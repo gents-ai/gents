@@ -1,11 +1,4 @@
-export {
-  assertExactBridgeContract,
-  createDesktopClient,
-  BRIDGE_CONTRACT_VERSION,
-  PACKAGE_VERSION,
-  type DesktopBridgeContract,
-  type DesktopClient,
-} from "./client.js";
+export { createDesktopClient, type DesktopClient } from "./client.js";
 export {
   createDesktopStore,
   DEFAULT_TIMING,
@@ -32,7 +25,9 @@ export type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
   ManagedServerResetResult,
+  HomeResetDisposition,
 } from "./api/types.js";
+export type { IncompatibleStoreView } from "./generated/IncompatibleStoreView.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
 export * from "./events.js";
 export * from "./operationalState.js";

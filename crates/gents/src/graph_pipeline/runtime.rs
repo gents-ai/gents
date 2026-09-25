@@ -2641,9 +2641,9 @@ mod tests {
             std::fs::read(path).unwrap()
         });
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("worker.key");
-        std::fs::write(&path, key).unwrap();
-        KeyIdentity::load_or_create(path, None).unwrap()
+        let mut key_file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+        std::io::Write::write_all(&mut key_file, key).unwrap();
+        KeyIdentity::load_existing(key_file.path(), None).unwrap()
     }
 
     pub(in crate::graph_pipeline) async fn seed_signed_graph_request(

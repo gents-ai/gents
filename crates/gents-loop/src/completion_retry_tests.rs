@@ -42,7 +42,12 @@ fn failure_class_maps_transport_variants() {
         FailureClass::Transport
     );
     assert_eq!(
-        failure_class(&InferenceError::Timeout { timeout_secs: 30 }, "timeout"),
+        failure_class(
+            &InferenceError::Timeout {
+                timeout: std::time::Duration::from_secs(30)
+            },
+            "timeout"
+        ),
         FailureClass::Transport
     );
     assert_eq!(

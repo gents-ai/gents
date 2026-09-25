@@ -1,4 +1,98 @@
 #[tokio::test]
+async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().canonical_dispatch_observation_cases;
+    let cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case.inputs[0].policy_allows)
+        .collect();
+    assert!(cases.iter().any(|case| case.inputs[0].acknowledged));
+    assert!(cases.iter().any(|case| !case.inputs[0].acknowledged));
+    for case in cases {
+        let input = &case.inputs[0];
+        let expected = &case.expected[0];
+        for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+            let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let model = ScriptedModel::new_turns(vec![
+                vec![
+                    RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        "dispatch-call".into(),
+                        "echo".into(),
+                        serde_json::json!({}),
+                    )),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+            ]);
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CountingTool {
+                name: "echo".into(),
+                output: "observed".into(),
+                calls: calls.clone(),
+            })];
+            let stream = run_loop_stream(
+                model,
+                Some(hook.clone()),
+                Message::user("run echo"),
+                Vec::new(),
+                Arc::new(tools),
+                owned_config(4),
+            );
+            let collect = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle);
+            let collected = if input.acknowledged {
+                let (collected, fired) = crate::config_client::ConfigApplyTxn::
+                    with_post_commit_receipt_loss_for_operation(
+                        Some("test.unrelated_transaction"), collect,
+                    ).await;
+                assert!(
+                    !fired,
+                    "unrelated commits must not consume a targeted fault"
+                );
+                collected
+            } else {
+                let (collected, fired) = crate::config_client::ConfigApplyTxn::
+                    with_post_commit_receipt_loss_for_operation(
+                        Some("tool_call.start_running_canonical"), collect,
+                    ).await;
+                assert!(fired, "{}: dispatch commit must be reached", case.name);
+                collected
+            };
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                usize::from(expected.may_invoke),
+                "{}: policy {policy:?}",
+                case.name
+            );
+            if expected.may_invoke {
+                assert!(collected.error.is_none(), "{:?}", collected.error);
+                assert_eq!(collected.tool_results, ["observed"]);
+                assert_eq!(collected.final_text.as_deref(), Some("done"));
+            } else {
+                assert!(
+                    collected.error.is_some(),
+                    "lost authority must stop the loop"
+                );
+                assert!(collected.tool_results.is_empty());
+                let rows = crate::config_client::ConfigAccess::Local(node.clone())
+                    .execute("query { AgentToolCall { lifecycle_state } }")
+                    .await
+                    .unwrap();
+                let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
+                assert_eq!(rows.len(), 1, "publication must precede dispatch");
+                assert_eq!(
+                    rows[0]["lifecycle_state"], "running",
+                    "receipt loss must not roll back the committed dispatch"
+                );
+            }
+            node.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
@@ -39,11 +133,6 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
-    // The generator drove the tool-call lifecycle directly: on_tool_call started
-    // it and on_tool_result completed it with the result. (The tool-result
-    // *message* persistence is split with StreamProcessor — exercised once the
-    // generator is wired into the consumer in step 3 — so it is not asserted
-    // here against the standalone generator.)
     let resp = node
         .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
         .await;

@@ -6,9 +6,8 @@
 
 [[set]]
 identifier = "core"
-description = "Contract, bootstrap summary, aggregate snapshot, observer metrics"
+description = "Bootstrap summary, aggregate snapshot, observer metrics"
 permissions = [
-  "allow-desktop-bridge-contract",
   "allow-desktop-bootstrap-summary",
   "allow-desktop-client-snapshot",
   "allow-desktop-observer-metrics",
@@ -16,11 +15,12 @@ permissions = [
 
 [[set]]
 identifier = "client-lifecycle"
-description = "Client start/shutdown and selected-agent"
+description = "Client start/shutdown, selected-agent, and application quit"
 permissions = [
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
   "allow-desktop-set-selected-agent",
+  "allow-desktop-app-quit",
 ]
 
 [[set]]
@@ -146,6 +146,7 @@ permissions = [
   "allow-desktop-managed-server-restart",
   "allow-desktop-managed-server-reset",
   "allow-desktop-managed-server-validate-root",
+  "allow-desktop-managed-server-open-login-items",
   "allow-desktop-open-db-explorer",
 ]
 
@@ -154,6 +155,7 @@ identifier = "config-write"
 description = "Config save/delete/test mutations"
 permissions = [
   "allow-desktop-agent-config-save",
+  "allow-desktop-default-behavior-set",
   "allow-desktop-config-components-apply",
   "allow-desktop-config-components-patch",
   "allow-desktop-behavior-save",
@@ -186,6 +188,7 @@ permissions = [
   "allow-desktop-claude-login",
   "allow-desktop-claude-login-cancel",
   "allow-desktop-provider-account-disconnect",
+  "allow-desktop-provider-account-retry-save",
 ]
 
 [[set]]

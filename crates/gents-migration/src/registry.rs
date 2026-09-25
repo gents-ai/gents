@@ -395,7 +395,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_EXECUTION_NAME,
         gents_protocol::schemas::INFERENCE_EXECUTION,
-        "bafyreihjwsdfpjfihlqy7sjaxmiwxn3j2n4osbbgfty6bu5iesvaqpufg4"
+        "bafyreiajj3zs3bo6fhnd4irvodv4kiltg32rdugdjiosbjgcmd6l3wiyx4"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_SAMPLING_NAME,
@@ -576,6 +576,31 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
         "bafyreicmpatd7phppn77232g3pmarwsf6h55vw3rqxv3ymqzyalqub7sum"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_DEFINITION_NAME,
+        gents_protocol::schemas::EVAL_DEFINITION,
+        "bafyreie2n4xfxrbadduyjodpb2g5moodnyzc4ihqmjeokckkmah6yqxuqi"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_RUN_NAME,
+        gents_protocol::schemas::EVAL_RUN,
+        "bafyreid6ovsdkyjzsmi2uetxhpxvpv7wtexxzf53gdacvtswg5enpmz434"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_TRIAL_NAME,
+        gents_protocol::schemas::EVAL_TRIAL,
+        "bafyreidz3fglzddswftftr3ywj3s2kvkfhziyaaz6ac5v7qib63izz62ku"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_VERDICT_NAME,
+        gents_protocol::schemas::EVAL_VERDICT,
+        "bafyreihws7qjvg343nfbbsdyublcowmk3f5lqieruniy3gze7wykbtsjfy"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+        gents_protocol::schemas::OPTIMIZATION_JOB,
+        "bafyreihfbmbtuxfvnlweo224iwnkr4s2kn5zyjmu7o5jfuoqylnxtupgra"
     ),
     baseline_entry!(
         gents_protocol::schemas::PACK_INSTALLATION_NAME,

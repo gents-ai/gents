@@ -58,6 +58,7 @@ fn sync_health_view_keeps_database_quarantine_failed() {
             ..P2pSyncStatusSnapshot::default()
         }),
         database_sync_error: None,
+        peer_schema_skew: Default::default(),
         directory: Vec::new(),
         peers: Vec::new(),
     })

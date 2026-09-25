@@ -50,6 +50,7 @@ export function useShell(
       saveAgentConfig: d.onSaveAgentConfig,
       saveBackendConfig: d.onSaveBackendConfig,
       saveBehaviorConfig: d.onSaveBehaviorConfig,
+      setDefaultBehavior: d.onSetDefaultBehavior,
       saveEventSourceConfig: d.onSaveEventSourceConfig,
       saveInferenceProfileConfig: d.onSaveInferenceProfileConfig,
       saveScheduleConfig: d.onSaveScheduleConfig,
@@ -153,8 +154,13 @@ export function useShell(
       refreshSession: d.refreshSession,
       onInitLocalRuntime: d.onInitLocalRuntime,
       startupPhase: d.startupPhase,
-      onResetManagedServer: d.onResetManagedServer,
-      managedServerReset: d.managedServerReset,
+      incompatibleHome: d.incompatibleHome,
+      managedServerWait: d.managedServerWait,
+      diagnosticsHint: d.diagnosticsHint,
+      skipManagedServerWait: d.onSkipManagedServerWait,
+      restartManagedServer: d.canRestartManagedServer
+        ? d.onRestartManagedServer
+        : undefined,
     };
   }, [api, applyConfig, behaviorColors, d, sendMessage]);
 }

@@ -9,7 +9,7 @@ mod writes;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::P2pSyncStatusSnapshot;
+use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -33,6 +34,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use sync_state::RuntimeSchemaObservation;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -310,6 +312,10 @@ pub struct ClientSyncStateSnapshot {
     pub database_sync: Option<P2pSyncStatusSnapshot>,
     /// Decode failure from the database's current sync-status envelope.
     pub database_sync_error: Option<String>,
+    /// Configured peers, by peer ID, whose runtime replicates different
+    /// collection versions than this node. DefraDB accepts the connection but
+    /// never merges either side's writes, so this is the only visible signal.
+    pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
     /// The exact durable configured-peer revision that caused this snapshot.
     /// Bridge projections consume this copy instead of racing a second
     /// directory read after receiving a sync update.
@@ -398,6 +404,41 @@ impl ClientCore {
         let record = self
             .sync_state
             .upsert_local_standard_peer(label, addr, agent_did, graphql, agent_home)
+            .await?;
+        self.sync_state.set_pairing_ready(&record, true).await?;
+        Ok(())
+    }
+
+    /// Test-fixture seam for a durably paired, chat-ready managed runtime.
+    /// Product callers must establish enrollment through the signed owner.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn add_managed_enrollment_peer_for_test(
+        &self,
+        agent_did: &str,
+        graphql: &str,
+        agent_home: &str,
+        authorization_sequence: u64,
+    ) -> Result<()> {
+        let addr =
+            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
+        self.sync_state
+            .upsert_local_standard_peer("Managed Runtime", addr, agent_did, graphql, agent_home)
+            .await?;
+        let record = self
+            .sync_state
+            .upsert_enrollment_peer(
+                "managed-runtime-peer",
+                "Managed Runtime",
+                addr,
+                agent_did,
+                "network",
+                "request",
+                "digest",
+                agent_did,
+                authorization_sequence,
+                "2999-01-01T00:00:00Z",
+            )
             .await?;
         self.sync_state.set_pairing_ready(&record, true).await?;
         Ok(())

@@ -434,6 +434,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         &options,
         core.principal(),
         &route_manager,
+        &mut || {},
     )
     .await;
     assert!(errors.is_empty());
@@ -1002,6 +1003,35 @@ async fn refresh_store_succeeds_with_selection_set() {
 }
 
 #[tokio::test]
+async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+
+    let error = core
+        .resend_status_enrollment("enroll-missing")
+        .await
+        .expect_err("only a persisted request of this desktop is resent");
+    assert!(
+        error
+            .to_string()
+            .contains("no local enrollment request enroll-missing"),
+        "{error:#}"
+    );
+    assert!(core
+        .active_status_enrollment_requests()
+        .await
+        .unwrap()
+        .is_empty());
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn ensure_agent_loaded_debounces_repeats() {
     use crate::client::paths::DesktopPaths;
 
@@ -1080,4 +1110,98 @@ async fn observer_metrics_returns_snapshot() {
         metrics.is_none(),
         "observer metrics should be None after shutdown"
     );
+}
+
+#[tokio::test]
+async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync() {
+    use crate::client::paths::DesktopPaths;
+    use crate::client::{project_sync_health, SyncHealthState};
+    use gents_protocol::enrollment::{encode_offer, EnrollmentOfferRecord};
+    use gents_protocol::peer_schema::{ReplicatedSchema, STATUS_REPLICATED_SCHEMA_FIELD};
+
+    let runtime_did = "did:key:runtime";
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+    let local: ReplicatedSchema =
+        gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+            .await
+            .expect("read local collection versions");
+    assert_eq!(
+        local.len(),
+        gents::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
+        "the desktop node registers every client route collection"
+    );
+    let mut next_release = local.clone();
+    next_release
+        .get_mut("AgentSession")
+        .expect("client route replicates AgentSession")
+        .version_id = "bafy-next-release".to_string();
+
+    let offer = encode_offer(&EnrollmentOfferRecord {
+        version: gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION,
+        offer_id: "offer-1".into(),
+        challenge: "challenge".into(),
+        network_id: "network".into(),
+        admin_did: runtime_did.into(),
+        server_peer: "peer".into(),
+        server_ticket: "ticket".into(),
+        owner_agent: runtime_did.into(),
+        profile: "client".into(),
+        schema_fingerprint: gents_protocol::enrollment::enrollment_schema_fingerprint(),
+        issued_at: "2026-09-24T00:00:00Z".into(),
+        expires_at: "2026-09-24T00:05:00Z".into(),
+        admin_sig: vec![0; 64],
+    })
+    .expect("encode offer");
+    let skewed = serde_json::json!({
+        "agent_did": runtime_did,
+        "enrollment": { "token": offer },
+        STATUS_REPLICATED_SCHEMA_FIELD: next_release,
+    });
+    let error = format!(
+        "{:#}",
+        core.request_status_enrollment(&skewed).await.unwrap_err()
+    );
+    assert!(
+        error.contains("update the app and the runtime to the same version")
+            && error.contains("AgentSession"),
+        "{error}"
+    );
+    assert!(
+        core.sync_state().peer_schema_skew.is_empty(),
+        "an unconfigured runtime leaves sync health alone"
+    );
+
+    core.add_local_standard_peer_for_test(runtime_did)
+        .await
+        .expect("configured runtime peer");
+    let observation = core
+        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
+        .expect("configured route");
+    core.finish_runtime_schema_observation(&observation, &skewed)
+        .await
+        .unwrap_err();
+    let health = project_sync_health(&core.sync_state()).expect("skew is visible");
+    assert_eq!(health.state, SyncHealthState::Incompatible);
+    assert!(health
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("AgentSession")));
+
+    let matching = serde_json::json!({
+        "agent_did": runtime_did,
+        STATUS_REPLICATED_SCHEMA_FIELD: local,
+    });
+    let observation = core
+        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
+        .expect("configured route");
+    core.finish_runtime_schema_observation(&observation, &matching)
+        .await
+        .expect("same collection versions are compatible");
+    assert!(core.sync_state().peer_schema_skew.is_empty());
+
+    core.shutdown().await.expect("shutdown");
 }

@@ -188,6 +188,13 @@ pub struct PackConfig {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<GraphDefinition>>", optional = nullable))]
     pub graphs: Vec<GraphDefinition>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<EvalDefinition>>", optional = nullable))]
+    pub eval_definitions: Vec<EvalDefinition>,
     /// Canonical authored topology, compiled after ordinary config resolution.
     #[serde(
         default,

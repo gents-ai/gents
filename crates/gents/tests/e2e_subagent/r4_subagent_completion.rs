@@ -48,7 +48,7 @@ struct ToolCallRow {
     await_mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 struct MessageRow {
     sequence: u32,
     role: String,
@@ -648,8 +648,12 @@ fn skip_reason(action: ToolCallHookAction) -> String {
     reason
 }
 
+/// The accepted-turn runtime is still writing this request (its own
+/// terminalization and bookkeeping), so the fixture write goes through the
+/// transaction owner, whose conflict retry re-runs the whole update.
 async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &str) {
     let request_id = escape_graphql_string(request_id);
+    let state = escape_graphql_string(state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -658,12 +662,12 @@ async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &st
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "set request lifecycle failed: {:?}",
-        response.errors
-    );
+    ConfigAccess::transact_local(node, None, "test.set_request_lifecycle", |txn| {
+        let mutation = mutation.clone();
+        Box::pin(async move { txn.execute(&mutation).await.map(|_| ()) })
+    })
+    .await
+    .unwrap_or_else(|error| panic!("set request lifecycle failed: {error:#}"));
 }
 
 async fn set_child_processing_deadline(
@@ -769,13 +773,19 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
 }
 
 async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
+    let header_doc_ids = parent_message_header_ids(node, session_id).await;
+    load_parent_messages(node, session_id, &header_doc_ids).await
+}
+
+/// Physical header identities of the parent transcript, in sequence order.
+async fn parent_message_header_ids(node: &EmbeddedNode, session_id: &str) -> Vec<String> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role request_doc_id }}
+            ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -784,39 +794,70 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
         "message query failed: {:?}",
         response.errors
     );
-    let rows: Vec<MessageRow> = response
+    response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    let (agent_did, requester_did) = request_scope_for_session(node, session_id).await;
-    let history = gents::load_history(node, session_id, &agent_did, requester_did.as_deref())
-        .await
-        .expect("load canonical parent history");
-    assert_eq!(
-        rows.len(),
-        history.len(),
-        "message metadata/history mismatch"
-    );
-    rows.into_iter()
-        .zip(history)
-        .map(|(mut row, message)| {
-            row.content = serde_json::to_string(&message).expect("serialize native message");
-            // Keep the structured rendering for tool IDs and function names,
-            // while exposing user-authored notification text without JSON
-            // string escaping to the status/body assertions below.
-            if let Message::User { content } = &message {
-                for item in content {
-                    if let UserContent::Text(Text { text }) = item {
-                        row.content.push('\n');
-                        row.content.push_str(text);
-                    }
-                }
-            }
-            row
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            row["_docID"]
+                .as_str()
+                .expect("AgentMessage physical identity")
+                .to_owned()
         })
         .collect()
+}
+
+/// Reconstruct each named header through the canonical message owner. Each
+/// row's metadata and content come from the same immutable header, so a
+/// publication racing this observation can add headers but never pair one
+/// header's metadata with another's content.
+async fn load_parent_messages(
+    node: &EmbeddedNode,
+    session_id: &str,
+    header_doc_ids: &[String],
+) -> Vec<MessageRow> {
+    let (agent_did, requester_did) = request_scope_for_session(node, session_id).await;
+    let mut rows = Vec::with_capacity(header_doc_ids.len());
+    for header_doc_id in header_doc_ids {
+        let (header, message) = gents::session::load_canonical_message_from_node(
+            node,
+            header_doc_id,
+            &agent_did,
+            requester_did.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reconstruct parent message {header_doc_id}: {error:#}"));
+        assert_eq!(
+            header.session_id, session_id,
+            "header left the parent session"
+        );
+        let mut content = serde_json::to_string(&message).expect("serialize native message");
+        // Keep the structured rendering for tool IDs and function names,
+        // while exposing user-authored notification text without JSON
+        // string escaping to the status/body assertions below.
+        if let Message::User { content: items } = &message {
+            for item in items {
+                if let UserContent::Text(Text { text }) = item {
+                    content.push('\n');
+                    content.push_str(text);
+                }
+            }
+        }
+        rows.push(MessageRow {
+            sequence: header.sequence,
+            role: serde_json::to_value(header.role)
+                .expect("serialize message role")
+                .as_str()
+                .expect("message role string")
+                .to_owned(),
+            content,
+            request_doc_id: header.request_doc_id,
+        });
+    }
+    rows
 }
 
 async fn fetch_background_notifications(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
@@ -1198,11 +1239,7 @@ async fn multiple_background_completions_append_notifications_and_coalesce_wake(
             .filter(|wake| {
                 matches!(
                     wake.lifecycle_state,
-                    Some(
-                        RequestLifecycleState::Claimed
-                            | RequestLifecycleState::Processing
-                            | RequestLifecycleState::InputRequired
-                    )
+                    Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
                 )
             })
             .count()
@@ -1605,4 +1642,208 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         .find(|message| message.content.contains("parent hook resumes"))
         .expect("resumed authored prompt");
     assert!(resumed.sequence > notification.sequence);
+}
+
+/// #1806 pinned-identity regression for `load_parent_messages`: identities
+/// captured while the runtime is stopped still reconstruct to exactly their
+/// own rows after a later publication. This does not drive
+/// `fetch_parent_messages` itself across the race; that composition is covered
+/// only by repeated integration runs.
+#[tokio::test]
+async fn parent_message_observation_is_coherent_across_publication() {
+    let (db, session_id, _parent_request_id) =
+        setup_runtime_fixture("parent_message_observation_publication").await;
+    let args = json!({
+        "name": CHILD_BEHAVIOR_ID,
+        "prompt": "observed before publication",
+        "await_mode": "background"
+    })
+    .to_string();
+    let first_runtime = run_canonical_background_spawn(&db, &args, "model-call-observation").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !fetch_parent_messages(db.node.as_ref(), &session_id)
+        .await
+        .iter()
+        .any(|message| message.content.contains("observed before publication"))
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for canonical background notification"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    first_runtime.shutdown().await;
+
+    let before_ids = parent_message_header_ids(db.node.as_ref(), &session_id).await;
+    let before = load_parent_messages(db.node.as_ref(), &session_id, &before_ids).await;
+
+    let runtime = run_canonical_parent_prompt(
+        &db,
+        &session_id,
+        "observation-publication-request",
+        "published between reads",
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let after = loop {
+        let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+        if messages
+            .iter()
+            .any(|message| message.content.contains("published between reads"))
+        {
+            break messages;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the publication between reads"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    runtime.shutdown().await;
+
+    // The identities read before the publication still reconstruct to exactly
+    // their own rows; the new header is simply not part of that observation.
+    let straddling = load_parent_messages(db.node.as_ref(), &session_id, &before_ids).await;
+    assert!(after.len() > before_ids.len());
+    assert_eq!(straddling.len(), before_ids.len());
+    for (observed, original) in straddling.iter().zip(&before) {
+        assert_eq!(observed.sequence, original.sequence);
+        assert_eq!(observed.role, original.role);
+        assert_eq!(observed.request_doc_id, original.request_doc_id);
+        assert_eq!(observed.content, original.content);
+    }
+    assert!(straddling
+        .iter()
+        .all(|message| !message.content.contains("published between reads")));
+    assert_eq!(&after[..before.len()], &before[..]);
+}
+
+async fn persist_unresolvable_message(node: &EmbeddedNode, request_id: &str) {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
+    };
+    #[derive(Deserialize)]
+    struct Scope {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+        agent_did: String,
+        requester_did: Option<String>,
+        session_id: String,
+    }
+    let request = escape_graphql_string(request_id);
+    let scope: Scope = first_row(
+        &node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, limit: 1) {{ _docID agent_did requester_did session_id }} }}"#
+            ))
+            .await,
+        "AgentRequest",
+    );
+    let message = TranscriptMessage {
+        message_key: format!("unresolvable:{request_id}"),
+        session_id: scope.session_id,
+        agent_did: scope.agent_did,
+        requester_did: scope.requester_did,
+        request_doc_id: Some(scope.doc_id),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "unrelated".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 10_000,
+        role: MessageRole::Assistant,
+        native_id: None,
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "unrelated-tool".into(),
+            id: "unrelated-call".into(),
+            call_id: None,
+            name: "bash".into(),
+            arguments: PayloadRef {
+                close_doc_id: "missing-close".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+    };
+    let variables =
+        gents::session::canonical_rows::transcript_message_create_variables(&message).unwrap();
+    ConfigAccess::transact_local(node, None, "test.unresolvable_sibling_message", |txn| {
+        let variables = variables.clone();
+        Box::pin(async move {
+            txn.execute_with_variables(
+                gents::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                &variables,
+            )
+            .await
+            .map(|_| ())
+        })
+    })
+    .await
+    .expect("persist unresolvable sibling message");
+}
+
+/// A spawn is materialized and claimed from its own accepted message alone, so
+/// an unresolvable message in a sibling child's session cannot block it.
+#[tokio::test]
+async fn later_child_is_claimed_without_reading_sibling_transcripts() {
+    let (db, session_id, request_id) = setup_fixture("claim_independent_of_siblings").await;
+    let spawn = |id: &str| {
+        StreamChunk::tool_call(
+            id,
+            "spawn_subagent",
+            json!({
+                "name": CHILD_BEHAVIOR_ID,
+                "prompt": format!("prompt for {id}"),
+                "await_mode": "background",
+            })
+            .to_string(),
+        )
+    };
+    let paused = |id: &str| {
+        let prompt = format!("prompt for {id}");
+        StreamPlan::new(
+            prompt.clone(),
+            vec![StreamResponse::Stream(StreamScript::paused(
+                prompt,
+                ["done"],
+            ))],
+        )
+    };
+    let runtime = boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
+        &db,
+        AcceptedTurnSpec {
+            backend_id: BACKEND_ID,
+            model: "test-model",
+            parent_behavior_id: PARENT_BEHAVIOR_ID,
+            configured_behavior_ids: &[PARENT_BEHAVIOR_ID, CHILD_BEHAVIOR_ID],
+            request_id: &request_id,
+            session_id: &session_id,
+            prompt: "parent prompt",
+            accepted_chunks: vec![spawn("spawn-sibling")],
+            child_plans: vec![paused("spawn-sibling"), paused("spawn-later")],
+            valid_until: None,
+            subagent_depth: None,
+            request_setup: None,
+        },
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+        3,
+        "parent prompt",
+    )
+    .await;
+    let (sibling, _) =
+        wait_for_child_for_tool(db.node.as_ref(), &request_id, "spawn-sibling").await;
+    wait_for_child_generation(db.node.as_ref(), &sibling).await;
+    persist_unresolvable_message(db.node.as_ref(), &sibling).await;
+
+    runtime.backend.enqueue_response(
+        "parent prompt",
+        StreamResponse::streams("parent prompt", vec![spawn("spawn-later")]),
+    );
+    let (later, _) = wait_for_child_for_tool(db.node.as_ref(), &request_id, "spawn-later").await;
+    wait_for_child_generation(db.node.as_ref(), &later).await;
+    runtime.shutdown().await;
 }

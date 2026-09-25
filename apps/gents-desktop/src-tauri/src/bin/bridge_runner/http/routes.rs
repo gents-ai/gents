@@ -23,7 +23,7 @@ use gents_desktop_bridge::commands::{
     save_backend_config, save_behavior_config, save_event_source_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
-    test_tool_service_config,
+    set_default_behavior, test_tool_service_config,
 };
 use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
@@ -34,14 +34,15 @@ use gents_desktop_bridge::tauri_commands::operations::{
 };
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
-    DesktopInterruptRequest, DesktopListSubagentTreeRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopPreviewInterruptCascadeRequest,
-    DesktopProbeMcpServiceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest,
-    ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest, SubagentTreeView,
-    TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
-    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest, TriggerSaveRequest,
+    DefaultBehaviorSetRequest, DesktopInterruptRequest, DesktopListSubagentTreeRequest,
+    DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EnrollmentRequestView,
+    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NativeExecutorStatusView, PeerStatusFetchRequest,
+    RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest,
+    SessionRenameRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -249,13 +250,8 @@ pub(super) fn handle_request(
             )?;
             let payload =
                 runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
-            let token = payload
-                .pointer("/enrollment/token")
-                .and_then(serde_json::Value::as_str)
-                .filter(|token| !token.trim().is_empty())
-                .context("server does not advertise authenticated status enrollment")?;
             let enrollment =
-                runtime.block_on(fixture.desktop_core().request_status_enrollment(token))?;
+                runtime.block_on(fixture.desktop_core().request_status_enrollment(&payload))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(
                 &EnrollmentRequestView::from(enrollment),
             )?))
@@ -395,6 +391,17 @@ pub(super) fn handle_request(
                 "decoding agent config save request",
             )?;
             runtime.block_on(save_agent_config(fixture.desktop_core().as_ref(), request))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/agent/default-behavior") => {
+            let request = decode::<DefaultBehaviorSetRequest>(
+                &request.body,
+                "decoding default behavior request",
+            )?;
+            runtime.block_on(set_default_behavior(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
         ("POST", "/desktop/behavior/save") => {
@@ -754,15 +761,10 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
         }
     "#;
 
-    let response = core.node().execute(query).await;
-    if response.has_errors() {
-        return Err(response
-            .errors
-            .iter()
-            .map(|e| e.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; "));
-    }
+    let response =
+        gents::graphql::graphql_with_transaction_retry(&core.node(), query, "AgentToolCall query")
+            .await
+            .map_err(|error| format!("{error:#}"))?;
 
     let data = response
         .data

@@ -1,18 +1,17 @@
-//! Live EthTool qualification: GLM-5.3-Flash uses `{tool_id}_query` against
+//! Live EthTool qualification: a live model uses `{tool_id}_query` against
 //! Base Sepolia (live chain data, live inference).
 //!
 //! Write coverage lives in `eth_tool_write_live.rs` (local Hardhat/Anvil,
 //! provisioned key, native transfer + declared contract write).
 //!
 //! ```bash
-//! GENTS_ETH_LIVE=1 cargo test -p gents --features live-e2e --test e2e_live \
+//! GENTS_ETH_LIVE=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
 //!   eth_tool_live_model_queries_base_sepolia \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
-//! Defaults: workstation-1 `http://100.73.235.38:8001/v1` model
-//! `GLM-5.3-Flash-NVFP4`, RPC `https://sepolia.base.org` (chain id 84532).
-//! Override with `GENTS_ETH_LIVE_ENDPOINT`, `GENTS_ETH_LIVE_MODEL`,
+//! Inference comes from the target named by `GENTS_EVAL_TARGET`. The RPC
+//! defaults to `https://sepolia.base.org` (chain id 84532); override with
 //! `GENTS_ETH_LIVE_RPC`, `GENTS_ETH_LIVE_CHAIN_ID`.
 
 use std::sync::Arc;
@@ -26,26 +25,17 @@ use serde::Deserialize;
 
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::{wait_for_assistant_answer, wait_for_request_terminal};
+use crate::support::live_inference::{
+    bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal, InferenceTarget,
+};
 use crate::support::test_db;
 
 const TOOL_ID: &str = "base-sepolia";
-const BACKEND_ID: &str = "backend-eth-live";
-const DEFAULT_ENDPOINT: &str = "http://100.73.235.38:8001/v1";
-const DEFAULT_MODEL: &str = "GLM-5.3-Flash-NVFP4";
 const DEFAULT_RPC: &str = "https://sepolia.base.org";
 const DEFAULT_CHAIN_ID: i64 = 84532;
 
 pub(crate) fn live_enabled() -> bool {
     std::env::var("GENTS_ETH_LIVE").as_deref() == Ok("1")
-}
-
-pub(crate) fn live_endpoint() -> String {
-    std::env::var("GENTS_ETH_LIVE_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string())
-}
-
-pub(crate) fn live_model() -> String {
-    std::env::var("GENTS_ETH_LIVE_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
 }
 
 fn live_rpc() -> String {
@@ -57,20 +47,6 @@ fn live_chain_id() -> i64 {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_CHAIN_ID)
-}
-
-pub(crate) async fn assert_endpoint_reachable(endpoint: &str) {
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest client");
-    match tokio::time::timeout(Duration::from_secs(20), client.get(&url).send()).await {
-        Ok(Ok(response)) if response.status().is_success() => {}
-        Ok(Ok(response)) => panic!("endpoint {url} returned {}", response.status()),
-        Ok(Err(error)) => panic!("endpoint {url} unreachable: {error}"),
-        Err(_) => panic!("endpoint {url} timed out"),
-    }
 }
 
 async fn assert_rpc_reachable(rpc_url: &str, chain_id: i64) {
@@ -109,70 +85,13 @@ async fn assert_rpc_reachable(rpc_url: &str, chain_id: i64) {
     );
 }
 
-pub(crate) async fn bind_glm_backend(
+pub(crate) async fn bind_eth_target(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
+    target: &InferenceTarget,
     system_prompt: &str,
 ) -> (String, String) {
-    let agent_did = identity.did().to_string();
-    let bootstrap = gents::ensure_agent_principal(node, &agent_did)
-        .await
-        .expect("ensure principal");
-    let behavior_id = bootstrap
-        .default_behavior_id
-        .clone()
-        .expect("principal has a default behavior");
-
-    let backend_id = escape_graphql_string(BACKEND_ID);
-    let escaped_agent_did = escape_graphql_string(&agent_did);
-    let endpoint = escape_graphql_string(&live_endpoint());
-    let model = escape_graphql_string(&live_model());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }}, backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    agent_did: "{escaped_agent_did}",
-                    backend_id: "{backend_id}",
-                    name: "{backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    openai_wire_api: "chat_completions",
-                    endpoint: "{endpoint}",
-                    auth: {{ kind: "unauthenticated" }},
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true
-                }},
-                update: {{
-                    name: "{backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    openai_wire_api: "chat_completions",
-                    endpoint: "{endpoint}",
-                    auth: {{ kind: "unauthenticated" }},
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert glm backend failed: {:?}",
-        response.errors
-    );
-
-    let profile_id = gents::default_inference_profile_id_for_behavior(&behavior_id);
-    let mut profile = gents::load_inference_profile(node, &agent_did, &profile_id)
-        .await
-        .expect("load default inference profile")
-        .expect("default inference profile exists after bootstrap");
-    profile.backend_id = BACKEND_ID.to_string();
-    profile.model_name = model;
-    gents::upsert_inference_profile(node, &profile)
-        .await
-        .expect("point default inference profile at glm");
+    let (agent_did, behavior_id) = bind_target(node, identity, target).await;
     configure_behavior_tools(
         node,
         &agent_did,
@@ -289,17 +208,18 @@ async fn eth_tool_live_model_queries_base_sepolia() {
         "set GENTS_ETH_LIVE=1 and pass --ignored to run the live EthTool qualification"
     );
 
-    let endpoint = live_endpoint();
+    let target = live_target();
     let rpc = live_rpc();
     let chain_id = live_chain_id();
-    assert_endpoint_reachable(&endpoint).await;
+    target.assert_reachable().await;
     assert_rpc_reachable(&rpc, chain_id).await;
 
     let db = test_db("eth-tool-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("eth-tool-live"));
-    let (agent_did, behavior_id) = bind_glm_backend(
+    let (agent_did, behavior_id) = bind_eth_target(
         db.node.as_ref(),
         identity.as_ref(),
+        &target,
         "You are an Ethereum operator. You have the native tool base-sepolia_query. \
          When asked for chain data, call that tool. Do not guess block numbers.",
     )

@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use gents::agent::persona_ops::setup_steward_self_config;
 use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
@@ -16,8 +17,8 @@ use gents::document_config::{
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, AgentIdentity, BashMode,
-    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
+    load_or_create_macos_secure_enclave_identity, AgentIdentity, BashMode, Collection,
+    CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -64,6 +65,79 @@ WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
 
+/// Takes the store lock for the rest of init. An overwrite wipes the home
+/// under that same lock, keeping the lock file itself, so no runtime can open
+/// the store while it is removed or hold a second lock afterwards.
+fn lock_init_store(
+    home_dir: &Path,
+    data_dir: &Path,
+    overwrite: bool,
+) -> Result<gents::home::StoreLock> {
+    // $HOME first, then the password database.
+    let user_home = std::env::home_dir();
+    lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
+}
+
+fn lock_init_store_for_user(
+    home_dir: &Path,
+    data_dir: &Path,
+    overwrite: bool,
+    user_home: Option<&Path>,
+) -> Result<gents::home::StoreLock> {
+    let home = if overwrite {
+        crate::overwritable_home(home_dir, user_home)?
+    } else {
+        None
+    };
+    let Some(home) = home else {
+        fs::create_dir_all(data_dir)
+            .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+        return gents::home::lock_store(home_dir, data_dir);
+    };
+    let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let lock = gents::home::lock_store(home_dir, &data_dir)?;
+    dangerously_overwrite_home(&home, lock.path())?;
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    Ok(lock)
+}
+
+/// The data directory an overwrite recreates, on the resolved home. A data
+/// directory reached through a symlink or `..` inside the home would be
+/// replaced by a different directory than the one locked, so it is refused;
+/// one outside the home is not wiped and keeps its lock.
+fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+
+    let refuse = || {
+        anyhow::anyhow!(
+            "refusing to dangerously overwrite {}: its data directory {} is reached through a symlink or `..`; remove the link or pass a plain --data-dir",
+            home_dir.display(),
+            data_dir.display()
+        )
+    };
+    let Ok(relative) = data_dir.strip_prefix(home_dir) else {
+        if fs::canonicalize(data_dir).is_ok_and(|resolved| resolved.starts_with(home)) {
+            return Err(refuse());
+        }
+        return Ok(data_dir.to_path_buf());
+    };
+    let mut resolved = home.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => resolved.push(name),
+            Component::CurDir => continue,
+            _ => return Err(refuse()),
+        }
+        if fs::symlink_metadata(&resolved).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(refuse());
+        }
+    }
+    Ok(resolved)
+}
+
 pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
@@ -72,15 +146,11 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         eprintln!("{YOLO_WARNING}");
     }
     crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
-    if args.dangerously_overwrite {
-        dangerously_overwrite_home(&home_dir)?;
-    }
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let _store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -547,10 +617,6 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 .key_path
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| default_key_path(options.home, options.agent_name));
-            if let Some(parent) = key_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating key directory {}", parent.display()))?;
-            }
             let identity = Arc::new(
                 KeyIdentity::load_or_create(&key_path, None)
                     .context("creating or loading agent identity key")?,
@@ -682,14 +748,6 @@ async fn initialize_runtime_home(
         .as_ref()
         .map(|principal| principal.enabled)
         .unwrap_or(true);
-    upsert_agent_principal(
-        node,
-        agent_did,
-        Some(&principal_display_name),
-        Some(&default_behavior_id),
-        principal_enabled,
-    )
-    .await?;
     let tools_id = default_tools_id_for_behavior(&default_behavior_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
@@ -807,20 +865,23 @@ async fn initialize_runtime_home(
     backend_doc.validate()?;
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_agent(agent_did);
-    let plan = DesiredStateApplyPlan::new(vec![
+    let documents = vec![
         replacement(Collection::InferenceBackend, &backend_doc)?,
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
         replacement(Collection::InferenceProfile, &inference_profile)?,
         replacement(Collection::AgentBehavior, &behavior)?,
         replacement(Collection::Tools, &wide_open_tools_document(agent_did))?,
-    ])?;
-    access
-        .transact("init.initialize_runtime_home", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-        })
-        .await?;
+    ];
+    publish_home_config(
+        access,
+        agent_did,
+        &principal_display_name,
+        &default_behavior_id,
+        principal_enabled,
+        documents,
+    )
+    .await?;
     // Health and discovery are runtime-owned observations, so the desired
     // config plan deliberately omits them. Preserve init's established
     // bootstrap contract by publishing the selected endpoint as initially
@@ -858,6 +919,51 @@ async fn initialize_runtime_home(
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+/// Publish init's documents and the principal that names their default
+/// behavior as one validated plan: a failed init leaves no default pointing at
+/// a missing or disabled behavior.
+async fn publish_home_config(
+    access: &ConfigAccess,
+    agent_did: &str,
+    display_name: &str,
+    default_behavior_id: &str,
+    enabled: bool,
+    documents: Vec<DesiredStateApplyDocument>,
+) -> Result<()> {
+    access
+        .transact("init.initialize_runtime_home", |txn| {
+            let mut documents = documents.clone();
+            Box::pin(async move {
+                let mut principal = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    agent_did,
+                    agent_did,
+                )
+                .await?
+                .map(|(_, value)| value)
+                .unwrap_or_else(|| {
+                    json!({
+                        "agent_did": agent_did,
+                        "created_at": chrono::Utc::now().to_rfc3339(),
+                        "created_by": agent_did,
+                    })
+                });
+                principal["display_name"] = json!(display_name);
+                principal["default_behavior_id"] = json!(default_behavior_id);
+                principal["enabled"] = json!(enabled);
+                documents.push(DesiredStateApplyDocument {
+                    collection: Collection::AgentPrincipal,
+                    add: principal.clone(),
+                    update: principal,
+                });
+                let plan = DesiredStateApplyPlan::new(documents)?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
 }
 
 /// Serialize a canonical config document into a complete-replacement plan
@@ -1249,6 +1355,160 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fake user home, so no test ever resolves a real broad path.
+    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
+        lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_never_wipes_the_user_home_through_an_alias() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(user_home.join("Documents")).unwrap();
+        fs::write(user_home.join("Documents/precious"), "keep").unwrap();
+        let link = temp.path().join("gents-home");
+        std::os::unix::fs::symlink(&user_home, &link).unwrap();
+
+        for alias in [
+            link.clone(),
+            user_home.join("."),
+            user_home.join("Documents").join(".."),
+            temp.path().to_path_buf(),
+        ] {
+            let error = overwrite(&alias, &user_home)
+                .expect_err("the user home and its ancestors are never overwritten")
+                .to_string();
+            assert!(error.contains("user home"), "{alias:?}: {error}");
+        }
+        assert_eq!(
+            fs::read_to_string(user_home.join("Documents/precious")).unwrap(),
+            "keep"
+        );
+        assert!(
+            !user_home.join("data").exists(),
+            "nothing is created before the home is validated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_refuses_a_data_directory_linked_out_of_the_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let external = temp.path().join("real-data");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("MANIFEST"), "store").unwrap();
+        std::os::unix::fs::symlink(&external, home.join("data")).unwrap();
+
+        let error = overwrite(&home, &user_home).expect_err("a linked data directory is refused");
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert!(external.join("MANIFEST").is_file());
+        assert!(fs::symlink_metadata(home.join("data"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_through_a_linked_home_keeps_one_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let real = temp.path().join("real-home");
+        fs::create_dir_all(real.join("data")).unwrap();
+        fs::write(real.join("init.json"), "{}").unwrap();
+        let link = temp.path().join("link-home");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let held = overwrite(&link, &user_home).expect("a dedicated linked home is overwritten");
+        assert!(!real.join("init.json").exists());
+        assert!(real.join("data").is_dir());
+        for alias in [link.join("data"), real.join("data")] {
+            assert!(
+                gents::home::lock_store(&real, &alias).is_err(),
+                "{alias:?} takes the lock init holds"
+            );
+        }
+        drop(held);
+    }
+
+    #[test]
+    fn an_overwrite_is_refused_when_the_user_home_is_unknown_or_unresolvable() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join("data")).unwrap();
+        fs::write(home.join("init.json"), "{}").unwrap();
+        for unknown in [None, Some(Path::new(""))] {
+            let error = lock_init_store_for_user(&home, &home.join("data"), true, unknown)
+                .expect_err("an overwrite needs a known user home")
+                .to_string();
+            assert!(error.contains("cannot be determined"), "{error}");
+        }
+        let missing = temp.path().join("missing-user-home");
+        let error = lock_init_store_for_user(&home, &home.join("data"), true, Some(&missing))
+            .expect_err("an unresolvable user home is not compared lexically");
+        assert!(
+            format!("{error:#}").contains("cannot be resolved"),
+            "{error:#}"
+        );
+        assert!(home.join("init.json").is_file(), "nothing was wiped");
+        lock_init_store_for_user(&home, &home.join("data"), false, None)
+            .expect("init without an overwrite does not need the user home");
+    }
+
+    #[test]
+    fn init_holds_the_store_lock_until_it_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("data");
+        let held = lock_init_store(&home, &data, false).expect("init locks a fresh store");
+        assert!(data.is_dir());
+        assert!(
+            gents::home::lock_store(&home, &data).is_err(),
+            "a runtime cannot open the store while init runs"
+        );
+        drop(held);
+        gents::home::lock_store(&home, &data).expect("init releases the store");
+    }
+
+    #[test]
+    fn an_overwrite_wipes_under_the_lock_and_keeps_excluding_others() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("MANIFEST"), "store").unwrap();
+        fs::write(home.join("init.json"), "{}").unwrap();
+
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let runtime = gents::home::lock_store(&home, &data).unwrap();
+        assert!(
+            overwrite(&home, &user_home).is_err(),
+            "a store a runtime has open is not wiped"
+        );
+        assert!(data.join("MANIFEST").is_file());
+        drop(runtime);
+
+        let held = overwrite(&home, &user_home).expect("an idle home is overwritten");
+        assert!(!data.join("MANIFEST").exists());
+        assert!(!home.join("init.json").exists());
+        assert!(data.is_dir());
+        assert!(
+            held.path().is_file(),
+            "the held lock file survives the wipe"
+        );
+        assert!(
+            gents::home::lock_store(&home, &data).is_err(),
+            "the lock init holds is the one a runtime would take"
+        );
+    }
     use gents::BackendProviderKind;
 
     /// Compile-only guard that the retired flat Tools vocabulary is
@@ -1268,6 +1528,72 @@ mod tests {
         );
         assert_eq!(tools.tools_id, "drift-tools");
         assert!(tools.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_init_publishes_no_default_behavior() {
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let owner = "did:key:z-init-atomic";
+        let backend = json!({"agent_did":owner,"backend_id":"backend","name":"Local",
+            "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
+            "auth":{"kind":"unauthenticated"}});
+        let profile = json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend",
+            "model_name":"model"});
+        let behavior = |enabled: bool| {
+            json!({"agent_did":owner,"behavior_id":"default",
+                "inference_profile_id":"profile","enabled":enabled})
+        };
+        let entry = |collection, value: serde_json::Value| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        };
+        let principal = || async { load_agent_principal(&node, owner).await.unwrap() };
+
+        // The named behavior is missing, then disabled: neither publishes a principal.
+        let missing = vec![
+            entry(Collection::InferenceBackend, backend.clone()),
+            entry(Collection::InferenceProfile, profile.clone()),
+        ];
+        assert!(
+            publish_home_config(&access, owner, "Agent", "default", true, missing)
+                .await
+                .is_err()
+        );
+        assert_eq!(principal().await, None);
+        let disabled = vec![
+            entry(Collection::InferenceBackend, backend.clone()),
+            entry(Collection::InferenceProfile, profile.clone()),
+            entry(Collection::AgentBehavior, behavior(false)),
+        ];
+        let error = publish_home_config(&access, owner, "Agent", "default", true, disabled)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("must be enabled"),
+            "{error:#}"
+        );
+        assert_eq!(principal().await, None);
+
+        let complete = vec![
+            entry(Collection::InferenceBackend, backend),
+            entry(Collection::InferenceProfile, profile),
+            entry(Collection::AgentBehavior, behavior(true)),
+        ];
+        publish_home_config(&access, owner, "Agent", "default", true, complete)
+            .await
+            .unwrap();
+        assert_eq!(
+            principal().await.unwrap().default_behavior_id.as_deref(),
+            Some("default")
+        );
     }
 
     fn init_summary(provider_kind: BackendProviderKind, endpoint: &str) -> InitSummary {

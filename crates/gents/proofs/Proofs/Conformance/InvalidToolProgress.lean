@@ -1,4 +1,5 @@
 import Proofs.CompletionRetry.InvalidToolProgress
+import Proofs.CompletionRetry.RepeatedToolFailure
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.InvalidToolProgressContracts
@@ -7,39 +8,26 @@ open CompletionRetry.InvalidToolProgress Conformance.Contracts
 structure Case where
   name : String
   outcomes : List Outcome
-  expectedInvalidUsed : Nat
-  expectedExhausted : Bool
-  expectedObservedOutcomes : Nat
   deriving Repr
 
-/-- Prefix observed by the loop; no suffix can be dispatched after exhaustion. -/
-def observed (s : State) : List Outcome → Nat
-  | [] => 0
-  | o :: rest => if canDispatch s then 1 + observed (recordDurable s o) rest else 0
-
 def cases : List Case :=
-  [ ⟨"empty", [], 0, false, 0⟩
-  , ⟨"invalid_arguments_charged", [.invalidArguments], 1, false, 1⟩
-  , ⟨"policy_denial_charged", [.policyDenied], 1, false, 1⟩
-  , ⟨"unknown_tool_charged", [.unknownTool], 1, false, 1⟩
-  , ⟨"ordinary_failure_uncharged", List.replicate 12 .ordinaryFailure, 0, false, 12⟩
-  , ⟨"seven_invalids_allow_next", List.replicate 7 .policyDenied, 7, false, 7⟩
-  , ⟨"eighth_invalid_exhausts", List.replicate 8 .invalidArguments, 8, true, 8⟩
-  , ⟨"ninth_invalid_not_dispatched", List.replicate 9 .unknownTool, 8, true, 8⟩
+  [ ⟨"empty", []⟩
+  , ⟨"invalid_arguments_charged", [.invalidArguments]⟩
+  , ⟨"policy_denial_charged", [.policyDenied]⟩
+  , ⟨"unknown_tool_charged", [.unknownTool]⟩
+  , ⟨"ordinary_failure_uncharged", List.replicate 12 .ordinaryFailure⟩
+  , ⟨"seven_invalids_allow_next", List.replicate 7 .policyDenied⟩
+  , ⟨"eighth_invalid_exhausts", List.replicate 8 .invalidArguments⟩
+  , ⟨"ninth_invalid_not_dispatched", List.replicate 9 .unknownTool⟩
   , ⟨"success_does_not_reset", [.policyDenied,.success,.invalidArguments,.success,
       .unknownTool,.success,.policyDenied,.success,.invalidArguments,.success,
-      .unknownTool,.success,.policyDenied,.success,.invalidArguments], 8, true, 15⟩
+      .unknownTool,.success,.policyDenied,.success,.invalidArguments]⟩
   , ⟨"ordinary_failure_does_not_reset", [.policyDenied,.ordinaryFailure,.invalidArguments,
       .ordinaryFailure,.unknownTool,.ordinaryFailure,.policyDenied,.ordinaryFailure,
       .invalidArguments,.ordinaryFailure,.unknownTool,.ordinaryFailure,.policyDenied,
-      .ordinaryFailure,.invalidArguments], 8, true, 15⟩
+      .ordinaryFailure,.invalidArguments]⟩
   , ⟨"success_after_exhaustion_not_dispatched",
-      List.replicate 8 .policyDenied ++ [.success], 8, true, 8⟩ ]
-
-theorem cases_match : ∀ c ∈ cases,
-    (run ⟨0⟩ c.outcomes).invalidUsed = c.expectedInvalidUsed ∧
-    exhausted (run ⟨0⟩ c.outcomes) = c.expectedExhausted ∧
-    observed ⟨0⟩ c.outcomes = c.expectedObservedOutcomes := by decide
+      List.replicate 8 .policyDenied ++ [.success]⟩ ]
 
 private def outcomeString : Outcome → String
   | .invalidArguments => "invalidArguments"
@@ -50,12 +38,36 @@ private def outcomeString : Outcome → String
   | .skipped => "skipped"
   | .backgroundCompletion => "backgroundCompletion"
 
+private def outcomeCall : Outcome → Nat
+  | .invalidArguments => 0
+  | .policyDenied => 1
+  | .unknownTool => 2
+  | .success => 3
+  | .ordinaryFailure => 4
+  | .skipped => 5
+  | .backgroundCompletion => 6
+
+/-- The owned loop composes this allowance with the repetition guard. A
+fixture call's arguments name only its outcome, so equal outcomes are identical
+calls, and every fixture ordinary failure has the same error. -/
+def composedEvents (outcomes : List Outcome) : List CompletionRetry.RepeatedToolFailure.Event :=
+  outcomes.map fun o => ⟨outcomeCall o, o, if o = .ordinaryFailure then some 0 else none⟩
+
+private def composedJson (outcomes : List Outcome) : String :=
+  let (actions, ending) := CompletionRetry.RepeatedToolFailure.run {} (composedEvents outcomes)
+  ",\"composed_actions\":" ++
+    jsonArray (actions.map (jsonString ∘ CompletionRetry.RepeatedToolFailure.actionName)) ++
+  ",\"composed_ending\":" ++
+    (match ending with
+      | none => "null"
+      | some ending => jsonString (CompletionRetry.RepeatedToolFailure.endingName ending)) ++
+  ",\"composed_invalid_used\":" ++
+    toString (CompletionRetry.RepeatedToolFailure.invalidUsed {} (composedEvents outcomes))
+
 private def caseJson (c : Case) : String :=
   "{\"name\":" ++ jsonString c.name ++
   ",\"outcomes\":" ++ jsonArray (c.outcomes.map (jsonString ∘ outcomeString)) ++
-  ",\"expected_invalid_used\":" ++ toString c.expectedInvalidUsed ++
-  ",\"expected_exhausted\":" ++ (if c.expectedExhausted then "true" else "false") ++
-  ",\"expected_observed_outcomes\":" ++ toString c.expectedObservedOutcomes ++ "}"
+  composedJson c.outcomes ++ "}"
 
 def casesJson := jsonArray (cases.map caseJson)
 end Conformance.InvalidToolProgressContracts

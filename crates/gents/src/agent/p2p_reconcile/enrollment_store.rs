@@ -30,7 +30,7 @@ use super::enrollment::{
     EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
     EnrollmentRouteDirection, EnrollmentRouteReceipt, NetworkAdminPin,
 };
-use super::graphql_helpers::{ensure_no_errors, rows};
+use super::graphql_helpers::rows;
 
 const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
   AgentNetwork { network_id admin_did display_name default_template created_at admin_sig }
@@ -722,9 +722,13 @@ impl GraphqlEnrollmentStore {
 
     /// Load every authority row once and project it without relying on row order.
     pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
-        let response = self.node.execute(ENROLLMENT_DOCUMENT_QUERY).await;
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            ENROLLMENT_DOCUMENT_QUERY,
+            "query authenticated enrollment documents",
+        )
+        .await?;
         let now = Utc::now();
-        ensure_no_errors(&response, "query authenticated enrollment documents")?;
         let raw_network_rows = rows::<Value>(&response, "AgentNetwork")?;
         let network_id = raw_network_rows
             .first()

@@ -42,7 +42,7 @@ For native Linux/arm64 task containers on an Apple Silicon controller, use:
 
 ## DeepSeek V4 Flash on workstation-1
 
-The workstation service exposes model ID `d4f`. The official DeepSeek code-agent
+Pass the workstation service's served model ID as `--model`. The official DeepSeek code-agent
 evaluation uses `reasoning_effort=max`, `temperature=1.0`, and `top_p=0.95`;
 those are the adapter defaults.
 
@@ -53,7 +53,7 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH="$PWD" \
   ./scripts/harbor/run_with_cleanup.sh run \
   -d terminal-bench/terminal-bench-2-1 \
   --agent scripts.harbor.gents_agent:GentsAgent \
-  --model d4f \
+  --model "$SERVED_MODEL_ID" \
   --n-concurrent 16 \
   --n-concurrent-agents 16 \
   --timeout-multiplier 1000 \
@@ -143,7 +143,7 @@ Useful overrides:
 | `GENTS_GLIBC_BUNDLE_PATH` | unset | glibc loader/library bundle for musl task images |
 | `GENTS_MAX_OUTPUT` | `393216` | Per-turn output ceiling, matching DeepSeek's 384K (384 × 1024) `high`/`max` recommendation. Each completion clamps this ceiling to the context remaining after its assembled input. The name deliberately avoids Harbor's secret-key `TOKEN` heuristic. |
 | `GENTS_MAX_TOTAL` | required | Positive input/output token allowance for the whole durable request. Every completed provider call is charged, including tool turns, compaction, and later-retracted attempts; optional title inference is disabled for budgeted requests. Missing usage and observed overruns fail closed. The name avoids Harbor's secret-key `TOKEN` heuristic. |
-| `GENTS_CONTEXT_WINDOW` | `458752` | Gents prompt/compaction budget. The 75% compaction threshold admits up to 344,064 estimated input tokens; the per-turn output clamp preserves the combined-context invariant and the difference from D4F's 512K server limit leaves 53,248 tokens of tokenizer-accounting headroom. |
+| `GENTS_CONTEXT_WINDOW` | `458752` | Gents prompt/compaction budget. The 75% compaction threshold admits up to 344,064 estimated input tokens; the per-turn output clamp preserves the combined-context invariant and the difference from DeepSeek V4 Flash's 512K server limit leaves 53,248 tokens of tokenizer-accounting headroom. |
 | `GENTS_MAX_TURNS` | `1000` | Agent completion-loop turn ceiling |
 | `GENTS_RETRY_MAX_TRANSPORT` | `3` | Transient inference retry ceiling |
 | `GENTS_REQUEST_TIMEOUT_SECS` | `86400` | Durable request and Harbor exec timeout |

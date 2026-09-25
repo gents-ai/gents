@@ -25,6 +25,7 @@ pub(super) fn default_display_name_for_did(agent_did: &str) -> String {
         .to_string()
 }
 
+#[cfg(test)]
 pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();

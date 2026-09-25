@@ -1,8 +1,8 @@
-/* The behaviour choice for a new session: a chip, the name and a chevron
+/* The behavior choice for a new session: a chip, the name and a chevron
    in the composer's leading slot, opening a small picker. Each row is the
-   behaviour's chip and name, its description, and one mono line of what
+   behavior's chip and name, its description, and one mono line of what
    it runs on and may touch, resolved by the bridge; a search field
-   filters by name and description. Disabled behaviours are left out. */
+   filters by name and description. Disabled behaviors are left out. */
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, Search, X } from "lucide-react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
-import { createBehavior } from "./agent/createBehavior";
+import { BehaviorSheet } from "./agent/BehaviorSheet";
 import { BehaviorAvatar } from "./parts";
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
@@ -34,14 +34,14 @@ export function BehaviorPicker({
   onChange: (behaviorId: string) => void;
 }) {
   if (!deployment) return null;
-  const behaviours = deployment.behaviors.filter((b) => b.enabled);
-  const chosen = behaviours.find((b) => b.behaviorId === behaviorId) ?? behaviours[0];
+  const behaviors = deployment.behaviors.filter((b) => b.enabled);
+  const chosen = behaviors.find((b) => b.behaviorId === behaviorId) ?? behaviors[0];
   if (!chosen) return null;
   return (
     <MountedBehaviorPicker
       shell={shell}
       deployment={deployment}
-      behaviours={behaviours}
+      behaviors={behaviors}
       chosen={chosen}
       onChange={onChange}
     />
@@ -51,19 +51,22 @@ export function BehaviorPicker({
 function MountedBehaviorPicker({
   shell,
   deployment,
-  behaviours,
+  behaviors,
   chosen,
   onChange,
 }: {
   shell: Shell;
   deployment: DeploymentView;
-  behaviours: DeploymentView["behaviors"];
+  behaviors: DeploymentView["behaviors"];
   chosen: DeploymentView["behaviors"][number];
   onChange: (behaviorId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   /* search is hidden until asked for: the icon in the footer, or typing */
   const [searching, setSearching] = useState(false);
+  const [creating, setCreating] = useState(false);
+  /* the create sheet waits for the popover's exit animation: one dialog at a time */
+  const createAfterClose = useRef(false);
   const popover = useExclusivePopover(() => {
     setQuery("");
     setSearching(false);
@@ -77,166 +80,194 @@ function MountedBehaviorPicker({
   const env = (id: string) =>
     deployment.behaviorEnvironments.find((e) => e.behaviorId === id);
   const q = query.trim().toLowerCase();
-  const shown = behaviours.filter(
+  const shown = behaviors.filter(
     (b) =>
       !q ||
       b.displayName.toLowerCase().includes(q) ||
       describe(b.behaviorId).toLowerCase().includes(q),
   );
   return (
-    <Popover
-      open={popover.open}
-      onOpenChange={popover.onOpenChange}
-      onOpenChangeComplete={popover.onOpenChangeComplete}
-    >
-      <PopoverTrigger
-        render={
-          <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
-        }
-        aria-label="Behaviour"
-      >
-        <BehaviorAvatar
-          name={chosen.displayName}
-          behaviorId={chosen.behaviorId}
-          className="size-6 text-[10px]"
-        />
-        <span>{chosen.displayName}</span>
-        <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
-      </PopoverTrigger>
-      <PopoverContent
-        ref={popover.popupRef}
-        aria-label="Choose behavior"
-        align="start"
-        className="w-[min(40rem,calc(100vw-4rem))] p-0"
-        onKeyDown={(e) => {
-          /* a printable key with the list focused starts a search with that key */
-          if (
-            !searching &&
-            e.key.length === 1 &&
-            !e.metaKey &&
-            !e.ctrlKey &&
-            !e.altKey
-          ) {
-            setSearching(true);
-            setQuery(e.key);
-            e.preventDefault();
-          }
+    <>
+      <Popover
+        open={popover.open}
+        onOpenChange={(next) => {
+          /* reopening the picker withdraws a create still waiting on its exit */
+          if (next) createAfterClose.current = false;
+          popover.onOpenChange(next);
+        }}
+        onOpenChangeComplete={(next) => {
+          /* a popover opened after Create was clicked takes the turn instead */
+          const create = !next && createAfterClose.current && !popover.peerPending();
+          if (!next) createAfterClose.current = false;
+          popover.onOpenChangeComplete(next);
+          if (create) setCreating(true);
         }}
       >
-        {searching && (
-          <div className="flex items-center gap-2 border-b border-border/60 px-3">
-            <Search className="size-3.5 text-muted-foreground" />
-            <input
-              ref={input}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
+        <PopoverTrigger
+          render={
+            <Button variant="ghost" size="sm" className="gap-2 px-1.5 font-normal" />
+          }
+          aria-label="Behavior"
+        >
+          <BehaviorAvatar
+            name={chosen.displayName}
+            behaviorId={chosen.behaviorId}
+            className="size-6 text-[10px]"
+          />
+          <span>{chosen.displayName}</span>
+          <ChevronDown className="ml-6 size-3.5 text-muted-foreground" />
+        </PopoverTrigger>
+        <PopoverContent
+          ref={popover.popupRef}
+          aria-label="Choose behavior"
+          align="start"
+          className="w-[min(40rem,calc(100vw-4rem))] p-0"
+          onKeyDown={(e) => {
+            /* a printable key with the list focused starts a search with that key */
+            if (
+              !searching &&
+              e.key.length === 1 &&
+              !e.metaKey &&
+              !e.ctrlKey &&
+              !e.altKey
+            ) {
+              setSearching(true);
+              setQuery(e.key);
+              e.preventDefault();
+            }
+          }}
+        >
+          {searching && (
+            <div className="flex items-center gap-2 border-b border-border/60 px-3">
+              <Search className="size-3.5 text-muted-foreground" />
+              <input
+                ref={input}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setQuery("");
+                    setSearching(false);
+                  }
+                }}
+                placeholder="Search behaviors"
+                aria-label="Search behaviors"
+                className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+              <button
+                type="button"
+                aria-label="Close search"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => {
                   setQuery("");
                   setSearching(false);
-                }
-              }}
-              placeholder="Search behaviours"
-              aria-label="Search behaviours"
-              className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
-            <button
-              type="button"
-              aria-label="Close search"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setQuery("");
-                setSearching(false);
-              }}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        )}
-        <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-          <ul role="listbox" aria-label="Behaviour" className="p-1">
-            {shown.map((b) => {
-              const e = env(b.behaviorId);
-              const selected = b.behaviorId === chosen.behaviorId;
-              return (
-                <li key={b.behaviorId}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => {
-                      onChange(b.behaviorId);
-                      popover.onOpenChange(false);
-                    }}
-                    className={cn(
-                      "grid w-full grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-lg px-2 py-2 text-left hover:bg-accent",
-                      selected && "bg-muted",
-                    )}
-                  >
-                    <BehaviorAvatar
-                      name={b.displayName}
-                      behaviorId={b.behaviorId}
-                      className="row-span-3 mt-0.5"
-                    />
-                    <span className="text-sm font-medium">
-                      {b.displayName}
-                      {b.isDefault && (
-                        <span className="ml-2 font-normal text-muted-foreground">
-                          default
+                }}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
+          <ScrollArea className="max-h-[min(20rem,calc(var(--available-height)-8rem))] [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
+            <ul role="listbox" aria-label="Behavior" className="p-1">
+              {shown.map((b) => {
+                const e = env(b.behaviorId);
+                const selected = b.behaviorId === chosen.behaviorId;
+                return (
+                  <li key={b.behaviorId}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => {
+                        onChange(b.behaviorId);
+                        popover.onOpenChange(false);
+                      }}
+                      className={cn(
+                        "grid w-full grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-lg px-2 py-2 text-left hover:bg-accent",
+                        selected && "bg-muted",
+                      )}
+                    >
+                      <BehaviorAvatar
+                        name={b.displayName}
+                        behaviorId={b.behaviorId}
+                        className="row-span-3 mt-0.5"
+                      />
+                      <span className="text-sm font-medium">
+                        {b.displayName}
+                        {b.isDefault && (
+                          <span className="ml-2 font-normal text-muted-foreground">
+                            default
+                          </span>
+                        )}
+                      </span>
+                      {describe(b.behaviorId) && (
+                        <span className="line-clamp-1 text-xs text-muted-foreground">
+                          {describe(b.behaviorId)}
                         </span>
                       )}
-                    </span>
-                    {describe(b.behaviorId) && (
-                      <span className="line-clamp-1 text-xs text-muted-foreground">
-                        {describe(b.behaviorId)}
-                      </span>
-                    )}
-                    {readiness(b.behaviorId).ready ? (
-                      <span className="truncate font-mono text-[11px] text-muted-foreground">
-                        {e?.modelName ?? "no backend"} · files {short(e?.fileAccess)} ·
-                        bash {short(e?.bashAccess)} · net{" "}
-                        {e?.networkAccess ?? "disabled"}
-                      </span>
-                    ) : (
-                      <span className="truncate text-[11px] text-destructive">
-                        Unavailable: {readiness(b.behaviorId).reason}
-                      </span>
-                    )}
-                  </button>
+                      {readiness(b.behaviorId).ready ? (
+                        <span className="truncate font-mono text-[11px] text-muted-foreground">
+                          {e?.modelName ?? "no backend"} · files {short(e?.fileAccess)}{" "}
+                          · bash {short(e?.bashAccess)} · net{" "}
+                          {e?.networkAccess ?? "disabled"}
+                        </span>
+                      ) : (
+                        <span className="truncate text-[11px] text-destructive">
+                          Unavailable: {readiness(b.behaviorId).reason}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+              {shown.length === 0 && (
+                <li className="px-2 py-4 text-center text-sm text-muted-foreground">
+                  No behavior matches.
                 </li>
-              );
-            })}
-            {shown.length === 0 && (
-              <li className="px-2 py-4 text-center text-sm text-muted-foreground">
-                No behaviour matches.
-              </li>
-            )}
-          </ul>
-        </ScrollArea>
-        <div className="flex items-center border-t border-border/60 p-1">
-          <button
-            type="button"
-            onClick={() => void createBehavior(shell, deployment)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent"
-          >
-            <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
-              <Plus className="size-3.5" />
-            </span>
-            Create new behaviour
-          </button>
-          {!searching && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Search behaviours"
-              onClick={() => setSearching(true)}
+              )}
+            </ul>
+          </ScrollArea>
+          <div className="flex items-center border-t border-border/60 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                /* a draft behavior beside the session; saved enabled and chosen */
+                createAfterClose.current = true;
+                popover.onOpenChange(false);
+              }}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent"
             >
-              <Search />
-            </Button>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
+              <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
+                <Plus className="size-3.5" />
+              </span>
+              Create new behavior
+            </button>
+            {!searching && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Search behaviors"
+                onClick={() => setSearching(true)}
+              >
+                <Search />
+              </Button>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {deployment && (
+        <BehaviorSheet
+          shell={shell}
+          deployment={deployment}
+          open={creating}
+          enabled
+          onClose={(behaviorId) => {
+            setCreating(false);
+            if (behaviorId) onChange(behaviorId);
+          }}
+        />
+      )}
+    </>
   );
 }

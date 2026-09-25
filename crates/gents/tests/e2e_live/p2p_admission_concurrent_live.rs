@@ -1,4 +1,4 @@
-//! Live concurrent multi-wave P2P admission e2e against real d4f inference.
+//! Live concurrent multi-wave P2P admission e2e against real inference.
 //!
 //! The sequential unit e2e (`p2p_admission_backpressure_e2e`) waits for each
 //! peer convergence before the next write, so `max_concurrent_push_tasks = 1`
@@ -6,7 +6,7 @@
 //!
 //!   * Owner hub: `max_concurrent_push_tasks = 1` (TLA `PushWorkers = 1` shape)
 //!   * Two healthy peers as PushLog fan-out targets
-//!   * Real GLM completions on workstation-1:8000
+//!   * Real completions from the target named by `GENTS_EVAL_TARGET`
 //!   * **Concurrent** request submission — N waves in flight at once so the
 //!     single push worker must serialize fan-out across peers without
 //!     stranding either peer
@@ -14,11 +14,9 @@
 //! Gated: `#[ignore]` + `GENTS_LIVE_P2P_ADMISSION=1`.
 //!
 //! ```bash
-//! GENTS_LIVE_P2P_ADMISSION=1 \
-//!   GENTS_LIVE_P2P_ADMISSION_ENDPOINT=http://workstation-1:8000/v1 \
-//!   GENTS_LIVE_P2P_ADMISSION_MODEL=GLM-5.3-Flash-NVFP4 \
+//! GENTS_LIVE_P2P_ADMISSION=1 GENTS_EVAL_TARGET=workstation-1 \
 //!   cargo test -p gents --test e2e_live \
-//!     concurrent_multiwave_single_push_worker_converges_with_live_d4f \
+//!     concurrent_multiwave_single_push_worker_converges_with_live_inference \
 //!     -- --ignored --nocapture --test-threads=1
 //! ```
 //!
@@ -29,38 +27,21 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{AgentBehavior, BackendAuth, InferenceBackend, InferenceProfile};
 use gents::graphql::escape_graphql_string;
-use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
-    Gents, OpenAiWireApi, ToolCeiling,
-};
+use gents::AgentIdentity;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
-use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::{create_runtime_request, BootedAgent};
+use crate::support::live_inference::{bind_target, boot_live_agent, live_target};
 use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, TestP2pAdmission};
 
-const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
-const LIVE_BACKEND_ID: &str = "backend-live-p2p-admission";
 const CONCURRENT_WAVES: usize = 4;
 const REPLICATED: &[&str] = &["AgentRequest", "AgentResponse", "AgentMessage"];
 
 fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
-}
-
-fn live_endpoint() -> String {
-    std::env::var("GENTS_LIVE_P2P_ADMISSION_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
-}
-
-fn live_model() -> String {
-    std::env::var("GENTS_LIVE_P2P_ADMISSION_MODEL")
-        .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
 
 async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
@@ -147,121 +128,6 @@ async fn install_one_way_replicator(
         )
         .await
         .expect("install sender → receiver replicator");
-}
-
-async fn assert_endpoint_reachable(endpoint: &str) {
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest");
-    let resp = tokio::time::timeout(Duration::from_secs(20), client.get(&url).send()).await;
-    match resp {
-        Ok(Ok(r)) if r.status().is_success() => {}
-        Ok(Ok(r)) => panic!("endpoint {url} returned {}", r.status()),
-        Ok(Err(e)) => panic!("endpoint {url} unreachable: {e}"),
-        Err(_) => panic!("endpoint {url} timed out"),
-    }
-}
-
-fn live_backend(agent_did: &str, endpoint: &str) -> InferenceBackend {
-    InferenceBackend {
-        agent_did: agent_did.to_string(),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        name: LIVE_BACKEND_ID.to_string(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
-        endpoint: endpoint.to_string(),
-        auth: BackendAuth::Unauthenticated,
-        connect_timeout_secs: None,
-        discovery_timeout_secs: None,
-        max_concurrent: Some(8),
-        max_queue_depth: Some(100),
-        enabled: true,
-        tags: Vec::new(),
-    }
-}
-
-async fn bind_live_backend(
-    node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
-    endpoint: &str,
-    model: &str,
-) -> (String, String) {
-    let agent_did = identity.did().to_string();
-    let mut principal = ensure_agent_principal(node, &agent_did)
-        .await
-        .expect("ensure principal");
-    let behavior_id = default_behavior_id_for_agent(&agent_did);
-    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    principal.default_behavior_id = Some(behavior_id.clone());
-    let backend = live_backend(&agent_did, endpoint);
-    let profile = InferenceProfile {
-        agent_did: agent_did.clone(),
-        profile_id: profile_id.clone(),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        model_name: model.to_string(),
-        ..Default::default()
-    };
-    let behavior = AgentBehavior {
-        behavior_id: behavior_id.clone(),
-        agent_did: agent_did.clone(),
-        display_name: Some("Live P2P admission behavior".to_string()),
-        description: None,
-        context_id: None,
-        inference_profile_id: profile_id,
-        enabled: true,
-        tags: Vec::new(),
-        created_at: Some(chrono::Utc::now().to_rfc3339()),
-    };
-    let documents = [
-        (Collection::AgentPrincipal, serde_json::to_value(principal)),
-        (Collection::InferenceBackend, serde_json::to_value(backend)),
-        (Collection::InferenceProfile, serde_json::to_value(profile)),
-        (Collection::AgentBehavior, serde_json::to_value(behavior)),
-    ]
-    .into_iter()
-    .map(|(collection, value)| {
-        let value = value.expect("serialize live P2P configuration document");
-        gents::config_client::DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        }
-    })
-    .collect();
-    let plan = gents::config_client::DesiredStateApplyPlan::new(documents)
-        .expect("build live P2P configuration plan");
-    gents::ConfigAccess::transact_local(node, None, "test.bind_live_p2p_backend", |txn| {
-        let plan = &plan;
-        Box::pin(async move {
-            gents::config_client::apply_desired_state_plan(txn, plan)
-                .await
-                .map(|_| ())
-        })
-    })
-    .await
-    .expect("install live P2P configuration");
-
-    debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
-    (agent_did, behavior_id)
-}
-
-async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    let agent = Gents::from_default_behavior_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let agent_did = agent.agent_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    Ok(BootedAgent::new(shutdown_tx, handle, agent_did))
 }
 
 fn is_terminal(state: &str) -> bool {
@@ -428,18 +294,19 @@ impl Drop for LiveTopologyGuard {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
-async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Result<()> {
+async fn concurrent_multiwave_single_push_worker_converges_with_live_inference() -> Result<()> {
     assert!(
         live_enabled(),
         "set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored to run the concurrent multi-wave live e2e"
     );
 
-    let endpoint = live_endpoint();
-    let model = live_model();
+    let target = live_target();
     eprintln!(
-        "[p2p-admission-live] endpoint={endpoint} model={model} waves={CONCURRENT_WAVES} push_workers=1 peers=2"
+        "[p2p-admission-live] target={} model={} waves={CONCURRENT_WAVES} push_workers=1 peers=2",
+        target.name,
+        target.model()
     );
-    assert_endpoint_reachable(&endpoint).await;
+    target.assert_reachable().await;
 
     let admission = TestP2pAdmission::single_push_worker();
     let owner = test_p2p_db_with_admission("p2p-adm-live-owner", admission.clone()).await;
@@ -462,13 +329,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     .await;
 
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (agent_did, behavior_id) = bind_live_backend(
-        topo.owner().node.as_ref(),
-        identity.as_ref(),
-        &endpoint,
-        &model,
-    )
-    .await;
+    let (agent_did, behavior_id) =
+        bind_target(topo.owner().node.as_ref(), identity.as_ref(), &target).await;
     let agent = boot_live_agent(topo.owner(), identity).await?;
     topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={agent_did}");
@@ -502,7 +364,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
         let state = wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
         assert_eq!(
             state, "completed",
-            "owner wave {request_id} must complete against live d4f, got {state}"
+            "owner wave {request_id} must complete against target {}, got {state}",
+            target.name
         );
         eprintln!("[p2p-admission-live] owner terminal {request_id}={state}");
     }

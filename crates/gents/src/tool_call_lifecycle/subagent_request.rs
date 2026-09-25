@@ -301,7 +301,12 @@ async fn create_subagent_request_inner(
                 .agent_did
                 .as_deref()
                 .context("parent AgentRequest is missing agent_did")?;
-            if parent.request_id != parent_request_id || parent_agent_did != agent_did {
+            let observed_depth = u32::try_from(parent.subagent_depth.unwrap_or(0))
+                .map_err(|_| anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent))?;
+            if parent.request_id != parent_request_id
+                || parent_agent_did != agent_did
+                || observed_depth != parent_subagent_depth
+            {
                 return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
             }
         }
@@ -573,7 +578,7 @@ async fn load_parent_request_by_doc_id(
             AgentRequest(
                 filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
-            ) {{ _docID request_id agent_did }}
+            ) {{ _docID request_id agent_did subagent_depth }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -749,11 +754,14 @@ mod tests {
             }
         }
         fn workspace(binding: &LeanReservedChildBinding) -> Option<WorkspaceLineage> {
-            binding.workspace.map(|value| WorkspaceLineage {
-                workspace_id: Some(token("workspace", value)),
-                workspace_owner_agent_did: Some(token("agent", binding.agent)),
-                workspace_authority: Some("readWrite".into()),
-                workspace_seal_hash: Some(token("seal", value)),
+            binding.workspace.as_ref().map(|value| WorkspaceLineage {
+                workspace_id: Some(format!("workspace-{}", value.workspace_id)),
+                workspace_owner_agent_did: Some(format!(
+                    "agent-{}",
+                    value.workspace_owner_agent_did
+                )),
+                workspace_authority: Some(value.workspace_authority.clone()),
+                workspace_seal_hash: value.workspace_seal_hash.map(|seal| format!("seal-{seal}")),
             })
         }
         fn row(binding: &LeanReservedChildBinding) -> gents_protocol::row::AgentRequestRow {
@@ -765,7 +773,7 @@ mod tests {
                 "behavior_id": token("behavior", binding.behavior),
                 "content": token("payload", binding.payload),
                 "input": {},
-                "subagent_depth": 1,
+                "subagent_depth": binding.depth,
                 "caused_by_parent_request_id": token("request", binding.parent_request),
                 "caused_by_parent_request_doc_id": token("request-doc", binding.parent_request_doc),
                 "caused_by_parent_tool_call_id": token("tool", binding.parent_tool),
@@ -794,7 +802,7 @@ mod tests {
                 &token("behavior", candidate.behavior),
                 &token("payload", candidate.payload),
                 &gents_protocol::request_input::RequestInput::default(),
-                1,
+                u32::try_from(candidate.depth).expect("modeled child depth fits native depth"),
                 &token("request", candidate.parent_request),
                 &token("request-doc", candidate.parent_request_doc),
                 &token("tool", candidate.parent_tool),

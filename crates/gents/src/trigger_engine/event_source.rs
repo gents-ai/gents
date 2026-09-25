@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -223,10 +224,13 @@ impl SourceSchemaCache {
         if let Some(fields) = guard.get(collection) {
             return Ok(fields.clone());
         }
-        let response = node.execute(&source_fields_query(collection)).await;
-        if response.has_errors() {
-            anyhow::bail!("introspect {} failed: {:?}", collection, response.errors);
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &source_fields_query(collection),
+            "introspect",
+        )
+        .await
+        .with_context(|| format!("introspect {collection}"))?;
         let fields = source_fields_from(response.data.as_ref(), collection)?;
         guard.insert(collection.to_string(), fields.clone());
         Ok(fields)
@@ -582,13 +586,13 @@ impl EventSource {
             collection = collection,
             limit = SEEN_DOCS_SEED_LIMIT,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "seen-doc seed query for {collection} failed: {:?}",
-                response.errors
-            );
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "seen-doc seed query",
+        )
+        .await
+        .with_context(|| format!("seen-doc seed query for {collection}"))?;
         let rows = response
             .data
             .as_ref()
@@ -619,15 +623,13 @@ impl EventSource {
                 }}"#,
                 limit = SEEN_DOCS_SEED_LIMIT,
             );
-            let response = self.node.execute(&query).await;
-            if response.has_errors() {
-                anyhow::bail!(
-                    "correlation readiness seed for {}.{} failed: {:?}",
-                    collection,
-                    field,
-                    response.errors
-                );
-            }
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &self.node,
+                &query,
+                "correlation readiness seed",
+            )
+            .await
+            .with_context(|| format!("correlation readiness seed for {collection}.{field}"))?;
             for row in response
                 .data
                 .as_ref()
@@ -715,14 +717,13 @@ impl EventSource {
             collection = collection,
             limit = SEEN_DOCS_SEED_LIMIT,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "event source rescan query for {} failed: {:?}",
-                collection,
-                response.errors
-            );
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "event source rescan query",
+        )
+        .await
+        .with_context(|| format!("event source rescan query for {collection}"))?;
         let rows = response
             .data
             .as_ref()
@@ -899,10 +900,9 @@ impl EventSource {
             id = crate::graphql::escape_graphql_string(source_doc_id),
             projection = projection,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("fetch source doc errors: {:?}", response.errors);
-        }
+        let response =
+            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "fetch source doc")
+                .await?;
         let Some(rows) = response
             .data
             .as_ref()
@@ -1249,15 +1249,23 @@ impl EventSource {
             trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            tracing::warn!(
-                trigger_id = %trigger.trigger_id,
-                errors = ?response.errors,
-                "event-trigger batched marker prune failed; dispatch will retain the final marker check",
-            );
-            return HashSet::new();
-        }
+        let response = match crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "event-trigger batched marker prune",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    trigger_id = %trigger.trigger_id,
+                    error = %error,
+                    "event-trigger batched marker prune failed; dispatch will retain the final marker check",
+                );
+                return HashSet::new();
+            }
+        };
         response
             .data
             .as_ref()
@@ -1305,15 +1313,23 @@ impl EventSource {
             owner = crate::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            tracing::warn!(
-                consumer = ?delivery.consumer(),
-                errors = ?response.errors,
-                "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
-            );
-            return HashSet::new();
-        }
+        let response = match crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "event-trigger durable quiescence prune",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    consumer = ?delivery.consumer(),
+                    error = %error,
+                    "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
+                );
+                return HashSet::new();
+            }
+        };
         response
             .data
             .as_ref()

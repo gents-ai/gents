@@ -55,7 +55,7 @@ impl ToolDyn for CliTool {
                 .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError::from(error))))?;
             let output = run_cli_command(&config, &args.argv)
                 .await
-                .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError::from(error))))?;
+                .map_err(LocalToolError::into_dispatch_error)?;
             serde_json::to_string(&output).map_err(ToolError::JsonError)
         })
     }
@@ -108,16 +108,20 @@ fn deny_artifact_scope() -> Result<(), LocalToolError> {
     Ok(())
 }
 
-async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<String> {
+async fn run_cli_command(
+    config: &CliToolConfig,
+    argv: &[String],
+) -> Result<String, LocalToolError> {
     deny_artifact_scope()?;
     let cwd = match config.working_dir.as_ref() {
         Some(path) => {
             if !path.is_dir() {
-                bail!(
+                return Err(anyhow::anyhow!(
                     "working directory for tool '{}' is not a directory: {}",
                     config.name,
                     path.display()
-                );
+                )
+                .into());
             }
             path.clone()
         }
@@ -145,40 +149,64 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
     })
     .await;
 
-    let (exit_code, stdout_bytes, stderr_bytes) = match outcome {
+    render_cli_outcome(config, &cwd, argv, outcome)
+}
+
+fn render_cli_outcome(
+    config: &CliToolConfig,
+    cwd: &std::path::Path,
+    argv: &[String],
+    outcome: ManagedExecOutcome,
+) -> Result<String, LocalToolError> {
+    let timeout_secs = config.timeout_secs.max(1);
+    let (exit_code, stdout_bytes, stderr_bytes, terminal_cause) = match outcome {
         ManagedExecOutcome::Exited {
             code,
             stdout,
             stderr,
             ..
-        } => (code.unwrap_or(-1), stdout, stderr),
-        ManagedExecOutcome::TimedOut { .. } => {
-            bail!("timed out after {timeout_secs}s")
-        }
-        ManagedExecOutcome::Cancelled { .. } => {
-            bail!("command cancelled by the owning request")
-        }
-        ManagedExecOutcome::SpawnFailed { error } => bail!(error),
+        } => (Some(code.unwrap_or(-1)), stdout, stderr, None),
+        ManagedExecOutcome::TimedOut { stdout, stderr, .. } => (
+            None,
+            stdout,
+            stderr,
+            Some(format!("timed out after {timeout_secs}s")),
+        ),
+        ManagedExecOutcome::Cancelled { stdout, stderr, .. } => (
+            None,
+            stdout,
+            stderr,
+            Some("command cancelled by the owning request".to_owned()),
+        ),
+        ManagedExecOutcome::SpawnFailed { error } => return Err(anyhow::anyhow!(error).into()),
     };
 
-    let (stdout, _) = cap_output(
-        &String::from_utf8_lossy(&stdout_bytes),
-        super::DEFAULT_MAX_COMMAND_CHARS,
-    );
-    let (stderr, _) = cap_output(
-        &String::from_utf8_lossy(&stderr_bytes),
-        super::DEFAULT_MAX_COMMAND_CHARS,
-    );
+    let render_channel = |bytes: &[u8]| {
+        let text = String::from_utf8_lossy(bytes);
+        if terminal_cause.is_some() {
+            crate::tool_call_lifecycle::delivery::terminal_output_tail(
+                &text,
+                config.max_output_chars,
+            )
+            .to_owned()
+        } else {
+            cap_output(&text, config.max_output_chars).0
+        }
+    };
+    let stdout = render_channel(&stdout_bytes);
+    let stderr = render_channel(&stderr_bytes);
     let command_line = std::iter::once(config.binary_path.display().to_string())
         .chain(argv.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
 
-    Ok(format!(
+    let rendered = format!(
         "cwd: {}\ncommand: {}\nexit_code: {}\nstdout:\n{}\nstderr:\n{}",
         cwd.display(),
         command_line,
-        exit_code,
+        exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unavailable".to_owned()),
         if stdout.is_empty() {
             "(empty)"
         } else {
@@ -189,7 +217,15 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
         } else {
             &stderr
         },
-    ))
+    );
+    if let Some(cause) = terminal_cause {
+        // Captured command text must not reclassify the terminal cause.
+        return Err(LocalToolError::reported_failure(
+            gents_loop::tool_call_lifecycle::runtime::classify_error_text(&cause),
+            format!("{cause}\n{rendered}"),
+        ));
+    }
+    Ok(rendered)
 }
 
 #[cfg(all(test, unix))]
@@ -206,6 +242,7 @@ mod tests {
             env_vars: HashMap::from([("GENTS_T".to_string(), "1".to_string())]),
             working_dir: None,
             timeout_secs,
+            max_output_chars: super::super::DEFAULT_MAX_COMMAND_CHARS,
         }
     }
 
@@ -267,11 +304,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_output_cap_bounds_each_channel() {
+        let mut config = config(5);
+        config.max_output_chars = 7;
+        let out = run_cli_command(
+            &config,
+            &[
+                "-c".into(),
+                "printf '%20s' out; printf '%20s' err >&2".into(),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(out.contains(&format!("stdout:\n{:7}\n", "")), "{out}");
+        assert!(out.contains(&format!("stderr:\n{:7}\n", "")), "{out}");
+        assert!(out.contains("first 7 of 20 bytes"), "{out}");
+    }
+
+    #[tokio::test]
     async fn tool_timeout_kills_the_process_group() {
-        let err = run_cli_command(&config(1), &["-c".into(), "sleep 30".into()])
-            .await
-            .unwrap_err();
+        let err = run_cli_command(
+            &config(1),
+            &[
+                "-c".into(),
+                "printf '%17000s' ' '; printf 'timeout unavailable transport'; printf 'last stderr' >&2; sleep 30".into(),
+            ],
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("timed out after 1s"), "{err}");
+        let diagnostic = err.to_string();
+        let stdout = diagnostic
+            .split_once("stdout:\n")
+            .unwrap()
+            .1
+            .split_once("\nstderr:\n")
+            .unwrap()
+            .0;
+        assert!(stdout.ends_with("timeout unavailable transport"), "{err}");
+        assert_eq!(stdout.len(), super::super::DEFAULT_MAX_COMMAND_CHARS);
+        assert!(err.to_string().contains("stderr:\nlast stderr"), "{err}");
+        assert!(err.to_string().contains("exit_code: unavailable"), "{err}");
+        assert!(matches!(
+            crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                "cli",
+                Err(err.into_dispatch_error())
+            ),
+            crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                ..
+            } if class == gents_loop::tool_call_lifecycle::runtime::classify_error_text("timed out after 1s")
+        ));
     }
 
     #[tokio::test]
@@ -280,17 +363,33 @@ mod tests {
 
         let token = tokio_util::sync::CancellationToken::new();
         let cancel = token.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let temp = tempfile::tempdir().unwrap();
+        let ready = temp.path().join("output-written");
+        let mut config = config(30);
+        config
+            .env_vars
+            .insert("GENTS_READY".into(), ready.display().to_string());
+        let cancellation = tokio::spawn(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !ready.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("command must write output before cancellation");
             cancel.cancel();
         });
         let err = scope_request_tool_execution(
             None,
             token,
-            run_cli_command(&config(30), &["-c".into(), "sleep 30".into()]),
+            run_cli_command(&config, &["-c".into(),
+                "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()]),
         )
         .await
         .unwrap_err();
+        cancellation.await.unwrap();
         assert!(err.to_string().contains("cancelled"), "{err}");
+        assert!(err.to_string().contains("stdout:\npartial stdout"), "{err}");
+        assert!(err.to_string().contains("stderr:\npartial stderr"), "{err}");
     }
 }

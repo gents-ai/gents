@@ -12,11 +12,10 @@ use crate::background_tools::r4c_args::{
 };
 use crate::background_tools::{
     append_steering_request, child_request_completed, child_terminal_reason, child_terminal_status,
-    context_allowed_target_names, drain_automated_wakeups_returning_ids,
-    effective_context_cross_deployment_spawn_timeout_seconds, handle_list_background_tools,
-    handle_list_subagents, handle_read_subagent, handle_read_tool_output,
-    load_authorized_child_edge, load_child_final_response, load_child_terminal_row,
-    load_parent_subagent_context, load_steer_subagent_target, pending_automated_wakeup_request_ids,
+    context_allowed_target_names, effective_context_cross_deployment_spawn_timeout_seconds,
+    handle_list_background_tools, handle_list_subagents, handle_read_subagent,
+    handle_read_tool_output, load_authorized_child_edge, load_child_final_response,
+    load_child_terminal_row, load_parent_subagent_context, load_steer_subagent_target,
     project_child_terminal, resolve_context_target, try_load_authorized_child_edge,
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, ChildEdge, ParentSubagentContext,
     ProcessControlScope, ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget,
@@ -24,6 +23,7 @@ use crate::background_tools::{
 };
 use crate::descendant_graph::DescendantGraphAccess;
 use crate::document_config::{load_agent_behavior, SubagentTargetDocument};
+use crate::lifecycle::queue::drain_automated_wakeups_returning_ids;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::subagent_workspace::{
     resolve_spawn_workspace, ParentWorkspaceStamp, SpawnWorkspaceError,

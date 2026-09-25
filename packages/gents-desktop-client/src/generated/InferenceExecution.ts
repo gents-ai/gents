@@ -16,9 +16,13 @@ max_total_tokens?: number | null,
  */
 stream_batch_ms?: number | null,
 /**
- * Maximum provider-stream silence. Existing default 1,800s.
+ * Execution lease duration, renewed by the owned execution independently of provider output. Default 120s.
  */
 stream_liveness_timeout_secs?: number | null,
+/**
+ * Maximum provider transport silence per attempt, including the wait for response headers; expiry is a retryable attempt failure. Independent of the lease. Default 300s.
+ */
+provider_idle_timeout_secs?: number | null,
 /**
  * Overall claimed-request duration. Existing default 86,400s; includes tools.
  */

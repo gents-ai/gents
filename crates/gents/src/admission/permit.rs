@@ -3,23 +3,22 @@ use std::sync::{Arc, Mutex};
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
 use rig::completion::{CompletionError, Usage};
-use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
-use super::controller::{BackendAdmissionController, InferenceCallRecord};
+use super::controller::{InferenceCallRecord, PoolPermit};
 use super::persistence::{persist_existing_call_terminal, spawn_persistence};
 use super::stream_guard::StreamGuardLifecycle;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
-    controller: Arc<BackendAdmissionController>,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Option<PoolPermit>,
     call: InferenceCallRecord,
     _doc_id: String,
     terminal: Option<PermitTerminal>,
     finished: bool,
     cancel_observer: Option<CancellationToken>,
     terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
+    provider_activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,8 +31,7 @@ struct PermitTerminal {
 impl AdmissionPermit {
     pub(super) fn new(
         node: Arc<EmbeddedNode>,
-        controller: Arc<BackendAdmissionController>,
-        permit: OwnedSemaphorePermit,
+        permit: PoolPermit,
         call: InferenceCallRecord,
         doc_id: String,
         cancel_observer: Option<CancellationToken>,
@@ -41,7 +39,6 @@ impl AdmissionPermit {
     ) -> Self {
         Self {
             node,
-            controller,
             permit: Some(permit),
             call,
             _doc_id: doc_id,
@@ -49,7 +46,27 @@ impl AdmissionPermit {
             finished: false,
             cancel_observer,
             terminal_failure_observer,
+            provider_activity: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn controller_generation_for_test(&self) -> u64 {
+        self.call.controller_generation
+    }
+
+    #[cfg(test)]
+    pub(super) fn attribution_for_test(&self) -> &str {
+        &self.call.backend_config_fingerprint
+    }
+
+    /// The armed attempt this call serves; its stall reason names a drop
+    /// caused by the owned loop's provider idle window.
+    pub(crate) fn observe_provider_activity(
+        &mut self,
+        activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
+    ) {
+        self.provider_activity = activity;
     }
 
     pub(crate) async fn finish_success(
@@ -156,25 +173,25 @@ impl StreamGuardLifecycle for AdmissionPermit {
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
-        // Return the semaphore permit before the in-flight release: the
-        // release can synchronously install a replacement controller, and a
-        // drained controller must hold no outstanding permits (#1001; Lean
-        // `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`).
-        // Field drop runs only after this body — including the observer lock
-        // below — so the permit must be taken explicitly here.
+        // Field drop runs only after this body, which can block on the
+        // observer lock below; return capacity first.
         drop(self.permit.take());
-        self.controller.release_in_flight();
         if self.finished {
             return;
         }
         self.finished = true;
-        let terminal_failure_reason =
-            self.terminal_failure_observer
-                .as_ref()
-                .and_then(|observer| match observer.lock() {
-                    Ok(reason) => reason.clone(),
-                    Err(poisoned) => poisoned.into_inner().clone(),
-                });
+        let terminal_failure_reason = self
+            .provider_activity
+            .as_ref()
+            .and_then(|activity| activity.stall_reason())
+            .or_else(|| {
+                self.terminal_failure_observer
+                    .as_ref()
+                    .and_then(|observer| match observer.lock() {
+                        Ok(reason) => reason.clone(),
+                        Err(poisoned) => poisoned.into_inner().clone(),
+                    })
+            });
         let terminal = self.terminal.clone().unwrap_or_else(|| {
             if self
                 .cancel_observer

@@ -1,5 +1,8 @@
 mod support;
 
+#[path = "../src/lean_vocab_test/support.rs"]
+mod lean_vocab_test;
+
 #[path = "e2e_subagent/r4_subagent_completion.rs"]
 mod r4_subagent_completion;
 #[path = "e2e_subagent/r4_subagent_tools.rs"]

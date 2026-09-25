@@ -47,8 +47,12 @@ pub struct ManagedServerRestartRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetRequest {
-    /// Omit to preview the exact managed home and required confirmation.
+    /// Omit to preview what would be retired and the required confirmation.
     pub confirmation: Option<String>,
+    /// Archive (the default) or delete. Each has its own confirmation text.
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
 /// Fetch peer runtime status by **saved peer id** only — read grants never
@@ -97,6 +101,15 @@ pub struct SessionRenameRequest {
 #[serde(deny_unknown_fields)]
 pub struct AgentConfigSaveRequest {
     pub document: gents::document_config::AgentPrincipal,
+}
+
+/// Make a behavior the principal's default, enabling it in the same apply.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct DefaultBehaviorSetRequest {
+    pub agent_did: String,
+    pub behavior_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

@@ -64,15 +64,18 @@ export function createDesktopApiAdapter(
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
         request: { agentName, ...authority },
       }),
-    resetManagedServer: (confirmation) =>
+    resetManagedServer: (confirmation, disposition) =>
       invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
-        request: { confirmation: confirmation ?? null },
+        request: { confirmation: confirmation ?? null, disposition: disposition ?? null },
       }),
+    quitDesktop: () => invokeDesktop<void>("desktop_app_quit"),
     validateManagedServerRoot: (path) =>
       invokeDesktop<{ canonicalPath: string }>(
         "desktop_managed_server_validate_root",
         { request: { path } },
       ).then((result) => result.canonicalPath),
+    openManagedServerLoginItems: () =>
+      invokeDesktop<void>("desktop_managed_server_open_login_items"),
     commitManagedServerAutoStart: (_agentName) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
         enabled: true,
@@ -176,9 +179,9 @@ export function createDesktopApiAdapter(
         request,
       }),
     saveAgentConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
-        request,
-      }),
+      invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", { request }),
+    setDefaultBehavior: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_default_behavior_set", { request }),
     saveBehaviorConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", {
         request,
@@ -281,6 +284,10 @@ export function createDesktopApiAdapter(
     disconnectProviderAccount: (agentDid, credentialId) =>
       invokeDesktop<void>("desktop_provider_account_disconnect", {
         request: { agentDid, credentialId },
+      }),
+    retrySaveProviderAccount: (agentDid, provider) =>
+      invokeDesktop<ProviderAccountView>("desktop_provider_account_retry_save", {
+        request: { agentDid, provider },
       }),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {

@@ -825,6 +825,19 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                     .await
                     .iter()
                     .any(|message| message.message_key.starts_with("background-completion-notification:"))
+                // The notification materializes a successor wake. Shut down
+                // only once that wake is inside inference (the third scripted
+                // provider call), so shutdown deterministically fails it into
+                // its own persisted backoff; shutting down before its claim
+                // would leave it pending instead.
+                && runtime.backend.observed_requests("continue") >= 3
+                && background_wake_retry_rows(&db.node, session_id)
+                    .await
+                    .iter()
+                    .any(|row| {
+                        row.request_id.starts_with("background-completion-")
+                            && row.lifecycle_state == Some(RequestLifecycleState::Processing)
+                    })
             {
                 break;
             }
@@ -832,7 +845,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         }
     })
     .await
-    .expect("failed wake did not retain canonical background completion notification");
+    .expect("failed wake did not retain canonical background completion notification with its successor wake in inference");
     runtime.shutdown().await;
 
     // Freeze the exact physical candidate set before the sweep. The sweep may

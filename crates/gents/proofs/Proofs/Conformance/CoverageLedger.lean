@@ -79,6 +79,9 @@ def consumerWithFollowUp
   , acceptedFollowUp := acceptedFollowUp
   }
 
+def r5ScenarioFollowUp : String :=
+  "Six finite generated traces exercise physical two-principal P2P rows, signed child admission, live-child recovery inertness, expired-child recovery, terminal-bridge receipt repair, cancel acknowledgment and keyed delivery through native owners. Generations bind model symbols to observed native UUIDs, not injected stale-CAS parameters. Interrupted expired-child recovery has a model witness but no native trace here. Every trace materializes children before recovery; orphan materialization is outside this composition. Checkpoints cover selected post-action states and pending queue coalescing; clock scheduling, ACP outcomes and atomic canonical publication remain external premises, not universal native proofs."
+
 def tagged (entry : CoverageEntry)
     (feature : String) (surfaces : List Surface) : CoverageEntry :=
   { entry with feature := feature, surfaces := surfaces }
@@ -200,6 +203,14 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
   , { feature := "apply-reconcile"
     , required := [Surface.operatorCli]
     , deferred := [(Surface.operatorUi, "#281")]
+    }
+  , { feature := "eval"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1515")]
+    }
+  , { feature := "optimization"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1455")]
     }
   , { feature := "event-delivery"
     , required := [Surface.runtimeInternal]
@@ -413,6 +424,21 @@ def vocabularyCoverage : List CoverageEntry :=
       "MailboxSourceKind"
       "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
       "mailbox" allSurfaces
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalOutcomeKind"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalProviderReason"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalEvidenceClass"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -597,6 +623,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
       "The native closure builder is exercised, but the adapter filters access observations itself and derives authorized_reference_closure from its result. Bind independent ACP observations through the production authorization owner before claiming end-to-end selection coverage.")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "session_hydration_closure_cases"
+      "SessionHydrationClosureCases"
+      "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
+      "The native consumer checks closure construction and selection against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions or end-to-end peer hydration.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_hydration_apply_cases"
       "SessionHydrationApplyCases"
@@ -644,6 +676,29 @@ def caseCoverage : List CoverageEntry :=
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
+      "queued_steering_trace_cases"
+      "QueuedSteeringTraceCases"
+      "lifecycle::queue::tests::steering::generated_pending_steering_terminals_retain_signed_admission_without_output"
+      "Native binding covers only the two true-pending interruptBeforeClaim and admissionReject scripts: signed raw content/input survive and no canonical output rows appear. It does not bind claimed or owned terminal paths, provider-send denial, capture conflict, exact replay, or pending-turn UI visibility.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "queued_steering_trace_cases"
+      "QueuedSteeringTraceCases"
+      "lifecycle::queue::tests::steering::generated_owned_prepublication_terminals_retain_signed_admission_without_output"
+      "Native binding covers the two modeled owned prepublication failure/interruption terminal-owner suffixes after a production-signed steering enqueue: claim/begin, physical interrupt latch where modeled, real NoMessage terminalization, retained signed content/input, and zero canonical output/active request. It does not inject a daemon context-preparation error or hook cancellation, execute provider dispatch, inspect the pending-turn UI projection, or verify fresh admission at claim. Those upstream and projection premises remain unbound.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "queued_steering_trace_cases"
+      "QueuedSteeringTraceCases"
+      "agent::loop_stream::tests::generated_authored_input_is_durable_before_provider_stream_entry"
+      "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "queued_steering_guard_cases"
+      "QueuedSteeringGuardCases"
+      "Wrong-head claim, incoherent supplied-owner and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. The exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp; lifecycle terminalization is separate. Bind each guard to the native queue/owned-execution rejection path before claiming native conformance.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "aggregate_token_budget_cases"
       "AggregateTokenBudgetCases"
       "agent::loop_stream::tests::generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger"
@@ -675,11 +730,32 @@ def caseCoverage : List CoverageEntry :=
       "StartupReadinessCases"
       "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "readiness_publication_cases"
+      "ReadinessPublicationCases"
+      "behavior_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
+      "The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "publish_if_cases"
+      "PublishIfCases"
+      "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases")
+      "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "eval_outcome_cases"
+      "EvalOutcomeCases"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::policy::tests::gates_costs_and_decisions_match_lean")
+      "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"
@@ -733,6 +809,12 @@ def caseCoverage : List CoverageEntry :=
       "mailbox::reply_tests::generated_reply_cases_drive_claim_validation"
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "mailbox_handoff_cases"
+      "MailboxHandoffCases"
+      "mailbox::reply_tests::modeled_handoff_positive_sequence_maps_to_native_owners"
+      "Only the fresh-linked positive case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage. The other eleven generated handoff cases remain model-only; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"
@@ -895,6 +977,18 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases"
       "conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "interrupt_queue_cases"
+      "InterruptQueueCases"
+      "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows"
+      "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "interrupt_queue_cases"
+      "InterruptQueueHttpOverlapCases"
+      "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff"
+      "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   -- Inference cases include periodic cadence: startup may defer a live execution
   -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage
@@ -950,6 +1044,11 @@ def caseCoverage : List CoverageEntry :=
       "invalid_tool_progress_cases"
       "InvalidToolProgressCases"
       "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop")
+      "completion-retry" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "repeated_tool_failure_cases"
+      "RepeatedToolFailureCases"
+      "agent::loop_stream::tests::generated_repeated_tool_failure_cases_drive_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_path_alias_cases"
@@ -1013,6 +1112,18 @@ def caseCoverage : List CoverageEntry :=
       "RestartDispositionCases"
       "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")
       "recovery" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "reserved_child_materialization_cases"
+      "ReservedChildMaterializationCases"
+      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_reserved_child_cases_drive_actual_transaction_owner"
+      "The native consumer drives reserved-child create, replay and conflict through the transaction owner and checks physical rows. It does not prove arbitrary parent authorization or host-independent child execution.")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "local_parent_depth_cases"
+      "LocalParentDepthCases"
+      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_local_child_parent_depth_cases_drive_owner"
+      "The native consumer compares supplied local-child depth with a freshly loaded parent row through the creation owner. Present valid depths use canonical signed parent chains; missing or malformed depths are imported-row observations, not reachable publication witnesses (publication requires stored depth). This binds only observed local parent depth and creation result, not child execution admission, independent signed ancestry, remote bridge trust, or document ACP.")
+      "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
@@ -1034,6 +1145,18 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases"
       "tool_call_lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
       "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "hook::tests::process_control_scope::generated_wait_observer_interrupt_preserves_background_process"
+      "The generated caller-interrupt observer-completion case derives the completed foreground wait through the tool owner and the unchanged Running background process through the observation owner. The native consumer binds both states and the persisted structured result. This deterministic observer path does not decide the competing request-cancellation winner.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "e2e_subagent::r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row"
+      "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "restart_disposition_cases"
@@ -1101,6 +1224,37 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases")
       "subagents-cross-principal" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
+      "r5_scenario_cases"
+      "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_happy_path_uses_native_owners_and_physical_p2p_docs"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_b_crash_mid_execution_uses_native_recovery"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_a_crash_mid_wait_uses_native_recovery"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_partition_during_cancel_uses_native_mirror"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_multi_completion_coalesces_native_wake"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_remote_depth_ceiling_uses_native_admission"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
       "tool_call_lifecycle::composed_conformance::generated_composed_invariants_use_canonical_admission_owner"
@@ -1127,11 +1281,22 @@ def caseCoverage : List CoverageEntry :=
       "conformance::delegation_depth_matches_runtime_limit"
       "This consumer compares the runtime depth limit only. Generated path acyclicity, boundedness and cascade witnesses need actual delegation/control traces; asserting their expected flags is not implementation coverage.")
       "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "delegated_child_resolution_cases"
+      "DelegatedChildResolutionCases"
+      "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver"
+      "Three generated cases bind the composed receive/reservation owner's depth-two inherit, depth-three rejection and read-only bind outcomes to the real SubagentSource receiver with no local parent request. Copied accepted bridge fields and peer membership are fixture inputs; this test does not establish publication provenance, P2P delivery or document ACP. The composed theorem binds parentToolDoc to the accepted call; other HostChildFacts identities and admission remain supplied observations, not independently validated parent provenance. LocalChild stored-depth validation is accounted for separately by local_parent_depth_cases, not this remote receiver test. Separate publication bindings recheck signed parent workspace provenance. Host workspace observations and argument decoding remain native premises. Provision and changed-seal cases are not covered by this receiver test; separate resolver tests cover two provision parent-seal drift cases, not full host materialization. No atomicity is claimed between workspace observation and child creation.")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"
       "DescendantGraphCases"
       "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control")
       "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
+      "descendant_cursor_cases"
+      "DescendantCursorCases"
+      "descendant_graph::tests::generated_descendant_cursor_cases_page_native_edges")
+      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
@@ -1279,10 +1444,22 @@ def caseCoverage : List CoverageEntry :=
       "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (followUpCoverage
+      "canonical_dispatch_observation_cases"
+      "CanonicalDispatchObservationCases"
+      "Compose durable gate commits with caller acknowledgements. Lost receipts retain Running without permission to invoke; acknowledged Running replay is not a fresh election. Bind generated sequences to native call hooks under both persistence policies, physical row accounting, recovery, and an external-dispatch spy. A hook return check alone does not establish zero external effects or special-tool post-effect error safety.")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"
-      "Stored and presented payload lengths are derived by reconstruction, not provider request sizing. Neither payload length bounds the other; missing dependencies yield no measurement. The compaction projection join has a separate fixture group. The real serialized-request/threshold experiment remains native.external-projected-request-threshold for implementation; this group is reconstruction-only, not compaction or native consumer coverage.")
+      "lean_vocab_test::support::canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction"
+      "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
       "canonical-output" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "terminal_diagnostic_presentation_cases"
+      "TerminalDiagnosticPresentationCases"
+      "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_cases_bind_native_presentation"
+      "Eight valid generated inputs bind exact native presentation ranges, literals, and rendered bytes. Two invalid UTF-8 inputs are rejected at the adapter representation boundary via String::from_utf8; the production presentation helper accepts typed strings. This pure binding does not establish capture of uncommitted process bytes, terminal CAS authority, crash recovery, or provider continuation; those remain obligations of their existing owners.")
+      "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_projection_join_cases"
       "CompactionProjectionJoinCases"
@@ -1298,10 +1475,17 @@ def caseCoverage : List CoverageEntry :=
       "RepairedProjectionAdmissionCases"
       "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
       "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "canonical_output_projection_cases"
       "CanonicalOutputProjectionCases"
-      "Typed immutable projection, loading/conflict/denial, owner liveness and retained Partial diagnostics are executable Lean witnesses. Native projection plus ACP/genesis validation remains a bridge obligation.")
+      "gents_protocol::transcript::tests::generated_reasoning_visibility_matches_persisted_presentation"
+      "The two published mixed/all-opaque reasoning cases bind present_message to renderedKinds. This binds stateless reasoning presentation, not projection selection, ACP or genesis validation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "canonical_output_projection_cases"
+      "CanonicalOutputProjectionCases"
+      "gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview"
+      "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (followUpCoverage
       "compaction_reducer_cases"
@@ -1374,6 +1558,12 @@ def caseCoverage : List CoverageEntry :=
       "rendered_capture_cases"
       "RenderedCaptureCases"
       "agent::loop_stream::tests::generated_rendered_capture_cases_hold_against_the_real_defra_sink")
+      "rendered-capture" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "rendered_capture_storage_cases"
+      "RenderedCaptureStorageCases"
+      "rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec"
+      "The native consumer checks full and delta codec reconstruction with an injected base and witness. It does not exercise DefraDB base lookup, authorization, or provider-send ordering.")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "durable_reduction_cases"
@@ -1565,6 +1755,11 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.Template.assembled_preamble_literal"
       "The existing slot assembler preserves resolved context instructions literally; task_binding_preserves_context confines invocation substitutions to the task slot. Task render_determined proves dependency on declared task variables. The next layers must fence this model through the real provider-input serializer; slot content preservation alone is not a wire-format proof.")
       "prompt-assembly" []
+  , tagged (followUpCoverage
+      "follow_up_hook"
+      "PeerRegistryDiscovery.PersonaRequest.default_disable_rejected"
+      "Incomplete binding (#1737): persona admission cases are not generated from PersonaRequest.lean. The default-disable row in conformance::persona_request::admission_matrix_mirrors_lean_admits is hand-written against decide_persona_request; generating the admission matrix from the Lean opOk owner replaces it.")
+      "apply-reconcile" [Surface.agentFacing]
   ]
 
 def followUpHookIds : List String :=
@@ -1715,5 +1910,9 @@ def CoverageEntry.toJson (entry : CoverageEntry) : String :=
 
 def coverageLedgerJson : String :=
   jsonArray (coverageLedger.map CoverageEntry.toJson)
+
+example : coverageLedger.all (fun entry =>
+    featureSurfaceRequirements.any (fun requirement => requirement.feature == entry.feature))
+    = true := by native_decide
 
 end Conformance.Contracts

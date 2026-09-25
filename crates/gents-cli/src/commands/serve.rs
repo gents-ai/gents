@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
-use crate::http::router::RuntimeActivationObservation;
+use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
@@ -481,9 +481,11 @@ async fn wait_for_shutdown_signal() {
 }
 
 async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("embedded HTTP listener cannot bind to {addr}"))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| {
+        format!(
+            "embedded HTTP listener cannot bind to {addr}; if another Gents runtime is serving there, stop it or pass --http-port"
+        )
+    })?;
     drop(listener);
     Ok(())
 }
@@ -576,8 +578,17 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let http_addr = SocketAddr::new(args.http_addr, args.http_port);
-    if args.http_port == 0 {
+    let _store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
+    if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
+        tracing::warn!(
+            home = %home_dir.display(),
+            port = http_port,
+            "serving a non-default home on port {http_port}, which the desktop agent and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
+        );
+    }
+    let http_addr = SocketAddr::new(args.http_addr, http_port);
+    if http_port == 0 {
         anyhow::bail!(
             "--http-port 0 is not supported: the embedded HTTP server does not expose its \
              ephemeral bound port; choose an explicit non-zero port"
@@ -586,7 +597,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
         display_host(args.http_addr),
-        args.http_port
+        http_port
     );
     let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
@@ -696,6 +707,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
+    let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
+    let serve_lifecycle = ServeLifecycleHandle::default();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -704,6 +717,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         effective_tool_root
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
+        Some(home_dir.to_string_lossy().into_owned()),
         mcp_query_scope,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
@@ -712,6 +726,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         enrollment_decisions.clone(),
         activation_runtime.clone(),
         activation_rx,
+        replicated_schema.clone(),
+        serve_lifecycle.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -738,7 +754,18 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         node.shutdown().await;
         return Err(error);
     }
-    gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    // A store from an older build is refused before anything else starts, and
+    // exits with the incompatible-store status instead of a generic failure.
+    if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
+        node.shutdown().await;
+        return Err(gents::storage_backend::classify_store_error(
+            error, &data_dir,
+        ));
+    }
+    let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        .await
+        .context("reading client route collection versions after migrations")?;
+    replicated_schema.set(schema).ok();
     let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
         node.as_ref(),
         identity.as_ref(),
@@ -1120,6 +1147,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             p2p_admission: p2p_admission_state,
         },
     )?;
+    // Local discovery reads runtime.json, so /status reports ready only after
+    // it names this process.
+    serve_lifecycle.mark_ready();
 
     // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
     // pager client. Binding follows pack apply and readiness fencing so a
@@ -1282,14 +1312,13 @@ fn resolve_server_identity(
 
     let key_path = resolve_server_key_path(args, init_config, home_dir, agent_name)?;
     ensure_key_path_exists_for_initialized_did(init_config, &key_path)?;
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-    let identity = Arc::new(
+    let identity = if init_config.is_some_and(|config| has_agent_did(&config.agent_did)) {
+        KeyIdentity::load_existing(&key_path, None).context("loading agent identity key")?
+    } else {
         KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
+            .context("creating or loading agent identity key")?
+    };
+    let identity = Arc::new(identity);
     ensure_identity_matches_init_config(init_config, identity.did())?;
     let node_identity_did = identity.did().to_string();
     Ok(ServerIdentity {
@@ -1376,7 +1405,7 @@ fn has_agent_did(did: &str) -> bool {
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join("p2p-secret-key")
+    home_dir.join(gents::home::P2P_SECRET_KEY_FILE_NAME)
 }
 
 fn resolve_server_p2p_config(
@@ -1630,6 +1659,38 @@ mod grok_shim_tests {
             Command::Server(args) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    /// A home key an older build wrote with ambient (0644) permissions stops
+    /// the runtime with the insecure-key exit status, not a generic crash.
+    #[cfg(unix)]
+    #[test]
+    fn an_older_insecure_home_key_exits_with_the_insecure_key_status() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("keys").join("local.key");
+        gents::identity::load_or_create_file_identity(&key).unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let args = parse_server(&["--key-path", key.to_str().unwrap()]);
+
+        let error = match resolve_server_identity(&args, None, temp.path(), "local") {
+            Ok(_) => panic!("an insecure key must not load"),
+            Err(error) => error,
+        };
+        let store = gents::storage_backend::incompatible_store(&error, Path::new(""))
+            .expect("typed refusal");
+        assert_eq!(
+            store.kind,
+            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+        );
+        assert_eq!(
+            crate::native_service::incompatible_store_exit_code(store.kind),
+            crate::native_service::INSECURE_KEY_EXIT_CODE
+        );
+        assert_eq!(
+            fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 
     #[test]

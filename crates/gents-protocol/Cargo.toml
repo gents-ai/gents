@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Shared schemas, client turn-observation protocol, and collection row mirrors for Gents"
 
 # `native` gates the reqwest-based GraphQL transport (`graphql::execute_graphql_async`,
-# `execute_graphql_blocking`, `graphql_endpoint_available`): reqwest has no
+# `graphql_endpoint_available`): reqwest has no
 # wasm32-wasip1 support, so a guest-compilable dependent (gents-loop) pulls
 # this crate with `default-features = false` and never links it. Every other
 # module (message, row, canonical, ...) is native/guest agnostic and always on.
@@ -25,7 +25,7 @@ chrono = { workspace = true }
 ciborium = "0.2"
 graphql-parser = "0.4"
 gents-schemas = { workspace = true }
-reqwest = { workspace = true, features = ["blocking"], optional = true }
+reqwest = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
@@ -40,6 +40,7 @@ tracing = { workspace = true }
 # native serialization against live rig until Layer A removes rig entirely.
 [dev-dependencies]
 axum = "0.8"
+gents-lean-contract.workspace = true
 rig-core.workspace = true
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt", "macros"] }

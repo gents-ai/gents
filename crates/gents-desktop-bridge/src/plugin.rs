@@ -31,11 +31,18 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                         "could not bring the packaged Gents runtime up to date"
                     );
                 }
+                if let Err(error) = tauri::async_runtime::block_on(
+                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state),
+                ) {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not restart the agent service that predates this app"
+                    );
+                }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            tauri_commands::lifecycle::desktop_bridge_contract,
             tauri_commands::external_url::desktop_open_external_url,
             tauri_commands::packs::desktop_pack_installed,
             tauri_commands::packs::desktop_pack_search,
@@ -52,6 +59,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::lifecycle::desktop_init_local_standard,
             tauri_commands::lifecycle::desktop_client_start,
             tauri_commands::lifecycle::desktop_client_shutdown,
+            tauri_commands::lifecycle::desktop_app_quit,
             tauri_commands::managed_server::desktop_managed_server_status,
             tauri_commands::managed_server::desktop_managed_server_start,
             tauri_commands::managed_server::desktop_managed_server_stop,
@@ -59,6 +67,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::managed_server::desktop_managed_server_restart,
             tauri_commands::managed_server::desktop_managed_server_reset,
             tauri_commands::managed_server::desktop_managed_server_validate_root,
+            tauri_commands::managed_server::desktop_managed_server_open_login_items,
             tauri_commands::db_explorer::desktop_open_db_explorer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
@@ -83,6 +92,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
             tauri_commands::config::desktop_agent_config_save,
+            tauri_commands::config::desktop_default_behavior_set,
             tauri_commands::config::desktop_config_components_apply,
             tauri_commands::config::desktop_config_components_patch,
             tauri_commands::config::desktop_behavior_save,
@@ -115,6 +125,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::inference_setup::desktop_claude_login_cancel,
             tauri_commands::inference_setup::desktop_provider_accounts_list,
             tauri_commands::inference_setup::desktop_provider_account_disconnect,
+            tauri_commands::inference_setup::desktop_provider_account_retry_save,
             tauri_commands::tasks::desktop_task_save,
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,

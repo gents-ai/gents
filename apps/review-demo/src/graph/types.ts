@@ -114,8 +114,7 @@ export type NodeState =
   | "live"
   | "done"
   | "failed"
-  | "waiting-group"
-  | "input-required";
+  | "waiting-group";
 
 export type NodeKind = "job" | "area" | "scan" | "verify" | "verdict" | "triage";
 

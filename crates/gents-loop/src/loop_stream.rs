@@ -49,6 +49,8 @@ mod aggregate_budget;
 mod contract;
 mod invalid_tool_progress;
 mod one_shot;
+mod provider_idle;
+mod repeated_tool_failure;
 mod request_assembly;
 mod tool_dispatch;
 mod turn_threading;
@@ -58,6 +60,7 @@ pub use contract::{
     TurnCompactionRequest,
 };
 pub use one_shot::{run_loop_to_text, run_loop_to_typed};
+pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 // Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
 // agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
@@ -70,6 +73,7 @@ pub use request_assembly::{
 };
 pub use tool_dispatch::dispatch_tool;
 
+use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::{
     build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
     repair_and_rebuild_request,
@@ -133,6 +137,7 @@ where
             assemble_new_messages(config.context_message.clone(), prompt);
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
+        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
         let mut aggregated_usage = Usage::new();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
@@ -228,7 +233,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let mut stream = loop {
+                let (mut stream, activity) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -273,12 +278,20 @@ where
                             })?;
                     }
 
-                    match model.stream(dispatch_request).await {
-                        Ok(stream) => break stream,
-                        Err(completion_error) => {
-                            let streaming_error = StreamingError::Completion(completion_error);
-                            let classified = crate::error::classify_completion_error(&streaming_error);
-                            let error_text = streaming_error.to_string();
+                    let activity =
+                        crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                    match within_provider_idle(
+                        model.stream(dispatch_request),
+                        config.provider_idle_timeout,
+                        activity.as_deref(),
+                        true,
+                    )
+                    .await
+                    .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
+                    {
+                        Ok(stream) => break (stream, activity),
+                        Err(failure) => {
+                            let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
                                 &classified,
                                 &error_text,
@@ -387,7 +400,16 @@ where
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
-            while let Some(item) = stream.next().await {
+            while let Some(item) = within_provider_idle(
+                stream.next(),
+                config.provider_idle_timeout,
+                activity.as_deref(),
+                !saw_stream_item,
+            )
+            .await
+            .map_or_else(|stall| Some(Err(stall)), |next| {
+                next.map(|item| item.map_err(ProviderAttemptFailure::Completion))
+            }) {
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
@@ -405,10 +427,12 @@ where
                     }
                     // Dispatch begins only after this provider stream closes
                     // and its turn is accepted. No host effect exists here.
-                    Err(completion_error) => {
-                        let streaming_error = StreamingError::Completion(completion_error);
-                        let classified = crate::error::classify_completion_error(&streaming_error);
-                        let error_text = streaming_error.to_string();
+                    Err(failure) => {
+                        let (classified, error_text) = failure.classify();
+                        // Everything received was already yielded. Release the
+                        // admission permit and provider connection before any
+                        // retry backoff.
+                        drop(stream);
                         if !saw_stream_item {
                             match retry.on_pre_stream_failure(
                                 &classified,
@@ -767,6 +791,21 @@ where
             for (tool_call, internal_call_id) in pending_calls {
                 let tool_name = tool_call.function.name.clone();
                 let tool_args = value_to_json_string(&tool_call.function.arguments);
+                let repeat_decision = repeated_tool_failure.decide(&tool_name, &tool_args);
+                if repeat_decision == repeated_tool_failure::RepeatDecision::Stop {
+                    for item in close_streaming_turn(
+                        &mut new_messages,
+                        &mut accumulator,
+                        stream.message_id.clone(),
+                        pending_results,
+                    ) {
+                        yield item;
+                    }
+                    Err(StreamingError::Completion(CompletionError::ProviderError(
+                        repeated_tool_failure.stop_reason(),
+                    )))?;
+                    unreachable!("repeated tool failure ends the stream");
+                }
                 let call_action = match hook.as_ref() {
                     Some(hook) => {
                         hook.on_tool_call(
@@ -790,7 +829,10 @@ where
                         })))?;
                         unreachable!("Err(..)? above ends the stream");
                     }
-                    ToolCallHookAction::Skip { reason } => reason,
+                    ToolCallHookAction::Skip { reason } => {
+                        repeated_tool_failure.reset();
+                        reason
+                    }
                     _ => {
                         let live_output = match hook.as_ref() {
                             Some(hook) => Some(
@@ -802,14 +844,21 @@ where
                             Some(hook) => hook.session_id().await,
                             None => None,
                         };
-                        let outcome = dispatch_tool(
-                            tools.as_slice(),
-                            &tool_name,
-                            tool_args.clone(),
-                            live_output,
-                            session_id,
-                        )
-                        .await;
+                        let suppressed =
+                            repeat_decision == repeated_tool_failure::RepeatDecision::Suppress;
+                        let outcome = if suppressed {
+                            drop(live_output);
+                            repeated_tool_failure.suppress()
+                        } else {
+                            dispatch_tool(
+                                tools.as_slice(),
+                                &tool_name,
+                                tool_args.clone(),
+                                live_output,
+                                session_id,
+                            )
+                            .await
+                        };
                         if let Some(hook) = hook.as_ref() {
                             let result_action = hook
                                 .on_tool_result(
@@ -832,6 +881,18 @@ where
                             }
                         }
                         invalid_tool_progress.record(&outcome);
+                        if !suppressed {
+                            let command_envelope = tools
+                                .iter()
+                                .find(|tool| tool.name() == tool_name)
+                                .is_some_and(|tool| tool.emits_command_envelope());
+                            repeated_tool_failure.record_dispatched(
+                                &tool_name,
+                                &tool_args,
+                                &outcome,
+                                command_envelope,
+                            );
+                        }
                         let (bounded, _, _) = truncate_text(
                             outcome.model_facing_text(),
                             tool_result_truncation_mode(&tool_name),

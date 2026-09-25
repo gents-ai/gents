@@ -337,7 +337,13 @@ async fn load_authorized_subagent_threads_for_roots(
             for mut tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
                 .context("decoding scoped spawn AgentToolCall rows")?
             {
-                tool.args = gents::tool_call_lifecycle::load_tool_call_arguments(
+                // The runtime admits a spawn row and its coordinator header in
+                // one transaction, but a replica can observe the row first.
+                // Like the live tool and background readers, leave an edge
+                // whose canonical admission does not reconstruct unprojected
+                // for this pass instead of aborting every link for the root;
+                // the caller reloads links while the tool stays unprojected.
+                tool.args = match gents::tool_call_lifecycle::load_tool_call_arguments(
                     &access,
                     &tool.doc_id,
                     &tool.agent_did,
@@ -345,12 +351,17 @@ async fn load_authorized_subagent_threads_for_roots(
                     tool.requester_did.as_deref(),
                 )
                 .await
-                .with_context(|| {
-                    format!(
-                        "reconstructing accepted spawn arguments for {}",
-                        tool.doc_id
-                    )
-                })?;
+                {
+                    Ok(args) => args,
+                    Err(error) => {
+                        tracing::debug!(
+                            error = format!("{error:#}"),
+                            tool_call_doc_id = tool.doc_id,
+                            "Codex subagent spawn edge canonical admission is not ready"
+                        );
+                        continue;
+                    }
+                };
                 if let Some(child_request_id) = nonempty(tool.child_request_id.as_deref()) {
                     child_request_ids.push(child_request_id.to_string());
                 }
@@ -1385,7 +1396,6 @@ mod tests {
         assert_eq!(status("pending"), ChildStatus::Pending);
         assert_eq!(status("claimed"), ChildStatus::Running);
         assert_eq!(status("processing"), ChildStatus::Running);
-        assert_eq!(status("inputRequired"), ChildStatus::Running);
         assert_eq!(status("completed"), ChildStatus::Completed);
         assert_eq!(status("failed"), ChildStatus::Errored);
         assert_eq!(status("interrupted"), ChildStatus::Interrupted);

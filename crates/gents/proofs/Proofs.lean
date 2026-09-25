@@ -14,6 +14,8 @@ import Proofs.SessionFork
 import Proofs.SessionRecovery
 import Proofs.SessionHydration
 import Proofs.Session.Properties
+import Proofs.Session.Interrupt
+import Proofs.Session.InterruptCases
 import Proofs.Transcript
 import Proofs.CanonicalOutput
 import Proofs.Compaction
@@ -79,6 +81,7 @@ import Proofs.PeerRegistryDiscovery.RootAdmission
 import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.RepeatedToolFailure
 
 import Proofs.Conformance.LogicalOutputObligation
 
@@ -92,3 +95,7 @@ import Proofs.SelfConfig.Auth
 import Proofs.GraphPipeline.Configuration
 
 import Proofs.TaskHooks
+
+import Proofs.Eval
+
+import Proofs.Optimization

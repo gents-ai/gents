@@ -4,3 +4,4 @@ import Proofs.Mailbox.Properties
 import Proofs.Mailbox.Executable
 import Proofs.Mailbox.Notification
 import Proofs.Mailbox.Reply
+import Proofs.Mailbox.Handoff

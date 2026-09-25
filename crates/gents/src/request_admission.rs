@@ -18,7 +18,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::AgentIdentity;
 use crate::watcher::AgentRequest;
 
@@ -216,7 +216,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
     let failure_reason = escape_graphql_string(reason);
     let terminalized_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
-        r#"mutation {{
+        r#"mutation($terminal_output: JSON) {{
             update_AgentRequest(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
@@ -227,13 +227,29 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     lifecycle_state: "failed",
                     failure_reason: "{failure_reason}",
                     terminalized_at: "{terminalized_at}",
-                    terminal_redrive_attempts: 0
+                    terminal_redrive_attempts: 0,
+                    terminal_output: $terminal_output
                 }}
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::write_local_idempotent_update_response(
-        node, operation, &mutation,
+    let mutation = &mutation;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        operation,
+        move |txn| {
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    &mutation,
+                    &serde_json::json!({
+                        "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
+                    }),
+                )
+                .await
+            })
+        },
     )
     .await
     .map(|_| ())
@@ -773,20 +789,12 @@ async fn verify_cross_principal_child_source(
         child_request_id: Option<String>,
         delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     }
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
                 tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id child_request_id delegated_workspace
             }} }}"#,
             escape_graphql_string(tool_doc_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload cross-principal source bridge failed: {:?}",
-            response.errors
-        )));
-    }
+        ), "reload cross-principal source bridge").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let bridge: BridgeRow = crate::graphql::first_row(&response, "AgentToolCall")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -941,21 +949,14 @@ async fn verify_exact_parent_tool_call(
         spawn_target_did: Option<String>,
         spawn_behavior_id: Option<String>,
         delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
+        delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
     }
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(&node, &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace
+            tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace delegated_input
         }} }}"#,
             escape_graphql_string(tool_doc_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime source tool call failed: {:?}",
-            response.errors
-        )));
-    }
+        ), "reload runtime source tool call").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let tool: ToolRow = crate::graphql::first_row(&response, "AgentToolCall")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -972,6 +973,12 @@ async fn verify_exact_parent_tool_call(
             && tool.spawn_behavior_id.as_deref() == child.behavior_id.as_deref(),
         "runtime source tool-call document does not exactly own this child",
     )?;
+    // Lean `CanonicalOutput.local_call_has_no_delegated_input`: a local call's
+    // arguments come only from its accepted publication.
+    deny_if(
+        tool.delegated_input.is_none(),
+        "local-child runtime source tool call carries delegated input",
+    )?;
     verify_delegated_workspace(child, tool.delegated_workspace.as_ref())?;
     #[derive(Deserialize)]
     struct SpawnTargetArgs {
@@ -979,23 +986,21 @@ async fn verify_exact_parent_tool_call(
         name: Option<String>,
     }
     let access = crate::config_client::ConfigAccess::Local(node.clone());
-    let matching = crate::run_timeline_fetch::load_session_tool_calls(
+    let matching = crate::run_timeline_fetch::load_accepted_tool_arguments(
         &access,
         parent_agent_did,
         parent_session_id,
         parent_requester_did,
+        tool_doc_id,
     )
     .await
     .context("load canonical runtime source tool-call arguments")
-    .map_err(AgentRequestAdmissionError::unavailable)?
-    .into_iter()
-    .filter(|candidate| candidate.doc_id.as_deref() == Some(tool_doc_id))
-    .collect::<Vec<_>>();
+    .map_err(AgentRequestAdmissionError::unavailable)?;
     deny_if(
         matching.len() == 1,
         "canonical runtime source tool-call binding is missing or ambiguous",
     )?;
-    let args_json = matching[0].args.as_str();
+    let args_json = matching[0].as_str();
     deny_if(
         !args_json.trim().is_empty(),
         "canonical runtime source tool-call has no arguments",
@@ -1068,16 +1073,10 @@ async fn verify_automated_trigger_source(
         enabled: bool,
     }
     let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
-    let response = node.execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id agent_did task_id source enabled }} }}"#,
         escape_graphql_string(doc),
-    )).await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime trigger failed: {:?}",
-            response.errors
-        )));
-    }
+    ), "reload runtime trigger").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let triggers: Vec<TriggerRow> =
         crate::graphql::rows(&response, "Trigger").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1099,16 +1098,10 @@ async fn verify_automated_trigger_source(
             ),
         "runtime trigger physical source, principal, kind, or availability changed",
     )?;
-    let response = node.execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ behavior_id enabled }} }}"#,
         escape_graphql_string(&trigger.task_id), escape_graphql_string(agent_did),
-    )).await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime trigger task failed: {:?}",
-            response.errors
-        )));
-    }
+    ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let tasks: Vec<TaskRow> =
         crate::graphql::rows(&response, "Task").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1288,19 +1281,17 @@ async fn load_signed_request(
     doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
     let doc_id = escape_graphql_string(doc_id);
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 {SIGNED_REQUEST_FIELDS}
             }} }}"#,
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload AgentRequest admission row failed: {:?}",
-            response.errors
-        )));
-    }
+        ),
+        "reload AgentRequest admission row",
+    )
+    .await
+    .map_err(AgentRequestAdmissionError::unavailable)?;
     crate::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -1330,6 +1321,69 @@ mod tests {
     use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+
+    #[tokio::test]
+    async fn pending_admission_rejection_selects_terminal_no_message() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let mut create = AgentRequestCreate::base(
+            "rejected-request",
+            identity.did(),
+            identity.did(),
+            "behavior",
+            "session",
+            "work",
+            "interactive",
+            "2026-09-01T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self(identity.did()),
+        );
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let created = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        super::terminalize_pending_request_rejection(
+            &node,
+            &doc_id,
+            identity.did(),
+            "request activates a skill outside its context allowlist",
+            "test.admission_rejection",
+        )
+        .await
+        .unwrap();
+
+        let escaped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+        let selected = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+            ))
+            .await;
+        assert!(!selected.has_errors(), "{:?}", selected.errors);
+        let row = crate::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert_eq!(
+            row["failure_reason"],
+            "request activates a skill outside its context allowlist"
+        );
+        let terminal_output: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone()).unwrap();
+        assert_eq!(
+            terminal_output,
+            gents_protocol::output::TerminalOutput::NoMessage
+        );
+    }
 
     #[tokio::test]
     async fn signed_input_cannot_expand_context_or_impersonate_runtime_queue() {
@@ -1467,6 +1521,70 @@ mod tests {
             "receipt-parent"
         )
         .is_err());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn local_child_source_rejects_delegated_input_on_local_tool_row() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (agent, session, parent, parent_doc) = (
+            "did:key:local-owner",
+            "local-session",
+            "local-parent",
+            "local-parent-doc",
+        );
+        let create_tool = |key: &str, delegated: bool| {
+            let mut input = serde_json::json!({
+                "tool_call_key": key, "tool_call_id": key, "request_id": parent,
+                "request_doc_id": parent_doc, "session_id": session, "agent_did": agent,
+                "requester_did": agent, "message_sequence": 1, "tool_name": "spawn_subagent",
+                "lifecycle_state": "running", "spawn_target_did": agent,
+                "spawn_behavior_id": "behavior-1",
+            });
+            if delegated {
+                input["delegated_input"] = serde_json::json!({
+                    "source": {"close_doc_id": "coordinator-close", "stream": 0},
+                    "arguments": "{\"name\":\"child\",\"prompt\":\"forged\"}",
+                    "parent_subagent_depth": 0
+                });
+            }
+            format!(
+                "mutation {{ create_AgentToolCall(input: {}) {{ _docID }} }}",
+                gents_protocol::graphql::graphql_input_literal(&input).unwrap()
+            )
+        };
+        let created = node.execute(&create_tool("local-delegated", true)).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let tool_doc = crate::graphql::single_mutation_document(&created, "create_AgentToolCall")
+            .unwrap()
+            .and_then(|row| row["_docID"].as_str())
+            .expect("created tool document")
+            .to_owned();
+        let child: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(serde_json::json!({
+                "request_id": "child", "agent_did": agent, "behavior_id": "behavior-1"
+            }))
+            .unwrap();
+        let error = super::verify_exact_parent_tool_call(
+            node.clone(),
+            &tool_doc,
+            "local-delegated",
+            parent_doc,
+            parent,
+            session,
+            Some(agent),
+            agent,
+            agent,
+            &child,
+        )
+        .await
+        .expect_err("a local tool row cannot supply delegated arguments");
+        assert!(error.is_denied(), "{error:#}");
+        assert!(
+            error.to_string().contains("carries delegated input"),
+            "{error:#}"
+        );
         node.shutdown().await;
     }
 

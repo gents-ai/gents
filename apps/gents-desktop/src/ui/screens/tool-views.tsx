@@ -3,11 +3,26 @@
    presentation kinds (command, fileRead, fileEdit, subagent, process,
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
+import { useRef } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
+import { Button } from "@gents/ui/components/button";
+import { toast } from "sonner";
+import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
+import { useFollowTail } from "../lib/scroll";
+import { isLocalAgent } from "../lib/firstRun";
+import { useDeployment } from "./deployment-context";
 import { CopyButton } from "./Markdown";
-import { duration, toolSummary } from "./tool-summary";
+import {
+  DIFF_MARK,
+  diffText,
+  duration,
+  isAbsolutePath,
+  isRedacted,
+  lineCount,
+  toolSummary,
+} from "./tool-summary";
 
 const pretty = (value: string) => {
   try {
@@ -47,14 +62,38 @@ export function ToolSummary({
   );
 }
 
-function Payload({ label, value }: { label: string; value?: string | null }) {
+function Payload({
+  label,
+  value,
+  counted = false,
+}: {
+  label: string;
+  value?: string | null;
+  /** say how many lines it holds, for output long enough to scroll */
+  counted?: boolean;
+}) {
   if (!value?.trim()) return null;
+  if (isRedacted(value))
+    return (
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          {label}
+        </span>
+        <p className="font-sans text-xs text-muted-foreground">
+          Hidden because it looks like it contains a credential.
+        </p>
+      </div>
+    );
   const text = pretty(value);
+  const lines = counted ? lineCount(text) : 0;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
           {label}
+          {lines > 1 && (
+            <span className="normal-case"> · {lines.toLocaleString()} lines</span>
+          )}
         </span>
         <CopyButton getText={() => text} />
       </div>
@@ -103,7 +142,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {tool.cancelCause && (
         <Meta
           items={[
-            `cancelled · ${tool.cancelCause.cause}`,
+            `canceled · ${tool.cancelCause.cause}`,
             tool.cancelCause.source,
             tool.cancelCause.at
               ? new Date(tool.cancelCause.at).toLocaleTimeString()
@@ -128,9 +167,9 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               p.networkMode && `network: ${p.networkMode}`,
             ]}
           />
-          <Payload label="stdout" value={p.stdout} />
-          <Payload label="stderr" value={p.stderr} />
-          <Payload label="output" value={p.fallbackOutput} />
+          <Payload label="stdout" value={p.stdout} counted />
+          <Payload label="stderr" value={p.stderr} counted />
+          <Payload label="output" value={p.fallbackOutput} counted />
         </>
       )}
       {p.kind === "fileRead" && (
@@ -147,31 +186,27 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
                 <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
                   diff
                 </span>
-                <CopyButton
-                  getText={() =>
-                    p.diff
-                      .map((l) => `${l.kind === "added" ? "+" : "-"}${l.text}`)
-                      .join("\n")
-                  }
-                />
+                <CopyButton getText={() => diffText(p.diff)} />
               </div>
               <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
                 <pre className="w-max min-w-full py-2 font-mono text-[11px] leading-relaxed">
                   {p.diff.map((l, i) => (
                     <span
                       key={i}
+                      data-diff={l.kind}
                       className={cn(
                         "block px-3",
-                        l.kind === "added"
-                          ? "bg-success text-marker-foreground"
-                          : "bg-destructive/10 text-muted-foreground line-through decoration-destructive/40",
+                        l.kind === "added" && "bg-success text-marker-foreground",
+                        l.kind === "removed" &&
+                          "bg-destructive/10 text-muted-foreground line-through decoration-destructive/40",
+                        l.kind === "context" && "text-muted-foreground",
                       )}
                     >
                       <span
                         aria-hidden="true"
                         className="mr-2 inline-block w-2 select-none"
                       >
-                        {l.kind === "added" ? "+" : "-"}
+                        {DIFF_MARK[l.kind]}
                       </span>
                       {l.text}
                     </span>
@@ -180,6 +215,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               </ScrollArea>
             </div>
           )}
+          {p.path && tool.statusKind === "success" && <RevealFile path={p.path} />}
           <Payload label="output" value={p.fallbackOutput} />
         </>
       )}
@@ -211,18 +247,50 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="result" value={p.output} />
         </>
       )}
-      {live && (
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-          <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            live output
-          </span>
-          <ScrollArea className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-            <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
-              {live}
-            </pre>
-          </ScrollArea>
-        </div>
-      )}
+      {live && <LiveOutput subject={tool.itemKey} tail={live} />}
     </div>
+  );
+}
+
+/* a running command's newest lines are the ones that matter: the box keeps
+   to its foot as output arrives, unless the reader has scrolled up */
+function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
+  const owner = useRef<HTMLDivElement>(null);
+  useFollowTail(owner, subject, tail);
+  return (
+    <div ref={owner} className="grid grid-cols-[minmax(0,1fr)] gap-1">
+      <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+        live output
+      </span>
+      <ScrollArea
+        data-testid={`tool-live-output-${subject}`}
+        className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      >
+        <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
+          {tail}
+        </pre>
+      </ScrollArea>
+    </div>
+  );
+}
+
+function RevealFile({ path }: { path: string }) {
+  const deployment = useDeployment();
+  const label = revealInFolderLabel();
+  if (!label || !deployment || !isLocalAgent(deployment) || !isAbsolutePath(path))
+    return null;
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      className="justify-self-start font-sans"
+      onClick={() =>
+        void revealInFolder(path).catch((error: unknown) =>
+          toast(`Couldn't find ${path} on this computer: ${String(error)}`),
+        )
+      }
+    >
+      {label}
+    </Button>
   );
 }

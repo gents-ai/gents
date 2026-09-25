@@ -64,11 +64,11 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .dead          => .failed
     | .interrupted   => .interrupted
     | .workspaceBindingPending | .pending => .waitingForClaim
-    | .claimed | .processing | .inputRequired => .running
+    | .claimed | .processing => .running
 
 /-- Generic client projection for a session/request head.  The effective turn
     state is derived only from the request, while the exact request state remains
-    available for thin clients that present claim and input-required distinctions. -/
+    available for thin clients that present claim distinctions. -/
 structure ClientHeadProjection where
   turnState : ClientTurnState
   requestState : RequestState
@@ -84,9 +84,6 @@ def ClientHeadProjection.isTerminal (head : ClientHeadProjection) : Bool :=
 
 def ClientHeadProjection.isActive (head : ClientHeadProjection) : Bool :=
   !head.isTerminal
-
-def ClientHeadProjection.waitingOnUserInput (head : ClientHeadProjection) : Bool :=
-  head.isActive && head.requestState == .inputRequired
 
 theorem projectHead_turnState (view : AttemptView) :
     (projectHead view).turnState = deriveAttempt view := rfl

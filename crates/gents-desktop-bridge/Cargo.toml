@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 webbrowser = "1"
 tracing-subscriber.workspace = true
@@ -44,10 +45,14 @@ ts-rs = { version = "10.1", default-features = false, features = [
 ] }
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
+gents-desktop-core = { workspace = true, features = ["test-fixtures"] }
 gents-lean-contract.workspace = true
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"

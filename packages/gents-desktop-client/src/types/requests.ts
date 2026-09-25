@@ -1,4 +1,5 @@
 import type { AgentConfigSaveRequest as GeneratedAgentConfigSaveRequest } from "../generated/AgentConfigSaveRequest.js";
+import type { DefaultBehaviorSetRequest as GeneratedDefaultBehaviorSetRequest } from "../generated/DefaultBehaviorSetRequest.js";
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";
 import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../generated/BackendSaveRequest.js";
 import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
@@ -38,6 +39,8 @@ type RequestInput<T> = {
 
 export type AgentConfigSaveRequest =
   RequestInput<GeneratedAgentConfigSaveRequest>;
+export type DefaultBehaviorSetRequest =
+  RequestInput<GeneratedDefaultBehaviorSetRequest>;
 export type BackendDeleteRequest = RequestInput<GeneratedBackendDeleteRequest>;
 export type BackendSaveRequest = RequestInput<GeneratedBackendSaveRequest>;
 export type BehaviorDeleteRequest =

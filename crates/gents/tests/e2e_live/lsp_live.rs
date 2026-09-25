@@ -8,12 +8,12 @@
 //!
 //! ```bash
 //! rust-analyzer --version
-//! GENTS_LIVE_LSP=1 cargo test -p gents --test e2e_live \
+//! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --test e2e_live \
 //!   lsp_live_model_uses_rust_analyzer \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
-//! Uses the same DeepSeek V4 Flash backend as the other d4f live tests.
+//! Runs against the inference target named by `GENTS_EVAL_TARGET`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use gents::AgentIdentity;
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
-    bind_d4f_backend, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::test_db;
 
@@ -187,7 +187,8 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("lsp-live"));
 
-    let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
+    let (agent_did, behavior_id) =
+        bind_target(db.node.as_ref(), identity.as_ref(), &live_target()).await;
 
     configure_behavior_tools(
         db.node.as_ref(),

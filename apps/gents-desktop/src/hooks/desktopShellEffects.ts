@@ -10,11 +10,7 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
-import {
-  isMacTauriShell,
-  isMobileTauriShell,
-  ownsAutomaticRecovery,
-} from "../lib/shellPlatform";
+import { isMacTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
@@ -30,7 +26,7 @@ type DesktopShellEffectsArgs = {
   lastObservedP2PHealth: MutableRefObject<P2PHealth | null>;
   lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
-  localServerAvailable: MutableRefObject<boolean | null>;
+  clientAutostarts: (snapshot: DesktopClientSnapshot) => boolean;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   newSessionAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
@@ -64,7 +60,7 @@ export function useDesktopShellEffects({
   lastObservedP2PHealth,
   lastP2PAutoRestartAt,
   localWorkflow,
-  localServerAvailable,
+  clientAutostarts,
   listenToUpdates,
   newSessionAgentRef,
   refreshSession,
@@ -106,11 +102,7 @@ export function useDesktopShellEffects({
       return;
     }
 
-    if (
-      !shouldAutoStartDesktopClient(snapshot, localServerAvailable.current, {
-        mobile: isMobileTauriShell(),
-      })
-    ) {
+    if (!clientAutostarts(snapshot)) {
       return;
     }
 
@@ -122,7 +114,7 @@ export function useDesktopShellEffects({
     void onStartClient();
   }, [
     autostartAttempted,
-    localServerAvailable,
+    clientAutostarts,
     onStartClient,
     sending,
     snapshot,
@@ -262,20 +254,4 @@ export function useDesktopShellEffects({
       setLocalWorkflow({ kind: "ready" });
     }
   }, [localWorkflow, sending, setLocalWorkflow]);
-}
-
-export function shouldAutoStartDesktopClient(
-  snapshot: DesktopClientSnapshot,
-  localServerAvailable: boolean | null,
-  options: { mobile?: boolean } = {},
-): boolean {
-  if (options.mobile) {
-    return true;
-  }
-  return (
-    snapshot.bootstrap.clientStateExists ||
-    snapshot.bootstrap.savedPeers.some(
-      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
-    )
-  );
 }

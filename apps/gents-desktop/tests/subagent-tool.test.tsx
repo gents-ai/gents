@@ -29,7 +29,6 @@ describe("subagent transcript tool", () => {
             },
             reconstruction: { state: "ready" },
             partialOutputTail: "Reading watcher.rs",
-            partialOutputSeq: 18,
           },
         ],
       },

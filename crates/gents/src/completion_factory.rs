@@ -21,6 +21,31 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
+/// The backend connection a behavior's provider client is built from.
+pub(crate) fn behavior_connection_fingerprint(behavior: &ResolvedBehavior) -> String {
+    crate::admission::backend_connection_fingerprint(&crate::backend_registry::BackendFields {
+        backend_id: behavior.backend_id.clone(),
+        backend_provider_kind: behavior.backend_provider_kind,
+        openai_wire_api: behavior.openai_wire_api,
+        backend_endpoint: behavior.backend_endpoint.clone(),
+        backend_auth: behavior.backend_auth.clone(),
+    })
+}
+
+/// Identity of everything a behavior slot builds once and keeps: its resolved
+/// configuration plus the keyed connection identity of its inference and
+/// compaction clients. `ResolvedBehavior`'s Debug redacts credentials, so a
+/// key rotation is visible only through the keyed fingerprints.
+pub(crate) fn behavior_slot_fingerprint(behavior: &ResolvedBehavior) -> String {
+    let compaction = behavior.compaction_inference.as_ref().map(|inference| {
+        crate::admission::backend_connection_fingerprint(&inference.backend.backend_fields())
+    });
+    format!(
+        "{behavior:?}|connection={}|compaction_connection={compaction:?}",
+        behavior_connection_fingerprint(behavior)
+    )
+}
+
 pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
@@ -32,7 +57,8 @@ where
     <C::CompletionModel as CompletionModel>::Response: 'static,
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
-    AdmittedCompletionClient::new(client, admission).completion_model(&behavior.model_name)
+    AdmittedCompletionClient::new(client, admission, behavior_connection_fingerprint(behavior))
+        .completion_model(&behavior.model_name)
 }
 
 /// Build a loop config for one completion loop.
@@ -91,6 +117,7 @@ pub(crate) fn loop_config(
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: Some(behavior.provider_idle_timeout),
         deadline: None,
         max_turns: behavior.max_turns,
         output_obligation_gate: None,
@@ -262,7 +289,7 @@ pub(crate) use gents_loop::compaction::merge_optional_params;
 /// (#540).
 ///
 /// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
-/// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
+/// `deepseek_v4` on a DeepSeek V4 Flash server) only emits the chain-of-thought in
 /// the response `message.reasoning` field when the request carries
 /// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
 /// defaults thinking OFF and the `reasoning` field is empty, so our harvest

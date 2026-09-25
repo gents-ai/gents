@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
+use gents::{watcher::AgentRequest, AgentIdentity};
 use serde::Deserialize;
-use tempfile::TempDir;
 
 pub mod accepted_turn;
 pub mod conformance_consumers;
@@ -42,116 +42,56 @@ pub fn materialization_identity_for(did: &str) -> Arc<dyn AgentIdentity> {
 }
 
 pub struct TestDb {
+    home: EmbeddedHome,
     pub node: Arc<EmbeddedNode>,
     pub node_identity: Arc<dyn AgentIdentity>,
     pub process_generation: u64,
-    node_identity_did: String,
-    p2p_reopen: Option<TestP2pAdmission>,
-    tempdir: TempDir,
 }
 
 impl TestDb {
     pub fn data_path(&self) -> &std::path::Path {
-        self.tempdir.path()
+        self.home.path()
     }
 
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
-        let data_path = self.tempdir.path().to_path_buf();
         let before = self.process_generation;
-
-        // Stopping the embedded process closes its subscriptions and other
-        // node-owned services. Those tasks may retain Arc handles briefly
-        // after the top-level agent task has been aborted, so wait for their
-        // actual release before claiming an exclusive durable-store reopen.
-        self.node.shutdown().await;
-        let release_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let strong = Arc::strong_count(&self.node);
-        if strong != 1 {
-            anyhow::bail!(
-                "simulate_process_crash: stopped EmbeddedNode retained live owners \
-                 (strong_count={strong}); crash boundary would not clear process state"
-            );
-        }
-
         let stand_in = Arc::new(
             EmbeddedNode::builder()
                 .build()
                 .await
                 .map_err(|e| anyhow::anyhow!("simulate_process_crash: stand-in node: {e}"))?,
         );
-        let old = std::mem::replace(&mut self.node, stand_in);
-
-        match Arc::try_unwrap(old) {
-            Ok(owned) => drop(owned),
-            Err(shared) => {
-                let count = Arc::strong_count(&shared);
-                self.node = shared;
-                anyhow::bail!(
-                    "simulate_process_crash: cannot exclusively drop EmbeddedNode \
-                     (strong_count={count} after replace); restored handle is shut \
-                     down and unusable — fix outstanding Arc clones before Crash"
-                );
-            }
-        }
-
-        let mut reopen_builder = EmbeddedNode::builder()
-            .data_path(&data_path)
-            .with_node_identity_did(&self.node_identity_did);
-        if let Some(admission) = &self.p2p_reopen {
-            reopen_builder = reopen_builder.with_p2p(test_p2p_config(admission, &data_path));
-        }
-        let reopened = reopen_builder.build().await.map_err(|e| {
-            anyhow::anyhow!(
-                "simulate_process_crash: reopen durable store at {} failed: {e}",
-                data_path.display()
-            )
-        })?;
-        self.node = Arc::new(reopened);
-
-        ensure_runtime_schemas(&self.node)
-            .await
-            .map_err(|e| anyhow::anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
-
+        drop(std::mem::replace(&mut self.node, stand_in));
+        self.home.reopen().await?;
+        self.node = self.home.node.clone();
         self.process_generation = before + 1;
         Ok(())
     }
 }
 
-pub async fn test_db(name: &str) -> TestDb {
-    let tempdir = tempfile::Builder::new()
-        .prefix(&format!("gents-{name}-"))
-        .tempdir()
-        .expect("tempdir");
-    test_db_in(tempdir).await
-}
-
-pub async fn test_db_in(tempdir: TempDir) -> TestDb {
-    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
-    );
-    let node_identity_did = node_identity.did().to_string();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .with_node_identity_did(&node_identity_did)
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
+pub fn test_db_from_home(home: EmbeddedHome) -> TestDb {
+    let node = home.node.clone();
+    let node_identity = home.identity.clone();
     TestDb {
+        home,
         node,
         node_identity,
         process_generation: 0,
-        node_identity_did,
-        p2p_reopen: None,
-        tempdir,
     }
+}
+
+pub async fn test_db(name: &str) -> TestDb {
+    let home = EmbeddedHome::create_temp(name)
+        .await
+        .expect("embedded home");
+    test_db_from_home(home)
+}
+
+pub async fn test_db_in(tempdir: tempfile::TempDir) -> TestDb {
+    let home = EmbeddedHome::in_tempdir(tempdir, None)
+        .await
+        .expect("embedded home");
+    test_db_from_home(home)
 }
 
 #[derive(Debug, Clone)]
@@ -193,30 +133,15 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
-    );
-    let node_identity_did = node_identity.did().to_string();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .with_node_identity_did(&node_identity_did)
-            .with_p2p(test_p2p_config(&admission, tempdir.path()))
-            .build()
-            .await
-            .expect("embedded p2p node"),
-    );
-    ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    TestDb {
-        node,
-        node_identity,
-        process_generation: 0,
-        node_identity_did,
-        p2p_reopen: Some(admission),
+    let home = EmbeddedHome::in_tempdir(
         tempdir,
-    }
+        Some(Arc::new(move |data_path: &std::path::Path| {
+            test_p2p_config(&admission, data_path)
+        })),
+    )
+    .await
+    .expect("p2p embedded home");
+    test_db_from_home(home)
 }
 
 fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {

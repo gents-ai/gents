@@ -16,6 +16,7 @@ import {
   ManagedRuntimeAuthorityReview,
 } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
+import { LOGIN_ITEMS_PATH } from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
 
 export function LocalServer({ shell }: { shell: Shell }) {
@@ -55,7 +56,9 @@ export function LocalServer({ shell }: { shell: Shell }) {
       await shell.refreshSnapshot();
       toast(label);
     } catch (e) {
-      toast(`${label} failed: ${String(e)}`);
+      if (!(await shell.incompatibleHome?.adopt(e))) {
+        toast(`${label} failed: ${String(e)}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -103,6 +106,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
       setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      await shell.incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
     }
@@ -144,6 +148,12 @@ export function LocalServer({ shell }: { shell: Shell }) {
           {(statusError || status?.error) && (
             <span role="alert" className="text-xs text-destructive">
               {statusError || status?.error}
+            </span>
+          )}
+          {status?.state === "running" && status.approvalRequired && (
+            <span role="alert" className="text-xs text-destructive">
+              macOS no longer allows Gents in the background, so the agent will not
+              start again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
             </span>
           )}
           <Badge

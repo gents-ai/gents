@@ -4,7 +4,10 @@ on:
   push:
     branches:
       - main
+  # Draft PRs run only the guard jobs (repository-guard, triage-hygiene).
+  # Marking a PR ready runs the full suite on the stack top.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
     inputs:
       full_candidate:
@@ -89,8 +92,9 @@ jobs:
     name: rust-and-cli (${{ matrix.suite }})
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      (github.event.pull_request.draft == false &&
+      (github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     needs: repository-guard
     runs-on:
       [
@@ -378,8 +382,9 @@ jobs:
   lean-proofs:
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      (github.event.pull_request.draft == false &&
+      (github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     # Reuse the warm proof cache on studio-1's light support slot. This keeps
     # the runtime slot free once repository-guard releases the Rust matrix.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
@@ -455,8 +460,9 @@ jobs:
   desktop-packages:
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      (github.event.pull_request.draft == false &&
+      (github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     # Package boundary, publishability, and package-local tests are independent
     # of the desktop application/browser gate and should not block it.
     runs-on: ubuntu-latest
@@ -500,8 +506,9 @@ jobs:
   desktop-ui:
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      (github.event.pull_request.draft == false &&
+      (github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
@@ -575,8 +582,9 @@ jobs:
   desktop-ui-bombadil:
     if: >-
       github.event_name != 'pull_request' ||
-      github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      (github.event.pull_request.draft == false &&
+      (github.event.pull_request.stack == null ||
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
     # Bombadil's exact Linux failure trace passes on macOS. Keep this small
     # platform-specific smoke on a Studio while the portable UI suite runs on
     # hosted Linux; it normally releases the slot before Rust becomes ready.

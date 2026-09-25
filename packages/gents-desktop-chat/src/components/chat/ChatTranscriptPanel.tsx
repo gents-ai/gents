@@ -50,7 +50,6 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
               tool.itemKey,
               tool.statusKind,
               tool.presentation,
-              tool.partialOutputSeq ?? 0,
               tool.partialOutputTail?.length ?? 0,
               tool.cancelCause?.cause ?? "",
             ]),

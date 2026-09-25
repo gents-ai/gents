@@ -96,6 +96,11 @@ export function createBridgeHttpAdapter(
     },
     saveAgentConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
+    setDefaultBehavior: async (request) =>
+      client.postJson<DesktopClientSnapshot>(
+        "/desktop/agent/default-behavior",
+        request,
+      ),
     saveBehaviorConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
     saveBackendConfig: async (request) =>

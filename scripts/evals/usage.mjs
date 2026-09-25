@@ -6,17 +6,17 @@ import { text } from "./report.mjs";
 export function summarizeUsage(snapshot) {
   const trials = snapshot.trials.flatMap((trial) =>
     (trial.stageUsage || []).map((usage) => ({
-      model: trial.model,
+      target: trial.target,
       trial: trial.trial,
       ...usage,
     })),
   );
   const groups = new Map();
   for (const row of trials) {
-    const key = JSON.stringify([row.model, row.stage]);
+    const key = JSON.stringify([row.target, row.stage]);
     if (!groups.has(key))
       groups.set(key, {
-        model: row.model,
+        target: row.target,
         stage: row.stage,
         trials: 0,
         calls: 0,
@@ -52,12 +52,12 @@ export function summarizeUsage(snapshot) {
 export function renderUsage(usage) {
   const n = (value) => (value === null ? "—" : value.toLocaleString("en-US"));
   const lines = [
-    "Reported token usage by model and stage (all observed trials, including failures)",
+    "Reported token usage by target and stage (all observed trials, including failures)",
     "Stage                      Trials Calls     Input    Output  Peak input  Input/Output coverage",
   ];
-  for (const model of new Set(usage.stages.map((row) => row.model))) {
-    lines.push(text(model));
-    for (const row of usage.stages.filter((row) => row.model === model))
+  for (const target of new Set(usage.stages.map((row) => row.target))) {
+    lines.push(text(target));
+    for (const row of usage.stages.filter((row) => row.target === target))
       lines.push(
         `${text(row.stage).padEnd(27)} ${String(row.trials).padStart(5)} ${String(row.calls).padStart(5)} ${n(row.input).padStart(9)} ${n(row.output).padStart(9)} ${n(row.peakInput).padStart(11)}  ${row.inputReportedCalls}/${row.calls} / ${row.outputReportedCalls}/${row.calls}`,
       );

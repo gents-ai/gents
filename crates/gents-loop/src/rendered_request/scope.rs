@@ -65,6 +65,7 @@ pub struct PendingCapture {
     pub turn_index: usize,
     pub attempt: u32,
     pub assembly_trace: AssemblyTrace,
+    pub activity: Arc<crate::provider_activity::ProviderActivity>,
 }
 
 #[derive(Default)]
@@ -223,6 +224,7 @@ pub fn arm(
         turn_index,
         attempt,
         assembly_trace,
+        activity: Arc::default(),
     };
     let replaced = {
         let mut state = scope.lock();
@@ -312,6 +314,32 @@ pub(crate) fn armed_capture_scope(turn_index: usize, attempt: u32) -> Option<Str
                 .filter(|claimed| claimed.turn_index == turn_index && claimed.attempt == attempt)
                 .map(|claimed| claimed.capture_scope.clone())
         })
+}
+
+/// Transport activity of the armed or in-flight attempt `(turn_index, attempt)`.
+pub(crate) fn attempt_activity(
+    turn_index: usize,
+    attempt: u32,
+) -> Option<Arc<crate::provider_activity::ProviderActivity>> {
+    let scope = current_scope()?;
+    let state = scope.lock();
+    state
+        .pending
+        .iter()
+        .chain(state.claimed.iter())
+        .find(|capture| capture.turn_index == turn_index && capture.attempt == attempt)
+        .map(|capture| Arc::clone(&capture.activity))
+}
+
+/// Transport activity of the most recently armed attempt in this task's scope.
+pub fn current_attempt_activity() -> Option<Arc<crate::provider_activity::ProviderActivity>> {
+    let scope = current_scope()?;
+    let state = scope.lock();
+    state
+        .pending
+        .as_ref()
+        .or(state.claimed.as_ref())
+        .map(|capture| Arc::clone(&capture.activity))
 }
 
 /// The `LoopConfig::on_rendered_request` callback every production completion

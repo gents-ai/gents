@@ -152,8 +152,7 @@ fn render_reasoning_summary(reasoning: &Reasoning) -> String {
     for item in &reasoning.content {
         let piece = match item {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
-            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
-            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => continue,
         };
         if !out.is_empty() {
             out.push('\n');
@@ -178,9 +177,35 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
 }
 
 #[cfg(test)]
+use crate as test_protocol;
+#[cfg(test)]
+#[path = "../../gents-lean-contract/tests/support/rendered_reasoning.rs"]
+mod rendered_reasoning_contract;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::message::Text;
+
+    #[test]
+    fn generated_reasoning_visibility_matches_persisted_presentation() {
+        for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
+            let presentation = present_message(&case.message);
+            assert_eq!(presentation.body_markdown, "", "{}", case.name);
+            assert_eq!(
+                presentation.reasoning_markdown.as_deref().unwrap_or(""),
+                case.expected_text,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                presentation.reasoning_markdown.is_none(),
+                case.rendered_kinds.is_empty(),
+                "{}",
+                case.name
+            );
+        }
+    }
 
     #[test]
     fn tool_result_messages_present_as_tool_rows() {

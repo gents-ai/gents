@@ -126,9 +126,11 @@ pub(crate) fn push_datetime_field(
     let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
         return;
     };
+    // Re-supplied DateTime fields must round-trip exactly: `started_at` is
+    // part of the descendant edge order, so truncating it moves the edge.
     let value = DateTime::parse_from_rfc3339(value)
         .map(|dt| dt.with_timezone(&Utc))
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
         .unwrap_or_else(|_| value.to_string());
     fields.push(format!(r#"{field}: "{}""#, escape_graphql_string(&value)));
 }

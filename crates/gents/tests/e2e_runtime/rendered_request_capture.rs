@@ -122,6 +122,11 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     );
     let accounting = provenance["assembly_trace"]["context_accounting"].clone();
     assert_eq!(accounting["compaction_reason"], "below_threshold");
+    assert_eq!(
+        accounting["estimated_input_tokens"].as_u64(),
+        Some(gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap() as u64),
+        "pre-dispatch input accounting must equal estimation of the actual HTTP body"
+    );
     let components = &accounting["components"];
     let component_total = [
         "messages",
@@ -1037,13 +1042,8 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     const BIG_OUTPUT_CHARS: usize = 40_000;
     const CONTEXT_WINDOW: usize = 40_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
-    // Size the fixture through the production exact threshold helper. The
-    // provider counter uses serialized-byte estimates; four plain characters
-    // per token keeps this payload near that boundary without copying the
-    // threshold formula or reintroducing floating-point budget arithmetic.
-    let budget_chars =
-        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
-            .saturating_mul(4);
+    let input_budget =
+        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD);
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
     let marker = "capture-compaction";
@@ -1127,16 +1127,30 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             canonical(&observed[index]),
             "turn {index} must carry the body the provider was posted"
         );
+        let actual_tokens =
+            gents_loop::provider_input::estimate_input_body(observed[index].clone()).unwrap();
+        let provenance = parse_json(&row["provenance_json"]);
+        let accounting = &provenance["assembly_trace"]["context_accounting"];
+        assert_eq!(
+            accounting["estimated_input_tokens"].as_u64(),
+            Some(actual_tokens as u64),
+            "turn {index} pre-dispatch estimate must describe its actual HTTP request"
+        );
+        assert!(
+            actual_tokens <= input_budget,
+            "turn {index} dispatched {actual_tokens} input tokens above budget {input_budget}"
+        );
     }
 
     // The premise: turn 0 starts under budget, so the compaction observed at
     // turn 1 is caused by the tool result and not by a preamble that has since
     // outgrown the window.
-    let turn_zero_chars = row_text(&rows[0]).len();
+    let turn_zero_tokens =
+        gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap();
     assert!(
-        turn_zero_chars < budget_chars,
-        "turn 0 must start under the compaction budget; it was {turn_zero_chars} \
-         chars against a budget of {budget_chars}"
+        turn_zero_tokens < input_budget,
+        "turn 0 must start under the compaction budget; it was {turn_zero_tokens} \
+         input tokens against a budget of {input_budget}"
     );
 
     // Turn 1: the compacted list is what the provider was shown.
@@ -1461,6 +1475,269 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     );
 
     agent.shutdown().await;
+}
+
+const THRESHOLD_SUMMARIZER_MARKER: &str =
+    "Produce the required structured continuation checkpoint now.";
+
+struct ThresholdProbe {
+    seed_history: Vec<Message>,
+    follow_up_bodies: Vec<Value>,
+    follow_up_rows: Vec<Value>,
+    compaction_entries: usize,
+}
+
+async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> ThresholdProbe {
+    const CONTEXT_WINDOW: usize = 8_192;
+    const SEED_MARKER: &str = "threshold-seed-input";
+    const FOLLOW_UP_MARKER: &str = "threshold-follow-up-input";
+    const SEED_CHARS: usize = 10_000;
+
+    let checkpoint = serde_json::json!({
+        "goal": "answer the threshold follow-up",
+        "constraints_and_preferences": [],
+        "completed_work": ["seeded the canonical conversation"],
+        "in_progress": [],
+        "blockers": [],
+        "current_work": ["answering the follow-up"],
+        "key_decisions": [],
+        "errors_and_fixes": [],
+        "verification": [],
+        "uncertainties": [],
+        "next_actions": ["answer the follow-up"],
+        "critical_context": [],
+    })
+    .to_string();
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![
+            StreamPlan::current_authored_user(
+                THRESHOLD_SUMMARIZER_MARKER,
+                vec![StreamResponse::streams(
+                    THRESHOLD_SUMMARIZER_MARKER,
+                    vec![StreamChunk::text(checkpoint)],
+                )],
+            ),
+            StreamPlan::current_authored_user(
+                SEED_MARKER,
+                vec![StreamResponse::streams(
+                    SEED_MARKER,
+                    vec![StreamChunk::text(format!(
+                        "SEEDED{}",
+                        "x".repeat(SEED_CHARS)
+                    ))],
+                )],
+            ),
+            StreamPlan::current_authored_user(
+                FOLLOW_UP_MARKER,
+                vec![StreamResponse::completes(FOLLOW_UP_MARKER, ["done"])],
+            ),
+        ],
+    )
+    .expect("threshold probe mock backend");
+    let db = test_db(name).await;
+    let agent = boot_capture_agent_with(&db, name, backend.endpoint(), None, |behavior| {
+        behavior
+            .enable_meta_tools(false)
+            .enable_context_budget(false)
+            .context_window(CONTEXT_WINDOW)
+            .compaction_threshold(threshold)
+            .compaction_strategy(CompactionStrategy::StripThenSummarize)
+    })
+    .await;
+    // Each probe has its own database, so keep authored identities identical
+    // when comparing the exact serialized provider requests across runs.
+    let session_id = "session-threshold-boundary";
+    let seed_request_id = "request-threshold-seed";
+    let seed_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        seed_request_id,
+        session_id,
+        SEED_MARKER,
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &seed_doc, "completed").await;
+    assert_eq!(
+        backend.observed_completion_requests(),
+        1,
+        "seed must not compact"
+    );
+    let seed_history = gents::load_history(
+        db.node.as_ref(),
+        session_id,
+        &agent.agent_did,
+        Some(&agent.agent_did),
+    )
+    .await
+    .expect("load actual canonical seed history");
+    assert_eq!(seed_history.len(), 2, "one user and one provider assistant");
+
+    let follow_up_request_id = "request-threshold-follow-up";
+    let follow_up_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        follow_up_request_id,
+        session_id,
+        FOLLOW_UP_MARKER,
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &follow_up_doc, "completed").await;
+    let follow_up_bodies = backend.observed_completion_bodies()[1..].to_vec();
+    let follow_up_rows = wait_for_rendered_requests(
+        db.node.as_ref(),
+        follow_up_request_id,
+        follow_up_bodies.len(),
+    )
+    .await;
+    let compaction_entries = compaction_entry_count(db.node.as_ref(), session_id).await;
+    agent.shutdown().await;
+    ThresholdProbe {
+        seed_history,
+        follow_up_bodies,
+        follow_up_rows,
+        compaction_entries,
+    }
+}
+
+#[tokio::test]
+async fn serialized_input_threshold_equality_and_one_over_select_actual_compaction() {
+    use gents_loop::compaction::ReductionAdmission;
+    use gents_loop::provider_input::{budget::effective_input_budget, estimate_input_body};
+
+    const CONTEXT_WINDOW: usize = 8_192;
+    let probe = run_serialized_threshold_probe("threshold-probe", 1.0).await;
+    assert_eq!(
+        probe.follow_up_bodies.len(),
+        1,
+        "probe must dispatch without compaction"
+    );
+    assert_eq!(
+        coordinates(&probe.follow_up_rows),
+        vec![("inference.1", 0, 0)]
+    );
+    assert_eq!(probe.compaction_entries, 0);
+    let baseline_body = canonical(&probe.follow_up_bodies[0]);
+    assert_eq!(
+        parse_json(&probe.follow_up_rows[0]["request_json"]),
+        baseline_body
+    );
+    let measured = estimate_input_body(baseline_body.clone()).expect("actual HTTP input estimate");
+    assert!(
+        (2..CONTEXT_WINDOW).contains(&measured),
+        "measured input {measured} must permit exact neighboring budgets and output capacity"
+    );
+
+    // Select fixture thresholds through the production budget owner. With a
+    // window below 10,000, every integer input budget has a basis-point value.
+    let threshold_for = |budget| {
+        (1..=10_000_u64)
+            .map(|basis_points| basis_points as f64 / 10_000.0)
+            .find(|threshold| effective_input_budget(CONTEXT_WINDOW, *threshold) == budget)
+            .expect("the measured integer budget is representable")
+    };
+    let equal_threshold = threshold_for(measured);
+    let one_over_threshold = threshold_for(measured - 1);
+    assert_eq!(
+        effective_input_budget(CONTEXT_WINDOW, equal_threshold),
+        measured
+    );
+    assert_eq!(
+        effective_input_budget(CONTEXT_WINDOW, one_over_threshold),
+        measured - 1
+    );
+    assert!(ReductionAdmission::for_input(measured, CONTEXT_WINDOW, equal_threshold).is_none());
+    assert!(ReductionAdmission::for_input(measured, CONTEXT_WINDOW, one_over_threshold).is_some());
+
+    let equal = run_serialized_threshold_probe("threshold-equal", equal_threshold).await;
+    assert_eq!(
+        equal.seed_history, probe.seed_history,
+        "identical canonical seed inputs"
+    );
+    assert_eq!(
+        equal.follow_up_bodies.len(),
+        1,
+        "equality must not summarize"
+    );
+    assert_eq!(
+        coordinates(&equal.follow_up_rows),
+        vec![("inference.1", 0, 0)]
+    );
+    assert_eq!(equal.compaction_entries, 0);
+    assert_eq!(
+        canonical(&equal.follow_up_bodies[0]),
+        baseline_body,
+        "equality run must send the same serialized provider request as the probe"
+    );
+    assert_eq!(
+        parse_json(&equal.follow_up_rows[0]["request_json"]),
+        baseline_body
+    );
+
+    let over = run_serialized_threshold_probe("threshold-one-over", one_over_threshold).await;
+    assert_eq!(
+        over.seed_history, probe.seed_history,
+        "identical canonical seed inputs"
+    );
+    assert!(
+        over.follow_up_bodies.len() >= 2,
+        "one-over must summarize at least once before inference; captured scopes {:?}, build paths {:?}",
+        coordinates(&over.follow_up_rows),
+        over.follow_up_rows.iter().map(build_path).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        over.follow_up_rows.len(),
+        over.follow_up_bodies.len(),
+        "each provider call must have one durable capture"
+    );
+    let scopes = coordinates(&over.follow_up_rows);
+    let (inference, summaries) = scopes.split_last().expect("nonempty capture sequence");
+    assert_eq!(*inference, ("inference.1", 0, 0));
+    for (index, ((scope, turn, attempt), row)) in
+        summaries.iter().zip(&over.follow_up_rows).enumerate()
+    {
+        assert!(
+            scope.starts_with("compaction.") && *turn == 0 && *attempt == 0,
+            "provider call {index} must be a first-attempt compaction: {scopes:?}"
+        );
+        assert!(
+            row_text(row).contains(THRESHOLD_SUMMARIZER_MARKER),
+            "compaction call {index} must carry the actual summarizer prompt"
+        );
+    }
+    assert_eq!(
+        over.compaction_entries, 1,
+        "a session-prefix summary must be durable"
+    );
+    for (row, body) in over.follow_up_rows.iter().zip(&over.follow_up_bodies) {
+        assert_eq!(
+            parse_json(&row["request_json"]),
+            canonical(body),
+            "each posted provider body must equal its durable capture"
+        );
+    }
+    let rebuilt = estimate_input_body(
+        over.follow_up_bodies
+            .last()
+            .expect("final inference body")
+            .clone(),
+    )
+    .expect("rebuilt inference HTTP input estimate");
+    assert!(
+        rebuilt <= measured - 1,
+        "rebuilt inference {rebuilt} must fit the one-over threshold {}",
+        measured - 1
+    );
+    let accounting = parse_json(
+        &over.follow_up_rows.last().expect("final inference capture")["provenance_json"],
+    );
+    assert_eq!(
+        accounting["assembly_trace"]["context_accounting"]["estimated_input_tokens"],
+        serde_json::json!(rebuilt),
+        "dispatch accounting must describe the rebuilt HTTP body"
+    );
 }
 
 #[tokio::test]

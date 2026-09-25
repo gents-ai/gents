@@ -12,7 +12,9 @@ the ingest boundary for request lineage:
   request-only control continuation;
 * malformed replicated rows are rejected individually, without preventing a
   later well-formed row from being considered; and
-* a steering request is not publishable before its user message is durable.
+* queued steering admission retains signed raw input; canonical publication of
+  the prepared message belongs to the owned execution start, not this lineage
+  ingest boundary (see `QueuedSteering`).
 -/
 
 namespace DurableLineage

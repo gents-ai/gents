@@ -1,5 +1,29 @@
 [
     {
+      "id": "native.dispatch-observation",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.attempt" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.replay_after_commit_never_authorizes" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.completionProbe" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
+      ],
+      "constructors": [],
+      "generated_groups": ["canonical_dispatch_observation_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": ["crates/gents/src/hook/persistence/prompt_hook.rs", "crates/gents/src/hook.rs", "crates/gents/src/tool_call_lifecycle/transition/native.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "lost_receipt_then_replay preserves Running without either observation granting invocation authority",
+        "won_dispatch_then_replay grants authority only on the newly won acknowledged dispatch",
+        "rejected_then_won_dispatch preserves Pending on policy rejection before fresh election",
+        "Bind both persistence policies to the actual call hook and prove zero external dispatch after receipt loss or replay",
+        "Normal request completion rejects a committed foreground dispatch through durable tool accounting, without changing the request before failure handoff",
+        "Bind recovery accounting and special control-tool failures after committed effects; ordinary result-write failure policy is not dispatch authorization"
+      ],
+      "retired_bindings": []
+    },
+    {
       "id": "native.request-execution-lease",
       "model_symbols": [
         { "file": "crates/gents/proofs/Proofs/RequestExecutionLease/Transition.lean", "symbol": "RequestExecutionLease.Action" },
@@ -62,7 +86,6 @@
         "same_deadline_replay_after_renewal_is_rejected",
         "one_tick_duration_cannot_advance_before_expiry",
         "terminal_lifecycle_rejects_renewal_even_with_active_lease",
-        "input_required_wait_keeps_explicit_owner_heartbeat",
         "close_or_retract_authorization_does_not_renew",
         "accept_and_publish_authorization_does_not_renew",
         "dispatch_authorization_does_not_renew",
@@ -121,7 +144,8 @@
       "consumer_paths": [
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents/src/compaction/tests.rs",
-        "crates/gents/tests/conformance/compaction_gate.rs"
+        "crates/gents/tests/conformance/compaction_gate.rs",
+        "crates/gents/tests/e2e_runtime/rendered_request_capture.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -130,7 +154,8 @@
         "Construct and measure complete requests at effective budget and one estimated token above it. Assert equality is NotNeeded and only a strictly greater estimate is reduction-eligible. Raw payload byte counts cannot stand in for these measured boundaries.",
         "Exercise literal-expanded and head/tail presentations and missing dependencies; incomplete reconstruction must not become a smaller dispatchable request.",
         "After reduction, rebuild and reproject the complete request and reject dispatch if its new estimate still exceeds the effective budget.",
-        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate."
+        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate.",
+        "Native HTTP capture tests compare persisted input accounting with the production estimator applied to the actual received request body, including every dispatched turn of a three-turn compaction scenario. All dispatched estimates fit the effective budget. Exact equality/one-over boundary construction, literal/window coverage, and incomplete-dependency rejection remain required experiments."
       ],
       "retired_bindings": []
     },
@@ -147,12 +172,14 @@
       ],
       "consumer_paths": [
         "crates/gents/src/config_client/txn_owner_tests.rs",
-        "crates/gents/src/defra_write/tests.rs"
+        "crates/gents/src/defra_write/tests.rs",
+        "crates/gents/src/streaming/canonical_tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [
         "inject failure at every write in closure, header, tool-intent and recovery generation-swap/accounting batches and observe all-or-none facts",
-        "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects"
+        "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects",
+        "Native publication and partial-text recovery tests inject a task-local failure after every successful ConfigApplyTxn mutation and compare persisted facts; successful second-fixture mutation counts pin complete fault coverage. Recovery includes the session observation. Exact-identity caller replay after an acknowledged commit performs zero transactional mutations; this does not simulate acknowledgement loss within the transaction owner or count arbitrary auto-commit writes. Running-tool recovery accounting and downstream dispatch/continuation/token-charge replay effects remain separate obligations."
       ],
       "retired_bindings": []
     },
@@ -190,7 +217,8 @@
         "block provider and tool reads while an independent bounded-cadence timer renews",
         "reject early, stale-deadline and expired renewal attempts",
         "suspend past expiry and resume with the old owner fenced from publication and dispatch",
-        "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time"
+        "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time",
+        "Native renewal tests run the actual renewal task while two read stand-ins block, and stop polling past the stored deadline before rejecting renewal and recovering the request. These establish independent timer operation, renewal rejection and recovery takeover, not stale-owner publication/dispatch rejection, actual provider/tool integration, OS suspend, or system-clock discontinuity."
       ],
       "retired_bindings": ["PersistProgress renewal", "socket traffic renewal", "response progress sequence"]
     },
@@ -213,7 +241,8 @@
         "concurrent identical creates resolve to one immutable identity",
         "changed genesis content cannot overwrite the existing identity",
         "distinct documents at one source ordinal or closure project as conflict rather than first-writer-wins",
-        "use pinned DefraDB behavior rather than a synthetic ID map"
+        "use pinned DefraDB behavior rather than a synthetic ID map",
+        "The native genesis test races identical creates, verifies duplicate-create and changed-content identity behavior, then feeds both persisted closing records to canonical reconstruction in both arrival orders and under either closure reference: each reports ConflictingClosures, never a selected winner. Open-flush ordinal twins and cross-process replication remain separate coverage."
       ],
       "retired_bindings": ["synthetic global ID map"]
     },

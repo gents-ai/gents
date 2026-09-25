@@ -5,7 +5,7 @@ import { behaviorName, initials } from "./behavior";
 import { BehaviorHoverCard } from "./HoverCards";
 
 /* two-letter initials inside a quiet ring: raised face, hairline border,
-   ordinary text ink. Per-behaviour colour is parked for now; the hue
+   ordinary text ink. Per-behavior color is parked for now; the hue
    helpers in behavior.ts stay for when it comes back. */
 /* forwards every span prop, so a hover-card or tooltip trigger can render it */
 export function BehaviorAvatar({
@@ -37,12 +37,15 @@ export function BehaviorChip({
   meta,
   showName = true,
   description,
+  className,
 }: {
   behaviorId: string | null;
   deployment: DeploymentView | null;
   meta?: string;
   showName?: boolean;
   description?: string;
+  /* the avatar's own size, for a row that is smaller than a row */
+  className?: string;
 }) {
   const name = behaviorName(behaviorId, deployment);
   return (
@@ -55,7 +58,7 @@ export function BehaviorChip({
         <BehaviorAvatar
           name={name}
           behaviorId={behaviorId}
-          className="cursor-default"
+          className={cn("cursor-default", className)}
         />
       </BehaviorHoverCard>
       {showName && (

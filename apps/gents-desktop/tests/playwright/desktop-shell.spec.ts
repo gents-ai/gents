@@ -125,7 +125,7 @@ test.describe("kit shell", () => {
       document.documentElement.dataset.shell = "mac";
     });
     for (const viewport of [
-      { width: 1180, height: 720 },
+      { width: 640, height: 720 },
       { width: 1480, height: 868 },
       { width: 1180, height: 696 },
     ]) {
@@ -174,23 +174,38 @@ test.describe("kit shell", () => {
 
   test("session filters stay visible and can be reset", async ({ page }) => {
     await gotoHarness(page);
-    await expect(page.getByLabel("Session filters")).toBeVisible();
-    await expect(page.getByLabel("Filter by behaviour")).toContainText(
-      "All behaviours",
-    );
-    await expect(page.getByLabel("Filter by state")).toContainText("Any state");
-    await expect(page.getByLabel("Filter by source")).toContainText("Any source");
+    const filters = page.getByLabel("Session filters");
+    const session = page.getByRole("link", { name: /introduction-and-greetings/ });
+    await expect(filters).toBeVisible();
+    await expect(filters.getByRole("button", { name: "State" })).toBeVisible();
+    await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
+    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
 
-    await page.getByLabel("Filter by behaviour").click();
-    await page.getByRole("option", { name: "Ops" }).click();
-    await expect(page.getByText("Showing 0 of 1")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Clear filters" })).toBeVisible();
-
-    await page.getByRole("button", { name: "Clear filters" }).click();
-    await expect(page.getByText("Showing 1 of 1")).toBeVisible();
+    /* the behavior filter counts what each choice would leave: Ops has no
+       session here, so it is offered with its zero and cannot be picked */
+    await filters.getByRole("combobox", { name: "Behavior" }).click();
+    /* the popup is a dialog with a search field; it carries its own name */
     await expect(
-      page.getByRole("link", { name: /introduction-and-greetings/ }),
+      page.getByRole("dialog", { name: "Filter by behavior" }),
     ).toBeVisible();
+    const ops = page.getByRole("option", { name: /Ops\s*0$/ });
+    await expect(ops).toBeVisible();
+    await expect(ops).toHaveAttribute("aria-disabled", "true");
+    const withSession = page.getByRole("option", { name: /Default\s*1$/ });
+    await withSession.click();
+    await page.keyboard.press("Escape");
+    await expect(filters.getByRole("button", { name: "Clear filters" })).toBeVisible();
+    await expect(session).toBeVisible();
+
+    /* narrowing to nothing says so, and Clear filters brings the list back */
+    await filters.getByRole("button", { name: "State" }).click();
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
+    await filters.getByRole("button", { name: "Clear filters" }).click();
+    await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
+    await expect(session).toBeVisible();
   });
 
   test("agents and configuration are reachable", async ({ page }) => {
@@ -224,24 +239,64 @@ test.describe("kit shell", () => {
     expect(observed).toEqual({ current: 1, max: 1, overlapping: [] });
   });
 
+  test("the behavior filter and sync health never stack as dialogs", async ({
+    page,
+  }) => {
+    /* Bombadil (run 35946895240): Behavior filter, then Sync healthy, left
+       both popups open. Both are dialogs; the shell keeps one at a time. */
+    await gotoHarness(page);
+    const filters = page.getByLabel("Session filters");
+    const behavior = page.getByRole("dialog", { name: "Filter by behavior" });
+    const sync = page.getByRole("dialog", { name: "Database sync details" });
+
+    await startDialogObservation(page);
+    await filters.getByRole("combobox", { name: "Behavior" }).click();
+    await expect(behavior).toBeVisible();
+    await page.getByRole("button", { name: /Sync healthy/ }).click();
+    await expect(sync).toBeVisible();
+    await expect(behavior).toHaveCount(0);
+
+    await page.waitForTimeout(200);
+    const observed = await finishDialogObservation(page);
+    expect(observed.max).toBe(1);
+    expect(observed.overlapping).toEqual([]);
+  });
+
   test("requires a document name before configuration deletion", async ({ page }) => {
     await gotoHarness(page);
     await openConfig(page);
-    await openConfigSection(page, /^Contexts\b/);
-    await page.getByRole("link", { name: /Default context/ }).click();
+    await openConfigSection(page, /^Behaviors\b/);
+    await page
+      .getByRole("link", { name: /^Ops\b/ })
+      .first()
+      .click();
 
-    await expect(page.getByRole("combobox", { name: "Skills" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
-    await page.getByRole("button", { name: "Delete context" }).click();
+    await page.getByRole("button", { name: "Delete behavior" }).click();
     const confirm = page.getByRole("textbox", {
-      name: "Type Default context to confirm",
+      name: "Type Ops to confirm",
     });
     await expect(confirm).toBeFocused();
-    await expect(page.getByRole("button", { name: "Delete context" })).toBeDisabled();
-    await confirm.fill("Default context");
-    await expect(page.getByRole("button", { name: "Delete context" })).toBeEnabled();
-    await page.getByRole("button", { name: "Cancel" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(
+      dialog.getByRole("button", { name: "Delete behavior" }),
+    ).toBeDisabled();
+    await confirm.fill("Ops");
+    await expect(dialog.getByRole("button", { name: "Delete behavior" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(confirm).toHaveCount(0);
+  });
+
+  test("a provider's profile count opens its backend without crashing", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /^Providers\b/);
+    await page.getByRole("button", { name: "1 profile" }).first().click();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
   });
 
   test("seeded skills satisfy the canonical editor shape", async ({ page }) => {
@@ -250,9 +305,10 @@ test.describe("kit shell", () => {
     await openConfigSection(page, /^Skills\b/);
     await page.getByRole("link", { name: /Fleet summary/ }).click();
 
-    await expect(page.getByRole("textbox", { name: "Tool dependencies" })).toHaveValue(
-      "mcp-observability.fleet_status",
-    );
+    await expect(
+      page.getByRole("textbox", { name: "Tool dependencies" }),
+    ).toBeVisible();
+    await expect(page.getByText("mcp-observability.fleet_status")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
     await expect(page.getByTestId("error-banner")).toHaveCount(0);
   });
@@ -268,6 +324,30 @@ test.describe("kit shell", () => {
 
     await page.getByRole("button", { name: "Close context details" }).click();
     await expect(page.getByTestId("context-details")).not.toBeVisible();
+  });
+
+  test("file edit diffs mark added, removed and unchanged lines", async ({ page }) => {
+    await gotoHarness(page, "coding");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    const transcript = page.getByTestId("transcript-panel");
+    const removed = transcript.locator("[data-diff=removed]");
+    for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
+      await transcript
+        .locator("[data-slot=collapsible-trigger][aria-expanded=false]")
+        .filter({ hasText: /parser\.rs|edited|read|\$/ })
+        .first()
+        .click();
+    }
+    await expect(removed).toHaveText(/fn parse\(\) -> Ast \{ todo!\(\) \}/);
+    await expect(transcript.locator("[data-diff=added]")).toHaveText(
+      /fn parse\(\) -> Ast \{ Ast::default\(\) \}/,
+    );
+    await expect(transcript.locator("[data-diff=context]")).toHaveText(
+      /impl Parser \{/,
+    );
   });
 
   test("condensed session behavior details are keyboard accessible", async ({
@@ -291,7 +371,7 @@ test.describe("kit shell", () => {
     await expect(trigger).toBeVisible();
     await trigger.focus();
     await expect(trigger).toBeFocused();
-    await expect(page.getByTestId("behaviour-hover-card")).toBeVisible();
+    await expect(page.getByTestId("behavior-hover-card")).toBeVisible();
   });
 
   test("context and sync popovers never overlap as dialog portals", async ({
@@ -404,7 +484,7 @@ test.describe("kit shell", () => {
   test("reopens a conversation after using a different behavior", async ({ page }) => {
     await gotoHarness(page);
     await openChat(page);
-    await page.getByRole("button", { name: "Behaviour" }).click();
+    await page.getByRole("button", { name: "Behavior" }).click();
     await page.getByRole("option", { name: /Ops/ }).click();
     await composer(page).fill("inspect the runtime");
     await sendButton(page).click();

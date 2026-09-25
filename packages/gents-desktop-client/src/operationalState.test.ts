@@ -238,6 +238,26 @@ describe("deployment operational state", () => {
     });
   });
 
+  it("surfaces a runtime version mismatch without offering a futile reconnect", () => {
+    const detail =
+      "this app and the agent runtime are different Gents versions; update the app and the runtime to the same version";
+    const state = projectDeploymentOperationalState(
+      deployment(),
+      null,
+      syncHealth({ state: "incompatible", lastError: detail }),
+    );
+
+    expect(state.summary).toBe(state.sync);
+    expect(state.sync).toMatchObject({
+      layer: "sync",
+      kind: "blocked",
+      reason: "incompatible",
+      shortLabel: "Update required",
+      detail,
+      action: null,
+    });
+  });
+
   it("keeps an enrolled agent online from last-known readiness when sync is healthy", () => {
     const state = projectDeploymentOperationalState(
       deployment({

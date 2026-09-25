@@ -42,7 +42,11 @@ pub fn run() {
     prefer_host_tools();
     install_runtime();
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Registered first so a second launch exits before it sets anything up.
+    #[cfg(desktop)]
+    let builder = builder.plugin(single_instance());
+    let builder = builder
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
@@ -143,6 +147,13 @@ pub fn run() {
         });
 }
 
+/// A second copy of the app would share this one's service label, service
+/// definition and data. Launching it again focuses the running app instead.
+#[cfg(desktop)]
+fn single_instance<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
+}
+
 fn platform_bridge_config() -> BridgeConfig {
     BridgeConfig {
         home: HomePolicy::Default,
@@ -220,6 +231,12 @@ mod tests {
             BootstrapPolicy::PairedRemoteOnly
         ));
         assert_eq!(config.managed_server, ManagedServerPolicy::Disabled);
+    }
+
+    #[test]
+    fn a_second_launch_is_handed_to_the_running_app() {
+        let plugin = single_instance::<tauri::Wry>();
+        assert_eq!(tauri::plugin::Plugin::name(&plugin), "single-instance");
     }
 
     #[test]

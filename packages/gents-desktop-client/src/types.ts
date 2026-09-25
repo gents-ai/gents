@@ -47,6 +47,7 @@ export {
 } from "./types/display.js";
 export type {
   AgentConfigSaveRequest,
+  DefaultBehaviorSetRequest,
   BackendSaveRequest,
   ConfigComponentsApplyRequest,
   ConfigComponentsPatchRequest,
@@ -109,6 +110,7 @@ export type {
   RenderedTimelineItem,
   RenderedToolCallView,
   ToolCallView,
+  ToolDiffLineKind,
   ToolDiffLineView,
   ToolPresentationView,
   RequestResendResult,

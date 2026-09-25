@@ -199,6 +199,7 @@ mod tests {
             agent_did: "did:test:test".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/tmp/work".to_string()),
+            home: None,
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
@@ -210,6 +211,8 @@ mod tests {
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
         }
     }
 

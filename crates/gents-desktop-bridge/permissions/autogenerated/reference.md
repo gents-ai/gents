@@ -4,13 +4,13 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 
 #### This default permission set includes the following:
 
-- `allow-desktop-bridge-contract`
 - `allow-desktop-bootstrap-summary`
 - `allow-desktop-client-snapshot`
 - `allow-desktop-observer-metrics`
 - `allow-desktop-client-start`
 - `allow-desktop-client-shutdown`
 - `allow-desktop-set-selected-agent`
+- `allow-desktop-app-quit`
 
 ## Permission Table
 
@@ -43,6 +43,32 @@ Enables the desktop_agent_config_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_agent_config_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-app-quit`
+
+</td>
+<td>
+
+Enables the desktop_app_quit command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-app-quit`
+
+</td>
+<td>
+
+Denies the desktop_app_quit command without any pre-configured scope.
 
 </td>
 </tr>
@@ -173,32 +199,6 @@ Enables the desktop_bootstrap_summary command without any pre-configured scope.
 <td>
 
 Denies the desktop_bootstrap_summary command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-bridge-contract`
-
-</td>
-<td>
-
-Enables the desktop_bridge_contract command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-bridge-contract`
-
-</td>
-<td>
-
-Denies the desktop_bridge_contract command without any pre-configured scope.
 
 </td>
 </tr>
@@ -485,6 +485,32 @@ Enables the desktop_context_delete command without any pre-configured scope.
 <td>
 
 Denies the desktop_context_delete command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-default-behavior-set`
+
+</td>
+<td>
+
+Enables the desktop_default_behavior_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-default-behavior-set`
+
+</td>
+<td>
+
+Denies the desktop_default_behavior_set command without any pre-configured scope.
 
 </td>
 </tr>
@@ -953,6 +979,32 @@ Enables the desktop_mailbox_start_request command without any pre-configured sco
 <td>
 
 Denies the desktop_mailbox_start_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-managed-server-open-login-items`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_open_login_items command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-open-login-items`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_open_login_items command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1792,6 +1844,32 @@ Denies the desktop_provider_account_disconnect command without any pre-configure
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-accounts-list`
 
 </td>
@@ -2473,7 +2551,7 @@ Denies the desktop_workspace_list command without any pre-configured scope.
 </td>
 <td>
 
-Contract, bootstrap summary, aggregate snapshot, observer metrics
+Bootstrap summary, aggregate snapshot, observer metrics
 
 </td>
 </tr>
@@ -2486,7 +2564,7 @@ Contract, bootstrap summary, aggregate snapshot, observer metrics
 </td>
 <td>
 
-Client start/shutdown and selected-agent
+Client start/shutdown, selected-agent, and application quit
 
 </td>
 </tr>

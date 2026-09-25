@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { RefObject } from "react";
 
-import { useTranscriptFollow } from "../src/ui/screens/SessionScreen";
+import { useFollowTail } from "../src/ui/lib/scroll";
 
 function transcriptFixture() {
   const owner = document.createElement("div");
@@ -29,7 +29,7 @@ describe("transcript streaming follow", () => {
   it("stays pinned across growth, releases on scroll up, and relocks at the tip", () => {
     const fixture = transcriptFixture();
     const { result, rerender } = renderHook(
-      ({ signal }) => useTranscriptFollow(fixture.ownerRef, "session-1", signal),
+      ({ signal }) => useFollowTail(fixture.ownerRef, "session-1", signal),
       { initialProps: { signal: "assistant:10" } },
     );
 

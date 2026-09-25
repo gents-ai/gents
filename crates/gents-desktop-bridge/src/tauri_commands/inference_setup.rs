@@ -19,13 +19,169 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::error::BridgeError;
-use crate::state::{current_core, DesktopAppState};
+use crate::error::{BridgeError, BridgeErrorCode};
+use crate::state::{
+    current_core, CredentialSave, DesktopAppState, IssuedOAuthCredential, PendingOAuthCredentials,
+};
 use crate::types::ClientUpdateEvent;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+
+const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
+
+/// User-facing name for a credential provider. Setup errors name the account
+/// the user signed in to, never the runtime endpoint that failed.
+fn provider_label(provider: &str) -> &'static str {
+    match provider {
+        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
+        gents::claude_oauth::CLAUDE_OAUTH_PROVIDER => "Claude",
+        gents::xai_grok_oauth::XAI_OAUTH_PROVIDER => "Grok",
+        _ => "provider",
+    }
+}
+
+/// Refuses to start a browser sign-in unless the agent's canonical
+/// configuration owner answers. The probe reads the agent's credentials through
+/// the same access the save will use, so a runtime that is not serving is
+/// reported before the user completes an OAuth flow whose tokens could not be
+/// stored. Detail stays in the log; the returned message is user-facing.
+async fn require_reachable_configuration(
+    access: anyhow::Result<gents::ConfigAccess>,
+    agent_did: &str,
+    provider: &str,
+) -> Result<(), BridgeError> {
+    let probe = match access {
+        Ok(access) => list_oauth_credentials_on(&access, agent_did)
+            .await
+            .map(|_| ()),
+        Err(error) => Err(error),
+    };
+    probe.map_err(|error| {
+        tracing::warn!(
+            target: LOG_TARGET,
+            agent_did,
+            provider,
+            error = %format!("{error:#}"),
+            "agent configuration is not reachable; not starting provider sign-in"
+        );
+        BridgeError::new(
+            BridgeErrorCode::EndpointUnreachable,
+            format!(
+                "The agent is not running, so {} sign-in was not started. Start the agent and try again.",
+                provider_label(provider)
+            ),
+        )
+    })
+}
+
+async fn upsert_through(
+    access: anyhow::Result<gents::ConfigAccess>,
+    credential: OAuthCredential,
+) -> anyhow::Result<String> {
+    gents::oauth_credential::upsert_oauth_credential_on(&access?, &credential).await
+}
+
+fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> BridgeError {
+    tracing::warn!(
+        target: LOG_TARGET,
+        agent_did = %credential.agent_did,
+        provider = %credential.provider,
+        error = %format!("{error:#}"),
+        "saving the issued provider credential failed; holding it for retry"
+    );
+    BridgeError::new(
+        BridgeErrorCode::CredentialNotSaved,
+        format!(
+            "You are signed in to {}, but Gents could not save the sign-in to the agent. Make sure the agent is running, then retry saving.",
+            provider_label(&credential.provider)
+        ),
+    )
+}
+
+/// Saves a credential issued by a completed sign-in through the agent's
+/// canonical configuration owner. A failed save keeps the credential in the
+/// bridge's in-memory pending set so `desktop_provider_account_retry_save` can
+/// store it without another browser login.
+async fn save_issued_credential(
+    pending: &PendingOAuthCredentials,
+    access: anyhow::Result<gents::ConfigAccess>,
+    issued: IssuedOAuthCredential,
+) -> Result<String, BridgeError> {
+    let credential = issued.credential().clone();
+    match pending
+        .save(issued, |credential| upsert_through(access, credential))
+        .await
+    {
+        CredentialSave::Saved(doc_id) => Ok(doc_id),
+        CredentialSave::Superseded => Err(BridgeError::untyped(format!(
+            "A newer {} sign-in for this agent replaced this one.",
+            provider_label(&credential.provider)
+        ))),
+        CredentialSave::Failed(error) => Err(credential_not_saved(&credential, &error)),
+    }
+}
+
+/// Retries the save of a held credential for exactly this agent and provider.
+async fn retry_pending_credential(
+    pending: &PendingOAuthCredentials,
+    access: anyhow::Result<gents::ConfigAccess>,
+    agent_did: &str,
+    provider: &str,
+) -> Result<OAuthCredential, BridgeError> {
+    let (credential, saved) = pending
+        .retry(agent_did, provider, |credential| {
+            upsert_through(access, credential)
+        })
+        .await
+        .ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::NotFound,
+                "There is no unsaved sign-in to retry. Sign in again.",
+            )
+        })?;
+    match saved {
+        Ok(_) => Ok(credential),
+        Err(error) => Err(credential_not_saved(&credential, &error)),
+    }
+}
+
+/// Stored provider accounts plus the redacted view of sign-ins the bridge
+/// holds after a failed save. Held sign-ins are reported even when the store
+/// cannot be read, since retrying them is the way back to a stored account.
+async fn observe_provider_accounts(
+    pending: &PendingOAuthCredentials,
+    access: anyhow::Result<gents::ConfigAccess>,
+    agent_did: &str,
+) -> Result<Vec<ProviderAccountView>, BridgeError> {
+    let held: Vec<ProviderAccountView> = pending
+        .held_for(agent_did)
+        .iter()
+        .map(ProviderAccountView::pending_save)
+        .collect();
+    let stored = match access {
+        Ok(access) => list_oauth_credentials_on(&access, agent_did).await,
+        Err(error) => Err(error),
+    };
+    match stored {
+        Ok(stored) => Ok(stored
+            .iter()
+            .map(ProviderAccountView::from)
+            .chain(held)
+            .collect()),
+        Err(error) if !held.is_empty() => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                agent_did,
+                error = %format!("{error:#}"),
+                "reading stored provider accounts failed; reporting held sign-ins only"
+            );
+            Ok(held)
+        }
+        Err(error) => Err(BridgeError::untyped(error.to_string())),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -186,12 +342,32 @@ pub(crate) async fn desktop_inference_models_discover(
     let credential = if let Some(provider) = spec.oauth_provider {
         let core = current_core(&state)
             .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-        let access = core
-            .operator_access(request.agent_did.trim())
-            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let access = core.operator_access(request.agent_did.trim()).map_err(|error| {
+            tracing::warn!(
+                target: LOG_TARGET,
+                agent_did = %request.agent_did.trim(),
+                error = %format!("{error:#}"),
+                "resolving agent configuration access for model discovery failed"
+            );
+            BridgeError::new(
+                BridgeErrorCode::EndpointUnreachable,
+                "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
+            )
+        })?;
         gents::oauth_credential::list_oauth_credentials_on(&access, request.agent_did.trim())
             .await
-            .map_err(|error| BridgeError::untyped(error.to_string()))?
+            .map_err(|error| {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    agent_did = %request.agent_did.trim(),
+                    error = %format!("{error:#}"),
+                    "reading provider accounts for model discovery failed"
+                );
+                BridgeError::new(
+                    BridgeErrorCode::EndpointUnreachable,
+                    "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
+                )
+            })?
             .into_iter()
             .find(|credential| credential.enabled && credential.provider == provider)
     } else {
@@ -387,6 +563,8 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         return Err(BridgeError::untyped("agent_did is required"));
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
+    require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
+        .await?;
 
     let server = run_login_server(LoginOptions::default())
         .map_err(|error| BridgeError::untyped(format!("starting ChatGPT login server: {error}")))?;
@@ -427,12 +605,12 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let access = core
-        .operator_access(&agent_did)
-        .map_err(|error| BridgeError::untyped(format!("storing ChatGPT credential: {error}")))?;
-    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
-        .await
-        .map_err(|error| BridgeError::untyped(format!("storing ChatGPT credential: {error}")))?;
+    let doc_id = save_issued_credential(
+        &state.pending_oauth_credentials,
+        core.operator_access(&agent_did),
+        state.pending_oauth_credentials.issue(credential.clone()),
+    )
+    .await?;
 
     // Storing the credential is exactly the signal the runtime reconciles on to
     // flip a ChatGptCodex behavior available; nudge the UI to refetch health.
@@ -517,6 +695,19 @@ pub(crate) struct ProviderAccountView {
     pub access_token_expires_at: String,
     pub last_refresh: Option<String>,
     pub enabled: bool,
+    /// A completed sign-in the bridge holds because saving it failed; it is
+    /// not a stored account until `desktop_provider_account_retry_save`
+    /// succeeds.
+    pub pending_save: bool,
+}
+
+impl ProviderAccountView {
+    fn pending_save(credential: &OAuthCredential) -> Self {
+        Self {
+            pending_save: true,
+            ..Self::from(credential)
+        }
+    }
 }
 
 impl From<&OAuthCredential> for ProviderAccountView {
@@ -530,6 +721,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
+            pending_save: false,
         }
     }
 }
@@ -555,13 +747,12 @@ pub(crate) async fn desktop_provider_accounts_list(
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let agent_did = request.agent_did.trim();
-    let access = core
-        .operator_access(agent_did)
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let credentials = list_oauth_credentials_on(&access, agent_did)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(credentials.iter().map(ProviderAccountView::from).collect())
+    observe_provider_accounts(
+        &state.pending_oauth_credentials,
+        core.operator_access(agent_did),
+        agent_did,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -593,6 +784,46 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     Ok(())
 }
 
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderAccountRetrySaveRequest {
+    pub agent_did: String,
+    /// Credential provider kind, e.g. `claude-subscription`.
+    pub provider: String,
+}
+
+/// Saves a credential that a completed sign-in issued but could not store,
+/// without repeating the browser login. Only the redacted account view
+/// crosses the bridge.
+#[tauri::command]
+pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
+    app: AppHandle<R>,
+    request: ProviderAccountRetrySaveRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<ProviderAccountView, BridgeError> {
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "desktop client is not running",
+        )
+    })?;
+    let agent_did = request.agent_did.trim();
+    let provider = request.provider.trim();
+    let credential = retry_pending_credential(
+        &state.pending_oauth_credentials,
+        core.operator_access(agent_did),
+        agent_did,
+        provider,
+    )
+    .await?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("config"),
+    );
+    Ok(ProviderAccountView::from(&credential))
+}
+
 #[tauri::command]
 pub(crate) async fn desktop_grok_login<R: Runtime>(
     app: AppHandle<R>,
@@ -615,6 +846,8 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
         return Err(BridgeError::untyped("agent_did is required"));
     }
     let provider = normalize_xai_provider(request.provider.as_deref().unwrap_or_default());
+    require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
+        .await?;
 
     let cancel = Arc::new(AtomicBool::new(false));
     {
@@ -662,12 +895,12 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now());
-    let access = core
-        .operator_access(&agent_did)
-        .map_err(|error| BridgeError::untyped(format!("storing Grok credential: {error}")))?;
-    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
-        .await
-        .map_err(|error| BridgeError::untyped(format!("storing Grok credential: {error}")))?;
+    let doc_id = save_issued_credential(
+        &state.pending_oauth_credentials,
+        core.operator_access(&agent_did),
+        state.pending_oauth_credentials.issue(credential.clone()),
+    )
+    .await?;
 
     let _ = app.emit(
         "desktop://client-updated",
@@ -736,6 +969,406 @@ mod provider_account_tests {
         assert!(!json.contains("secret-refresh"));
         assert!(!json.contains("secret-id"));
         assert!(json.contains("acct-1"));
+    }
+
+    fn issued_credential(agent_did: &str) -> OAuthCredential {
+        OAuthCredential {
+            doc_id: None,
+            credential_id: format!("claude-subscription:{agent_did}"),
+            agent_did: agent_did.to_string(),
+            provider: gents::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
+            access_token: "issued-access".to_string(),
+            refresh_token: "issued-refresh".to_string(),
+            id_token: None,
+            account_id: Some("acct-1".to_string()),
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            last_refresh: None,
+            enabled: true,
+        }
+    }
+
+    /// Operator GraphQL access for a runtime that is not serving.
+    fn unreachable_operator() -> gents::ConfigAccess {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
+        let address = listener.local_addr().expect("local address");
+        drop(listener);
+        gents::ConfigAccess::Graphql(format!("http://{address}/api/v0/graphql"))
+    }
+
+    async fn serving_node() -> std::sync::Arc<gents::defra_node::EmbeddedNode> {
+        let node = gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node");
+        gents::ensure_runtime_schemas(&node).await.expect("schemas");
+        std::sync::Arc::new(node)
+    }
+
+    async fn serving_operator() -> gents::ConfigAccess {
+        gents::ConfigAccess::Local(serving_node().await)
+    }
+
+    fn assert_user_facing(error: &BridgeError) {
+        let message = error.message.to_ascii_lowercase();
+        for internal in ["127.0.0.1", "http://", "graphql", "/api/v0"] {
+            assert!(
+                !message.contains(internal),
+                "setup error leaks {internal:?}: {}",
+                error.message
+            );
+        }
+        assert!(error.endpoint.is_none());
+    }
+
+    #[tokio::test]
+    async fn sign_in_is_refused_before_oauth_when_the_runtime_is_not_serving() {
+        let error = require_reachable_configuration(
+            Ok(unreachable_operator()),
+            "did:key:zAgent",
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        )
+        .await
+        .expect_err("an unreachable runtime must refuse to start sign-in");
+        assert_eq!(error.code, BridgeErrorCode::EndpointUnreachable);
+        assert!(error.message.contains("Claude sign-in was not started"));
+        assert_user_facing(&error);
+
+        let missing_endpoint = require_reachable_configuration(
+            Err(anyhow::anyhow!(
+                "managed agent did:key:zAgent has no operator GraphQL endpoint"
+            )),
+            "did:key:zAgent",
+            gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await
+        .expect_err("unresolvable configuration access must refuse sign-in");
+        assert_eq!(missing_endpoint.code, BridgeErrorCode::EndpointUnreachable);
+        assert_user_facing(&missing_endpoint);
+
+        require_reachable_configuration(
+            Ok(serving_operator().await),
+            "did:key:zAgent",
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        )
+        .await
+        .expect("a serving runtime admits sign-in");
+    }
+
+    fn held_tokens(pending: &PendingOAuthCredentials, agent_did: &str) -> Vec<String> {
+        pending
+            .held_for(agent_did)
+            .into_iter()
+            .map(|credential| credential.access_token)
+            .collect()
+    }
+
+    fn credential_with_token(agent_did: &str, token: &str) -> OAuthCredential {
+        OAuthCredential {
+            access_token: token.to_string(),
+            ..issued_credential(agent_did)
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_save_holds_the_issued_credential_and_retry_saves_it_without_login() {
+        let pending = PendingOAuthCredentials::default();
+        let agent = "did:key:zAgent";
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+
+        let error = save_issued_credential(
+            &pending,
+            Ok(unreachable_operator()),
+            pending.issue(issued_credential(agent)),
+        )
+        .await
+        .expect_err("a runtime that is not serving cannot store the credential");
+        assert_eq!(error.code, BridgeErrorCode::CredentialNotSaved);
+        assert!(error.retryable);
+        assert!(error.message.contains("signed in to Claude"));
+        assert_user_facing(&error);
+        let serialized = serde_json::to_string(&error).unwrap();
+        assert!(!serialized.contains("issued-access"));
+        assert!(!serialized.contains("issued-refresh"));
+        assert_eq!(held_tokens(&pending, agent), ["issued-access"]);
+
+        // A retry while the runtime is still down keeps the credential held.
+        let still_down = retry_pending_credential(
+            &pending,
+            Err(anyhow::anyhow!("no operator GraphQL endpoint")),
+            agent,
+            provider,
+        )
+        .await
+        .expect_err("retry against an unavailable runtime fails");
+        assert_eq!(still_down.code, BridgeErrorCode::CredentialNotSaved);
+        assert_user_facing(&still_down);
+        assert_eq!(held_tokens(&pending, agent), ["issued-access"]);
+
+        // Once the canonical owner serves, retry stores the same tokens.
+        let node = serving_node().await;
+        let saved = retry_pending_credential(
+            &pending,
+            Ok(gents::ConfigAccess::Local(node.clone())),
+            agent,
+            provider,
+        )
+        .await
+        .expect("retry stores the held credential");
+        assert_eq!(saved.access_token, "issued-access");
+        assert!(held_tokens(&pending, agent).is_empty());
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node), agent)
+            .await
+            .expect("list stored credentials");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].provider, provider);
+        assert_eq!(stored[0].access_token, "issued-access");
+        assert_eq!(stored[0].refresh_token, "issued-refresh");
+    }
+
+    #[tokio::test]
+    async fn account_observation_reports_held_sign_ins_without_tokens() {
+        let pending = PendingOAuthCredentials::default();
+        let agent = "did:key:zAgent";
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+
+        let unobserved = observe_provider_accounts(&pending, Ok(unreachable_operator()), agent)
+            .await
+            .expect_err("an unreadable store with nothing held stays an error");
+        assert_eq!(unobserved.code, BridgeErrorCode::Unknown);
+
+        let _ = save_issued_credential(
+            &pending,
+            Ok(unreachable_operator()),
+            pending.issue(issued_credential(agent)),
+        )
+        .await;
+        let held = observe_provider_accounts(&pending, Ok(unreachable_operator()), agent)
+            .await
+            .expect("held sign-ins are observable while the store is unreachable");
+        assert_eq!(held.len(), 1);
+        assert!(held[0].pending_save);
+        assert_eq!(held[0].provider, provider);
+        let json = serde_json::to_string(&held).unwrap();
+        assert!(!json.contains("issued-access"));
+        assert!(!json.contains("issued-refresh"));
+        assert!(
+            observe_provider_accounts(&pending, Ok(unreachable_operator()), "did:key:zOther")
+                .await
+                .is_err()
+        );
+
+        let node = serving_node().await;
+        let with_store = observe_provider_accounts(
+            &pending,
+            Ok(gents::ConfigAccess::Local(node.clone())),
+            agent,
+        )
+        .await
+        .expect("serving store");
+        assert_eq!(with_store.len(), 1);
+        assert!(with_store[0].pending_save);
+
+        retry_pending_credential(
+            &pending,
+            Ok(gents::ConfigAccess::Local(node.clone())),
+            agent,
+            provider,
+        )
+        .await
+        .expect("retry stores the held credential");
+        let saved =
+            observe_provider_accounts(&pending, Ok(gents::ConfigAccess::Local(node)), agent)
+                .await
+                .expect("serving store");
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].pending_save);
+        assert_eq!(saved[0].provider, provider);
+    }
+
+    #[tokio::test]
+    async fn retry_save_only_uses_a_credential_held_for_that_agent_and_provider() {
+        let pending = PendingOAuthCredentials::default();
+        let _ = save_issued_credential(
+            &pending,
+            Ok(unreachable_operator()),
+            pending.issue(issued_credential("did:key:zAgent")),
+        )
+        .await;
+
+        for (agent, provider) in [
+            ("did:key:zOther", gents::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            (
+                "did:key:zAgent",
+                gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            ),
+        ] {
+            let error =
+                retry_pending_credential(&pending, Ok(serving_operator().await), agent, provider)
+                    .await
+                    .expect_err("no credential is held for this key");
+            assert_eq!(error.code, BridgeErrorCode::NotFound);
+        }
+        assert_eq!(held_tokens(&pending, "did:key:zAgent"), ["issued-access"]);
+    }
+
+    type Writes = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    fn failed_write(_: OAuthCredential) -> std::future::Ready<anyhow::Result<()>> {
+        std::future::ready(Err(anyhow::anyhow!("configuration owner unavailable")))
+    }
+
+    #[tokio::test]
+    async fn an_in_flight_retry_of_an_older_sign_in_cannot_discard_a_newer_held_one() {
+        let pending = std::sync::Arc::new(PendingOAuthCredentials::default());
+        let writes = Writes::default();
+        let agent = "did:key:zAgent";
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+
+        let older = pending.issue(credential_with_token(agent, "token-a"));
+        assert!(matches!(
+            pending.save(older, failed_write).await,
+            CredentialSave::Failed(_)
+        ));
+
+        let (older_started, older_writing) = tokio::sync::oneshot::channel::<()>();
+        let (release_older, older_released) = tokio::sync::oneshot::channel::<()>();
+        let retry_older = tokio::spawn({
+            let pending = pending.clone();
+            let writes = writes.clone();
+            async move {
+                pending
+                    .retry(agent, provider, move |credential| async move {
+                        let _ = older_started.send(());
+                        let _ = older_released.await;
+                        writes.lock().unwrap().push(credential.access_token);
+                        anyhow::Ok(())
+                    })
+                    .await
+                    .map(|(_, saved)| saved.is_ok())
+            }
+        });
+        older_writing.await.expect("older retry is writing");
+
+        let newer = pending.issue(credential_with_token(agent, "token-b"));
+        let (newer_started, mut newer_writing) = tokio::sync::oneshot::channel::<()>();
+        let save_newer = tokio::spawn({
+            let pending = pending.clone();
+            async move {
+                matches!(
+                    pending
+                        .save(newer, move |credential| {
+                            let _ = newer_started.send(());
+                            failed_write(credential)
+                        })
+                        .await,
+                    CredentialSave::Failed(_)
+                )
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            newer_writing.try_recv().is_err(),
+            "the newer save must wait for the older write"
+        );
+
+        release_older.send(()).expect("release older write");
+        assert_eq!(retry_older.await.unwrap(), Some(true));
+        assert!(save_newer.await.unwrap());
+        assert_eq!(held_tokens(&pending, agent), ["token-b"]);
+        assert_eq!(*writes.lock().unwrap(), ["token-a"]);
+
+        let retried = pending
+            .retry(agent, provider, {
+                let writes = writes.clone();
+                move |credential| async move {
+                    writes.lock().unwrap().push(credential.access_token);
+                    anyhow::Ok(())
+                }
+            })
+            .await
+            .map(|(credential, saved)| (credential.access_token, saved.is_ok()));
+        assert_eq!(retried, Some(("token-b".to_string(), true)));
+        assert!(held_tokens(&pending, agent).is_empty());
+        assert_eq!(*writes.lock().unwrap(), ["token-a", "token-b"]);
+    }
+
+    #[tokio::test]
+    async fn an_older_sign_in_saved_after_a_newer_one_never_overwrites_it() {
+        let pending = std::sync::Arc::new(PendingOAuthCredentials::default());
+        let writes = Writes::default();
+        let agent = "did:key:zAgent";
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+
+        let older = pending.issue(credential_with_token(agent, "token-a"));
+        let newer = pending.issue(credential_with_token(agent, "token-b"));
+
+        let (newer_started, newer_writing) = tokio::sync::oneshot::channel::<()>();
+        let (release_newer, newer_released) = tokio::sync::oneshot::channel::<()>();
+        let save_newer = tokio::spawn({
+            let pending = pending.clone();
+            let writes = writes.clone();
+            async move {
+                matches!(
+                    pending
+                        .save(newer, move |credential| async move {
+                            let _ = newer_started.send(());
+                            let _ = newer_released.await;
+                            writes.lock().unwrap().push(credential.access_token);
+                            anyhow::Ok(())
+                        })
+                        .await,
+                    CredentialSave::Saved(())
+                )
+            }
+        });
+        newer_writing.await.expect("newer save is writing");
+
+        let save_older = tokio::spawn({
+            let pending = pending.clone();
+            let writes = writes.clone();
+            async move {
+                matches!(
+                    pending
+                        .save(older, move |credential| async move {
+                            writes.lock().unwrap().push(credential.access_token);
+                            anyhow::Ok(())
+                        })
+                        .await,
+                    CredentialSave::Superseded
+                )
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release_newer.send(()).expect("release newer write");
+        assert!(save_newer.await.unwrap());
+        assert!(save_older.await.unwrap(), "the older save is superseded");
+        assert_eq!(*writes.lock().unwrap(), ["token-b"]);
+
+        let failed_older = pending.issue(credential_with_token(agent, "token-c"));
+        let saved_newer = pending.issue(credential_with_token(agent, "token-d"));
+        assert!(matches!(
+            pending.save(failed_older, failed_write).await,
+            CredentialSave::Failed(_)
+        ));
+        assert!(matches!(
+            pending
+                .save(saved_newer, {
+                    let writes = writes.clone();
+                    move |credential| async move {
+                        writes.lock().unwrap().push(credential.access_token);
+                        anyhow::Ok(())
+                    }
+                })
+                .await,
+            CredentialSave::Saved(())
+        ));
+        assert!(held_tokens(&pending, agent).is_empty());
+        assert!(pending.retry(agent, provider, failed_write).await.is_none());
+        assert_eq!(*writes.lock().unwrap(), ["token-b", "token-d"]);
     }
 }
 
@@ -816,6 +1449,8 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         return Err(BridgeError::untyped("agent_did is required"));
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
+    require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
+        .await?;
 
     let server = run_loopback_login(LoginOptions {
         // Opened here instead: a packaged build has to strip its own
@@ -865,12 +1500,12 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     };
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());
-    let access = core
-        .operator_access(&agent_did)
-        .map_err(|error| BridgeError::untyped(format!("storing Claude credential: {error}")))?;
-    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
-        .await
-        .map_err(|error| BridgeError::untyped(format!("storing Claude credential: {error}")))?;
+    let doc_id = save_issued_credential(
+        &state.pending_oauth_credentials,
+        core.operator_access(&agent_did),
+        state.pending_oauth_credentials.issue(credential.clone()),
+    )
+    .await?;
 
     let _ = app.emit(
         "desktop://client-updated",

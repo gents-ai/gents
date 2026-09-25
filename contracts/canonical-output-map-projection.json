@@ -6,17 +6,22 @@
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructPayload" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
         { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" }
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.renderedKinds" }
       ],
       "generated_groups": ["canonical_output_projection_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents-protocol/src/output.rs",
+        "crates/gents-protocol/src/transcript.rs",
         "crates/gents/src/session/history.rs",
         "crates/gents/src/background_tools.rs",
-        "crates/gents/src/agent/stream_processor.rs"
+        "crates/gents-loop/src/stream_processor.rs"
       ],
       "consumer_paths": [
+        "crates/gents-protocol/src/transcript.rs",
+        "crates/gents-loop/src/stream_processor.rs",
+        "crates/gents-lean-contract/tests/support/rendered_reasoning.rs",
         "crates/gents/src/hook/tests/transcript_native.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents/src/background_tools.rs",
@@ -24,6 +29,7 @@
       ],
       "native_status": "pending",
       "required_cases": [
+        "Bind stateless durable and live reasoning rendering to generated renderedKinds for mixed text/summary/encrypted/redacted and all-opaque published cases; this does not establish full stream-event or projection-selection coverage.",
         "Reconstruct dense committed extents by ordinal and stream with exact declaration positions and bytes.",
         "Classify absent dependencies as loading, ACP denial as denied, distinct twins as conflicted, and malformed sealed runs as invalid.",
         "Ignore benign late flushes beyond a selected sealed extent while rejecting in-extent twins.",
@@ -125,17 +131,24 @@
     {
       "id": "projection-payload-presentation",
       "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalTailStart_is_longest" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation_renders" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.TerminalDiagnosticContracts.result" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.payloadLengths" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.cases" }
       ],
       "constructors": [],
-      "generated_groups": ["canonical_payload_presentation_cases"],
+      "generated_groups": ["canonical_payload_presentation_cases", "terminal_diagnostic_presentation_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs"],
+      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs", "crates/gents/src/toolset/cli_tool.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs"],
       "native_status": "pending",
       "required_cases": [
+        "Bind exact terminal diagnostic ranges, literals and rendered bytes to the longest UTF-8-safe committed suffix within the supplied byte budget; invalid byte inputs are rejected at the adapter conversion boundary before the typed native helper.",
+        "Retain terminal lifecycle/CAS authority and unchanged empty-source extension behavior; fresh close and replay must derive the same presentation without new facts or cause drift. Uncommitted process bytes and cross-transaction crash behavior are not proved by the pure presentation binding.",
         "Compare stored and reconstructed payload lengths for full presentation, literals, head/tail windows and missing dependencies.",
+        "The four generated cases run through native canonical reconstruction for presented payload bytes and missing-dependency failure; the stored-byte quantities are Lean expectations, not a native provider-size measurement.",
         "This group covers reconstruction only: payload counts exclude metadata, URLs, escaping and request structure and do not establish provider sizing or a compaction decision.",
         "The actual serialized-request estimate/threshold join is tracked separately by native.external-projected-request-threshold."
       ],

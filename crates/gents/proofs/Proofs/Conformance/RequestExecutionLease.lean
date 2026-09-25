@@ -175,11 +175,6 @@ def leaseCases : List LeaseCase :=
     , action := .renew .mutationWriteGate 101 10
     , expected := none
     }
-  , { name := "input_required_wait_keeps_explicit_owner_heartbeat"
-    , pre := { processing 101 5 10 8 with request := .inputRequired }
-    , action := .renew .mutationWriteGate 101 10
-    , expected := some { processing 101 5 13 8 with request := .inputRequired }
-    }
   , { name := "close_or_retract_authorization_does_not_renew"
     , pre := processing 101 5 10 5
     , action := .authorizeProducerDecision .mutationWriteGate 101 .closeOrRetract
@@ -299,7 +294,7 @@ def leaseCases : List LeaseCase :=
     }
   ]
 
-theorem leaseCases_count : leaseCases.length = 48 := by native_decide
+theorem leaseCases_count : leaseCases.length = 47 := by native_decide
 
 theorem leaseCases_hold :
     leaseCases.all (fun testCase =>

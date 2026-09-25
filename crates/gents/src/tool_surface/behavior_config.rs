@@ -203,6 +203,7 @@ impl BehaviorToolConfig {
             bash: requested_bash,
             command_policy,
             cli_tool_names,
+            command_output_limits,
             enable_meta_tools: _,
             enable_goal_tools: _,
             enable_graph_tools,
@@ -242,6 +243,7 @@ impl BehaviorToolConfig {
             &static_policy.bash,
             file_tool_root.as_deref(),
             &cli_tool_names,
+            &command_output_limits,
             static_policy.lsp,
             ceiling,
         )?;

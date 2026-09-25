@@ -3,7 +3,14 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
+use gents::agent::p2p_reconcile::{
+    compare_client_replicated_schema, read_client_replicated_schema,
+};
 use gents::P2pSyncStatusSnapshot;
+use gents_protocol::peer_schema::{
+    ReplicatedSchema, ReplicatedSchemaSkew, STATUS_REPLICATED_SCHEMA_FIELD,
+};
+use serde_json::Value;
 
 use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
 #[cfg(test)]
@@ -19,11 +26,24 @@ type LastErrorPatch = (Option<String>, Option<String>);
 /// Status-changing mutations publish a coherent snapshot. The watch channel
 /// coalesces raw clock updates while still waking the bridge for product state,
 /// route, pairing retry, or configured-peer changes.
+///
+/// Replicated-schema compatibility is a live observation between two running
+/// nodes, owned here, and deliberately not part of the signed enrollment
+/// schema fingerprint: signed offers are re-verified against the current
+/// fingerprint on every projection, so folding replicated versions into it
+/// would invalidate every membership on any schema-changing release even
+/// when both sides upgrade together.
 #[derive(Clone)]
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
     directory: Arc<RwLock<PeerDirectory>>,
     advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
+    /// Collection versions only change when this process registers schemas
+    /// at startup, so the first successful read is reused.
+    local_replicated_schema: Arc<tokio::sync::OnceCell<ReplicatedSchema>>,
+    schema_observation_sequence: Arc<std::sync::atomic::AtomicU64>,
+    /// Newest recorded observation sequence per peer ID.
+    schema_observation_latest: Arc<std::sync::Mutex<BTreeMap<String, u64>>>,
 }
 
 impl ClientSyncStateOwner {
@@ -69,6 +89,7 @@ impl ClientSyncStateOwner {
             transport,
             database_sync: None,
             database_sync_error: None,
+            peer_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
         });
@@ -76,6 +97,9 @@ impl ClientSyncStateOwner {
             tx,
             directory,
             advertised_enrollment_labels: Arc::new(StdRwLock::new(BTreeMap::new())),
+            local_replicated_schema: Arc::new(tokio::sync::OnceCell::new()),
+            schema_observation_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            schema_observation_latest: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -306,6 +330,117 @@ impl ClientSyncStateOwner {
         });
     }
 
+    /// Capture the configured peers of `runtime_did` routed through
+    /// `endpoint`, plus a sequence number, before that endpoint's `/status`
+    /// is fetched. `None` when no current route matches, so a fetch can only
+    /// be recorded against the generation of the endpoint it came from.
+    /// Finishing records only on peers still in that generation and never
+    /// behind a newer observation.
+    pub(super) fn begin_runtime_schema_observation(
+        &self,
+        runtime_did: &str,
+        endpoint: Option<&str>,
+    ) -> Option<RuntimeSchemaObservation> {
+        let expected = self
+            .records()
+            .into_iter()
+            .filter(|record| {
+                record.agent_did == runtime_did
+                    && same_endpoint(record.graphql.as_deref(), endpoint)
+            })
+            .collect::<Vec<_>>();
+        let bound_endpoint = expected.first()?.graphql.clone();
+        Some(RuntimeSchemaObservation {
+            runtime_did: runtime_did.to_string(),
+            endpoint: bound_endpoint,
+            sequence: self
+                .schema_observation_sequence
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            expected,
+        })
+    }
+
+    /// Compare the fetched `/status` with this node's replicated collection
+    /// versions and record the result for the peers captured by `observation`.
+    pub(super) async fn finish_runtime_schema_observation(
+        &self,
+        local: &Arc<defra_node::EmbeddedNode>,
+        observation: &RuntimeSchemaObservation,
+        status: &Value,
+    ) -> anyhow::Result<()> {
+        let local = self.local_replicated_schema(local).await?;
+        self.record_runtime_schema(observation, local, status)
+    }
+
+    /// Compare without recording. Enrollment uses this before the offer is
+    /// authenticated, so an unverified `/status` cannot set or clear skew.
+    pub(super) async fn compare_runtime_schema(
+        &self,
+        local: &Arc<defra_node::EmbeddedNode>,
+        runtime_did: &str,
+        status: &Value,
+    ) -> anyhow::Result<()> {
+        let local = self.local_replicated_schema(local).await?;
+        compare_runtime_status(local, runtime_did, status)
+    }
+
+    async fn local_replicated_schema(
+        &self,
+        local: &Arc<defra_node::EmbeddedNode>,
+    ) -> anyhow::Result<&ReplicatedSchema> {
+        self.local_replicated_schema
+            .get_or_try_init(|| read_client_replicated_schema(Arc::clone(local)))
+            .await
+    }
+
+    fn record_runtime_schema(
+        &self,
+        observation: &RuntimeSchemaObservation,
+        local: &ReplicatedSchema,
+        status: &Value,
+    ) -> anyhow::Result<()> {
+        let observed = compare_runtime_status(local, &observation.runtime_did, status);
+        let skew = match &observed {
+            Ok(()) => None,
+            Err(error) => match error.downcast_ref::<ReplicatedSchemaSkew>() {
+                Some(skew) => Some(skew.clone()),
+                None => return observed,
+            },
+        };
+        let mut latest = self
+            .schema_observation_latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.tx.send_if_modified(|state| {
+            let mut changed = false;
+            for expected in &observation.expected {
+                let current = state.directory.iter().any(|record| {
+                    record.peer_id == expected.peer_id
+                        && observation_generation_matches(expected, record)
+                });
+                let newest = latest
+                    .get(&expected.peer_id)
+                    .is_none_or(|sequence| *sequence <= observation.sequence);
+                if !current || !newest {
+                    continue;
+                }
+                latest.insert(expected.peer_id.clone(), observation.sequence);
+                changed |= match &skew {
+                    None => state.peer_schema_skew.remove(&expected.peer_id).is_some(),
+                    Some(skew) => {
+                        state
+                            .peer_schema_skew
+                            .insert(expected.peer_id.clone(), skew.clone())
+                            .as_ref()
+                            != Some(skew)
+                    }
+                };
+            }
+            changed
+        });
+        observed
+    }
+
     /// Patch one diagnostic only while both the durable peer generation and
     /// the previously observed diagnostic still match. Delayed projection
     /// work cannot use this path to overwrite newer supervisor state.
@@ -404,8 +539,20 @@ impl ClientSyncStateOwner {
                     status
                 })
                 .collect();
+            let skew_before = state.peer_schema_skew.len();
+            state.peer_schema_skew.retain(|peer_id, _| {
+                let previous = previous_directory
+                    .iter()
+                    .find(|record| &record.peer_id == peer_id);
+                let next = records.iter().find(|record| &record.peer_id == peer_id);
+                previous
+                    .zip(next)
+                    .is_some_and(|(previous, next)| observation_generation_matches(previous, next))
+            });
             state.directory.clone_from(records);
-            state.directory != previous_directory || state.peers != previous_peers
+            state.directory != previous_directory
+                || state.peers != previous_peers
+                || state.peer_schema_skew.len() != skew_before
         });
     }
 
@@ -430,6 +577,61 @@ impl ClientSyncStateOwner {
             *peer != previous
         })
     }
+}
+
+/// An in-flight replicated-schema observation of one runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeSchemaObservation {
+    runtime_did: String,
+    endpoint: Option<String>,
+    sequence: u64,
+    expected: Vec<PeerRecord>,
+}
+
+impl RuntimeSchemaObservation {
+    /// The GraphQL endpoint of the bound route; its `/status` is the only
+    /// payload this observation may record.
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
+    }
+}
+
+/// Endpoints match when they parse to the same URL, so formatting such as
+/// scheme or host case and an explicit default port cannot unbind a route.
+fn same_endpoint(configured: Option<&str>, target: Option<&str>) -> bool {
+    match (configured, target) {
+        (None, None) => true,
+        (Some(configured), Some(target)) => {
+            match (reqwest::Url::parse(configured), reqwest::Url::parse(target)) {
+                (Ok(configured), Ok(target)) => configured == target,
+                _ => configured == target,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Bind `status` to `runtime_did` and compare its advertised versions.
+/// `null` means the runtime has not read its own node yet and is not a skew.
+fn compare_runtime_status(
+    local: &ReplicatedSchema,
+    runtime_did: &str,
+    status: &Value,
+) -> anyhow::Result<()> {
+    let status_did = status.get("agent_did").and_then(Value::as_str);
+    anyhow::ensure!(
+        status_did == Some(runtime_did),
+        "runtime status belongs to {}, not {runtime_did}",
+        status_did.unwrap_or("an unidentified runtime")
+    );
+    let remote = match status.get(STATUS_REPLICATED_SCHEMA_FIELD) {
+        Some(Value::Null) => {
+            anyhow::bail!("runtime {runtime_did} has not published its replicated schema yet")
+        }
+        Some(schema) => serde_json::from_value::<ReplicatedSchema>(schema.clone()).ok(),
+        None => None,
+    };
+    compare_client_replicated_schema(local, remote.as_ref()).map_err(anyhow::Error::from)
 }
 
 fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -> bool {
@@ -541,6 +743,229 @@ mod tests {
                 "{name} retained a direct PeerDirectory mutation seam"
             );
         }
+    }
+
+    fn replicated_schema(session_version: &str) -> ReplicatedSchema {
+        gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
+            .iter()
+            .map(|name| {
+                let version = if *name == "AgentSession" {
+                    session_version.to_string()
+                } else {
+                    format!("bafy-{name}")
+                };
+                (
+                    (*name).to_string(),
+                    gents_protocol::peer_schema::ReplicatedCollectionIdentity {
+                        version_id: version,
+                        branchable: true,
+                        policy_resource: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn status(agent_did: &str, schema: &ReplicatedSchema) -> Value {
+        serde_json::json!({ "agent_did": agent_did, STATUS_REPLICATED_SCHEMA_FIELD: schema })
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_skew_is_recorded_per_peer_until_that_runtime_matches() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+        let mut updates = owner.subscribe();
+        let next_release = status(&runtime.agent_did, &replicated_schema("bafy-next-release"));
+
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        let error = owner
+            .record_runtime_schema(&observation, &local, &next_release)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("AgentSession"), "{error:#}");
+        assert!(updates.has_changed().unwrap());
+        let skew = updates
+            .borrow_and_update()
+            .peer_schema_skew
+            .get("a")
+            .cloned();
+        assert_eq!(
+            skew.map(|skew| skew.collections),
+            Some(vec!["AgentSession".to_string()])
+        );
+
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        owner
+            .record_runtime_schema(&observation, &local, &next_release)
+            .unwrap_err();
+        assert!(
+            !updates.has_changed().unwrap(),
+            "same skew is not republished"
+        );
+
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        owner
+            .record_runtime_schema(&observation, &local, &status(&runtime.agent_did, &local))
+            .unwrap();
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+    }
+
+    #[test]
+    fn route_endpoints_compare_as_parsed_urls() {
+        let configured = Some("http://127.0.0.1:9181/api/v0/graphql");
+        for equivalent in [
+            "HTTP://127.0.0.1:9181/api/v0/graphql",
+            "http://127.0.0.1:9181/api/v0/graphql",
+        ] {
+            assert!(same_endpoint(configured, Some(equivalent)), "{equivalent}");
+        }
+        assert!(same_endpoint(
+            Some("http://localhost:80/api/v0/graphql"),
+            Some("http://LOCALHOST/api/v0/graphql"),
+        ));
+        assert!(!same_endpoint(
+            configured,
+            Some("http://127.0.0.1:9182/api/v0/graphql")
+        ));
+        assert!(!same_endpoint(configured, None));
+    }
+
+    #[tokio::test]
+    async fn observation_binds_to_the_route_endpoint() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        assert!(owner
+            .begin_runtime_schema_observation(
+                &runtime.agent_did,
+                Some("http://other/api/v0/graphql")
+            )
+            .is_none());
+        assert!(owner
+            .begin_runtime_schema_observation("did:key:unconfigured", None)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_late_older_observation_cannot_overwrite_a_newer_one() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+
+        let older = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        let newer = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        owner
+            .record_runtime_schema(&newer, &local, &status(&runtime.agent_did, &local))
+            .unwrap();
+        owner
+            .record_runtime_schema(
+                &older,
+                &local,
+                &status(&runtime.agent_did, &replicated_schema("bafy-old-runtime")),
+            )
+            .unwrap_err();
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_observation_is_bound_to_the_runtime_identity() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+
+        let error = owner
+            .record_runtime_schema(
+                &observation,
+                &local,
+                &status("did:key:port-reuse", &replicated_schema("bafy-other")),
+            )
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("did:key:port-reuse"));
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+
+        let unpublished = serde_json::json!({
+            "agent_did": runtime.agent_did,
+            STATUS_REPLICATED_SCHEMA_FIELD: null,
+        });
+        owner
+            .record_runtime_schema(&observation, &local, &unpublished)
+            .unwrap_err();
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+
+        let old_build = serde_json::json!({ "agent_did": runtime.agent_did });
+        owner
+            .record_runtime_schema(&observation, &local, &old_build)
+            .unwrap_err();
+        assert!(!owner.snapshot().peer_schema_skew["a"].advertised);
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_skew_follows_peer_generation() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+        let skewed = status(&runtime.agent_did, &replicated_schema("bafy-other"));
+
+        let first = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        let in_flight = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        owner
+            .record_runtime_schema(&first, &local, &skewed)
+            .unwrap_err();
+        let mut replaced = runtime.clone();
+        replaced.addr = "endpoint:a-replaced".to_string();
+        owner.upsert_for_test(replaced.clone()).await.unwrap();
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "a replaced route generation starts unobserved"
+        );
+
+        owner
+            .record_runtime_schema(&in_flight, &local, &skewed)
+            .unwrap_err();
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "an observation begun against the old generation is fenced"
+        );
+
+        let current = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        owner
+            .record_runtime_schema(&current, &local, &skewed)
+            .unwrap_err();
+        assert!(owner.snapshot().peer_schema_skew.contains_key("a"));
+        let configured = owner
+            .records()
+            .into_iter()
+            .find(|record| record.peer_id == "a")
+            .expect("replaced peer is configured");
+        let removed = owner.queue_removal(&configured).await.unwrap();
+        assert!(removed.is_some());
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "a removed peer no longer reports skew"
+        );
     }
 
     #[tokio::test]

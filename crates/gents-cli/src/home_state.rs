@@ -24,6 +24,11 @@ fn default_home_dir() -> PathBuf {
         .join(".gents")
 }
 
+pub(crate) fn is_default_home(home_dir: &Path) -> bool {
+    let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical(home_dir) == canonical(&default_home_dir())
+}
+
 // default_data_dir, default_key_path, init_config_path, write_init_config,
 // and read_init_config now live in `gents::home` (moved so `gc-cell` can
 // write the same `init.json` shape from outside this binary); these are
@@ -80,7 +85,7 @@ pub(crate) fn load_initialized_home_identity(
             );
         }
         Arc::new(
-            KeyIdentity::load_or_create(&key_path, None)
+            KeyIdentity::load_existing(&key_path, None)
                 .with_context(|| format!("loading identity key {}", key_path.display()))?,
         )
     } else {

@@ -1,4 +1,4 @@
-/* What this behaviour actually gets: the bridge's tool surface
+/* What this behavior actually gets: the bridge's tool surface
    explanation (selection ∩ ceiling, with reasons), loaded when opened
    and refreshed on demand, as the desktop's BehaviorToolSurface does. */
 import { useState } from "react";
@@ -76,7 +76,7 @@ export function ToolSurface({
     >
       {!open ? (
         <Row
-          label="What this behaviour actually gets"
+          label="What this behavior actually gets"
           description="The selection intersected with the agent's ceiling, with reasons for anything missing."
         />
       ) : error ? (

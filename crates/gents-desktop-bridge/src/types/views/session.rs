@@ -63,7 +63,6 @@ pub struct ToolCallView {
     pub tool_call_id: Option<String>,
     pub args: Option<String>,
     pub partial_output_tail: Option<String>,
-    pub partial_output_seq: Option<i64>,
     pub result: Option<String>,
     /// Availability of the immutable canonical arguments and result payloads.
     /// Tool execution status remains in `lifecycle_state`.
@@ -106,8 +105,16 @@ pub struct CommandDenialView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDiffLineView {
-    pub kind: String,
+    pub kind: ToolDiffLineKind,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolDiffLineKind {
+    Added,
+    Removed,
+    Context,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -205,9 +212,6 @@ pub struct RenderedToolCallView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub partial_output_tail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub partial_output_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub denial: Option<CommandDenialView>,
@@ -428,7 +432,6 @@ pub struct SessionLiveDeltaView {
     pub outcome: String,
     pub revision: SessionProjectionRevisionView,
     pub request_id: String,
-    pub progress_seq: Option<i64>,
     pub turn_state: Option<String>,
     pub status: Option<String>,
     pub content: Option<SessionLiveTextPatchView>,

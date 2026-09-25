@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::session::session_scope_filter;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
-use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
+use gents::{DescendantEdge, DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
@@ -336,8 +336,13 @@ async fn cancel_parent_bridge_local(
         "parent bridge selects a different physical child or scope"
     );
     let physical = escape_graphql_string(parent_doc_id);
-    let response = execute_node_json(node.as_ref(), &format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#)).await?;
-    let parent = request_row_from_response(&response, parent_request_id)?;
+    let response = graphql_with_transaction_retry(
+        &node,
+        &format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
+        "load parent request for subagent cancel",
+    )
+    .await?;
+    let parent = request_row_from_data(&response.data.unwrap_or_default(), parent_request_id)?;
     anyhow::ensure!(
         parent.request_id == parent_request_id && parent.doc_id.as_deref() == Some(parent_doc_id),
         "parent physical and logical identities disagree"
@@ -627,9 +632,13 @@ async fn fetch_request_row_local_scoped(
             }}
         }}"#
     );
-    let response = execute_node_json(node, &query).await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "load scoped request for subagent cancel")
+            .await?;
     let mut rows = response
-        .pointer("/data/AgentRequest")
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -759,7 +768,7 @@ async fn scoped_fetch_row_graphql(
         }}"#
     );
     let response = post_graphql(graphql, &query).await?;
-    request_row_from_scoped_response(&response, target)
+    request_row_from_scoped_data(&response["data"], target)
 }
 
 async fn scoped_fetch_row_local(
@@ -788,16 +797,17 @@ async fn scoped_fetch_row_local(
             }}
         }}"#
     );
-    let response = execute_node_json(node, &query).await?;
-    request_row_from_scoped_response(&response, target)
+    let response =
+        graphql_with_transaction_retry(node, &query, "load subagent cancel snapshot").await?;
+    request_row_from_scoped_data(&response.data.unwrap_or_default(), target)
 }
 
-fn request_row_from_scoped_response(
-    response: &Value,
+fn request_row_from_scoped_data(
+    data: &Value,
     target: &ScopedRequestRef,
 ) -> Result<AgentRequestRow> {
-    let rows = response
-        .pointer("/data/AgentRequest")
+    let rows = data
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("scoped snapshot query omitted rows"))?;
     anyhow::ensure!(
@@ -836,9 +846,9 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
         .join(", ")
 }
 
-fn request_row_from_response(response: &Value, request_id: &str) -> Result<AgentRequestRow> {
-    let rows = response
-        .pointer("/data/AgentRequest")
+fn request_row_from_data(data: &Value, request_id: &str) -> Result<AgentRequestRow> {
+    let rows = data
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("request row query omitted rows"))?;
     anyhow::ensure!(
@@ -883,25 +893,23 @@ async fn tool_lifecycle_state_local(
 ) -> Result<Option<String>> {
     let physical = escape_graphql_string(doc_id);
     let scope = session_scope_filter(owner, session_id, requester);
-    let response = execute_node_json(node, &format!(r#"{{AgentToolCall(filter: {{{scope},_docID: {{_eq: "{physical}"}}}},limit:2){{_docID lifecycle_state}}}}"#)).await?;
-    let rows = response["data"]["AgentToolCall"]
-        .as_array()
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{AgentToolCall(filter: {{{scope},_docID: {{_eq: "{physical}"}}}},limit:2){{_docID lifecycle_state}}}}"#),
+        "load subagent bridge lifecycle state",
+    )
+    .await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
         .context("bridge state query omitted rows")?;
     anyhow::ensure!(rows.len() <= 1, "physical bridge identity is ambiguous");
     Ok(rows
         .first()
         .and_then(|row| row["lifecycle_state"].as_str())
         .map(str::to_owned))
-}
-
-async fn execute_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!("graphql returned errors: {:?}", response.errors);
-    }
-    Ok(json!({
-        "data": response.data.unwrap_or(Value::Null),
-    }))
 }
 
 fn string_field(row: &Value, field: &str) -> Option<String> {
@@ -1025,22 +1033,10 @@ async fn load_rooted_lineage(
             if edge.depth > max_depth {
                 continue;
             }
-            let parent_request_id = edge.immediate_parent_request_id.clone();
             descendants_by_parent
-                .entry(parent_request_id)
+                .entry(edge.immediate_parent_request_id.clone())
                 .or_default()
-                .push(LineageNode {
-                    depth: edge.depth,
-                    row: serde_json::from_value(json!({
-                        "request_id": edge.child_request_id,
-                        "agent_did": edge.principal_did,
-                        "behavior_id": edge.behavior_id,
-                        "lifecycle_state": edge.lifecycle_state,
-                        "created_at": edge.created_at,
-                        "caused_by_parent_request_id": edge.immediate_parent_request_id,
-                    }))
-                    .context("decoding descendant edge as canonical AgentRequest row")?,
-                });
+                .push(LineageNode::edge(edge));
         }
         if !page.has_more {
             break;
@@ -1052,12 +1048,9 @@ async fn load_rooted_lineage(
     // child's subtree precedes later siblings; flatten depth-first (sibling
     // order preserved from the resolver's started_at/tool_call_id ordering).
     let mut rows = Vec::new();
-    let mut stack = vec![LineageNode {
-        row: root,
-        depth: 0,
-    }];
+    let mut stack = vec![LineageNode::request(root, 0)];
     while let Some(node) = stack.pop() {
-        let request_id = node.row.request_id.clone();
+        let request_id = node.request_id().to_owned();
         rows.push(node);
         if let Some(mut children) = descendants_by_parent.remove(&request_id) {
             children.reverse();
@@ -1158,10 +1151,7 @@ fn append_forest_node(
     let Some(row) = rows_by_id.get(request_id) else {
         return;
     };
-    output.push(LineageNode {
-        row: row.clone(),
-        depth,
-    });
+    output.push(LineageNode::request(row.clone(), depth));
     if depth >= max_depth {
         return;
     }
@@ -1283,15 +1273,16 @@ fn output_rows(rows: &[LineageNode], indent: bool) -> Vec<LineageOutputRow> {
 }
 
 fn render_table(rows: &[LineageOutputRow]) -> String {
-    const HEADERS: [&str; 6] = [
+    const HEADERS: [&str; 7] = [
         "CHILD_REQUEST_ID",
         "PARENT_REQUEST_ID",
         "DEPLOYMENT",
         "BEHAVIOR_ID",
-        "STATE",
+        "EDGE_STATE",
+        "REQUEST_STATE",
         "STARTED_AT",
     ];
-    let mut table_rows = Vec::<[String; 6]>::new();
+    let mut table_rows = Vec::<[String; 7]>::new();
     for row in rows {
         table_rows.push([
             row.display_request_id.clone(),
@@ -1300,7 +1291,11 @@ fn render_table(rows: &[LineageOutputRow]) -> String {
                 .unwrap_or_else(|| "-".to_string()),
             row.deployment.clone(),
             row.behavior_id.clone(),
-            row.state.clone(),
+            row.edge_state.clone().unwrap_or_else(|| "-".to_string()),
+            row.request_lifecycle_state
+                .map(RequestLifecycleState::as_str)
+                .unwrap_or("-")
+                .to_string(),
             row.started_at.clone(),
         ]);
     }
@@ -1320,7 +1315,7 @@ fn render_table(rows: &[LineageOutputRow]) -> String {
     output
 }
 
-fn push_cells(output: &mut String, cells: &[String; 6], widths: &[usize; 6]) {
+fn push_cells(output: &mut String, cells: &[String; 7], widths: &[usize; 7]) {
     for (idx, cell) in cells.iter().enumerate() {
         if idx > 0 {
             output.push_str("  ");
@@ -1399,10 +1394,30 @@ fn append_tree_node(
     });
 }
 
+/// A rooted lineage row is either a request (the root, or a forest row read
+/// from `AgentRequest`) or a canonical descendant edge. The edge carries the
+/// bridge's own state vocabulary and is never decoded as an `AgentRequest`.
 #[derive(Debug, Clone)]
-struct LineageNode {
-    row: AgentRequestRow,
-    depth: usize,
+enum LineageNode {
+    Request { row: AgentRequestRow, depth: usize },
+    Edge(DescendantEdge),
+}
+
+impl LineageNode {
+    fn request(row: AgentRequestRow, depth: usize) -> Self {
+        Self::Request { row, depth }
+    }
+
+    fn edge(edge: DescendantEdge) -> Self {
+        Self::Edge(edge)
+    }
+
+    fn request_id(&self) -> &str {
+        match self {
+            Self::Request { row, .. } => &row.request_id,
+            Self::Edge(edge) => &edge.child_request_id,
+        }
+    }
 }
 
 fn request_parent_id(row: &AgentRequestRow) -> Option<String> {
@@ -1430,7 +1445,10 @@ struct LineageOutputRow {
     deployment: String,
     agent_did: Option<String>,
     behavior_id: String,
-    state: String,
+    /// Bridge-owned edge state; absent for rows with no parent bridge.
+    edge_state: Option<String>,
+    /// The request's own lifecycle; absent for an unmaterialized child.
+    request_lifecycle_state: Option<RequestLifecycleState>,
     started_at: String,
     depth: usize,
     #[serde(skip_serializing)]
@@ -1439,51 +1457,61 @@ struct LineageOutputRow {
 
 impl LineageOutputRow {
     fn from_node(node: &LineageNode, indent: bool) -> Self {
-        let request_id = node.row.request_id.clone();
+        let (
+            request_id,
+            parent_request_id,
+            agent_did,
+            behavior_id,
+            edge_state,
+            request_lifecycle_state,
+            started_at,
+            depth,
+        ) = match node {
+            LineageNode::Request { row, depth } => (
+                row.request_id.clone(),
+                request_parent_id(row),
+                row.agent_did.as_deref(),
+                row.behavior_id.as_deref(),
+                None,
+                row.lifecycle_state,
+                row.claimed_at
+                    .as_deref()
+                    .and_then(non_empty_str)
+                    .or_else(|| row.created_at.as_deref().and_then(non_empty_str)),
+                *depth,
+            ),
+            LineageNode::Edge(edge) => (
+                edge.child_request_id.clone(),
+                Some(edge.immediate_parent_request_id.clone()),
+                edge.principal_did.as_deref(),
+                edge.behavior_id.as_deref(),
+                Some(edge.lifecycle_state.clone()),
+                edge.child_lifecycle_state,
+                edge.created_at.as_deref().and_then(non_empty_str),
+                edge.depth,
+            ),
+        };
         let display_request_id = if indent {
-            format!("{}{}", "  ".repeat(node.depth), request_id)
+            format!("{}{}", "  ".repeat(depth), request_id)
         } else {
             request_id.clone()
         };
-        let agent_did = node
-            .row
-            .agent_did
-            .as_deref()
-            .and_then(non_empty_str)
-            .map(ToOwned::to_owned);
-        let deployment = agent_did.clone().unwrap_or_else(|| "-".to_string());
-        let behavior_id = node
-            .row
-            .behavior_id
-            .as_deref()
-            .and_then(non_empty_str)
-            .unwrap_or("-")
-            .to_string();
-        let state = node
-            .row
-            .lifecycle_state
-            .map(RequestLifecycleState::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        let started_at = node
-            .row
-            .claimed_at
-            .as_deref()
-            .and_then(non_empty_str)
-            .or_else(|| node.row.created_at.as_deref().and_then(non_empty_str))
-            .unwrap_or("-")
-            .to_string();
+        let agent_did = agent_did.and_then(non_empty_str).map(ToOwned::to_owned);
 
         Self {
             child_request_id: request_id.clone(),
             request_id,
-            parent_request_id: request_parent_id(&node.row),
-            deployment,
+            parent_request_id,
+            deployment: agent_did.clone().unwrap_or_else(|| "-".to_string()),
             agent_did,
-            behavior_id,
-            state,
-            started_at,
-            depth: node.depth,
+            behavior_id: behavior_id
+                .and_then(non_empty_str)
+                .unwrap_or("-")
+                .to_string(),
+            edge_state,
+            request_lifecycle_state,
+            started_at: started_at.unwrap_or("-").to_string(),
+            depth,
             display_request_id,
         }
     }
@@ -1520,20 +1548,117 @@ mod tests {
     #[test]
     fn table_renderer_indents_tree_request_column_only() {
         let rows = vec![
-            LineageNode {
-                row: row("parent", None, "2026-05-20T00:00:00Z"),
-                depth: 0,
-            },
-            LineageNode {
-                row: row("child", Some("parent"), "2026-05-20T00:00:01Z"),
-                depth: 1,
-            },
+            LineageNode::request(row("parent", None, "2026-05-20T00:00:00Z"), 0),
+            LineageNode::request(row("child", Some("parent"), "2026-05-20T00:00:01Z"), 1),
         ];
         let rendered = render_table(&output_rows(&rows, true));
         assert!(rendered.contains("CHILD_REQUEST_ID"));
         assert!(rendered.contains("parent"));
         assert!(rendered.contains("  child"));
         assert!(rendered.contains("parent"));
+    }
+
+    fn fan_out_edge(
+        child_request_id: &str,
+        edge_state: &str,
+        child_lifecycle_state: Option<RequestLifecycleState>,
+    ) -> DescendantEdge {
+        serde_json::from_value(json!({
+            "cursor": format!("cursor-{child_request_id}"),
+            "root_request_id": "root",
+            "immediate_parent_request_id": "root",
+            "immediate_parent_request_doc_id": "root-doc",
+            "immediate_parent_agent_did": "did:key:zTest",
+            "immediate_parent_requester_did": null,
+            "immediate_parent_tool_call_doc_id": format!("bridge-doc-{child_request_id}"),
+            "immediate_parent_session_id": "session-root",
+            "immediate_parent_tool_call_id": format!("spawn-{child_request_id}"),
+            "child_request_id": child_request_id,
+            "principal_did": "did:key:zTest",
+            "behavior_id": child_request_id,
+            "await_mode": "background",
+            "lifecycle_state": edge_state,
+            "child_lifecycle_state": child_lifecycle_state,
+            "materialization_state": "materialized_local",
+            "transcript_cursor": 0,
+            "authorization_state": "authorized",
+            "control_authority": "authorized",
+            "depth": 1,
+            "created_at": "2026-09-25T14:13:34Z",
+        }))
+        .expect("canonical descendant edge")
+    }
+
+    #[test]
+    fn live_fan_out_keeps_edge_state_apart_from_child_request_state() {
+        let mut root = row("root", None, "2026-09-25T14:13:33Z");
+        root.lifecycle_state = Some(RequestLifecycleState::Processing);
+        let rows = vec![
+            LineageNode::request(root, 0),
+            LineageNode::edge(fan_out_edge(
+                "running-child",
+                "running",
+                Some(RequestLifecycleState::Processing),
+            )),
+            LineageNode::edge(fan_out_edge(
+                "awaiting-child",
+                gents::descendant_graph::AWAITING_CHILD_MATERIALIZATION,
+                None,
+            )),
+            LineageNode::edge(fan_out_edge(
+                "unauthorized-child",
+                gents::descendant_graph::PENDING_CHILD_AUTHORIZATION,
+                None,
+            )),
+            LineageNode::edge(fan_out_edge(
+                "continued-child",
+                "running",
+                Some(RequestLifecycleState::Completed),
+            )),
+        ];
+        let output = output_rows(&rows, false);
+        let states = output
+            .iter()
+            .map(|row| {
+                (
+                    row.request_id.as_str(),
+                    row.edge_state.as_deref(),
+                    row.request_lifecycle_state,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            vec![
+                ("root", None, Some(RequestLifecycleState::Processing)),
+                (
+                    "running-child",
+                    Some("running"),
+                    Some(RequestLifecycleState::Processing)
+                ),
+                (
+                    "awaiting-child",
+                    Some(gents::descendant_graph::AWAITING_CHILD_MATERIALIZATION),
+                    None
+                ),
+                (
+                    "unauthorized-child",
+                    Some(gents::descendant_graph::PENDING_CHILD_AUTHORIZATION),
+                    None
+                ),
+                (
+                    "continued-child",
+                    Some("running"),
+                    Some(RequestLifecycleState::Completed)
+                ),
+            ]
+        );
+        let json = serde_json::to_value(&output).expect("lineage rows serialize");
+        assert_eq!(json[1]["edge_state"], "running");
+        assert_eq!(json[1]["request_lifecycle_state"], "processing");
+        assert_eq!(json[2]["request_lifecycle_state"], Value::Null);
+        let table = render_table(&output);
+        assert!(table.contains("EDGE_STATE") && table.contains("REQUEST_STATE"));
     }
 
     fn scoped_row(

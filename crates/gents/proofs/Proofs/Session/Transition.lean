@@ -36,6 +36,12 @@ inductive Transition : SessionQueueState → SessionQueueState → Prop where
       source.automatedWakeup →
       post = pre.drainAutomatedWakeups source queueKey →
       Transition pre post
+  | drain_observed_automated {pre post : SessionQueueState}
+      {source : QueueSource} {queueKey : Option QueueKey}
+      {observed : List RequestId} :
+      source.automatedWakeup →
+      post = pre.drainObservedAutomatedWakeups source queueKey observed →
+      Transition pre post
 
 inductive Trace : SessionQueueState → SessionQueueState → Prop where
   | refl {s : SessionQueueState} : Trace s s

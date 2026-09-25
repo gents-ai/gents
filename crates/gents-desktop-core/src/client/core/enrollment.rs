@@ -14,7 +14,7 @@ use gents::agent::p2p_reconcile::enrollment::{
     EnrollmentRequest as PureRequest, EnrollmentRouteDirection as PureRouteDirection,
     EnrollmentRouteReceipt as PureRouteReceipt, NetworkAdminPin as PureAdminPin,
 };
-use gents::graphql::{ensure_no_errors, escape_graphql_string, rows};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::AgentIdentity;
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, AuthorizationRevisionKind,
@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use super::super::principal_identity::PrincipalIdentity;
 use super::route_manager::ClientRouteManager;
-use super::sync_state::ClientSyncStateOwner;
+use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
 
 pub(super) async fn current_local_endpoint(
@@ -73,20 +73,55 @@ struct AdminPinRow {
 }
 
 impl ClientCore {
+    /// Start observing runtime `runtime_did` through its configured route at
+    /// `endpoint`; call before fetching that endpoint's `/status`. `None` when
+    /// no current route of that runtime uses `endpoint`.
+    pub fn begin_runtime_schema_observation(
+        &self,
+        runtime_did: &str,
+        endpoint: &str,
+    ) -> Option<RuntimeSchemaObservation> {
+        self.sync_state
+            .begin_runtime_schema_observation(runtime_did, Some(endpoint))
+    }
+
+    /// Compare the fetched `status` with this node's replicated collection
+    /// versions; a mismatch on a configured peer stays visible in sync health.
+    pub async fn finish_runtime_schema_observation(
+        &self,
+        observation: &RuntimeSchemaObservation,
+        status: &Value,
+    ) -> Result<()> {
+        self.sync_state
+            .finish_runtime_schema_observation(&self.node, observation, status)
+            .await
+            .context("runtime cannot sync with this app")
+    }
+
+    /// Author an enrollment request from a runtime's `/status` payload.
     pub async fn request_status_enrollment(
         &self,
-        offer_token: &str,
+        status: &Value,
     ) -> Result<EnrollmentRequestResult> {
-        self.request_status_enrollment_with_label(offer_token, None)
+        self.request_status_enrollment_with_label(status, None)
             .await
     }
 
     pub async fn request_status_enrollment_with_label(
         &self,
-        offer_token: &str,
+        status: &Value,
         advertised_label: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
+        let offer_token = status
+            .pointer("/enrollment/token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.trim().is_empty())
+            .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
+        self.sync_state
+            .compare_runtime_schema(&self.node, &offer.owner_agent, status)
+            .await
+            .context("refusing to enroll with an incompatible runtime")?;
         anyhow::ensure!(
             offer.schema_fingerprint == enrollment_schema_fingerprint(),
             "server enrollment schema {} is incompatible with {}",
@@ -227,8 +262,12 @@ impl ClientCore {
     }
 
     pub async fn active_status_enrollment_requests(&self) -> Result<Vec<EnrollmentRequestResult>> {
-        let response = self.node.execute(STATUS_ENROLLMENT_QUERY).await;
-        ensure_no_errors(&response, "load desktop enrollment requests")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            STATUS_ENROLLMENT_QUERY,
+            "load desktop enrollment requests",
+        )
+        .await?;
         let pins = rows::<EnrollmentPinRow>(&response, "NetworkAdminPin")?
             .into_iter()
             .fold(BTreeMap::<String, Vec<String>>::new(), |mut pins, row| {
@@ -342,6 +381,45 @@ impl ClientCore {
         Ok(active)
     }
 
+    /// Pushes one of this desktop's persisted requests to its server again. A
+    /// request is written locally before it is pushed, so one whose push
+    /// failed stays pending without the server ever seeing it.
+    pub async fn resend_status_enrollment(&self, request_id: &str) -> Result<()> {
+        let escaped = escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
+                _docID protocol_version request_id request_digest offer_id offer_token challenge
+                network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
+                owner_agent profile client_nonce issued_at expires_at candidate_sig
+            }} }}"#
+        );
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "loading enrollment request to resend",
+        )
+        .await?;
+        let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
+        let row = select_retryable_local_request(
+            &rows,
+            self.principal.did(),
+            &self.local_peer_id,
+            request_id,
+        )?
+        .with_context(|| format!("no local enrollment request {request_id}"))?;
+        let offer_token = row.to_record()?.offer_token;
+        let offer = decode_offer(&offer_token).context("decoding persisted enrollment offer")?;
+        let (request, document_id) = self
+            .existing_request_for_offer(&offer, &offer_token, &self.local_peer_id)
+            .await?
+            .with_context(|| format!("no local enrollment request {request_id}"))?;
+        anyhow::ensure!(
+            request.request_id == request_id,
+            "enrollment request {request_id} is not the request persisted for its offer"
+        );
+        push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await
+    }
+
     async fn confirm_admin_pin(
         &self,
         network_id: &str,
@@ -352,8 +430,12 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network_id_escaped}" }} }}) {{ admin_did }} }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "loading local enrollment admin pin")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "loading local enrollment admin pin",
+        )
+        .await?;
         let pins = rows::<AdminPinRow>(&response, "NetworkAdminPin")?;
         match pins.as_slice() {
             [pin] if pin.admin_did == admin_did => return Ok(()),
@@ -396,8 +478,12 @@ impl ClientCore {
         match committed {
             Ok(_) => Ok(()),
             Err(commit_error) => {
-                let response = self.node.execute(&query).await;
-                ensure_no_errors(&response, "recovering local enrollment admin pin")?;
+                let response = graphql_with_transaction_retry(
+                    &self.node,
+                    &query,
+                    "recovering local enrollment admin pin",
+                )
+                .await?;
                 let pins = rows::<AdminPinRow>(&response, "NetworkAdminPin")?;
                 anyhow::ensure!(
                     matches!(pins.as_slice(), [pin] if pin.admin_did == admin_did),
@@ -436,8 +522,12 @@ impl ClientCore {
                 owner_agent profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "loading retryable enrollment request")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "loading retryable enrollment request",
+        )
+        .await?;
         let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let Some(row) = select_retryable_local_request(
             &rows,
@@ -873,8 +963,12 @@ async fn load_status_enrollment_approvals(
     principal: &PrincipalIdentity,
     local_peer_id: &str,
 ) -> Result<BTreeMap<String, EnrollmentAuthorityOutcome>> {
-    let response = node.execute(STATUS_ENROLLMENT_QUERY).await;
-    ensure_no_errors(&response, "load status enrollment approvals")?;
+    let response = graphql_with_transaction_retry(
+        node,
+        STATUS_ENROLLMENT_QUERY,
+        "load status enrollment approvals",
+    )
+    .await?;
     let mut conflicts = BTreeMap::<String, Vec<String>>::new();
     let mut generational_conflicts = BTreeMap::<String, Vec<(Option<u64>, String)>>::new();
     let mut request_scopes = BTreeMap::<String, (String, String)>::new();

@@ -314,13 +314,113 @@ pub(crate) fn materialize_named_pack(
     Ok((root, lease, manifest))
 }
 
+/// A subject pack for `gents eval run` and `gents optimization run`: a
+/// directory on disk, or a name resolved the way `gents pack install`
+/// resolves one (compiled in, else the registry).
+pub(crate) struct SubjectPack {
+    pub(crate) source: gents::eval::runner::CellSource,
+    pub(crate) manifest: PackManifest,
+    /// The shared lock on a materialized cache entry, held while it is read.
+    _lease: Option<std::fs::File>,
+}
+
+impl SubjectPack {
+    /// The pack's directory, when it resolved to one (always, when
+    /// resolved with `directory` set).
+    pub(crate) fn directory(&self) -> Option<&std::path::Path> {
+        match &self.source {
+            gents::eval::runner::CellSource::Directory(dir) => Some(dir),
+            gents::eval::runner::CellSource::InstalledPack { .. } => None,
+        }
+    }
+
+    /// The pack's one inference-slot behavior; refused when it declares
+    /// none or several.
+    pub(crate) fn default_behavior(&self) -> Result<String> {
+        let mut behaviors: Vec<&String> = self
+            .manifest
+            .metadata
+            .inference_slots
+            .iter()
+            .flat_map(|slot| slot.behaviors.iter())
+            .collect();
+        behaviors.sort();
+        behaviors.dedup();
+        match behaviors.as_slice() {
+            [only] => Ok((*only).clone()),
+            _ => anyhow::bail!(
+                "pack {} declares {} behaviors in its inference slots; name one as <pack>:<behavior>",
+                self.manifest.name,
+                behaviors.len()
+            ),
+        }
+    }
+}
+
+/// Resolve `spec`. A spec that names a path is a directory used in place:
+/// one that starts with `.`, `/` or `~`, or one with a path separator that
+/// is a directory (`acme/widget` is otherwise a namespaced pack name). Any
+/// other spec is a pack name, even when a directory of that name is in the
+/// working directory: it resolves as `gents pack install` resolves one. A
+/// compiled-in pack is handed to the runner by name unless `directory` asks
+/// for a directory; a registry pack, or a compiled-in one when `directory`
+/// is set, is materialized into `<home>/packs/<name>/<digest>`.
+pub(crate) async fn resolve_subject_pack(
+    home: &std::path::Path,
+    spec: &str,
+    registry: Option<&str>,
+    directory: bool,
+) -> Result<SubjectPack> {
+    let path = std::path::Path::new(spec);
+    if names_a_directory(spec) {
+        let manifest_path = path.join("manifest.json");
+        let manifest: PackManifest = serde_json::from_slice(
+            &std::fs::read(&manifest_path)
+                .with_context(|| format!("reading {}", manifest_path.display()))?,
+        )
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+        return Ok(SubjectPack {
+            source: gents::eval::runner::CellSource::Directory(path.to_path_buf()),
+            manifest,
+            _lease: None,
+        });
+    }
+    let pack = resolve_pack_source(spec, registry, home).await?;
+    let manifest = pack.manifest().clone();
+    if !directory && matches!(pack, PackSource::Bundled(_)) {
+        return Ok(SubjectPack {
+            source: gents::eval::runner::CellSource::InstalledPack {
+                name: spec.to_owned(),
+            },
+            manifest,
+            _lease: None,
+        });
+    }
+    let (root, lease) = materialize_cached_pack(home, &pack)?;
+    Ok(SubjectPack {
+        source: gents::eval::runner::CellSource::Directory(root),
+        manifest,
+        _lease: Some(lease),
+    })
+}
+
+/// Whether a subject spec names a directory rather than a pack: see
+/// [`resolve_subject_pack`].
+fn names_a_directory(spec: &str) -> bool {
+    spec.starts_with(['.', '/', '~'])
+        || (spec.contains(std::path::is_separator) && std::path::Path::new(spec).is_dir())
+}
+
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
     // Keep the shared sha256: digest representation out of filesystem names.
     let hash = pack
         .digest()
         .strip_prefix("sha256:")
         .context("invalid pack digest")?;
-    Ok(home.join("packs").join(&pack.manifest().name).join(hash))
+    Ok(home
+        .join(gents::home::PACKS_DIR_NAME)
+        .join(&pack.manifest().name)
+        .join(hash))
 }
 
 fn prune(args: PackPruneArgs) -> Result<()> {
@@ -659,22 +759,17 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     args.grant_authority,
                 )?
             };
-            let identity = gents::pack::PackIdentity {
-                coordinate: format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-                version: pack.manifest().version.clone(),
-                digest: pack.digest().to_owned(),
-                plugins: plugins
+            let identity = gents::pack::PackIdentity::new(
+                pack.manifest(),
+                pack.digest(),
+                plugins
                     .iter()
                     .map(|plugin| gents::pack::InstalledPackPlugin {
                         name: plugin.name.clone(),
                         digest: plugin.digest.clone(),
                     })
                     .collect(),
-            };
+            );
             let apply = gents::pack::install_pack_documents(
                 &access,
                 &owner,
@@ -749,6 +844,37 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bare subject spec is a pack name even when a directory of that name
+    /// is in the working directory (a test runs in the crate root, which has
+    /// `src`); only a spec that looks like a path is read as a directory.
+    #[tokio::test]
+    async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
+        assert!(std::path::Path::new("src").is_dir());
+        assert!(!names_a_directory("src"));
+        assert!(names_a_directory("./src"));
+        assert!(names_a_directory("/packs/monitor"));
+        assert!(names_a_directory("~/packs/monitor"));
+        assert!(names_a_directory("src/commands"));
+        assert!(!names_a_directory("acme/widget"));
+
+        let home = tempfile::tempdir().unwrap();
+        let unreachable = Some("http://127.0.0.1:9");
+        let bare = resolve_subject_pack(home.path(), "src", unreachable, false)
+            .await
+            .err()
+            .expect("no pack is named src");
+        assert!(
+            bare.to_string()
+                .starts_with("src is not compiled into this binary"),
+            "{bare:#}"
+        );
+        let dotted = resolve_subject_pack(home.path(), "./src", unreachable, false)
+            .await
+            .err()
+            .expect("./src has no manifest");
+        assert_eq!(dotted.to_string(), "reading ./src/manifest.json");
+    }
 
     #[test]
     fn concurrent_materialization_publishes_complete_assets() {

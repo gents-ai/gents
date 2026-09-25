@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-client",
-  "version": "0.18.5",
+  "version": "0.19.0",
   "license": "Apache-2.0",
   "description": "Transport, shared store, and view-model contract for Gents desktop packages",
   "type": "module",
@@ -26,7 +26,6 @@
     "README.md"
   ],
   "scripts": {
-    "prebuild": "node ../../scripts/check-desktop-bridge-fingerprint.mjs",
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
     "test": "vitest run"
   },

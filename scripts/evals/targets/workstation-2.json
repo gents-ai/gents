@@ -1,0 +1,22 @@
+{
+  "agent_principal": {},
+  "inference_backends": [
+    {
+      "backend_id": "workstation-2",
+      "name": "workstation-2 vLLM",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "http://workstation-2:8000/v1",
+      "auth": { "kind": "unauthenticated" },
+      "max_concurrent": 4,
+      "max_queue_depth": 100
+    }
+  ],
+  "inference_profiles": [
+    {
+      "profile_id": "workstation-2",
+      "backend_id": "workstation-2",
+      "model_name": "GLM-5.3-Flash-NVFP4"
+    }
+  ]
+}

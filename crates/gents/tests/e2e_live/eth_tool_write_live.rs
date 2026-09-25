@@ -3,17 +3,17 @@
 //!
 //! The production write surface cannot take agent-supplied bytecode: `write`
 //! declarations require a known `to`, so this harness deploys a tiny Counter
-//! as the operator, then GLM uses `send_eth` and `counter_increment`.
+//! as the operator, then the live model uses `send_eth` and `counter_increment`.
 //!
 //! ```bash
-//! GENTS_ETH_LIVE=1 cargo test -p gents --features live-e2e --test e2e_live \
+//! GENTS_ETH_LIVE=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
 //!   eth_tool_live_model_writes_on_local_chain \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
 //! Prefers `anvil` (`GENTS_ANVIL_BIN`, `$PATH`, or `~/.foundry/bin/anvil`).
-//! Override the RPC with `GENTS_ETH_WRITE_RPC`. Override inference with
-//! `GENTS_ETH_LIVE_ENDPOINT` / `GENTS_ETH_LIVE_MODEL`.
+//! Override the RPC with `GENTS_ETH_WRITE_RPC`. Inference comes from the
+//! target named by `GENTS_EVAL_TARGET`.
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -31,12 +31,10 @@ use gents::{
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
-use crate::eth_tool_live::{
-    assert_endpoint_reachable, bind_glm_backend, fetch_tool_calls, live_enabled, live_endpoint,
-};
+use crate::eth_tool_live::{bind_eth_target, fetch_tool_calls, live_enabled};
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::live_inference::{live_target, wait_for_request_terminal};
 use crate::support::test_db;
 
 const TOOL_ID: &str = "local";
@@ -562,8 +560,8 @@ async fn eth_tool_live_model_writes_on_local_chain() {
         "set GENTS_ETH_LIVE=1 and pass --ignored to run the live EthTool write qualification"
     );
 
-    let endpoint = live_endpoint();
-    assert_endpoint_reachable(&endpoint).await;
+    let target = live_target();
+    target.assert_reachable().await;
     let chain = start_local_chain().await;
 
     let deploy = send_unlocked(
@@ -595,9 +593,10 @@ async fn eth_tool_live_model_writes_on_local_chain() {
 
     let db = test_db("eth-tool-write-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("eth-tool-write-live"));
-    let (agent_did, behavior_id) = bind_glm_backend(
+    let (agent_did, behavior_id) = bind_eth_target(
         db.node.as_ref(),
         identity.as_ref(),
+        &target,
         "You are an Ethereum operator on a local Hardhat chain. \
          You have send_eth (native transfer), counter_increment (contract write), \
          counter_number (contract read), and local_query (JSON-RPC). \

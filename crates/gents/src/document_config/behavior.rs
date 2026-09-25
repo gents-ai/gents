@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::references::ConfigReferences;
 use super::serde_helpers::{
@@ -109,10 +109,7 @@ pub(crate) async fn load_agent_behavior_record(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query AgentBehavior failed: {:?}", resp.errors);
-    }
+    let resp = graphql_with_transaction_retry(node, &query, "query AgentBehavior").await?;
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
 }
@@ -153,10 +150,7 @@ pub(crate) async fn list_agent_behavior_records(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("list AgentBehavior failed: {:?}", resp.errors);
-    }
+    let resp = graphql_with_transaction_retry(node, &query, "list AgentBehavior").await?;
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
 }

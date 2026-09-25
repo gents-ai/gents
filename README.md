@@ -1,187 +1,77 @@
 # Gents
 
-**An agent runtime where the database is the control plane.**
+Gents is a desktop app for running your own AI agents. Each agent runs in the
+background on your machine and keeps its configuration, conversations, and
+work as documents in a local, replicated database.
 
-Gents runs LLM agents on top of [DefraDB](https://github.com/sourcenetwork/defradb): every piece of state — configuration, requests, responses, sessions, tool calls, schedules — is a replicated, access-controlled document. Agents get verifiable DID-based identity, document-level permissions, and P2P event propagation for free, because the database provides them.
+## Install
 
-## Get running
+Download the installer for your platform from the
+[latest GitHub release](https://github.com/gents-ai/gents/releases/latest).
+The app includes everything it needs; you do not need to install Rust, Node, or
+a separate command-line tool.
 
-On an Apple Silicon Mac, the desktop installer is the supported path. Download
-`gents-desktop_*_aarch64.dmg` from the
-[GitHub release](https://github.com/gents-ai/gents/releases/latest), drag
-**Gents** to **Applications**, and launch it. If `~/.gents` already exists from
-`gents init` or a previous desktop, setup continues that agent instead of
-creating a second identity.
+### macOS (Apple Silicon)
 
-Linux desktops use the `.deb` or AppImage on that same release. Each installer
-has a checksum in `SHA256SUMS-desktop-*.txt`.
+1. Download `gents-desktop_<version>_aarch64.dmg`.
+2. Open the disk image and drag **Gents** to **Applications**.
+3. Launch **Gents** from **Applications**. Keep it there so the background
+   agent can find it at the next login.
 
-Build the `gents` binary from this repo when you want the CLI on PATH:
+Intel Macs are not supported. The app is signed and notarized. If macOS refuses
+to open it, do not disable Gatekeeper or strip the quarantine attribute;
+[open an issue](https://github.com/gents-ai/gents/issues) with your macOS
+version and the exact error.
 
-```bash
-cargo build -p gents-cli --release
+### Linux (x86_64)
+
+On Debian 12, Ubuntu, or a compatible newer distribution:
+
+```sh
+sudo apt install ./gents-desktop_<version>_amd64.deb
 ```
 
-`gents init` provisions a local agent home under `~/.gents` with one inference
-backend. Pick the block below for the provider you want — `gents init` with no
-backend flags defaults to a local `llama.cpp` server:
+Then launch **Gents** from your application menu.
 
-```bash
-# Local model (default)
-brew install llama.cpp
-llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
-gents init
+Or use the AppImage (glibc 2.36 or newer):
 
-# OpenAI API key
-gents init --backend-preset openai --model-name gpt-4.1
-
-# OpenRouter API key
-gents init --backend-preset openrouter --model-name MODEL
-
-# ChatGPT / Codex subscription (OAuth)
-gents init --backend-preset chatgpt-codex
-gents codex-login
-
-# Grok / xAI subscription (OAuth)
-gents init --backend-preset xai-oauth
-gents grok-login
-
-# Claude subscription (OAuth)
-gents init --backend-preset claude-cli-subscription
-gents claude-login
-
-# Any other OpenAI-compatible endpoint
-gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
+```sh
+chmod +x gents-desktop_<version>_x86_64.AppImage
+./gents-desktop_<version>_x86_64.AppImage
 ```
 
-Then start the runtime and talk to it. `gents chat` is the dependency-free
-terminal UI; it works the same way no matter which provider you picked above:
+If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1`. The
+background agent needs a user systemd session.
 
-```bash
-gents server    # keep this running in another terminal; embedded DefraDB + GraphQL + P2P
-gents chat      # chat in the terminal
-```
+Installer checksums are attached to each release as
+`SHA256SUMS-desktop-macos.txt` and `SHA256SUMS-desktop-linux.txt`.
 
-If you'd rather use the `codex` terminal UI (nicer editing, same read-only tool
-boundary chosen at `gents init`), install the `codex` CLI separately and put it
-on PATH (`GENTS_CODEX_BIN` to point at a different binary). Despite the name,
-it talks to whichever provider you configured above — it is only a terminal UI,
-not tied to using OpenAI/ChatGPT for inference:
+### Server / CLI
 
-```bash
-gents codex     # requires `codex` on PATH; works with any provider from gents init
-```
+For a headless runtime, download `gents-<target>.tar.gz` (Linux x86_64/aarch64,
+macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
 
-New to Gents? Read the [beginner guide](docs/getting-started.md) and the
-[glossary](docs/glossary.md) for what these terms mean.
+## First run
 
-For worked document-driven scenarios, use `gents pack list` and see the
-[pack catalog and authoring guide](packs/README.md). A bundled graph inherits
-the default backend configured above when it is installed:
+The app walks you through setup: create a local agent, review the folders and
+permissions it may use, then connect a model provider. If `~/.gents` already
+exists, setup continues that agent instead of creating a second one.
 
-```bash
-gents pack show code_review
-gents pack install code_review
+The agent keeps running when you close the window or quit the app. Use
+**Stop Agent** in the menu bar or tray menu to stop it; **Start at login** is a separate setting.
 
-cd /path/to/repo
-gents graph run code_review
-gents graph watch <run-id>
-gents graph result <run-id>
-```
+## Get help
 
-The run command defaults to the current directory, `origin/main`, and `HEAD`;
-use `--repo`, `--base`, or `--head` to override them. Add `--output json` to
-install, run, watch, or result for machine-readable output. Result prints the
-durable review report and confirmed findings as well as retaining their exact
-document/commit references. Use `gents graph cancel <run-id>` to request cancellation. The
-code-review graph accepts any local Git work tree and uses the existing
-principal, deployment, tool-surface, workspace, request, trigger, and graph-run
-machinery; bundling it grants no tools or execution authority.
+Report problems and questions as
+[GitHub issues](https://github.com/gents-ai/gents/issues). Include your OS and
+version, the Gents version, and the step that failed. Logs help: on macOS, open
+Console.app and filter by subsystem `ai.gents`; on Linux, run
+`journalctl --user -u gents-runtime.service`. Never include credentials, API
+keys, or sign-in callback URLs.
 
-The catalog also includes a web deep-research graph. First stand up the public
-search and extraction stack; its single entrypoint waits for real SearXNG and
-Firecrawl smoke checks before returning:
+## Contributing
 
-```bash
-git clone https://github.com/source-inc/web-research-mcp.git
-cd web-research-mcp
-./scripts/stack install-mcp
-```
-
-`install-mcp` starts the released real stack, waits for both backend smoke
-checks, registers `http://127.0.0.1:9213/mcp` against the running local Gents
-node, and probes readiness. The graph package installs Gents documents and
-declares this external dependency; it deliberately does not silently allocate
-the roughly 12 GB Docker stack during `pack install`.
-
-Then install the graph and run it with live fan-out progress:
-
-```bash
-gents pack install web_deep_research
-gents graph run web_deep_research \
-  --question "What changed in the MCP security guidance, and what should operators do?" \
-  --investigator-count 4 \
-  --watch
-gents graph result <run-id> | tee web-research-report.md
-```
-
-The graph plans a closed assignment set, fans out investigators, waits for the
-complete evidence barrier, adjudicates claims, and writes a cited report from
-the verdict ledger. Each investigator submits one idempotent bounded evidence
-bundle: several planned searches become a capped, deduplicated set of fetched
-sources with stable IDs, hashes, and gateway-verified excerpts. Plan,
-adjudication, and report stages have no web authority; only investigators can
-reach the named research service. The paid
-acceptance gate is `scripts/web-research-live-e2e.sh`: it starts real SearXNG
-and Firecrawl infrastructure and runs the complete graph against a real model.
-It contains no mock backend path.
-
-## Why this exists
-
-Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.
-
-- **The data store is the control plane.** Configure an agent by writing documents; trigger work by writing documents; debug by reading them. The runtime watches request documents and writes responses back. Multi-agent coordination is document replication, not RPC.
-- **Identity and authorization are cryptographic and layered.** DefraDB authenticates a *principal* as a DID, and document ACP authorizes access. *Behaviors* — prompt, tools, model — are reusable interfaces on a principal. *Deployments* place principals on hosts.
-- **The core is proven.** The request, process, persistence, tool-call, and subagent lifecycles — and what the runtime feeds the model — are specified in Lean 4 with zero `sorry`s, fenced by conformance tests, and only then implemented. See [the proofs](crates/gents/proofs/README.md).
-
-## Architecture
-
-```text
-            documents in ────────────► documents out
-                 │                            ▲
-   ┌─────────────▼────────────────────────────┴──────────────┐
-   │  Gents runtime (the core)                              │
-   │  watcher → request lifecycle → owned completion loop    │
-   │  → tool surface (files/bash/MCP/subagents/skills)       │
-   │  → persistence hooks → live response streaming          │
-   ├─────────────────────────────────────────────────────────┤
-   │  embedded DefraDB: identity (DID) · document ACP · P2P  │
-   └─────────────────────────────────────────────────────────┘
-        ▲                ▲                  ▲
-     CLI (operate)   desktop (observe)   other peers (replicate)
-```
-
-- **Runtime** (`crates/gents`) — the agent loop, lifecycles, tool execution, triggers/schedules, compaction, recovery. The core; everything else supports it.
-- **Protocol** (`crates/gents-protocol`) — schemas, the persisted message vocabulary, and the turn-observation protocol shared by every peer.
-- **CLI** (`crates/gents-cli`) — init/serve/chat, plus declarative config apply/diff: agent manifests in, documents out.
-- **Desktop** (`apps/gents-desktop`, `crates/gents-desktop*`) — an observer UI enrolled with runtimes and synchronized over P2P.
-- **Proofs** (`crates/gents/proofs`) — the Lean models the runtime conforms to.
-
-Subagents are requests: a parent's tool call spawns a child request — possibly on another deployment — and the child's terminal state projects back onto the parent's transcript. Automation is the same shape: Tasks, Schedules, and EventTriggers materialize requests with lineage stamped on every one.
-
-## Development
-
-Building from source needs a few system dependencies (Rust, a C/C++ toolchain,
-`protoc`, `libclang`, and OpenSSL headers). DefraDB dependencies are public and
-use pinned HTTPS revisions.
-Build, test, and toolchain setup live in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
-
-The development flow is foundation-first: Lean model → conformance tests → implementation. `AGENTS.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
-
-## Status
-
-Pre-1.0 and under active development. Extracted from a larger system
-(Amygdala) and intentionally narrow: the runtime and its formal specification.
+Building from source is covered in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 

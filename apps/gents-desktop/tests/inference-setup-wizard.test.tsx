@@ -144,7 +144,7 @@ describe("InferenceSetupWizard", () => {
           {
             collection: "InferenceProfile",
             id: "profile-a",
-            changes: { model_name: "gpt-5.5" },
+            changes: { model_name: "gpt-6-astra" },
           },
         ],
       });

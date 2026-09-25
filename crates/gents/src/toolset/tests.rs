@@ -94,6 +94,11 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         .as_str()
         .unwrap()
         .contains("Existing file contents are replaced"));
+    assert!(write_def.parameters["properties"]["expected_content_hash"].is_object());
+    assert_eq!(
+        write_def.parameters["properties"]["overwrite"]["default"],
+        false
+    );
 
     let bash_tool = UnrestrictedBashTool::new(
         ToolContext::new(root, false).unwrap(),
@@ -134,6 +139,7 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(600),
         Duration::from_secs(3_600),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable(),
     );
     let def = crate::llm::tool::Tool::definition(&tool, String::new()).await;
@@ -619,6 +625,8 @@ async fn write_and_edit_file_work_under_root() {
             path: "nested/file.txt".to_string(),
             content: "hello world".to_string(),
             raw_json: false,
+            expected_content_hash: None,
+            overwrite: false,
         },
     )
     .await
@@ -684,6 +692,8 @@ async fn read_only_workspace_authority_denies_file_writes() {
                         path: "file.txt".to_string(),
                         content: "nope".to_string(),
                         raw_json: false,
+                        expected_content_hash: None,
+                        overwrite: true,
                     },
                 )
                 .await
@@ -710,6 +720,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
         ToolContext::new(root.clone(), true).unwrap(),
         Duration::from_secs(5),
         Duration::from_secs(5),
+        DEFAULT_MAX_COMMAND_CHARS,
         policy.clone(),
     );
     let result =
@@ -1628,6 +1639,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        DEFAULT_MAX_COMMAND_CHARS,
         policy,
     );
 
@@ -1788,6 +1800,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(1),
         Duration::from_secs(1),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
     let command = "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
@@ -1832,6 +1845,64 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         .parse::<i32>()
         .unwrap();
     assert_unix_process_exited(descendant_pid).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
+    let root = temp_root("gents-bash-timeout-partial-output");
+    let pid_file = root.join("shell.pid");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        DEFAULT_MAX_COMMAND_CHARS,
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
+    );
+    let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
+
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": command,
+            "timeout_secs": 1,
+        })
+        .to_string(),
+    );
+    let outcome = tokio::time::timeout(Duration::from_secs(10), call)
+        .await
+        .expect("timed-out bash call must return promptly");
+    let crate::tool_call_lifecycle::ToolOutcome::Failed {
+        class: crate::tool_call_lifecycle::FailureClass::External,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("per-call timeout must be a recoverable typed failure, got {outcome:?}");
+    };
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["status"], "timeout");
+    assert_eq!(meta["timed_out"], true);
+    assert!(meta["exit_code"].is_null());
+    assert!(meta["duration_ms"].as_u64().unwrap() >= 1000, "{output}");
+    assert!(
+        output.contains("compiled-pkg-one\ncompiled-pkg-two"),
+        "{output}"
+    );
+    assert!(output.contains("warn-from-stderr"), "{output}");
+    let hint = meta["hint"]
+        .as_str()
+        .expect("timeout result carries a hint");
+    assert!(hint.starts_with("timed out after "), "{hint}");
+    assert!(hint.contains("spawn_process"), "{hint}");
+    let shell_pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    assert_unix_process_exited(shell_pid).await;
 }
 
 #[cfg(unix)]
@@ -1985,6 +2056,112 @@ fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
     }
 }
 
+fn write_args(path: &str, content: &str) -> WriteFileArgs {
+    WriteFileArgs {
+        path: path.to_string(),
+        content: content.to_string(),
+        raw_json: true,
+        expected_content_hash: None,
+        overwrite: false,
+    }
+}
+
+#[tokio::test]
+async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
+    let root = temp_root("gents-write-guard");
+    let file = root.join("notes.txt");
+    let context = ToolContext::new(root, false).unwrap();
+    let writer = WriteFileTool::new(context.clone());
+    let reader = ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS);
+
+    let created = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "one\n"))
+        .await
+        .expect("creating a new file is unguarded");
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["created"], true);
+    let written_hash = created["content_hash"].as_str().unwrap().to_string();
+
+    let refused = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "blind\n"))
+        .await
+        .expect_err("blind overwrite must be refused");
+    let refused = refused.to_string();
+    assert!(refused.contains("already exists"), "{refused}");
+    assert!(
+        !refused.contains(&written_hash),
+        "the refusal must not disclose the current hash: {refused}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one\n");
+
+    let read = crate::llm::tool::Tool::call(
+        &reader,
+        ReadFileArgs {
+            path: "notes.txt".to_string(),
+            start_line: None,
+            end_line: None,
+            max_chars: DEFAULT_MAX_FILE_CHARS,
+            raw_json: true,
+        },
+    )
+    .await
+    .unwrap();
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap();
+    let read_hash = read["content_hash"].as_str().unwrap().to_string();
+    assert_eq!(read_hash, written_hash);
+
+    std::fs::write(&file, "changed by operator\n").unwrap();
+    let mut stale = write_args("notes.txt", "two\n");
+    stale.expected_content_hash = Some(read_hash.clone());
+    let stale = crate::llm::tool::Tool::call(&writer, stale)
+        .await
+        .expect_err("a stale hash must be refused");
+    let stale = stale.to_string();
+    assert!(stale.contains("has changed since it was read"), "{stale}");
+    assert!(
+        !stale.contains(&super::file_tools::content_hash(b"changed by operator\n")),
+        "the stale refusal must not disclose the current hash: {stale}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "changed by operator\n"
+    );
+
+    let mut current = write_args("notes.txt", "two\n");
+    current.expected_content_hash = Some(super::file_tools::content_hash(b"changed by operator\n"));
+    let current = crate::llm::tool::Tool::call(&writer, current)
+        .await
+        .expect("the current hash authorizes the replacement");
+    let current: serde_json::Value = serde_json::from_str(&current).unwrap();
+    assert_eq!(current["created"], false);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
+
+    let mut forced = write_args("notes.txt", "three\n");
+    forced.overwrite = true;
+    crate::llm::tool::Tool::call(&writer, forced)
+        .await
+        .expect("explicit overwrite replaces regardless of current content");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+
+    let mut both = write_args("notes.txt", "four\n");
+    both.expected_content_hash = Some(super::file_tools::content_hash(b"three\n"));
+    both.overwrite = true;
+    let both = crate::llm::tool::Tool::call(&writer, both)
+        .await
+        .expect_err("a hash with overwrite=true is ambiguous");
+    assert!(both.to_string().contains("conflict"), "{both}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+
+    let mut vanished = write_args("gone.txt", "x");
+    vanished.expected_content_hash = Some(read_hash);
+    let vanished = crate::llm::tool::Tool::call(&writer, vanished)
+        .await
+        .expect_err("a hash for a missing file must be refused");
+    assert!(
+        vanished.to_string().contains("no longer exists"),
+        "{vanished}"
+    );
+    assert!(!file.with_file_name("gone.txt").exists());
+}
+
 #[tokio::test]
 async fn read_file_reports_raw_content_hash() {
     let root = temp_root("gents-read-hash");
@@ -2034,7 +2211,7 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
 }
 
 #[tokio::test]
-async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
+async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current() {
     let root = temp_root("gents-edit-stale");
     let file = root.join("a.txt");
     // Pattern is ambiguous — but the stale gate must fire FIRST (Lean E6).
@@ -2048,7 +2225,10 @@ async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
         .expect_err("stale hash must reject");
     let text = err.to_string();
     assert!(text.contains("changed since"), "{text}");
-    assert!(text.contains("sha256:"), "{text}");
+    assert!(
+        !text.contains(&super::file_tools::content_hash(b"dup\ndup\n")),
+        "the stale refusal must not disclose the current hash: {text}"
+    );
     assert!(
         text.contains("re-read") || text.contains("Re-read"),
         "{text}"
@@ -2091,7 +2271,7 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
 #[tokio::test]
 async fn edit_file_not_found_error_carries_closest_match() {
     let root = temp_root("gents-edit-closest");
-    std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: d4f\n").unwrap();
+    std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: fixture-model\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let err = crate::llm::tool::Tool::call(
         &tool,
@@ -2216,6 +2396,8 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
                 path: "both.txt".to_string(),
                 content: "alpha: 0\nbeta: 1\n".to_string(),
                 raw_json: false,
+                expected_content_hash: None,
+                overwrite: true,
             },
         );
         let (re, rw) = tokio::join!(edit, write);
@@ -2381,6 +2563,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
         Duration::from_secs(5),
         &policy,
         false,
+        DEFAULT_MAX_COMMAND_CHARS,
     )
     .await
     .unwrap_err();
@@ -2394,8 +2577,11 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    let fx = crate::workspace::artifact_test_fixture(&[]).await;
+    // Load the Lean cases before the fixture claims its execution lease: the
+    // first load may wait behind `lake build` under the shared proofs lock for
+    // longer than the lease, which would expire the grant under test.
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
+    let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
     let mut exercised = 0;
     for case in cases {
@@ -2440,7 +2626,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
                         .with_mode(CommandExecutionMode::ArtifactWrite)
                         .with_network_mode(CommandNetworkMode::Disabled);
                     super::shared::run_command(&context, "bash", "/bin/sh", &["-c".into(), script],
-                        None, Duration::from_secs(10), &policy, false).await
+                        None, Duration::from_secs(10), &policy, false, DEFAULT_MAX_COMMAND_CHARS).await
                 },
             ).await
         };
@@ -2621,6 +2807,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
         ToolContext::new(root.clone(), false).unwrap(),
         Duration::from_secs(120),
         Duration::from_secs(120),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable()
             .with_mode(CommandExecutionMode::ArtifactWrite)
             .with_network_mode(CommandNetworkMode::Disabled),

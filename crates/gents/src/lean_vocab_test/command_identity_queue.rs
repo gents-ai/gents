@@ -87,25 +87,109 @@ pub(crate) struct LeanPendingUserTurnCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanQueuedSteeringTraceCase {
     pub(crate) name: String,
+    pub(crate) actions: Vec<LeanQueuedSteeringAction>,
     #[serde(rename = "requestId")]
     pub(crate) request_id: u64,
     #[serde(rename = "requestDocId")]
     pub(crate) request_doc_id: u64,
     #[serde(rename = "contentToken")]
     pub(crate) content_token: u64,
+    pub(crate) entry: LeanQueuedSteeringEntry,
+    #[serde(rename = "interruptAt")]
+    pub(crate) interrupt_at: Option<u64>,
+    #[serde(rename = "preparedCandidate")]
+    pub(crate) prepared_candidate: Option<LeanQueuedSteeringCandidate>,
+    pub(crate) capture: LeanQueuedSteeringCapture,
     #[serde(rename = "lifecycleState")]
     pub(crate) lifecycle_state: String,
+    #[serde(rename = "acceptedInput")]
+    pub(crate) accepted_input: bool,
+    #[serde(rename = "queueActive")]
+    pub(crate) queue_active: Option<u64>,
     #[serde(rename = "admissionVisible")]
     pub(crate) admission_visible: bool,
     #[serde(rename = "canonicalAuthoredCount")]
     pub(crate) canonical_authored_count: u64,
+    #[serde(rename = "providerSendPermitted")]
+    pub(crate) provider_send_permitted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanQueuedSteeringAction {
+    Enqueue,
+    ClaimWithoutBegin,
+    ClaimAndBegin,
+    LatchInterrupt,
+    InterruptBeforeClaim,
+    AdmissionReject,
+    FailBeforeStream,
+    DedupLose,
+    Expire,
+    InterruptClaimed,
+    InterruptProcessing,
+    Fail,
+    Finish,
+    BindWorkspace,
+    Claim,
+    BeginInference,
+    ContinueProcessing,
+    Publish,
+    PrepareFails,
+    Capture,
+    Send,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringEntry {
+    #[serde(rename = "requestId")]
+    pub(crate) request_id: u64,
+    #[serde(rename = "createdAt")]
+    pub(crate) created_at: u64,
+    pub(crate) source: String,
+    pub(crate) policy: String,
+    #[serde(rename = "queueKey")]
+    pub(crate) queue_key: Option<u64>,
+    #[serde(rename = "queuedAfter")]
+    pub(crate) queued_after: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringCandidate {
+    pub(crate) closing: super::canonical_output::LeanCanonicalSegment,
+    pub(crate) message:
+        super::canonical_output::LeanCanonicalMessage<super::canonical_output::LeanPayloadSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringCapture {
+    #[serde(rename = "agentDid")]
+    pub(crate) agent_did: u64,
+    #[serde(rename = "sessionId")]
+    pub(crate) session_id: u64,
+    #[serde(rename = "requestDocId")]
+    pub(crate) request_doc_id: u64,
+    #[serde(rename = "turnIndex")]
+    pub(crate) turn_index: u64,
+    pub(crate) attempt: u64,
+    #[serde(rename = "bodyToken")]
+    pub(crate) body_token: u64,
+    #[serde(rename = "priorBodyToken")]
+    pub(crate) prior_body_token: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanQueuedSteeringGuardCase {
     pub(crate) name: String,
+    #[serde(rename = "prefixAdmitted")]
+    pub(crate) prefix_admitted: bool,
     pub(crate) admitted: bool,
 }
 
@@ -224,7 +308,8 @@ pub(crate) struct LeanReservedChildBinding {
     pub(crate) parent_tool: usize,
     pub(crate) parent_tool_doc: usize,
     pub(crate) payload: usize,
-    pub(crate) workspace: Option<usize>,
+    pub(crate) depth: usize,
+    pub(crate) workspace: Option<super::canonical_execution::LeanCanonicalDelegatedWorkspace>,
     pub(crate) admission: usize,
 }
 
@@ -235,6 +320,22 @@ pub(crate) struct LeanReservedChildMaterializationCase {
     pub(crate) candidate: LeanReservedChildBinding,
     pub(crate) expected_decision: String,
     pub(crate) expected_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanLocalParentDepthExpected {
+    Admitted { child_depth: u32 },
+    Rejected { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanLocalParentDepthCase {
+    pub(crate) name: String,
+    pub(crate) supplied_parent_depth: u32,
+    pub(crate) stored_parent_depth: Option<i64>,
+    pub(crate) expected: LeanLocalParentDepthExpected,
 }
 
 /// Startup restart-disposition witness (#937): the shape of one running

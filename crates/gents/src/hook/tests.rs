@@ -21,6 +21,9 @@ mod background_panic;
 #[path = "tests/background_budget.rs"]
 mod background_budget;
 
+#[path = "tests/wait_settlement.rs"]
+mod wait_settlement;
+
 #[path = "tests/process_control_scope.rs"]
 mod process_control_scope;
 
@@ -65,6 +68,59 @@ fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> Stri
     // labels such as `parent-one` are intentionally reused. Keep fixtures
     // scoped to the physical node as well as that label.
     format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
+}
+
+#[tokio::test]
+async fn spawn_preplan_surfaces_missing_parent_but_keeps_malformed_intent_for_dispatch() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:owner",
+        FailurePolicy::default(),
+    );
+    hook.state.lock().await.current_request_id = Some("missing-parent".to_owned());
+    let message = |arguments| Message::Assistant {
+        id: Some("provider-message".to_owned()),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "tool-call".to_owned(),
+            call_id: None,
+            function: ToolFunction {
+                name: crate::toolset::SPAWN_SUBAGENT_TOOL_NAME.to_owned(),
+                arguments,
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    let internal_ids = vec!["internal-tool-call".to_owned()];
+
+    let malformed = message(json!({ "name": "child" }));
+    assert!(hook
+        .preplan_spawn_admissions(&malformed, &internal_ids)
+        .await
+        .unwrap()
+        .is_empty());
+    let empty_name = message(json!({ "name": "", "prompt": "work" }));
+    assert!(hook
+        .preplan_spawn_admissions(&empty_name, &internal_ids)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let valid = message(json!({ "name": "child", "prompt": "work" }));
+    let error = hook
+        .preplan_spawn_admissions(&valid, &internal_ids)
+        .await
+        .expect_err("a failed parent read must stop preplanning before publication");
+    assert!(
+        error
+            .to_string()
+            .contains("preplan spawn admission for parent request missing-parent"),
+        "unexpected preplanning error: {error:#}"
+    );
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -571,6 +627,164 @@ fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     }
 }
 
+#[tokio::test]
+async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies() {
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().canonical_dispatch_observation_cases;
+    for case in cases
+        .iter()
+        .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
+    {
+        for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            ensure_runtime_schemas(&node).await.unwrap();
+            let hook = DefraSessionHook::with_identity(
+                node.clone(),
+                "general",
+                "did:test:dispatch-receipt",
+                policy,
+            );
+            assert!(matches!(
+                hook.on_completion_call(&user_text_message("Run a tool"), &[])
+                    .await,
+                HookAction::Continue
+            ));
+            let session_id = hook.session_id().await.unwrap();
+            bind_interruptible_request(
+                &node,
+                &hook,
+                "request-receipt",
+                &session_id,
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
+            accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
+            let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
+            let admitted = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            assert_eq!(case.inputs.len(), case.expected.len());
+            for (input, expected) in case.inputs.iter().zip(&case.expected) {
+                if expected.observation == "replay" {
+                    // Restore the original publication binding so replay must
+                    // reach the durable election, not the consumed-map guard.
+                    hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
+                        .await
+                        .unwrap();
+                }
+                let call = hook.on_tool_call("read", None, "receipt-call", "{}");
+                let action = if input.acknowledged {
+                    call.await
+                } else {
+                    let (action, fired) =
+                        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(call)
+                            .await;
+                    assert!(fired, "{}: receipt fault must fire", case.name);
+                    action
+                };
+                assert_eq!(
+                    matches!(action, ToolCallHookAction::Continue),
+                    expected.may_invoke,
+                    "{}: {action:?}",
+                    case.name
+                );
+                if expected.observation == "replay" {
+                    assert!(
+                        matches!(&action, ToolCallHookAction::Terminate { reason }
+                        if reason.contains("no longer pending")),
+                        "{action:?}"
+                    );
+                }
+                let row = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+                assert_eq!(
+                    row["lifecycle_state"].as_str() == Some("running"),
+                    expected.running,
+                    "{}: durable dispatch state",
+                    case.name
+                );
+            }
+            let mut fixture = hook_execution_fixtures()
+                .lock()
+                .await
+                .remove(&hook_execution_fixture_key(&hook, "request-receipt"))
+                .unwrap();
+            let selection = fixture
+                .writer
+                .terminal_output(&fixture.lifecycle.request().doc_id)
+                .await;
+            let outcome = match case.parent_outcome.as_str() {
+                "failed" => crate::lifecycle::RequestTerminalOutcome::Failed,
+                other => panic!("unsupported modeled parent outcome {other}"),
+            };
+            let completion_outcome = match case.completion_probe_outcome.as_str() {
+                "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
+                other => panic!("unsupported modeled completion probe {other}"),
+            };
+            assert!(
+                !case.completion_probe_accepted,
+                "{}: this adapter branch requires a running-call completion rejection",
+                case.name
+            );
+            let document =
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+            let request_query = format!(
+                "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
+            );
+            let access = crate::ConfigAccess::Local(node.clone());
+            let before_probe = access.execute(&request_query).await.unwrap();
+            let before_request = before_probe["data"]["AgentRequest"].as_array().unwrap();
+            assert_eq!(before_request.len(), 1);
+            let completion = fixture
+                .lifecycle
+                .terminalize_owned(completion_outcome, selection.clone(), None)
+                .await;
+            assert_eq!(completion.is_ok(), case.completion_probe_accepted);
+            let rejection = completion.expect_err("running foreground call must block completion");
+            assert!(
+                matches!(
+                    rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
+                    Some(crate::lifecycle::ToolAccountingRejection::ForegroundRunning)
+                ),
+                "completion must be rejected by durable tool accounting: {rejection:#}"
+            );
+            let after_probe = access.execute(&request_query).await.unwrap();
+            assert_eq!(
+                after_probe["data"]["AgentRequest"].as_array().unwrap(),
+                before_request,
+                "rejected completion must not terminalize or replace the request generation"
+            );
+            let terminalized = fixture
+                .lifecycle
+                .terminalize_owned(outcome, selection, Some("dispatch observation failed"))
+                .await
+                .unwrap();
+            assert_eq!(terminalized, crate::lifecycle::TerminalizeResult::Won);
+            let document =
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+            let observed = crate::ConfigAccess::Local(node.clone()).execute(&format!(
+                "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
+            )).await.unwrap();
+            let data = &observed["data"];
+            let rows = data["AgentToolCall"].as_array().unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the exact committed call survives parent failure"
+            );
+            assert_eq!(rows[0]["_docID"], admitted["_docID"]);
+            let expected = &case.expected_after_parent_failure;
+            assert_eq!(
+                rows[0]["lifecycle_state"].as_str() == Some("running"),
+                expected.running
+            );
+            assert_eq!(rows[0]["stuck_since"].is_string(), expected.needs_recovery);
+            assert_eq!(
+                data["AgentMessage"].as_array().unwrap().len(),
+                expected.message_count
+            );
+            node.shutdown().await;
+        }
+    }
+}
+
 #[test]
 fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     let mut state = session_state_for_test();
@@ -588,6 +802,103 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     state.reset_after_user_message();
     assert_eq!(state.begin_or_continue_assistant_turn(), 2);
     assert_eq!(state.persist_assistant_turn(), 2);
+}
+
+/// Completion persistence can fail after a control tool has already committed
+/// its effect. Neither that failure nor a subsequent replay permits dispatch.
+#[tokio::test]
+async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
+        .iter()
+        .find(|case| case.expected == "fresh" && case.token_budget.is_none())
+        .unwrap();
+    let replay = crate::lean_vocab_test::lean_canonical_dispatch_observation_cases()
+        .iter()
+        .find(|case| case.name == "won_dispatch_then_replay")
+        .unwrap();
+    let args = json!({"objective": goal_case.objective}).to_string();
+    for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+        let mut completion_mutation = None;
+        for inject in [false, true] {
+            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            ensure_runtime_schemas(&node).await.unwrap();
+            let hook = DefraSessionHook::with_identity(
+                node.clone(),
+                "general",
+                "did:test:control-receipt",
+                policy,
+            )
+            .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
+            assert!(matches!(
+                hook.on_completion_call(&user_text_message("Create a goal"), &[])
+                    .await,
+                HookAction::Continue
+            ));
+            let session = hook.session_id().await.unwrap();
+            bind_interruptible_request(
+                &node,
+                &hook,
+                "control-receipt",
+                &session,
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
+            accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
+            let (action, mutations) =
+                crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                    completion_mutation,
+                    hook.on_tool_call("create_goal", None, "control-call", &args),
+                )
+                .await;
+            let goal =
+                crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
+                    .await
+                    .unwrap()
+                    .expect("the control effect committed before completion");
+            assert_eq!(goal.objective, goal_case.objective);
+            if inject {
+                assert_eq!(Some(mutations), completion_mutation, "fault must fire");
+                assert!(
+                    matches!(action, ToolCallHookAction::Terminate { .. }),
+                    "{action:?}"
+                );
+                let row = fetch_tool_call_row(&node, &session, "control-call").await;
+                assert_eq!(
+                    row["lifecycle_state"].as_str() == Some("running"),
+                    replay.expected[0].running
+                );
+                let again = hook
+                    .on_tool_call("create_goal", None, "control-call", &args)
+                    .await;
+                assert_eq!(
+                    matches!(again, ToolCallHookAction::Continue),
+                    replay.expected[1].may_invoke
+                );
+                let after =
+                    crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(
+                    serde_json::to_value(after).unwrap(),
+                    serde_json::to_value(goal).unwrap(),
+                    "replay must not alter the committed goal"
+                );
+            } else {
+                assert!(
+                    matches!(action, ToolCallHookAction::Skip { .. }),
+                    "{action:?}"
+                );
+                assert!(mutations > 0);
+                completion_mutation = Some(mutations);
+            }
+            hook_execution_fixtures()
+                .lock()
+                .await
+                .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
+            node.shutdown().await;
+        }
+    }
 }
 
 #[test]
@@ -2753,7 +3064,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         "cascade cancel should latch child interrupt_requested_at"
     );
 
-    // Late complete must not overwrite the interrupt terminal (CAS).
+    // Divergent late output must not overwrite the durable interrupt terminal.
     let mut reloaded = crate::tool_call_lifecycle::ToolCallLifecycle::load(
         node.clone(),
         &session_id,
@@ -2762,7 +3073,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     .await
     .unwrap()
     .expect("outer row");
-    // Force in-memory running so complete() is attempted; durable CAS must lose.
+    // A stale in-memory Running observation is not authority to replace output.
     reloaded.set_state(crate::tool_call_lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
@@ -2771,10 +3082,14 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     assert!(
         late_error
             .to_string()
-            .contains("canonical tool delivery replay payload differs from terminal result"),
+            .contains("terminal raw tool result is not an exact extension of persisted raw output"),
         "unexpected late-completion failure: {late_error:#}"
     );
     let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
+    assert_eq!(
+        outer_after, outer_row,
+        "late completion changed the terminal row"
+    );
     assert_eq!(
         outer_after
             .get("lifecycle_state")

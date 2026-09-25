@@ -155,18 +155,30 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
         },
-        std::sync::Weak::new(),
+        super::super::controller::CapacityPool::open(1),
     );
     let mut holder = controller
         .clone()
-        .acquire(node.clone(), pending_call("holder-call"), None, None)
+        .acquire(
+            node.clone(),
+            pending_call("holder-call"),
+            "recovery-cas",
+            None,
+            None,
+        )
         .await
         .unwrap();
     let waiting_controller = controller.clone();
     let waiting_node = node.clone();
     let waiting = tokio::spawn(async move {
         waiting_controller
-            .acquire(waiting_node, pending_call("waiting-call"), None, None)
+            .acquire(
+                waiting_node,
+                pending_call("waiting-call"),
+                "recovery-cas",
+                None,
+                None,
+            )
             .await
     });
     let queued = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -199,8 +211,12 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         result.is_err(),
         "a recovered queued call must not obtain a provider permit"
     );
-    assert!(
-        controller.is_drained(),
+    assert_eq!(
+        (
+            controller.pool.held_for_test(),
+            controller.pool.queue_waiters_for_test()
+        ),
+        (0, 0),
         "losing admission must release controller bookkeeping"
     );
     let response = node
@@ -260,20 +276,20 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
         },
-        std::sync::Weak::new(),
+        super::super::controller::CapacityPool::open(1),
     );
     let permit = controller
         .clone()
         .acquire(
             node.clone(),
             pending_call("aborted-finalizer-call"),
+            "recovery-cas",
             None,
             None,
         )
         .await
         .unwrap();
-    assert_eq!(controller.available_permits_for_test(), 0);
-    assert!(!controller.is_drained());
+    assert_eq!(controller.pool.available_permits_for_test(), 0);
 
     let gate_entered = std::sync::Arc::new(tokio::sync::Notify::new());
     let release_gate = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -319,14 +335,14 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     drop(stream);
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !controller.is_drained() {
+        while controller.pool.held_for_test() != 0 {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("aborted finalizer must drop its AdmissionPermit");
     assert_eq!(
-        controller.available_permits_for_test(),
+        controller.pool.available_permits_for_test(),
         1,
         "aborted finalizer must return the real provider permit"
     );

@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     let cases = lean_codex_shim_projection_cases();
-    assert_eq!(cases.len(), 13);
+    assert_eq!(cases.len(), 11);
 
     for case in cases {
         assert_eq!(
@@ -82,7 +82,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "codex_shim.projection.pending",
             "codex_shim.projection.claimed",
             "codex_shim.projection.processing",
-            "codex_shim.projection.input_required",
             "codex_shim.projection.completed_request",
             "codex_shim.projection.failed_request",
             "codex_shim.projection.dead_request",
@@ -90,7 +89,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "codex_shim.projection.supersession_override",
             "codex_shim.projection.interrupted_request",
             "codex_shim.projection.local_interrupt_preempts_core_state",
-            "codex_shim.projection.local_interrupt_input_required",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>()
@@ -164,13 +162,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         ]
     );
 
-    let input_required =
-        lean_codex_shim_projection_case("codex_shim.projection.local_interrupt_input_required");
-    assert_eq!(input_required.request_state, "inputRequired");
-    assert!(input_required.local_interrupt_acked);
-    assert!(input_required.interruptible_request_state);
-    assert_eq!(input_required.projected_phase, "interrupted");
-
     let lifecycle_cases = lean_codex_shim_turn_lifecycle_cases();
     assert_eq!(lifecycle_cases.len(), 4);
     let lifecycle_names = lifecycle_cases
@@ -220,7 +211,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     let tool_cases = lean_codex_shim_subagent_tool_cases();
     assert_eq!(tool_cases.len(), 9);
     let status_cases = lean_codex_shim_subagent_status_cases();
-    assert_eq!(status_cases.len(), 10);
+    assert_eq!(status_cases.len(), 9);
     for case in status_cases {
         let head =
             gents_protocol::client_protocol::project_persisted_attempt(&case.request_state, false)
@@ -292,7 +283,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 11);
+    assert_eq!(thread_status_cases.len(), 10);
     for case in thread_status_cases {
         use gents_protocol::client_protocol::ClientTurnState;
         let head = case.request_state.as_deref().and_then(|request_state| {

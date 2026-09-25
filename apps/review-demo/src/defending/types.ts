@@ -377,7 +377,7 @@ export type DefenseSnapshot = {
 };
 
 export type DefenseNodeState =
-  "expected" | "live" | "done" | "failed" | "waiting-group" | "input-required";
+  "expected" | "live" | "done" | "failed" | "waiting-group";
 
 export type DefenseNodeKind =
   | "job"

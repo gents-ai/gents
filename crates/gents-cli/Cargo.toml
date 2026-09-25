@@ -31,6 +31,7 @@ required-features = ["live-e2e"]
 
 [dependencies]
 anyhow.workspace = true
+async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 bs58 = "0.5"
 chrono.workspace = true
@@ -74,6 +75,7 @@ sha2.workspace = true
 serde_yaml.workspace = true
 subtle.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -82,6 +84,8 @@ url = "2"
 semver = "1"
 tempfile = "3"
 wait-timeout = "0.2"
+# `gents eval init` holds a draft's check params to each check's schema.
+jsonschema = { version = "0.46.5", default-features = false }
 
 # `gents pack build` (src/commands/pack/build.rs) compiles a tool's source
 # through Afterburner's own compiler rather than growing a second one:
@@ -103,11 +107,16 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # revs are different types to the compiler.
 afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+
 [dev-dependencies]
 acp.workspace = true
-async-trait = "0.1"
 futures = "0.3"
 gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
-jsonschema = { version = "0.46.5", default-features = false }
 tokio-tungstenite = "0.26.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

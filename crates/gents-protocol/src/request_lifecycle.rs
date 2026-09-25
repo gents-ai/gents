@@ -14,7 +14,6 @@ pub enum RequestLifecycleState {
     Pending,
     Claimed,
     Processing,
-    InputRequired,
     Completed,
     Failed,
     Superseded,
@@ -23,12 +22,11 @@ pub enum RequestLifecycleState {
 }
 
 impl RequestLifecycleState {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 9] = [
         Self::WorkspaceBindingPending,
         Self::Pending,
         Self::Claimed,
         Self::Processing,
-        Self::InputRequired,
         Self::Completed,
         Self::Failed,
         Self::Superseded,
@@ -42,7 +40,6 @@ impl RequestLifecycleState {
             Self::Pending => "pending",
             Self::Claimed => "claimed",
             Self::Processing => "processing",
-            Self::InputRequired => "inputRequired",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Superseded => "superseded",
@@ -72,7 +69,6 @@ impl RequestLifecycleState {
             "pending" => Ok(Self::Pending),
             "claimed" => Ok(Self::Claimed),
             "processing" => Ok(Self::Processing),
-            "inputRequired" => Ok(Self::InputRequired),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "superseded" => Ok(Self::Superseded),

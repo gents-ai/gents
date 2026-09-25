@@ -214,6 +214,107 @@ fn bundled_review_loads_slot_authoring_and_literal_prompt_assets() {
     }
 }
 
+fn eval_manifest(assets: &[&str]) -> PackManifest {
+    serde_json::from_value(json!({
+        "manifest_version": 1, "name": "example", "version": "1", "description": "Example",
+        "kind": "documents", "authors": ["Example"], "assets": assets,
+        "config": "config/bundle.json",
+    }))
+    .unwrap()
+}
+
+fn eval_config(cases: Value) -> Value {
+    json!({"agent_principal": {}, "eval_definitions": [{
+        "definition_id": "defn",
+        "comparability_version": 1,
+        "subject": {"kind": "behavior"},
+        "cases": cases,
+    }]})
+}
+
+/// A sidecar case whose prompt would fail interpolation if it were
+/// interpolated: `NOT_INTERPOLATED` is unset.
+const SIDECAR_CASE: &str = r#"{"case_id":"one","split":"train","stages":[{"stage_id":"s","prompt":"literal ${NOT_INTERPOLATED}","deadline_secs":60,"checks":[{"check":"finding_count","params":{"count":1},"tier":"acceptance"}]}]}"#;
+
+fn load_eval(manifest: &PackManifest, config: Value) -> Result<PackConfig> {
+    load_pack_config(
+        manifest,
+        &PackInstallOptions {
+            agent_did: "did:key:owner".into(),
+        },
+        &|path| match path {
+            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "config/cases/one.json" => Ok(SIDECAR_CASE.as_bytes().to_vec()),
+            "config/cases/bad.json" => {
+                Ok(br#"{"case_id":"bad","split":"train","stages":[],"surprise":1}"#.to_vec())
+            }
+            _ => anyhow::bail!("unexpected asset {path}"),
+        },
+        &|_| None,
+    )
+}
+
+#[test]
+fn eval_definition_case_sidecars_hydrate_as_literal_cases_beside_inline_ones() {
+    let manifest = eval_manifest(&["README.md", "config/bundle.json", "config/cases/one.json"]);
+    let inline = json!({"case_id": "two", "split": "validation", "stages": [{
+        "stage_id": "s", "prompt": "p", "deadline_secs": 60,
+        "checks": [{"check": "finding_count", "params": {"count": 0}, "tier": "acceptance"}],
+    }]});
+    let config = load_eval(&manifest, eval_config(json!(["./cases/one.json", inline]))).unwrap();
+    let definition = &config.eval_definitions[0];
+    assert_eq!(definition.agent_did, "did:key:owner");
+    assert_eq!(
+        definition
+            .cases
+            .iter()
+            .map(|case| case.case_id.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    assert_eq!(
+        definition.cases[0].stages[0].prompt, "literal ${NOT_INTERPOLATED}",
+        "sidecar contents are never interpolated"
+    );
+    definition.validate().unwrap();
+}
+
+#[test]
+fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_paths() {
+    let undeclared = load_eval(
+        &eval_manifest(&["README.md", "config/bundle.json"]),
+        eval_config(json!(["./cases/one.json"])),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{undeclared:#}").contains("undeclared pack sidecar: config/cases/one.json"),
+        "{undeclared:#}"
+    );
+
+    let manifest = eval_manifest(&[
+        "README.md",
+        "config/bundle.json",
+        "config/cases/one.json",
+        "config/cases/bad.json",
+    ]);
+    for path in [
+        "./../escape.json",
+        "./cases/../../escape.json",
+        "cases/one.json",
+    ] {
+        let error = load_eval(&manifest, eval_config(json!([path]))).unwrap_err();
+        assert!(
+            !format!("{error:#}").contains("unexpected asset"),
+            "the reader must not receive {path}: {error:#}"
+        );
+    }
+    let malformed = load_eval(&manifest, eval_config(json!(["./cases/bad.json"]))).unwrap_err();
+    assert!(
+        format!("{malformed:#}").contains("./cases/bad.json is not one EvalCase"),
+        "{malformed:#}"
+    );
+}
+
 #[test]
 fn skill_instructions_load_from_a_literal_sidecar() {
     let config = load(

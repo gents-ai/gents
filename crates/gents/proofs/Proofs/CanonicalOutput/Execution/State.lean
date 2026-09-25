@@ -31,6 +31,8 @@ structure PhysicalRequestAdmission where
   session : SessionId
   requester : Option Nat
   authenticated : Bool
+  subagentDepth : Nat := 0
+  workspace : Option DelegatedWorkspace := none
   deriving DecidableEq, Repr
 
 structure GoalChildReceipt where
@@ -147,6 +149,10 @@ structure World where
   /-- Authenticated coordinator principal supplied by existing DID/ACP ownership
   at the local gate. It is not inferred from a source or remote target. -/
   principal : Nat
+  /-- Current accepted physical request depth, read from its owner at publication. -/
+  subagentDepth : Nat := 0
+  /-- Parent workspace stamp from the same authenticated request owner. -/
+  workspace : Option DelegatedWorkspace := none
   /-- Exact `(physical tool document, remote target, selected behavior)` subset projected from the
   existing configured routing owner for the turn being accepted. Local calls
   are absent. This is an authenticated owner snapshot, not caller-created ACP. -/

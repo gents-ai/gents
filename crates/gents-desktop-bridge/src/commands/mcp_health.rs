@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
@@ -60,13 +60,9 @@ pub(crate) async fn load_mcp_services_with_health_for_agent(
         }}"#
     );
 
-    let response = core.node().execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "list_mcp_services_with_health query failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(&core.node(), &query, "list_mcp_services_with_health query")
+            .await?;
 
     let raw = response
         .data
@@ -229,13 +225,9 @@ async fn load_registry_entry(
             }}
         }}"#
     );
-    let response = core.node().execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "probe_mcp_service registry query failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(&core.node(), &query, "probe_mcp_service registry query")
+            .await?;
     let row = response
         .data
         .as_ref()

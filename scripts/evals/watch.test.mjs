@@ -12,7 +12,7 @@ import {
 } from "./watch.mjs";
 import { summarizeUsage, renderUsage } from "./usage.mjs";
 
-test("stage usage preserves partial coverage, model isolation and repeated input", () => {
+test("stage usage preserves partial coverage, target isolation and repeated input", () => {
   const stages = stageUsageFromEvidence([
     {
       name: "preview-inference.json",
@@ -42,10 +42,10 @@ test("stage usage preserves partial coverage, model isolation and repeated input
   const result = summarizeUsage({
     directory: "/test",
     trials: [
-      { model: "one", trial: 1, stageUsage: stages },
-      { model: "one", trial: 2, stageUsage: stages },
-      { model: "two", trial: 1, stageUsage: stages },
-      { model: "one", trial: 3 },
+      { target: "one", trial: 1, stageUsage: stages },
+      { target: "one", trial: 2, stageUsage: stages },
+      { target: "two", trial: 1, stageUsage: stages },
+      { target: "one", trial: 3 },
     ],
   });
   assert.equal(result.stages.length, 4);
@@ -101,7 +101,12 @@ test("usage counts saved calls once and distinguishes unknown tokens from zero",
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "gents-watch-test-"));
-  const evidence = join(directory, "trials", "model-001-trial-001", "evidence");
+  const evidence = join(
+    directory,
+    "trials",
+    "target-001-trial-001",
+    "evidence",
+  );
   await mkdir(evidence, { recursive: true });
   await writeFile(
     join(directory, "execution.json"),
@@ -114,12 +119,18 @@ async function fixture() {
   await writeFile(
     join(directory, "report.json"),
     JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       updated_at: "2026-09-16T00:00:00Z",
-      models: ["model"],
+      targets: [
+        {
+          name: "target",
+          model: "model",
+          endpoint: "http://inference.test/v1",
+        },
+      ],
       planned: 2,
       unfinished: 2,
-      runs_per_model: 2,
+      runs_per_target: 2,
       concurrency: 1,
       stage_timeout_secs: 1800,
       summaries: [

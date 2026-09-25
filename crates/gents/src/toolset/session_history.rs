@@ -13,7 +13,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 
@@ -149,10 +149,9 @@ pub async fn load_request_context_observation(
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{
+    let response = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did))).await;
-    crate::graphql::ensure_no_errors(&response, "context request ownership")?;
+    }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did)), "context request ownership").await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .data
@@ -195,8 +194,7 @@ pub async fn load_pinned_request_context_observation(
         owner.session_id.as_deref().unwrap(),
         owner.requester_did.as_deref(),
     );
-    let selected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id))).await;
-    crate::graphql::ensure_no_errors(&selected, "physical context request ownership")?;
+    let selected = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id)), "physical context request ownership").await?;
     let rows = selected
         .data
         .as_ref()
@@ -208,8 +206,9 @@ pub async fn load_pinned_request_context_observation(
         [row] if row["_docID"].as_str() == Some(doc) => {}
         _ => bail!("invalid physical context request identity"),
     }
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ InferenceCall(filter: {{
         agent_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
     }}, order: [{{queued_at: DESC}}, {{call_seq: DESC}}, {{call_id: DESC}}], limit: 1) {{
@@ -217,9 +216,10 @@ pub async fn load_pinned_request_context_observation(
     }} }}"#,
             escape_graphql_string(agent_did),
             escape_graphql_string(&doc)
-        ))
-        .await;
-    crate::graphql::ensure_no_errors(&response, "live context observation")?;
+        ),
+        "live context observation",
+    )
+    .await?;
     let calls: InvestigationCallsEnvelope =
         decode(response.data.as_ref(), "live context observation")?;
     Ok(
@@ -252,16 +252,18 @@ pub async fn load_session_inference_observation(
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ AgentRequest(filter: {{
         agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
     }}) {{_docID request_id}} }}"#,
             escape_graphql_string(agent_did),
             escape_graphql_string(session_id)
-        ))
-        .await;
-    crate::graphql::ensure_no_errors(&response, "session accounting ownership")?;
+        ),
+        "session accounting ownership",
+    )
+    .await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .data
@@ -280,10 +282,12 @@ pub async fn load_session_inference_observation(
     // Bounded predicates, without truncating session history or ever
     // interpolating an empty list literal into a database operation.
     for batch in ids.chunks(128) {
-        let response = node
-            .execute(&session_investigation_calls_query(agent_did, batch))
-            .await;
-        crate::graphql::ensure_no_errors(&response, "session inference observations")?;
+        let response = graphql_with_transaction_retry(
+            node,
+            &session_investigation_calls_query(agent_did, batch),
+            "session inference observations",
+        )
+        .await?;
         let calls: InvestigationCallsEnvelope =
             decode(response.data.as_ref(), "session inference observations")?;
         rows.extend(calls.inference_calls);
@@ -600,25 +604,24 @@ pub async fn load_session_history_snapshot(
     }
 
     let limit = clamp_limit(limit);
-    let resp = node.execute(&request_scan_query(agent_did)).await;
-    if resp.has_errors() {
-        bail!(
-            "loading session history request scan failed: {:?}",
-            resp.errors
-        );
-    }
+    let resp = graphql_with_transaction_retry(
+        node,
+        &request_scan_query(agent_did),
+        "loading session history request scan",
+    )
+    .await?;
     let envelope: RequestScanEnvelope = decode(resp.data.as_ref(), "session history request scan")?;
     let session_ids = recent_session_ids(&envelope.requests, limit);
 
     let sessions = if session_ids.is_empty() {
         Vec::new()
     } else {
-        let resp = node
-            .execute(&session_detail_query(agent_did, &session_ids))
-            .await;
-        if resp.has_errors() {
-            bail!("loading session history details failed: {:?}", resp.errors);
-        }
+        let resp = graphql_with_transaction_retry(
+            node,
+            &session_detail_query(agent_did, &session_ids),
+            "loading session history details",
+        )
+        .await?;
         let envelope: SessionDetailEnvelope =
             decode(resp.data.as_ref(), "session history details")?;
         build_session_rows(&session_ids, envelope)
@@ -643,15 +646,12 @@ pub async fn load_session_investigation(
         bail!("sessions get requires a running agent DID and non-empty session_id");
     }
 
-    let response = node
-        .execute(&session_investigation_query(agent_did, session_id))
-        .await;
-    if response.has_errors() {
-        bail!(
-            "loading session investigation failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &session_investigation_query(agent_did, session_id),
+        "loading session investigation",
+    )
+    .await?;
     let envelope: InvestigationEnvelope = decode(response.data.as_ref(), "session investigation")?;
     if envelope.requests.is_empty() {
         bail!("session '{session_id}' has no requests owned by this agent");
@@ -665,18 +665,12 @@ pub async fn load_session_investigation(
     if request_doc_ids.len() != envelope.requests.len() {
         bail!("session investigation contains a request without a physical document ID");
     }
-    let response = node
-        .execute(&session_investigation_calls_query(
-            agent_did,
-            &request_doc_ids,
-        ))
-        .await;
-    if response.has_errors() {
-        bail!(
-            "loading session investigation calls failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &session_investigation_calls_query(agent_did, &request_doc_ids),
+        "loading session investigation calls",
+    )
+    .await?;
     let calls: InvestigationCallsEnvelope =
         decode(response.data.as_ref(), "session investigation calls")?;
 

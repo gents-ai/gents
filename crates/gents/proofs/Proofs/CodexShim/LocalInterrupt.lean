@@ -4,7 +4,6 @@ namespace CodexShim
 
 def interruptibleRequestState : RequestState → Prop
   | .processing => True
-  | .inputRequired => True
   | _ => False
 
 instance (s : RequestState) : Decidable (interruptibleRequestState s) := by

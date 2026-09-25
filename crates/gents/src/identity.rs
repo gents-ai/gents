@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{anyhow, Context, Result};
@@ -7,6 +7,10 @@ use async_trait::async_trait;
 use crypto::Key;
 use defra_core::signing::{RemoteSigner, SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
+
+mod file_key;
+
+pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {
@@ -73,7 +77,26 @@ impl KeyIdentity {
         key_path: impl Into<PathBuf>,
         service_account: Option<ServiceAccount>,
     ) -> Result<Self> {
-        let identity = Arc::new(load_or_create_identity(&key_path.into())?);
+        Self::from_raw_identity(
+            load_or_create_file_identity(&key_path.into())?,
+            service_account,
+        )
+    }
+
+    /// Opens only an existing validated key; initialized homes must not mint a
+    /// replacement identity when their recorded key disappears.
+    pub fn load_existing(
+        key_path: impl Into<PathBuf>,
+        service_account: Option<ServiceAccount>,
+    ) -> Result<Self> {
+        Self::from_raw_identity(load_file_identity(&key_path.into())?, service_account)
+    }
+
+    fn from_raw_identity(
+        identity: RawIdentity,
+        service_account: Option<ServiceAccount>,
+    ) -> Result<Self> {
+        let identity = Arc::new(identity);
         let did = identity.did().map_err(anyhow::Error::from)?.to_string();
         let public_key_bytes = identity.public_key_bytes();
         register_public_key(&did, identity.key_type(), public_key_bytes.clone());
@@ -642,31 +665,6 @@ fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypt
         other => anyhow::bail!(
             "registered identity key type {other} cannot be used as a gents runtime identity"
         ),
-    }
-}
-
-fn load_or_create_identity(path: &Path) -> Result<RawIdentity> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-
-    match std::fs::read(path) {
-        Ok(bytes) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &bytes)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("loading identity from {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
-            let bytes = private_key.raw();
-            std::fs::write(path, &bytes)
-                .with_context(|| format!("persisting identity key to {}", path.display()))?;
-            RawIdentity::from_private_key(private_key)
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("constructing identity from {}", path.display()))
-        }
-        Err(error) => {
-            Err(anyhow::Error::from(error)).with_context(|| format!("reading {}", path.display()))
-        }
     }
 }
 

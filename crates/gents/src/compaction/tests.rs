@@ -172,6 +172,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
         output_obligation_gate: None,
@@ -599,11 +600,12 @@ fn summary_schema_contains_only_the_model_authored_contract() {
 }
 
 #[tokio::test]
-#[ignore = "hits a live OpenAI-compatible endpoint; set GENTS_TEST_INFERENCE_URL"]
+#[ignore = "hits a live OpenAI-compatible endpoint; set GENTS_TEST_INFERENCE_URL and GENTS_TEST_MODEL"]
 async fn live_compaction_uses_rig_structured_output_end_to_end() {
     let endpoint = std::env::var("GENTS_TEST_INFERENCE_URL")
         .expect("set GENTS_TEST_INFERENCE_URL, including the /v1 suffix");
-    let model_name = std::env::var("GENTS_TEST_MODEL").unwrap_or_else(|_| "d4f".to_string());
+    let model_name =
+        std::env::var("GENTS_TEST_MODEL").expect("set GENTS_TEST_MODEL to the served model ID");
     let context_window = std::env::var("GENTS_TEST_COMPACTION_CONTEXT_WINDOW")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -1623,6 +1625,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
         output_obligation_gate: None,
@@ -2325,12 +2328,22 @@ fn strip_marks_already_truncated_output_without_sniffing_the_word() {
         "ordinary output mentioning the word must not be flagged as truncated"
     );
 
-    let messages = vec![
-        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
-        tool_result_msg("call-1", "output\n[Full output: DefraDB doc bafy123]"),
-    ];
-    let (stripped, _) = strip_tool_results(messages);
-    assert!(sole_tool_result_text(&stripped[1]).contains(", truncated"));
+    for notice in [
+        "output\n\n[Showing lines 1-2 of 90 (4000 bytes total)]",
+        "{\"results\":[\n\n[Showing first 51200 of 53000 bytes]",
+        "[Showing last 51200 of 53000 bytes]\n\n]}",
+        "[Output omitted: byte limit is zero (53000 bytes total)]",
+    ] {
+        let messages = vec![
+            tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+            tool_result_msg("call-1", notice),
+        ];
+        let (stripped, _) = strip_tool_results(messages);
+        assert!(
+            sole_tool_result_text(&stripped[1]).contains(", truncated"),
+            "{notice}"
+        );
+    }
 }
 
 #[test]
@@ -2788,6 +2801,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
         output_obligation_gate: None,

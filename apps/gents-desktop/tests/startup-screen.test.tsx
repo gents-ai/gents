@@ -99,38 +99,6 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
-  it("requires explicit acknowledgement of the exact managed home before reset", async () => {
-    const reset = vi.fn(async () => undefined);
-    render(
-      <StartupScreen
-        error="legacy Lark store"
-        managedServerReset={{
-          managedHome: "/Users/test/.gents",
-          dataPath: "/Users/test/.gents/data",
-          confirmation: "RESET /Users/test/.gents AND ARCHIVE LOCAL HISTORY",
-          consequence:
-            "Existing local conversations and configuration will be archived and not imported.",
-          completed: false,
-          backupPath: null,
-          archivedPaths: [],
-        }}
-        onResetManagedServer={reset}
-        onRetry={vi.fn(async () => undefined)}
-        phase="managed-server-error"
-      />,
-    );
-
-    const action = screen.getByTestId("managed-server-reset");
-    expect(action).toBeDisabled();
-    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "/Users/test/.gents/data",
-    );
-    await userEvent.click(screen.getByTestId("managed-server-reset-confirmation"));
-    expect(action).toBeEnabled();
-    await userEvent.click(action);
-    expect(reset).toHaveBeenCalledOnce();
-  });
-
   it("names local-agent observation instead of misreporting a configuration read", async () => {
     const status = deferred<{
       state: "disabled";
@@ -297,6 +265,110 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(startDesktopClient).not.toHaveBeenCalled();
+  });
+
+  it("offers the local agent instead of waiting on a client autostart declined", async () => {
+    const stopped = {
+      state: "stopped" as const,
+      autoStart: false,
+      agentName: "Forge",
+      agentDid: null,
+      graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
+      error: null,
+    };
+    const localOnly: DesktopClientSnapshot = {
+      bootstrap: {
+        ...bootstrap,
+        clientStateExists: false,
+        savedPeers: [{ ...savedPeer, source: "local-standard" }],
+      },
+      client: null,
+    };
+    const startDesktopClient = vi.fn(async () => snapshot(true, true));
+    const base = bridge(
+      vi.fn(async () => localOnly),
+      startDesktopClient,
+    );
+    render(
+      <App
+        bridge={{
+          ...base,
+          supportsManagedServer: true,
+          api: {
+            ...base.api,
+            managedServerStatus: vi.fn(async () => stopped),
+            startManagedServer: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Starting the secure client/)).not.toBeInTheDocument();
+    expect(screen.getByText("Local agent")).toBeInTheDocument();
+    expect(screen.getByTestId("setup-next")).toBeInTheDocument();
+    expect(startDesktopClient).not.toHaveBeenCalled();
+  });
+
+  it("starts the client for a local peer whose runtime is serving", async () => {
+    const running = {
+      state: "running" as const,
+      autoStart: true,
+      agentName: "Forge",
+      agentDid: null,
+      graphql: null,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: true,
+      error: null,
+    };
+    const started = deferred<DesktopClientSnapshot>();
+    const localOnly: DesktopClientSnapshot = {
+      bootstrap: {
+        ...bootstrap,
+        clientStateExists: false,
+        savedPeers: [{ ...savedPeer, source: "local-standard" }],
+      },
+      client: null,
+    };
+    const startDesktopClient = vi.fn(() => started.promise);
+    const base = bridge(
+      vi
+        .fn()
+        .mockResolvedValueOnce(localOnly)
+        .mockImplementation(() => started.promise),
+      startDesktopClient,
+    );
+    render(
+      <App
+        bridge={{
+          ...base,
+          supportsManagedServer: true,
+          api: {
+            ...base.api,
+            managedServerStatus: vi.fn(async () => running),
+            startManagedServer: vi.fn(),
+          },
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(startDesktopClient).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "Starting the secure client",
+    );
+    started.resolve(snapshot(true, true));
+    await waitFor(() => {
+      expect(screen.queryByTestId("startup-screen")).not.toBeInTheDocument();
+    });
   });
 
   it("offers a retry when reading saved configuration fails", async () => {

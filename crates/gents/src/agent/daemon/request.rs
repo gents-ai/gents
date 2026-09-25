@@ -57,6 +57,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) async fn handle_request(
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        stream_writer: &crate::streaming::DefraStreamWriter,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
@@ -438,7 +439,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
             let response_behavior_id = lifecycle.behavior_id().to_string();
             lifecycle
-                .begin_owned_execution(&self.stream_writer)
+                .begin_owned_execution(stream_writer)
                 .instrument(tracing::info_span!(
                     "request.begin_response",
                     request_id = %request.request_id,
@@ -459,6 +460,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     &doc_id,
                     &built.messages,
                     lifecycle,
+                    stream_writer,
                     &mut shutdown,
                     &mut interrupt_rx,
                     &request_token,

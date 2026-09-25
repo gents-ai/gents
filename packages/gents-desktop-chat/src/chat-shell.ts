@@ -29,8 +29,6 @@ export function requestProgressPresentation(
       return { label: "Claimed", animated: true };
     case "processing":
       return { label: "Working", animated: true };
-    case "inputRequired":
-      return { label: "Waiting for input", animated: false };
     case "completed":
       return { label: "Completed", animated: false };
     case "failed":

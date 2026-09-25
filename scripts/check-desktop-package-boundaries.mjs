@@ -149,27 +149,6 @@ for (const app of [
   checkInternalVersions(manifest, app);
 }
 
-const clientSourcePath = join(
-  root,
-  "packages/gents-desktop-client/src/client.ts",
-);
-const clientSource = readFileSync(clientSourcePath, "utf8");
-const fingerprintPath = join(
-  root,
-  "packages/gents-desktop-client/src/generated/BridgeContractFingerprint.ts",
-);
-const clientPackageVersion = readFileSync(fingerprintPath, "utf8").match(
-  /export const BRIDGE_PACKAGE_VERSION = "([^"]+)";/,
-)?.[1];
-if (!/export const PACKAGE_VERSION = BRIDGE_PACKAGE_VERSION;/.test(clientSource)) {
-  failures.push(`${relative(root, clientSourcePath)} must use the generated bridge package version`);
-}
-if (clientPackageVersion !== workspaceVersion) {
-  failures.push(
-    `${relative(root, clientSourcePath)} PACKAGE_VERSION ${clientPackageVersion ?? "<missing>"} != ${workspaceVersion}`,
-  );
-}
-
 for (const configPath of [
   "apps/gents-desktop/src-tauri/tauri.conf.json",
   "apps/fixture-host/src-tauri/tauri.conf.json",
@@ -514,12 +493,19 @@ const syncProjectorPath = join(
 const syncProjector = readFileSync(syncProjectorPath, "utf8");
 if (
   !syncProjector.includes(
-    'export type SyncHealthStateName = "healthy" | "syncing" | "offline" | "failed";',
+    [
+      "export type SyncHealthStateName =",
+      '  | "healthy"',
+      '  | "syncing"',
+      '  | "offline"',
+      '  | "failed"',
+      '  | "incompatible";',
+    ].join("\n"),
   ) ||
   !syncProjector.includes("export function projectSyncOperationalStatus(")
 ) {
   failures.push(
-    "gents-desktop-client must own the exact four-state sync projection",
+    "gents-desktop-client must own the exact five-state sync projection",
   );
 }
 for (const sourceRoot of [

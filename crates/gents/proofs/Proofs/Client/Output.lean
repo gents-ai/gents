@@ -28,7 +28,7 @@ def outputMissing : StreamingResponse.View → Bool
   | _ => false
 
 def activeRequestState : RequestState → Bool
-  | .claimed | .processing | .inputRequired => true
+  | .claimed | .processing => true
   | _ => false
 
 theorem active_request_projects_running {attempt : AttemptView}

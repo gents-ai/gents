@@ -162,6 +162,16 @@ impl ConfigReferences {
                     doc.default_behavior_id.as_deref(),
                     "default_behavior_id",
                 )?;
+                if let Some(default) = doc.default_behavior_id.as_deref() {
+                    let behavior: AgentBehavior =
+                        decode(&self.documents[&(Collection::AgentBehavior, default.to_owned())])?;
+                    ensure!(
+                        behavior.enabled,
+                        "AgentBehavior {default:?} is the default behavior of {} and must be \
+                         enabled; enable it or choose another default first",
+                        self.agent_did
+                    );
+                }
             }
             Collection::AgentBehavior => {
                 let doc: AgentBehavior = decode(value)?;
@@ -432,6 +442,9 @@ impl ConfigReferences {
             Collection::EventSource => decode::<EventSource>(value)?.validate()?,
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
+            // Check names resolve against the builtin registry at run time, not
+            // against configuration documents; there are no outgoing references.
+            Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
             // Skill tool_refs name tools, not config documents. Schema names,
             // ACP policy IDs, hook commands and tags keep their existing owners.
             Collection::Skill | Collection::CallbackModule | Collection::GraphDefinition => {}

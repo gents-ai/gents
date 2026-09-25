@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -11,17 +12,22 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
-  ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
-import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import {
   projectStartupPhaseAfterSnapshot,
+  shouldAutoStartDesktopClient,
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
-import { ownsAutomaticRecovery } from "../lib/shellPlatform";
+import {
+  ManagedServerStartupError,
+  observeManagedServerOperation,
+  type ManagedServerWait,
+} from "../lib/managedServerStartup";
+import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
+import { useIncompatibleHome } from "./useIncompatibleHome";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -45,6 +51,13 @@ export function useDesktopClientLifecycle({
 }: ClientLifecycleOptions) {
   const autostartAttempted = useRef(false);
   const localServerAvailable = useRef<boolean | null>(null);
+  const clientAutostarts = useCallback(
+    (next: DesktopClientSnapshot) =>
+      shouldAutoStartDesktopClient(next, localServerAvailable.current, {
+        mobile: isMobileTauriShell(),
+      }),
+    [],
+  );
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
@@ -68,8 +81,38 @@ export function useDesktopClientLifecycle({
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [managedServerReset, setManagedServerReset] =
-    useState<ManagedServerResetResult | null>(null);
+  const [managedServerWait, setManagedServerWait] = useState<ManagedServerWait | null>(
+    null,
+  );
+  const managedServerWaitAbort = useRef<AbortController | null>(null);
+  const [managedServerFailure, setManagedServerFailure] =
+    useState<ManagedServerStartupError | null>(null);
+  const [startupDiagnosticsHint, setStartupDiagnosticsHint] = useState<string | null>(
+    null,
+  );
+  const managedServerFailed = startupPhase === "managed-server-error";
+
+  // A managed-server failure precedes the first snapshot read; later startup
+  // errors already have one. The bootstrap summary of a client-less snapshot
+  // names where the logs are, and is read here without publishing it.
+  useEffect(() => {
+    if (!managedServerFailed || startupDiagnosticsHint || snapshot) return;
+    let current = true;
+    Promise.resolve()
+      .then(() => api.fetchDesktopSnapshot())
+      .then((next) => {
+        if (current) setStartupDiagnosticsHint(next.bootstrap.diagnosticsHint || null);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [api, managedServerFailed, startupDiagnosticsHint, snapshot]);
+  const incompatibleHome = useIncompatibleHome({
+    api,
+    setError,
+    startFresh: () => initializeDesktop(),
+  });
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -80,7 +123,7 @@ export function useDesktopClientLifecycle({
     const phase = projectStartupPhaseAfterSnapshot(
       startupPhaseRef.current,
       Boolean(next.client),
-      !next.bootstrap.clientStateExists && next.bootstrap.savedPeers.length === 0,
+      !clientAutostarts(next),
     );
     if (phase !== startupPhaseRef.current) setStartupPhase(phase);
   }
@@ -130,6 +173,7 @@ export function useDesktopClientLifecycle({
           if (startupPhaseRef.current === "starting-client") {
             setStartupPhase("client-error");
           }
+          await incompatibleHome.adopt(error);
         }
         throw error;
       } finally {
@@ -155,27 +199,27 @@ export function useDesktopClientLifecycle({
       autostartAttempted.current = false;
       if (supportsManagedServer && ownsAutomaticRecovery()) {
         setStartupPhase("checking-managed-server");
+        const abort = new AbortController();
+        managedServerWaitAbort.current = abort;
+        setManagedServerFailure(null);
         try {
-          localServerAvailable.current = await restoreManagedServer(api);
+          localServerAvailable.current = await restoreManagedServer(api, {
+            onWait: setManagedServerWait,
+            signal: abort.signal,
+          });
         } catch (error) {
           // A legacy or broken ~/.gents must not block first-run setup or
           // already-saved remote peers. Surface the error after the shell is up.
           localServerAvailable.current = false;
-          setError(String(error));
-          if (
-            error instanceof BridgeInvokeError &&
-            error.code === "incompatibleLocalStore" &&
-            api.resetManagedServer
-          ) {
-            try {
-              setManagedServerReset(await api.resetManagedServer());
-              setStartupPhase("managed-server-error");
-              return;
-            } catch (previewError) {
-              setError(
-                `${String(error)} Reset inspection failed: ${String(previewError)}`,
-              );
-            }
+          setError(error instanceof Error ? error.message : String(error));
+          if (await incompatibleHome.adopt(error)) {
+            setStartupPhase("managed-server-error");
+            return;
+          }
+          if (error instanceof ManagedServerStartupError) {
+            setManagedServerFailure(error);
+            setStartupPhase("managed-server-error");
+            return;
           }
         }
       }
@@ -190,27 +234,49 @@ export function useDesktopClientLifecycle({
     return pending;
   }
 
-  async function onRetryStartup() {
-    await initializeDesktop();
+  function onSkipManagedServerWait() {
+    if (initializationInFlight.current) {
+      managedServerWaitAbort.current?.abort();
+      return;
+    }
+    localServerAvailable.current = false;
+    setManagedServerFailure(null);
+    setError(null);
+    setStartupPhase("loading-configuration");
+    void refreshSnapshot();
   }
 
-  async function onResetManagedServer() {
-    if (!managedServerReset || !api.resetManagedServer) return;
+  async function onRestartManagedServer() {
+    const status = managedServerFailure?.status;
+    if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
+      return;
+    const restartManagedServer = api.restartManagedServer;
+    const agentName = status.agentName;
+    const authority = {
+      toolCeiling: status.effectiveToolCeiling,
+      toolRoot: status.effectiveToolRoot,
+    };
     setStarting(true);
     setError(null);
+    setStartupPhase("checking-managed-server");
     try {
-      const result = await api.resetManagedServer(managedServerReset.confirmation);
-      if (!result.completed || !result.backupPath) {
-        throw new Error("managed server reset did not create a backup");
-      }
-      setManagedServerReset(null);
+      await observeManagedServerOperation(
+        api,
+        () => restartManagedServer(agentName, authority),
+        setManagedServerWait,
+      );
       await initializeDesktop();
     } catch (error) {
-      setError(String(error));
+      setError(error instanceof Error ? error.message : String(error));
       setStartupPhase("managed-server-error");
+      await incompatibleHome.adopt(error);
     } finally {
       setStarting(false);
     }
+  }
+
+  async function onRetryStartup() {
+    await initializeDesktop();
   }
 
   useEffect(() => {
@@ -256,6 +322,7 @@ export function useDesktopClientLifecycle({
       logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);
       if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
         setError(`desktop client restart failed after ${reason}: ${String(error)}`);
+        await incompatibleHome.adopt(error);
       }
     } finally {
       setStopping(false);
@@ -266,7 +333,7 @@ export function useDesktopClientLifecycle({
 
   return {
     autostartAttempted,
-    localServerAvailable,
+    clientAutostarts,
     autoRestartInFlight,
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
@@ -281,8 +348,16 @@ export function useDesktopClientLifecycle({
     ensureDesktopClientStarted,
     onStartClient,
     onRetryStartup,
-    onResetManagedServer,
-    managedServerReset,
+    incompatibleHome,
+    managedServerWait,
+    diagnosticsHint: snapshot?.bootstrap.diagnosticsHint || startupDiagnosticsHint,
+    onSkipManagedServerWait,
+    canRestartManagedServer: Boolean(
+      managedServerFailure?.status.agentName &&
+      managedServerFailure.status.effectiveToolCeiling &&
+      api.restartManagedServer,
+    ),
+    onRestartManagedServer,
     restartDesktopClient,
   };
 }

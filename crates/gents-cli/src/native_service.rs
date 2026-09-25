@@ -15,6 +15,58 @@ use anyhow::{bail, Context, Result};
 
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
+/// Exit status of `gents` when it refuses to open a store this build cannot
+/// read (`gents::storage_backend::IncompatibleStore`). Supervisors and the
+/// desktop read it from the exit record to tell that refusal apart from a
+/// crash; systemd does not restart it. It is sysexits `EX_DATAERR`.
+pub const INCOMPATIBLE_STORE_EXIT_CODE: i32 = 65;
+/// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for a store another (possibly
+/// newer) build extended rather than an older one (sysexits `EX_NOUSER`, an
+/// otherwise unused status here).
+pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
+/// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for an identity key an older build
+/// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
+pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
+
+/// The exit status `gents` uses when it refuses a store of `kind`.
+pub fn incompatible_store_exit_code(kind: gents::storage_backend::IncompatibleStoreKind) -> i32 {
+    use gents::storage_backend::IncompatibleStoreKind;
+    match kind {
+        IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
+        IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
+        _ => INCOMPATIBLE_STORE_EXIT_CODE,
+    }
+}
+pub const BACKGROUND_APPROVAL_REQUIRED: &str = "macOS has not allowed Gents to run in the background. Approve Gents in System Settings > General > Login Items & Extensions, then start it again.";
+
+/// A start that macOS refused because the background item is not approved.
+/// Callers wait for approval and start again instead of failing. `detail` is
+/// launchd's refusal, when there was one.
+#[derive(Debug)]
+pub struct BackgroundApprovalPending {
+    pub detail: String,
+}
+
+impl std::fmt::Display for BackgroundApprovalPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(BACKGROUND_APPROVAL_REQUIRED)
+    }
+}
+
+impl std::error::Error for BackgroundApprovalPending {}
+
+/// macOS Background Task Management's record of the service definition
+/// (`SMAppService.statusForLegacyURL:`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BackgroundItemStatus {
+    /// Not macOS, or this macOS has no Background Task Management API.
+    #[default]
+    Unavailable,
+    NotRegistered,
+    Enabled,
+    RequiresApproval,
+    NotFound,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeServicePlatform {
@@ -49,6 +101,10 @@ pub struct NativeServiceConfig {
     /// Desktop bundle that owns this agent. macOS Login Items otherwise
     /// names the background item after the code-signing identity.
     pub associated_bundle_id: Option<String>,
+    /// Where the service manager appends the runtime's stderr. With the
+    /// native log sink enabled that holds only what precedes or escapes
+    /// tracing: argument errors, the exit error and panics.
+    pub stderr_path: Option<PathBuf>,
 }
 
 impl NativeServiceConfig {
@@ -90,6 +146,7 @@ impl NativeServiceConfig {
                 std::env::var_os("APPIMAGE").as_deref().map(Path::new),
             ),
             associated_bundle_id: None,
+            stderr_path: None,
         })
     }
 
@@ -170,6 +227,13 @@ pub struct NativeServiceStatus {
     /// macOS this includes loaded jobs that exited and are awaiting respawn.
     pub job_loaded: bool,
     pub enabled: bool,
+    /// macOS Background Task Management blocks the job until the user allows
+    /// it under Login Items.
+    pub requires_approval: bool,
+    pub background_item: BackgroundItemStatus,
+    /// The supervisor gave up on the job: a systemd unit in its terminal
+    /// `failed` state. It is not loaded, and `last_exit` names the cause.
+    pub failed: bool,
     pub detail: Option<String>,
 }
 
@@ -178,10 +242,29 @@ impl NativeServiceStatus {
         self.job_loaded
     }
 
+    /// Whether macOS still withholds approval. After launchd refused a start
+    /// with [`BackgroundApprovalPending`], a fresh item that Background Task
+    /// Management has not registered (or cannot find) is pending too: it only
+    /// reports `RequiresApproval` or `Enabled` once the user acts on it.
+    pub fn approval_pending(&self, start_refused: bool) -> bool {
+        self.requires_approval
+            || (start_refused
+                && !self.job_loaded
+                && matches!(
+                    self.background_item,
+                    BackgroundItemStatus::NotRegistered | BackgroundItemStatus::NotFound
+                ))
+    }
+
     pub fn summary(&self) -> String {
         format!(
-            "installed={} running={} job_loaded={} enabled={} (native service state only; runtime health is not checked)",
-            self.installed, self.running, self.job_loaded, self.enabled
+            "installed={} running={} job_loaded={} enabled={} requires_approval={} failed={} (native service state only; runtime health is not checked)",
+            self.installed,
+            self.running,
+            self.job_loaded,
+            self.enabled,
+            self.requires_approval,
+            self.failed
         )
     }
 }
@@ -195,6 +278,10 @@ pub struct CommandOutput {
 
 pub trait CommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput>;
+
+    fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
+        BackgroundItemStatus::Unavailable
+    }
 }
 
 pub struct ProcessCommandRunner;
@@ -256,6 +343,83 @@ impl CommandRunner for ProcessCommandRunner {
             stderr: read_capture(&mut stderr)?,
         })
     }
+
+    #[cfg(target_os = "macos")]
+    fn background_item_status(&self, definition: &Path) -> BackgroundItemStatus {
+        macos_background::item_status(definition)
+    }
+}
+
+/// Opens the Login Items pane where macOS lists background items awaiting
+/// approval.
+pub fn open_background_approval_settings() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if macos_background::open_login_items() {
+            return Ok(());
+        }
+        bail!("this version of macOS cannot open Login Items settings directly")
+    }
+    #[cfg(not(target_os = "macos"))]
+    bail!("background item approval exists only on macOS")
+}
+
+#[cfg(target_os = "macos")]
+mod macos_background {
+    use std::path::Path;
+
+    use super::BackgroundItemStatus;
+    use objc2::rc::autoreleasepool;
+    use objc2::runtime::{AnyClass, Bool};
+    use objc2::{msg_send, sel};
+    use objc2_foundation::{NSString, NSURL};
+
+    #[link(name = "ServiceManagement", kind = "framework")]
+    extern "C" {}
+
+    fn service_class() -> Option<&'static AnyClass> {
+        AnyClass::get(c"SMAppService")
+    }
+
+    fn responds(class: &AnyClass, selector: objc2::runtime::Sel) -> bool {
+        let responds: Bool = unsafe { msg_send![class, respondsToSelector: selector] };
+        responds.as_bool()
+    }
+
+    pub(super) fn item_status(definition: &Path) -> BackgroundItemStatus {
+        let Some(class) = service_class() else {
+            return BackgroundItemStatus::Unavailable;
+        };
+        if !responds(class, sel!(statusForLegacyURL:)) {
+            return BackgroundItemStatus::Unavailable;
+        }
+        autoreleasepool(|_| {
+            let path = NSString::from_str(&definition.to_string_lossy());
+            let url = NSURL::fileURLWithPath(&path);
+            let status: isize = unsafe { msg_send![class, statusForLegacyURL: &*url] };
+            // SMAppServiceStatus values.
+            match status {
+                0 => BackgroundItemStatus::NotRegistered,
+                1 => BackgroundItemStatus::Enabled,
+                2 => BackgroundItemStatus::RequiresApproval,
+                3 => BackgroundItemStatus::NotFound,
+                _ => BackgroundItemStatus::Unavailable,
+            }
+        })
+    }
+
+    pub(super) fn open_login_items() -> bool {
+        let Some(class) = service_class() else {
+            return false;
+        };
+        if !responds(class, sel!(openSystemSettingsLoginItems)) {
+            return false;
+        }
+        autoreleasepool(|_| {
+            let _: () = unsafe { msg_send![class, openSystemSettingsLoginItems] };
+        });
+        true
+    }
 }
 
 fn command_timeout(program: &OsStr, args: &[OsString]) -> Duration {
@@ -315,6 +479,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             .context("native service definition has no parent")?;
         fs::create_dir_all(parent)
             .with_context(|| format!("creating service directory {}", parent.display()))?;
+        self.prepare_stderr_log()?;
         let contents = self.render_definition()?;
         if path.exists() {
             let installed = fs::read(&path)
@@ -367,6 +532,15 @@ impl<R: CommandRunner> NativeServiceManager<R> {
 
     pub fn start(&self, enable_at_login: bool) -> Result<()> {
         self.require_installed()?;
+        self.prepare_stderr_log()?;
+        if self.platform == NativeServicePlatform::Macos
+            && self.background_item() == BackgroundItemStatus::RequiresApproval
+        {
+            return Err(BackgroundApprovalPending {
+                detail: "Background Task Management requires approval".to_string(),
+            }
+            .into());
+        }
         let was_enabled = self.status()?.enabled;
         if enable_at_login {
             self.set_enabled(true)?;
@@ -394,6 +568,21 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                         &["kickstart".into(), target.into()],
                     )?;
                     if !kick.success {
+                        // Only an item Background Task Management has not
+                        // registered can become approved later; the same rule
+                        // as `approval_pending`, so the wait can observe it.
+                        if launchd_refused_bootstrap(&bootstrap)
+                            && matches!(
+                                self.background_item(),
+                                BackgroundItemStatus::NotRegistered
+                                    | BackgroundItemStatus::NotFound
+                            )
+                        {
+                            return Err(BackgroundApprovalPending {
+                                detail: output_detail(&bootstrap),
+                            }
+                            .into());
+                        }
                         bail!(
                             "launchctl could not start Gents: {} (bootstrap: {})",
                             output_detail(&kick),
@@ -420,6 +609,12 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             }
             NativeServicePlatform::Linux => {
                 self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
+                // A unit that hit its start limit refuses `start` until its
+                // failed state is cleared. A unit that is not failed ignores this.
+                self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
+                )?;
                 self.run_checked(
                     "systemctl",
                     &["--user".into(), "start".into(), SYSTEMD_UNIT.into()],
@@ -450,6 +645,12 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     &["--user".into(), "stop".into(), SYSTEMD_UNIT.into()],
                 )?;
                 self.wait_unloaded_or_inactive()?;
+                // A unit that ends `failed` because of this stop was stopped
+                // on purpose; clear it so status does not report a crash.
+                self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
+                )?;
             }
         }
         if disable_at_login && self.config.definition_path(self.platform).exists() {
@@ -486,6 +687,9 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                 running: false,
                 job_loaded: false,
                 enabled: false,
+                requires_approval: false,
+                background_item: BackgroundItemStatus::Unavailable,
+                failed: false,
                 detail: None,
             });
         }
@@ -510,11 +714,15 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     );
                 }
                 let explicitly_disabled = launchd_is_disabled(&disabled.stdout)?;
+                let background_item = self.background_item();
                 Ok(NativeServiceStatus {
                     installed,
                     running: print.success && launchd_is_running(&print.stdout),
                     job_loaded: print.success,
                     enabled: !explicitly_disabled,
+                    requires_approval: background_item == BackgroundItemStatus::RequiresApproval,
+                    background_item,
+                    failed: false,
                     detail: Some(output_detail(&print)),
                 })
             }
@@ -561,10 +769,71 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                         "active" | "activating" | "deactivating" | "reloading"
                     ),
                     enabled: enabled.success && enabled.stdout == "enabled",
+                    requires_approval: false,
+                    background_item: BackgroundItemStatus::Unavailable,
+                    failed: active.stdout == "failed",
                     detail: Some(output_detail(&active)),
                 })
             }
         }
+    }
+
+    /// Why a loaded or failed job is not running: the supervisor's record of
+    /// its last exit. `None` while the process runs or has never exited.
+    pub fn last_exit(&self) -> Result<Option<ServiceExit>> {
+        if !self.config.definition_path(self.platform).is_file() {
+            return Ok(None);
+        }
+        self.require_installed()?;
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
+                let print =
+                    self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                ensure_launchd_print_result(&print)?;
+                Ok(print
+                    .success
+                    .then(|| launchd_exit_failure(&print.stdout))
+                    .flatten())
+            }
+            NativeServicePlatform::Linux => {
+                let show = self.run_allow_failure(
+                    "systemctl",
+                    &[
+                        "--user".into(),
+                        "show".into(),
+                        "--property=ActiveState,SubState,Result,ExecMainStatus,NRestarts".into(),
+                        SYSTEMD_UNIT.into(),
+                    ],
+                )?;
+                if !show.success {
+                    bail!(
+                        "systemctl could not report why Gents stopped: {}",
+                        output_detail(&show)
+                    );
+                }
+                Ok(systemd_exit_failure(&show.stdout))
+            }
+        }
+    }
+
+    /// Whether the installed definition launches an executable other than
+    /// this configuration's, as it does after the application moved.
+    pub fn installed_executable_differs(&self) -> Result<bool> {
+        let path = self.config.definition_path(self.platform);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let definition = fs::read(&path)
+            .with_context(|| format!("reading native service definition {}", path.display()))?;
+        self.ensure_owned_definition(&definition)?;
+        let text =
+            std::str::from_utf8(&definition).context("native service definition is not UTF-8")?;
+        let installed = match self.platform {
+            NativeServicePlatform::Macos => launchd_executable(text)?,
+            NativeServicePlatform::Linux => systemd_executable(text)?,
+        };
+        Ok(Path::new(&installed) != self.config.executable)
     }
 
     pub fn uninstall(&self) -> Result<()> {
@@ -581,6 +850,35 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         if self.platform == NativeServicePlatform::Linux {
             self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
         }
+        Ok(())
+    }
+
+    /// Neither launchd nor systemd creates a missing log directory; systemd
+    /// fails the unit instead. The log can hold paths and error details, so
+    /// only the user can read it.
+    fn prepare_stderr_log(&self) -> Result<()> {
+        let Some(path) = self.config.stderr_path.as_deref() else {
+            return Ok(());
+        };
+        let directory = path.parent().context("service log path has no parent")?;
+        fs::create_dir_all(directory)
+            .with_context(|| format!("creating service log directory {}", directory.display()))?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .with_context(|| format!("creating service log {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).with_context(
+                || format!("restricting service log directory {}", directory.display()),
+            )?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("restricting service log {}", path.display()))?;
+        }
+        #[cfg(not(unix))]
+        drop(file);
         Ok(())
     }
 
@@ -678,6 +976,11 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             .trim()
             .parse()
             .context("parsing current user id")
+    }
+
+    fn background_item(&self) -> BackgroundItemStatus {
+        self.runner
+            .background_item_status(&self.config.definition_path(self.platform))
     }
 
     fn set_macos_enabled(&self, enabled: bool) -> Result<()> {
@@ -781,6 +1084,17 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         .transpose()?
         .unwrap_or_default();
     let environment = format!("\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>");
+    let stderr = config
+        .stderr_path
+        .as_deref()
+        .map(|path| -> Result<String> {
+            Ok(format!(
+                "\n  <key>StandardErrorPath</key><string>{}</string>",
+                xml_path(path, "stderr log")?
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
     // Without this, macOS attributes the LaunchAgent to the signing
     // certificate's personal name instead of the desktop app.
     let associated_bundle = config
@@ -801,7 +1115,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
   <key>Label</key><string>{SERVICE_LABEL}</string>
   <key>ProgramArguments</key><array>
     <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>
-  </array>{environment}{associated_bundle}
+  </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Background</string>
@@ -830,7 +1144,27 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .transpose()?
         .map(|value| format!("Environment={value}\n"))
         .unwrap_or_default();
-    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError=journal\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    let stderr = config
+        .stderr_path
+        .as_deref()
+        .map(systemd_append_target)
+        .transpose()?
+        .unwrap_or_else(|| "journal".to_string());
+    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+}
+
+/// `append:` takes the rest of the line as the path after specifier expansion.
+fn systemd_append_target(path: &Path) -> Result<String> {
+    let path = path
+        .to_str()
+        .context("stderr log path is not valid UTF-8")?;
+    if path
+        .chars()
+        .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
+    {
+        bail!("stderr log path contains an unsupported control character");
+    }
+    Ok(format!("append:{}", path.replace('%', "%%")))
 }
 
 fn xml_path(path: &Path, name: &str) -> Result<String> {
@@ -892,6 +1226,14 @@ fn installed_home(platform: NativeServicePlatform, definition: &[u8]) -> Result<
 }
 
 fn launchd_home(plist: &str) -> Result<String> {
+    launchd_arguments(plist).map(|mut values| values.swap_remove(3))
+}
+
+fn launchd_executable(plist: &str) -> Result<String> {
+    launchd_arguments(plist).map(|mut values| values.swap_remove(0))
+}
+
+fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
     let value = plist::Value::from_reader_xml(std::io::Cursor::new(plist.as_bytes()))
         .context("parsing launchd property list")?;
     let dictionary = value
@@ -918,7 +1260,7 @@ fn launchd_home(plist: &str) -> Result<String> {
     {
         bail!("launchd definition is not a Gents foreground server invocation");
     }
-    Ok(values[3].to_owned())
+    Ok(values.into_iter().map(str::to_owned).collect())
 }
 
 fn systemd_home(unit: &str) -> Result<String> {
@@ -931,6 +1273,17 @@ fn systemd_home(unit: &str) -> Result<String> {
         .split_once(marker)
         .context("systemd definition is not a Gents foreground server invocation")?;
     parse_systemd_quoted(home)
+}
+
+fn systemd_executable(unit: &str) -> Result<String> {
+    let exec = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .context("systemd definition has no ExecStart")?;
+    let (executable, _) = exec
+        .split_once(" \"server\" \"--home\" ")
+        .context("systemd definition is not a Gents foreground server invocation")?;
+    parse_systemd_quoted(executable)
 }
 
 fn parse_systemd_quoted(value: &str) -> Result<String> {
@@ -987,6 +1340,115 @@ fn launchd_is_running(output: &str) -> bool {
             .is_some_and(|pid| pid > 0)
     });
     state_running && has_pid
+}
+
+/// An exit the supervisor recorded, with how many times it has restarted the
+/// job since it was loaded. A clean exit is not restarted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceExit {
+    pub reason: String,
+    pub restarts: u64,
+    pub clean: bool,
+    /// The recorded exit status, when the process exited rather than being
+    /// terminated by a signal.
+    pub code: Option<i32>,
+}
+
+impl ServiceExit {
+    /// The runtime exited because it refused to open its store.
+    pub fn incompatible_store(&self) -> bool {
+        self.refused_store().is_some()
+    }
+
+    /// Which store refusal the exit status reports, if any.
+    pub fn refused_store(&self) -> Option<gents::storage_backend::IncompatibleStoreKind> {
+        match self.code {
+            Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::UnknownLineage)
+            }
+            Some(FOREIGN_STORE_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
+            }
+            Some(INSECURE_KEY_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
+    if launchd_is_running(output) {
+        return None;
+    }
+    let field = |name: &str| {
+        output
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::trim)
+    };
+    let restarts = field("runs = ")
+        .and_then(|runs| runs.parse::<u64>().ok())
+        .unwrap_or_default()
+        .saturating_sub(1);
+    let (reason, clean, status) = if let Some(signal) = field("last terminating signal = ") {
+        (format!("terminated by signal {signal}"), false, None)
+    } else {
+        let code = field("last exit code = ")?;
+        if code.starts_with('(') {
+            return None;
+        }
+        let status = code
+            .split(':')
+            .next()
+            .and_then(|status| status.trim().parse::<i32>().ok());
+        if status == Some(0) {
+            ("exited normally".to_string(), true, status)
+        } else {
+            (format!("exited with code {code}"), false, status)
+        }
+    };
+    Some(ServiceExit {
+        reason,
+        restarts,
+        clean,
+        code: status,
+    })
+}
+
+fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
+    let field = |name: &str| {
+        output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+            .unwrap_or_default()
+    };
+    let (active, sub, result) = (field("ActiveState"), field("SubState"), field("Result"));
+    if active == "active" && sub != "auto-restart" {
+        return None;
+    }
+    if sub != "auto-restart" && (result.is_empty() || result == "success") {
+        return None;
+    }
+    Some(ServiceExit {
+        reason: format!("{result} (exit status {})", field("ExecMainStatus")),
+        restarts: field("NRestarts").parse().unwrap_or_default(),
+        clean: false,
+        code: (result == "exit-code")
+            .then(|| field("ExecMainStatus").parse().ok())
+            .flatten(),
+    })
+}
+
+/// launchd answers `bootstrap` of a background item that Background Task
+/// Management withholds with error 5 (EIO). An already loaded job fails the
+/// same way, so callers also require the job to be absent.
+fn launchd_refused_bootstrap(output: &CommandOutput) -> bool {
+    !output.success
+        && [&output.stderr, &output.stdout]
+            .iter()
+            .any(|text| text.contains("Bootstrap failed: 5:"))
 }
 
 fn launchd_is_disabled(output: &str) -> Result<bool> {
@@ -1116,6 +1578,7 @@ mod tests {
             service_config_dir: root.join("service-config"),
             search_path: Some("/a path/bin:/usr/bin".into()),
             associated_bundle_id: None,
+            stderr_path: None,
         }
     }
 
@@ -1221,6 +1684,111 @@ mod tests {
     }
 
     #[test]
+    fn service_definitions_append_stderr_to_the_configured_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = config(temp.path());
+        assert!(!render_launchd(&config)
+            .unwrap()
+            .contains("StandardErrorPath"));
+        assert!(render_systemd(&config)
+            .unwrap()
+            .contains("StandardError=journal\n"));
+
+        config.stderr_path = Some(temp.path().join("desk & top/logs/100% runtime.log"));
+        let plist = render_launchd(&config).unwrap();
+        assert!(plist.contains(&format!(
+            "<key>StandardErrorPath</key><string>{}</string>",
+            xml_escape(
+                &temp
+                    .path()
+                    .join("desk & top/logs/100% runtime.log")
+                    .to_string_lossy()
+            )
+            .unwrap()
+        )));
+        assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());
+        let unit = render_systemd(&config).unwrap();
+        assert!(unit.contains(&format!(
+            "StandardError=append:{}\n",
+            temp.path()
+                .join("desk & top/logs/100%% runtime.log")
+                .to_string_lossy()
+        )));
+        assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stderr_log_is_recreated_private_before_the_service_starts() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct Refuses;
+        impl CommandRunner for Refuses {
+            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+                bail!("no service manager in this test")
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        let log = temp.path().join("desktop/logs/runtime-errors.log");
+        config.stderr_path = Some(log.clone());
+        let manager = NativeServiceManager::with_runner(
+            config.clone(),
+            NativeServicePlatform::Linux,
+            Refuses,
+        );
+        fs::write(
+            config.definition_path(NativeServicePlatform::Linux),
+            manager.render_definition().unwrap(),
+        )
+        .unwrap();
+        // A desktop reset removed the directory after install.
+        assert!(!log.parent().unwrap().exists());
+
+        assert!(
+            manager.start(false).is_err(),
+            "the fake manager cannot start"
+        );
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(log.parent().unwrap()), 0o700);
+        assert_eq!(mode(&log), 0o600);
+    }
+
+    #[test]
+    fn a_moved_executable_is_detected_in_the_installed_definition() {
+        struct NoCommands;
+        impl CommandRunner for NoCommands {
+            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+                bail!("no service manager in this test")
+            }
+        }
+        for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = config(temp.path());
+            fs::create_dir_all(&config.home).unwrap();
+            fs::create_dir_all(&config.service_config_dir).unwrap();
+            let installed = NativeServiceManager::with_runner(config.clone(), platform, NoCommands);
+            assert!(!installed.installed_executable_differs().unwrap());
+            fs::write(
+                config.definition_path(platform),
+                installed.render_definition().unwrap(),
+            )
+            .unwrap();
+            assert!(!installed.installed_executable_differs().unwrap());
+
+            let mut moved = config.clone();
+            moved.executable = temp.path().join("Applications/gents");
+            let moved = NativeServiceManager::with_runner(moved, platform, NoCommands);
+            assert!(
+                moved.installed_executable_differs().unwrap(),
+                "{platform:?}"
+            );
+        }
+    }
+
+    #[test]
     fn launchd_definition_attributes_a_desktop_agent_to_the_app() {
         let temp = tempfile::tempdir().unwrap();
         let mut config = config(temp.path());
@@ -1239,6 +1807,9 @@ mod tests {
         let unit = render_systemd(&config).unwrap();
         assert!(unit.contains("agent %% $$ home\\\" \\\\ path"));
         assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains(&format!(
+            "RestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}"
+        )));
         assert!(!unit.contains("sh -c"));
         assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
     }
@@ -1314,8 +1885,9 @@ mod tests {
         fs::create_dir_all(&config.home).unwrap();
         fs::write(config.home.join("keep"), b"durable").unwrap();
         let runner = QueueRunner {
-            // install reload+disable, status active+enabled, stop+inactive,
-            // uninstall stop+inactive+disable+reload
+            // install reload+disable, status active+enabled,
+            // stop+inactive+reset-failed,
+            // uninstall stop+inactive+reset-failed+disable+reload
             outputs: Mutex::new(vec![
                 output(true, ""),
                 output(true, ""),
@@ -1324,7 +1896,9 @@ mod tests {
                 output(true, ""),
                 output(false, "inactive"),
                 output(true, ""),
+                output(true, ""),
                 output(false, "inactive"),
+                output(true, ""),
                 output(true, ""),
                 output(true, ""),
             ]),
@@ -1486,6 +2060,314 @@ mod tests {
         );
         assert!(manager.install().is_err());
         assert!(!definition.exists());
+    }
+
+    struct PendingApprovalRunner(Mutex<Vec<CommandOutput>>);
+
+    impl CommandRunner for PendingApprovalRunner {
+        fn run(&self, _: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
+            assert_ne!(
+                args.first().map(OsString::as_os_str),
+                Some(OsStr::new("bootstrap")),
+                "a job awaiting approval must not be bootstrapped"
+            );
+            Ok(self.0.lock().unwrap().remove(0))
+        }
+
+        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
+            BackgroundItemStatus::RequiresApproval
+        }
+    }
+
+    #[test]
+    fn supervisor_exit_records_name_a_crash_loop() {
+        assert_eq!(
+            launchd_exit_failure(
+                "state = not running\nruns = 3\nlast exit code = 78: Function not implemented\n"
+            ),
+            Some(ServiceExit {
+                reason: "exited with code 78: Function not implemented".into(),
+                restarts: 2,
+                clean: false,
+                code: Some(78),
+            })
+        );
+        assert_eq!(
+            launchd_exit_failure(
+                "state = not running\nruns = 1\nlast terminating signal = Killed: 9\n"
+            ),
+            Some(ServiceExit {
+                reason: "terminated by signal Killed: 9".into(),
+                restarts: 0,
+                clean: false,
+                code: None,
+            })
+        );
+        assert!(
+            launchd_exit_failure("state = not running\nlast exit code = (never exited)\n")
+                .is_none()
+        );
+        assert_eq!(
+            launchd_exit_failure("state = not running\nruns = 1\nlast exit code = 0\n"),
+            Some(ServiceExit {
+                reason: "exited normally".into(),
+                restarts: 0,
+                clean: true,
+                code: Some(0),
+            })
+        );
+        assert!(launchd_exit_failure("state = running\npid = 42\nlast exit code = 1\n").is_none());
+
+        assert_eq!(
+            systemd_exit_failure(
+                "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nExecMainStatus=1\nNRestarts=4\n"
+            ),
+            Some(ServiceExit {
+                reason: "exit-code (exit status 1)".into(),
+                restarts: 4,
+                clean: false,
+                code: Some(1),
+            })
+        );
+        let refused = launchd_exit_failure(&format!(
+            "state = not running\nruns = 2\nlast exit code = {INCOMPATIBLE_STORE_EXIT_CODE}: Inappropriate file type or format\n"
+        ))
+        .expect("launchd exit record");
+        assert!(refused.incompatible_store());
+        let refused = systemd_exit_failure(&format!(
+            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INCOMPATIBLE_STORE_EXIT_CODE}\nNRestarts=0\n"
+        ))
+        .expect("systemd exit record");
+        assert!(refused.incompatible_store());
+        assert!(!systemd_exit_failure(
+            "ActiveState=failed\nSubState=failed\nResult=signal\nExecMainStatus=65\nNRestarts=0\n"
+        )
+        .expect("signal exit record")
+        .incompatible_store());
+        let foreign = launchd_exit_failure(&format!(
+            "state = not running\nruns = 1\nlast exit code = {FOREIGN_STORE_EXIT_CODE}: No such user\n"
+        ))
+        .expect("launchd exit record");
+        assert_eq!(
+            foreign.refused_store(),
+            Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
+        );
+        let insecure = systemd_exit_failure(&format!(
+            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INSECURE_KEY_EXIT_CODE}\nNRestarts=0\n"
+        ))
+        .expect("systemd exit record");
+        assert_eq!(
+            insecure.refused_store(),
+            Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
+        );
+        assert_eq!(
+            incompatible_store_exit_code(
+                gents::storage_backend::IncompatibleStoreKind::InsecureKey
+            ),
+            INSECURE_KEY_EXIT_CODE
+        );
+        assert!(systemd_exit_failure(
+            "ActiveState=activating\nSubState=start\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
+        )
+        .is_none());
+        assert!(systemd_exit_failure(
+            "ActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn macos_loaded_job_blocked_by_background_approval_reports_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            PendingApprovalRunner(Mutex::new(vec![
+                command_output(true, "501", ""),
+                command_output(
+                    true,
+                    "state = not running\nlast exit code = 78: Function not implemented",
+                    "",
+                ),
+                command_output(true, "501", ""),
+                command_output(true, "", ""),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.job_loaded);
+        assert!(!status.running);
+        assert!(status.requires_approval);
+    }
+
+    #[test]
+    fn macos_background_approval_is_observed_and_blocks_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            PendingApprovalRunner(Mutex::new(vec![
+                command_output(true, "501", ""),
+                command_output(false, "", "Could not find service"),
+                command_output(true, "501", ""),
+                command_output(true, "", ""),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.requires_approval);
+        assert!(!status.job_loaded);
+
+        let error = manager.start(false).unwrap_err();
+        assert!(error.is::<BackgroundApprovalPending>());
+        assert_eq!(error.to_string(), BACKGROUND_APPROVAL_REQUIRED);
+        assert!(manager.runner.0.lock().unwrap().is_empty());
+    }
+
+    struct ItemStatusRunner {
+        outputs: Mutex<Vec<CommandOutput>>,
+        item: BackgroundItemStatus,
+    }
+
+    impl CommandRunner for ItemStatusRunner {
+        fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+            Ok(self.outputs.lock().unwrap().remove(0))
+        }
+
+        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
+            self.item
+        }
+    }
+
+    fn refused_bootstrap_start(item: BackgroundItemStatus) -> anyhow::Error {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            ItemStatusRunner {
+                outputs: Mutex::new(vec![
+                    command_output(true, "501", ""),
+                    command_output(false, "", "Could not find service"),
+                    command_output(true, "501", ""),
+                    command_output(true, "", ""),
+                    command_output(true, "501", ""),
+                    command_output(true, "501", ""),
+                    command_output(false, "", "Bootstrap failed: 5: Input/output error"),
+                    command_output(false, "", "Could not find service"),
+                ]),
+                item,
+            },
+        );
+        manager.start(false).unwrap_err()
+    }
+
+    #[test]
+    fn a_refused_bootstrap_of_an_unapproved_item_is_pending_approval() {
+        for item in [
+            BackgroundItemStatus::NotRegistered,
+            BackgroundItemStatus::NotFound,
+        ] {
+            let error = refused_bootstrap_start(item);
+            assert!(error.is::<BackgroundApprovalPending>(), "{item:?}: {error}");
+        }
+        for item in [
+            BackgroundItemStatus::Enabled,
+            BackgroundItemStatus::Unavailable,
+        ] {
+            let error = refused_bootstrap_start(item);
+            assert!(!error.is::<BackgroundApprovalPending>(), "{item:?}");
+            assert!(error.to_string().contains("Bootstrap failed: 5"), "{error}");
+        }
+        let pending = refused_bootstrap_start(BackgroundItemStatus::NotFound)
+            .downcast::<BackgroundApprovalPending>()
+            .unwrap();
+        assert!(pending.detail.contains("Input/output error"));
+    }
+
+    #[test]
+    fn an_unregistered_item_is_pending_only_after_a_refused_start() {
+        let status = NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: true,
+            requires_approval: false,
+            background_item: BackgroundItemStatus::NotRegistered,
+            failed: false,
+            detail: None,
+        };
+        assert!(!status.approval_pending(false), "a fresh install may start");
+        assert!(status.approval_pending(true));
+        let approved = NativeServiceStatus {
+            background_item: BackgroundItemStatus::Enabled,
+            ..status.clone()
+        };
+        assert!(!approved.approval_pending(true));
+        let loaded = NativeServiceStatus {
+            job_loaded: true,
+            ..status
+        };
+        assert!(!loaded.approval_pending(true));
+    }
+
+    #[test]
+    fn linux_terminal_failure_is_reported_with_its_exit_cause() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Linux),
+            render_systemd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Linux,
+            OrderedRunner(Mutex::new(vec![
+                command_output(false, "failed", ""),
+                command_output(true, "enabled", ""),
+                command_output(
+                    true,
+                    "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus=1\nNRestarts=5",
+                    "",
+                ),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.failed);
+        assert!(!status.job_loaded, "a failed unit is not loaded");
+        assert_eq!(
+            manager.last_exit().unwrap(),
+            Some(ServiceExit {
+                reason: "exit-code (exit status 1)".into(),
+                restarts: 5,
+                clean: false,
+                code: Some(1),
+            })
+        );
     }
 
     #[test]

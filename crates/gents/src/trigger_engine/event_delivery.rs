@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
 use crate::document_config::{CallbackBinding, EventGroupCount, EventSource};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
@@ -221,16 +221,14 @@ pub(crate) async fn probe_document(
 ) -> Result<Option<String>> {
     crate::graphql::validate_collection_identifier(collection)?;
     let filter = selection_filter(filter, Some(("_docID", id)))?;
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
-        ))
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "event selection probe failed: {:?}",
-        response.errors
-    );
+        ),
+        "event selection probe",
+    )
+    .await?;
     let rows = crate::graphql::rows::<Value>(&response, collection)?;
     rows.first()
         .map(|row| {
@@ -350,12 +348,7 @@ pub(crate) async fn evaluate_group(
         MAX_EVENT_TRIGGER_GROUP_DOCS + 1,
         fields.join(" ")
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "group membership query failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "group membership query").await?;
     let docs = crate::graphql::rows::<Value>(&response, delivery.collection())?;
     if docs.is_empty() {
         return Ok(GroupOutcome::Empty);
@@ -453,12 +446,15 @@ pub(crate) async fn group_correlation_page(
             escape_graphql_string(cursor)
         )
     });
-    let response=node.execute(&format!("{{{}(filter:{filter},order:{{_docID:ASC}},limit:{GROUP_RECOVERY_PAGE_SIZE}){{_docID {field}}}}}",delivery.collection())).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "event group recovery page failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
+            "{{{}(filter:{filter},order:{{_docID:ASC}},limit:{GROUP_RECOVERY_PAGE_SIZE}){{_docID {field}}}}}",
+            delivery.collection()
+        ),
+        "event group recovery page",
+    )
+    .await?;
     let rows = crate::graphql::rows::<Value>(&response, delivery.collection())?;
     let cursor = rows
         .last()

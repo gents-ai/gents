@@ -437,15 +437,26 @@ fn load_pack_config_with(
             agent_did: VALIDATION_OWNER.into(),
         }),
         lookup,
-        &|_, _, reference| {
-            let relative = reference
-                .strip_prefix("./")
-                .context("pack sidecar path must start with ./")?;
-            std::fs::read_to_string(pack.join(relative))
-                .with_context(|| format!("reading pack sidecar {relative}"))
-        },
+        &|_, _, reference| read_pack_sidecar(pack, reference),
     )
     .with_context(|| format!("decoding canonical pack config {}", path.display()))
+}
+
+/// A sidecar reference names an asset inside the pack, so it is held to the
+/// same rule as any other distributable pack asset: the loader and this
+/// closure ask `gents::pack::is_distributable_asset_path` rather than each
+/// deciding separately what a pack may contain. Without it a `./../` prefix
+/// resolves outside the pack directory.
+fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> {
+    let relative = reference
+        .strip_prefix("./")
+        .context("pack sidecar path must start with ./")?;
+    anyhow::ensure!(
+        gents::pack::is_distributable_asset_path(relative),
+        "pack sidecar path is not a pack asset path: {reference}"
+    );
+    std::fs::read_to_string(pack.join(relative))
+        .with_context(|| format!("reading pack sidecar {relative}"))
 }
 
 fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents::document_config::PackConfig> {
@@ -3679,6 +3690,28 @@ mod tests {
                 validate_source_pack_path(Path::new(path)).is_err(),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn pack_sidecar_reference_cannot_escape_the_pack_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join("code_review");
+        std::fs::create_dir(&pack).unwrap();
+        std::fs::write(pack.join("system_prompt.md"), "inside").unwrap();
+        std::fs::write(root.path().join("outside.md"), "outside").unwrap();
+
+        assert_eq!(
+            read_pack_sidecar(&pack, "./system_prompt.md").unwrap(),
+            "inside"
+        );
+        for reference in [
+            "./../outside.md",
+            "./code_review/../../outside.md",
+            "../outside.md",
+            "./",
+        ] {
+            assert!(read_pack_sidecar(&pack, reference).is_err(), "{reference}");
         }
     }
 

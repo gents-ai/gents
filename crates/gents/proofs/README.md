@@ -252,6 +252,9 @@ outside it, as a remote merge is. Its observations include exact normalized
 immutable segments and messages, not only row counts.
 `Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
 payload lengths from reconstruction, not provider request sizes or token usage.
+`canonical_presentation/native_adapter.rs` runs its four generated cases through
+native reconstruction for presented payload bytes and missing dependencies;
+stored-byte values remain Lean expectations, not native provider estimates.
 The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
@@ -329,12 +332,12 @@ Historical bridge references below are not evidence that this target already run
 | Surface | Contract and retained owner |
 | --- | --- |
 | Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
-| Authoring and inference | `Configuration` resolves a behavior into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(agent_did, logical ID)` and share one owner check; Task and graph stages reuse this result. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
+| Authoring and inference | `Configuration` resolves a behavior into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(agent_did, logical ID)` and share one owner check; Task and graph stages reuse this result. `defaultBehaviorPublishable` requires a principal's default behavior to be owned and enabled, so a publishable default never resolves to `disabledBehavior`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
 | Graph selection | `GraphPipeline/Configuration` resolves authorized installed capabilities through that same Task resolver. Foreign capability ownership is preserved. Event groups reuse `Triggers/Groups` validation and candidate resolution, with graph bounds checked at delivery. |
 | Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
 | Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard consumes decoded enablement; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes. |
-| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their principal once, so same-label documents from different principals coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. |
+| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their principal once, so same-label documents from different principals coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves behavior labels with an explicit principal; shared labels never determine permissions or imply a global ID-to-principal mapping. Structural fixture results evaluate the actual well-formedness predicate. |
 | Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
@@ -525,6 +528,22 @@ The current proof suite covers twenty practical areas:
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
+    `Mailbox/Handoff` composes the stored open-row receipt, foreground tool
+    completion, and ordinary request-lease terminalization for an explicit
+    session handoff, then delegates a distinct signed reply request to the
+    existing reply-claim owner. General success theorems bind the durable open
+    question and reply source, session, requester, and target agent to the
+    symbolic producer; a finite theorem pins all generated positive and
+    rejected outcomes to those executable owners. Native coverage exercises
+    one signed positive sequence: the mailbox tool's committed receipt,
+    explicit request terminal owner, and linked reply claim. It does not
+    execute an AgentToolCall row or prove that the completion loop observed
+    the tool result before terminalization. The model supplies a matching
+    `Item` to the reply owner but does not prove that projection from the
+    stored row; the native fixture uses a local-self requester, so distinct
+    requester/agent DIDs are not covered. Negative handoff guards remain
+    model-only; generic Ask/Gate notifications do not automatically complete
+    a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
@@ -592,7 +611,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and serial registry handoff |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and the shared-pool registry handoff |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -608,6 +627,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/RuntimeReconcile/StartupReadiness.lean` | Startup/readiness projection and semantic publication predicate. Generated `readiness_publication_cases` drive publisher process-state transitions and require no writes during idle time; document age is not a connectivity lease. |
 | `Proofs/ApplyReconcile.lean` | Barrel for atomic publication, model-driven witnesses, runtime bridge, and convergence |
+| `Proofs/Eval.lean` | Eval core contract (#1515): closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
+| `Proofs/Optimization.lean` | Configuration optimization (#1455) on the eval contract: worst-case unknown imputation, integer sufficiency and non-regression gates over per-case paired sums, the cost sub-gate, the ordered decision, the rule that too few cases can never be accepted, and the length-guarded job journal with bounded rounds. The permutation test, eval runs and the proposer are refinement boundaries |
 | `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654) |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Workspace.lean` | Isolated workspace lifecycle, append-only bindings, seal/owner routing, and authority meet |
@@ -631,7 +652,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
-| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, steering normalization that clears both halves of the spawn tool edge, and message-before-steering-request publication. The R4C generated steering witness fences these values in Rust conformance tests. |
+| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, and steering normalization that clears both halves of the spawn tool edge. Raw admission input is retained separately from canonical execution-start publication. The R4C generated steering witness fences lineage values in Rust conformance tests. |
+| `Proofs/QueuedSteering.lean` | Composes the existing queue, request, canonical execution Gate, reconstruction, RenderedCapture, and pending-turn projection owners. Signed raw input survives pre-start and owned pre-publication terminal outcomes; the latter terminalize the execution and finish the active queue. Input retention is structural, queue clearance follows Handover's finish theorem, and lease/request agreement is checked at this composition boundary. Execution-start publication of the separately prepared message gates authored-input provider send. The send predicate covers the authored-input and capture fences only: lease authorization and the native prepared-message-to-serialized-body projection remain Rust refinement obligations. Generated traces include ordered actions, full prepared candidate records, opaque capture inputs, and derived expectations. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -654,7 +676,7 @@ Semantic submodules:
 | `Proofs.RequestExecutionLease` | `State`, `Transition`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping`, `Registry`, `Persistence` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
-| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
+| `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Publication` (includes digest-guarded `publishIf`), `Convergence`, `ContractCases`, `RuntimeBridge` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
 | `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
@@ -799,7 +821,6 @@ States:
 - `pending`
 - `claimed`
 - `processing`
-- `inputRequired`
 - `completed`
 - `failed`
 - `superseded`
@@ -814,9 +835,6 @@ Operational meaning:
 - `pending` has not been claimed by a backend slot yet
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
-- `inputRequired` is reserved for a blocked external-input cycle; current Rust
-  runtime code does not emit it because autonomous tool calls run inline, and
-  active runtime filters exclude it until that loop is modeled
 - `dead` is persisted by the request machine only for stale pre-claim TTL
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
   deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
@@ -1416,13 +1434,11 @@ reconstructed count never exceeds backend `max_concurrent`.
 
 The finite-state checks currently establish:
 
-- generated Request transition cases enumerate the full 10x10 state square as
-  legal, illegal, or product-unreachable, with `inputRequired` pairs classified
-  as reserved current-product vocabulary
+- generated Request transition cases enumerate the full 9x9 state square as
+  legal or illegal
 - generated Process transition cases enumerate the full 5x5 state square as
   legal or illegal
-- every active current-product non-terminal request state has at least one
-  successor; reserved `inputRequired` remains vocabulary-only
+- every active current-product non-terminal request state has at least one successor
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
 - every non-terminal storage-observation state has at least one successor
@@ -1435,8 +1451,8 @@ The finite-state checks currently establish:
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters. Rust consumes the generated
 Request and Process transition cases directly: legal cases are driven through
-deterministic lifecycle/status paths, ordinary illegal cases must have no Rust
-writer path, and reserved cases must cite their boundary. The `Fintype` instances
+deterministic lifecycle/status paths, and illegal cases must have no Rust
+writer path. The `Fintype` instances
 structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Properties/Decidable.lean`.
@@ -1449,10 +1465,6 @@ are not deviations.
 
 Current boundaries:
 
-- `inputRequired` is reserved persisted/client vocabulary. Rust parses it as
-  non-terminal client vocabulary if observed, but active runtime lifecycle
-  filters use only `pending`, `claimed`, and `processing` until external input
-  is modeled.
 - `dead` is current product behavior only for stale pre-claim TTL expiry.
   Post-claim provider failure, retry exhaustion, tool failure, and deadline
   expiry remain terminal `failed`.
@@ -1480,26 +1492,41 @@ per-document writer has not been migrated; it is not an alternative formal contr
 
 ### Backend Controller Handoff
 
-`Proofs/InferenceCall/Registry.lean` refines one backend's serial controller
-handoff. Metadata-only reconciliation retains the current controller; a
-resource change retires it until its real owners release. Final release
-installs only the latest available desired configuration. Removed or
-unavailable pending configurations cannot be resurrected by a drain callback.
+`Proofs/InferenceCall/Registry.lean` refines one backend's admission capacity
+pool (#897, #1366). Metadata-only reconciliation retains the admitting
+controller; a resource change replaces it in the same step, on the same pool,
+so an available backend always admits (`available_desired_admits_without_gap`).
+Permits held by calls admitted before a rewrite, a removal or an outage keep
+counting until they release, and new admissions never exceed the current
+capacity (`acquire_admits_within_capacity`, `serve_within_capacity`,
+`over_capacity_blocks_admission`, `outage_carries_held`). Removal or
+unavailability fails queued calls and rejects new ones
+(`unavailable_closes_admission`, `removed_backend_cannot_be_resurrected`).
 
-The model separates actual permits from in-flight ownership, which also
-includes queued admissions. It composes the existing ControllerBookkeeping
-drain invariant and proves capacity preservation and release stuttering on
-epoch mismatch. Rust releases through the originating controller `Arc`;
-rollback can reuse an epoch, and isolation between those distinct controller
-incarnations is fenced by a real permit test outside this numeric model.
-Its finite release trace is conditional progress, not scheduler
-fairness or a wall-clock bound. Already-issued permits during downsizing
-remain bounded by their original controller's capacity until retirement.
+Each caller carries the connection its provider client was built from. By
+the #1725 product decision (snapshot semantics), a connection change such as
+key rotation or an endpoint move never rejects in-progress or queued calls:
+they finish on their slot's connection, sharing the pool
+(`available_rewrite_rejects_nothing`), and every admission is attributed to
+its own slot's connection in FIFO order (`serve_attributes_fifo`,
+`acquire_attributes_slot`). New slots are built for the new connection;
+behavior slot identity includes the keyed connection fingerprint because
+`ResolvedBehavior`'s Debug redacts credentials.
 
-Eight generated traces contain 55 step observations for the real registry
-and actual AdmissionPermits. Queued-waiter reachability remains covered by
-the existing controller bookkeeping tests. This registry refinement does
-not establish durable request waiting through backend outages.
+`Registry.Ledger` refines the Tokio realization: tokens are conserved across
+take, register, abandon, release, resize and reopen. Registration is the single
+admission point: it admits only while open (`register_closed_admits_nothing`)
+and only without debt, so every admission leaves held permits within capacity
+(`register_admits_within_capacity`), because Tokio returns a permit assigned
+to a dropped waiter around the ledger (`abandon_can_expose_permit_under_debt`).
+A permit taken from a semaphore retired by an outage never registers; its
+waiter acquires again from the current semaphore.
+
+Eleven generated traces, with expectations derived by `replay`, drive the real
+registry and actual AdmissionPermits, including queued callers. Epoch reuse on
+rollback creates a distinct incarnation on the same pool, fenced by a real
+permit test. This refinement does not establish durable request waiting
+through backend outages.
 
 ### Interrupted Inference Calls
 
@@ -1563,8 +1590,8 @@ Resume receipts also report the Goal status observed in their transaction.
 Recovering an old child while the Goal is paused returns that child with
 `created: false` and `goal_status: paused`; it does not silently claim reactivation.
 Separate native overlapping-write tests bypass the process-local mutation gate.
-InputRequired and WorkspaceBindingPending remain unfinished requests: a resume
-cannot duplicate work that already waits for input or workspace placement.
+WorkspaceBindingPending remains an unfinished request: a resume cannot
+duplicate work that already waits for workspace placement.
 
 `GoalAutomation/RequestHead.lean` preserves canonical request ordering among
 causal heads while excluding an authenticated continuation's physical parent.
@@ -1708,8 +1735,41 @@ a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
 remain runtime consumer obligations. Eleven generated traces in
-`invalid_tool_progress_cases` drive the real owned loop and persistence hook;
-the model is not a second lifecycle or permission owner.
+`invalid_tool_progress_cases` drive the real owned loop and persistence hook,
+checked against their composition with `RepeatedToolFailure`; the model is not
+a second lifecycle or permission owner.
+
+### Repeated tool failure (#1734)
+
+`CompletionRetry.RepeatedToolFailure` folds the owned loop's dispatch record
+over `InvalidToolProgress.Outcome` and composes with that allowance. After
+three consecutive dispatches of one call (tool name and argument text) whose
+ordinary failure has the same error identity, the next identical call is not
+run: a policy-denied notice stands in as its result through the persistence
+hook, so transcript and provider input agree. Repeating it again ends the
+execution with `repeated_tool_failure:` through the existing stream error and
+terminal owners, which settle the accepted, undispatched call.
+
+Only ordinary failures with a derivable identity count. The native adapter
+derives it from the failure class and text. The result's owner supplies the
+identity: only a tool registered as the command runner drops the fields its
+envelope is known to vary between identical runs (duration and the timeout
+hint rendered from it), and its unparseable envelope has no identity. Any
+other tool's text is compared verbatim, even if it has the same shape. Outcomes the invalid allowance charges,
+successes, other arguments and other errors restart the streak. A call the
+persistence hook answers itself (`Skip`) restarts it too, unless the guard has
+already decided to stop that call: the stop is decided before the hook runs. The
+suppression notice is a policy denial, so the allowance charges it; with the
+allowance nearly spent, a suppression ends the execution as
+`invalidExhausted`.
+
+The model proves the streak and suppression bounds across composed steps,
+that a call at the limit is never dispatched, that other calls are, that
+charged outcomes never count, that hook-handled calls not stopped reset, that suppression
+spends one allowance unit, and that an unbounded identical failure stops on
+the fifth call. Interleaved repeats are left to the turn cap and other
+budgets. `repeated_tool_failure_cases` and the composed fields of
+`invalid_tool_progress_cases` drive the real owned loop and persistence hook.
 
 ### Logical invocation output obligations
 

@@ -87,7 +87,6 @@ describe("live session deltas", () => {
       outcome: "delta",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
-      progressSeq: 2,
       turnState: "running",
       status: null,
       content: {
@@ -121,7 +120,6 @@ describe("live session deltas", () => {
       outcome: "delta",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
-      progressSeq: 3,
       turnState: "running",
       status: null,
       content: {
@@ -174,7 +172,6 @@ describe("live session deltas", () => {
       outcome: "delta",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
-      progressSeq: 2,
       turnState: "running",
       status: null,
       content: {
@@ -214,7 +211,6 @@ describe("live session deltas", () => {
       outcome: "delta",
       revision: { storeVersion: 5, reconcileVersion: 2 },
       requestId: "request-1",
-      progressSeq: 2,
       turnState: "running",
       status: null,
       content: {

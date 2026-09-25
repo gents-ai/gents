@@ -26,10 +26,19 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
-    /// The exact managed runtime data directory uses an incompatible store.
+    /// A local store (the managed runtime's or the desktop client's) was
+    /// written by a version this build cannot open.
     IncompatibleLocalStore,
     /// Enrollment-owned peer pairing and route-actuation failures.
     Pairing,
+    /// A provider sign-in completed, but saving the issued credential to the
+    /// agent's configuration failed. The bridge holds the credential in memory
+    /// so the save can be retried without signing in again.
+    CredentialNotSaved,
+    /// The managed runtime was started and answers, but had not reported
+    /// ready when the wait ended; it keeps starting, typically migrating its
+    /// data. Callers keep observing it rather than failing or restarting it.
+    RuntimeStillBooting,
     /// Catch-all for failures whose producer has not assigned a typed code.
     Unknown,
 }
@@ -49,6 +58,8 @@ impl BridgeErrorCode {
             Self::Backend => "backend",
             Self::IncompatibleLocalStore => "incompatibleLocalStore",
             Self::Pairing => "pairing",
+            Self::CredentialNotSaved => "credentialNotSaved",
+            Self::RuntimeStillBooting => "runtimeStillBooting",
             Self::Unknown => "unknown",
         }
     }
@@ -61,6 +72,7 @@ impl BridgeErrorCode {
                 | Self::Backend
                 | Self::StalePreview
                 | Self::Pairing
+                | Self::CredentialNotSaved
         )
     }
 }

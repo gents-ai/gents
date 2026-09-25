@@ -574,21 +574,13 @@ fn require_parent_stamp_agrees(
             "parent workspace scope does not match IsolatedWorkspace owner",
         ));
     }
-    if let Some(parent_seal) = nonempty(parent.workspace_seal_hash.as_deref()) {
-        match nonempty(workspace.seal_hash.as_deref()) {
-            Some(workspace_seal) if workspace_seal == parent_seal => {}
-            Some(workspace_seal) => {
-                return Err(SpawnWorkspaceError::invalid(format!(
-                    "parent workspace_seal_hash {parent_seal} does not match IsolatedWorkspace seal_hash {workspace_seal}"
-                )));
-            }
-            None => {
-                return Err(SpawnWorkspaceError::invalid(format!(
-                    "parent workspace_seal_hash {parent_seal} does not match IsolatedWorkspace {} (missing seal_hash)",
-                    workspace.workspace_id
-                )));
-            }
-        }
+    let stamped_seal = nonempty(parent.workspace_seal_hash.as_deref());
+    let observed_seal = nonempty(workspace.seal_hash.as_deref());
+    if stamped_seal != observed_seal {
+        return Err(SpawnWorkspaceError::invalid(format!(
+            "parent workspace seal drift for {}: stamped seal {:?}, observed seal {:?}",
+            workspace.workspace_id, stamped_seal, observed_seal
+        )));
     }
     Ok(())
 }
@@ -810,6 +802,11 @@ mod tests {
         doc.lifecycle_state = "sealed".into();
         assert!(stamp_from_workspace(&doc, WorkspaceAuthority::ReadOnly).is_err());
         doc.seal_hash = Some("actual-seal".into());
+        let absent_to_present = require_parent_stamp_agrees(&parent, &doc)
+            .expect_err("a newly observed seal must invalidate an absent stamped seal");
+        assert!(absent_to_present
+            .message
+            .contains("parent workspace seal drift"));
         let stale = ParentWorkspaceStamp::from_fields(
             "owner",
             Some("shared-label"),
@@ -818,6 +815,9 @@ mod tests {
             Some("stale-seal"),
         );
         assert!(require_parent_stamp_agrees(&stale, &doc).is_err());
+        doc.seal_hash = None;
+        assert!(require_parent_stamp_agrees(&stale, &doc).is_err());
+        doc.seal_hash = Some("actual-seal".into());
         assert!(stamp_from_workspace(&doc, WorkspaceAuthority::ReadWrite).is_err());
         assert_eq!(
             stamp_from_workspace(&doc, WorkspaceAuthority::ReadOnly)

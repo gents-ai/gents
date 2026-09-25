@@ -2196,3 +2196,107 @@ fn expand_eth_tools_fails_closed_on_missing_and_foreign() {
     let err = expand_eth_tools(&foreign, &view).unwrap_err();
     assert!(err.to_string().contains("different agent"));
 }
+
+#[test]
+fn pending_visibility_holds_missing_reference_but_not_invalid_inference() {
+    let owner = "did:key:owner";
+    let behavior = |behavior_id: &str, profile_id: &str| DocumentRecord {
+        doc_id: format!("doc-{behavior_id}"),
+        value: serde_json::from_value::<crate::document_config::AgentBehavior>(serde_json::json!({
+            "agent_did": owner,
+            "behavior_id": behavior_id,
+            "inference_profile_id": profile_id,
+        }))
+        .unwrap(),
+    };
+    let profile = |agent_did: &str, profile_id: &str, model_name: &str| DocumentRecord {
+        doc_id: format!("doc-{profile_id}"),
+        value: serde_json::from_value::<crate::document_config::InferenceProfile>(
+            serde_json::json!({
+                "agent_did": agent_did,
+                "profile_id": profile_id,
+                "backend_id": "backend",
+                "model_name": model_name,
+            }),
+        )
+        .unwrap(),
+    };
+
+    let mut view = empty_runtime_view(owner);
+    view.backends.insert(
+        "backend".to_string(),
+        DocumentRecord {
+            doc_id: "doc-backend".to_string(),
+            value: serde_json::from_value(serde_json::json!({
+                "agent_did": owner,
+                "backend_id": "backend",
+                "name": "backend",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:8080/v1",
+                "auth": {"kind": "unauthenticated"},
+            }))
+            .unwrap(),
+        },
+    );
+    view.backend_observations.insert(
+        "backend".to_string(),
+        crate::document_config::InferenceBackendObservation {
+            backend_id: "backend".to_string(),
+            catalogs: vec![crate::document_config::BackendModelCatalog {
+                agent_did: None,
+                observed_at: "2026-01-01T00:00:00Z".to_string(),
+                models: vec![crate::document_config::AdvertisedModel {
+                    model_name: "advertised".to_string(),
+                    display_name: None,
+                    context_window: None,
+                    max_context_window: None,
+                    max_output_tokens: None,
+                    reasoning_efforts: None,
+                }],
+            }],
+            probe_status: Some("healthy".to_string()),
+            last_probe: None,
+        },
+    );
+    view.inference_profiles
+        .insert("valid".to_string(), profile(owner, "valid", "advertised"));
+    view.inference_profiles.insert(
+        "unadvertised".to_string(),
+        profile(owner, "unadvertised", "never-advertised"),
+    );
+    view.inference_profiles.insert(
+        "foreign".to_string(),
+        profile("did:key:other", "foreign", "advertised"),
+    );
+
+    view.behaviors
+        .insert("selected".to_string(), behavior("selected", "valid"));
+    view.behaviors
+        .insert("spare".to_string(), behavior("spare", "unadvertised"));
+    assert!(
+        view.pending_visibility_details().is_empty(),
+        "a present but permanently invalid inference selection is not a pending document: {:?}",
+        view.pending_visibility_details()
+    );
+
+    view.behaviors
+        .insert("absent".to_string(), behavior("absent", "missing-profile"));
+    assert!(
+        view.pending_visibility_details()
+            .iter()
+            .any(|detail| detail.starts_with("behavior absent:")),
+        "a missing referenced document must still hold the gate: {:?}",
+        view.pending_visibility_details()
+    );
+
+    view.behaviors.remove("absent");
+    view.behaviors
+        .insert("borrowed".to_string(), behavior("borrowed", "foreign"));
+    assert!(
+        view.pending_visibility_details()
+            .iter()
+            .any(|detail| detail.starts_with("behavior borrowed:")),
+        "a foreign-owned reference must still hold the gate: {:?}",
+        view.pending_visibility_details()
+    );
+}

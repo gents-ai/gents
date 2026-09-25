@@ -158,6 +158,60 @@ async fn rejects_query_against_collection_outside_scope() {
     );
 }
 
+/// The unrestricted scope is the default for the MCP endpoint and for
+/// `gents query`, so it is the path that would otherwise hand an agent in the
+/// launching home the eval material. Both the row read and the discovery field
+/// inventory must refuse before they touch the datastore.
+#[tokio::test]
+async fn refuses_a_protected_collection_even_when_unrestricted() {
+    let node = seeded_node().await;
+    let tool = DefraQueryTool::new(node, CollectionScope::all());
+
+    let err = Tool::call(
+        &tool,
+        DefraQueryParams {
+            collection: gents_protocol::schemas::EVAL_VERDICT_NAME.to_string(),
+            filter: None,
+            fields: vec!["score_bp".to_string()],
+            limit: None,
+        },
+    )
+    .await
+    .expect_err("a protected collection must never be readable");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("protected"), "{message}");
+    assert!(
+        message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn refuses_discovery_of_a_protected_collection() {
+    let node = seeded_node().await;
+    let tool = DefraQueryTool::new(node, CollectionScope::all());
+
+    let err = Tool::call(
+        &tool,
+        DefraQueryParams {
+            collection: gents_protocol::schemas::EVAL_VERDICT_NAME.to_string(),
+            filter: None,
+            fields: vec!["*".to_string()],
+            limit: None,
+        },
+    )
+    .await
+    .expect_err("a protected collection's field inventory must never be listed");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("protected"), "{message}");
+    assert!(
+        message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
+        "{message}"
+    );
+}
+
 /// Selecting a field that does not exist on the collection must produce an
 /// agent-usable diagnostic: the collection name, the invalid field, close-match
 /// suggestions, and the allowed field inventory — not just DefraDB's raw

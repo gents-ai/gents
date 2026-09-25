@@ -82,13 +82,18 @@ export function MailboxScreen({ shell }: { shell: Shell }) {
               <p className="mt-3 font-heading text-lg font-medium text-heading">
                 Nothing needs your attention
               </p>
+              <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
+                When an agent has a question, needs your approval, finishes or fails
+                work, or flags something for you, it shows up here. To give an agent new
+                work, start a session.
+              </p>
               <Button
                 variant="brand"
                 className="mt-5"
                 nativeButton={false}
                 render={<a href={href({ name: "session", sessionId: null })} />}
               >
-                <Plus /> New session
+                <Plus /> Start a session
               </Button>
             </div>
           </div>

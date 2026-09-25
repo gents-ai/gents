@@ -63,21 +63,6 @@ private theorem processing_not_terminal : ¬ isTerminal RequestState.processing 
         | inl h => cases h
         | inr h => cases h
 
-private theorem inputRequired_not_terminal : ¬ isTerminal RequestState.inputRequired := by
-  intro h
-  cases h with
-  | inl h => cases h
-  | inr h =>
-    cases h with
-    | inl h => cases h
-    | inr h =>
-      cases h with
-      | inl h => cases h
-      | inr h =>
-        cases h with
-        | inl h => cases h
-        | inr h => cases h
-
 theorem terminal_irreversibility
     {pre post : RequestContext}
     (h_terminal : isTerminal pre.state)

@@ -14,15 +14,24 @@ use crate::watcher::AgentRequest;
 
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
 
+/// A provider client admitted through the backend it was built for.
+/// `connection` is that backend's `backend_connection_fingerprint` at build
+/// time. It only attributes calls: after a connection change, calls through
+/// this client still share the backend's pool and finish on this connection.
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionClient<C> {
     inner: C,
     admission: AdmissionRegistry,
+    connection: Arc<str>,
 }
 
 impl<C> AdmittedCompletionClient<C> {
-    pub(crate) fn new(inner: C, admission: AdmissionRegistry) -> Self {
-        Self { inner, admission }
+    pub(crate) fn new(inner: C, admission: AdmissionRegistry, connection: String) -> Self {
+        Self {
+            inner,
+            admission,
+            connection: connection.into(),
+        }
     }
 }
 
@@ -40,6 +49,18 @@ where
 pub(crate) struct AdmittedCompletionModel<M> {
     inner: M,
     admission: AdmissionRegistry,
+    connection: Arc<str>,
+}
+
+#[cfg(test)]
+impl<M> AdmittedCompletionModel<M> {
+    pub(super) fn for_test(inner: M, admission: AdmissionRegistry, connection: &str) -> Self {
+        Self {
+            inner,
+            admission,
+            connection: connection.into(),
+        }
+    }
 }
 
 impl<M> CompletionModel for AdmittedCompletionModel<M>
@@ -56,6 +77,7 @@ where
         Self {
             inner: M::make(&client.inner, model),
             admission: client.admission.clone(),
+            connection: client.connection.clone(),
         }
     }
 
@@ -63,7 +85,10 @@ where
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        let mut permit = self.admission.acquire_current_call().await?;
+        let mut permit = self
+            .admission
+            .acquire_current_call(&self.connection)
+            .await?;
         let token = current_context().ok().and_then(|c| c.inference_token);
         match token {
             Some(token) => {
@@ -102,7 +127,12 @@ where
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let mut permit = self.admission.acquire_current_call().await?;
+        let mut permit = self
+            .admission
+            .acquire_current_call(&self.connection)
+            .await?;
+        permit
+            .observe_provider_activity(crate::rendered_request::scope::current_attempt_activity());
         let token = current_context().ok().and_then(|c| c.inference_token);
         match token {
             Some(token) => {

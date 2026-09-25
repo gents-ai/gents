@@ -1,7 +1,16 @@
 use serde::Deserialize;
 
 use super::canonical_execution::ExecutionFuture;
-use super::canonical_output::{LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec};
+use super::canonical_output::{
+    LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec, LeanPresentation,
+};
+
+#[cfg(test)]
+#[path = "canonical_presentation/native_adapter.rs"]
+mod native_adapter;
+
+#[cfg(test)]
+pub(crate) use native_adapter::native_presentation;
 
 /// Payload presentation before provider-specific projection. These byte counts
 /// exclude metadata, escaping, media URLs and request structure; they are neither
@@ -22,6 +31,29 @@ pub(crate) struct LeanPayloadPresentationCase {
 pub(crate) struct LeanPayloadLengths {
     pub(crate) stored_payload_bytes: u64,
     pub(crate) presented_payload_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanTerminalDiagnosticPresentationCase {
+    pub(crate) name: String,
+    pub(crate) raw: Vec<u8>,
+    pub(crate) cause: Vec<u8>,
+    pub(crate) tail_budget: u64,
+    pub(crate) expected: LeanTerminalDiagnosticPresentationExpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanTerminalDiagnosticPresentationExpected {
+    Ok {
+        presentation: LeanPresentation,
+        rendered: Vec<u8>,
+    },
+    InvalidUtf8,
+    UnexpectedError {
+        error: String,
+    },
 }
 
 /// Observe reconstructed payload fields at the native reconstruction boundary.

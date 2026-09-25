@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{asset_path, interpolate, validate_pack_manifest, PackInstallOptions, PackManifest};
-use crate::document_config::PackConfig;
+use crate::document_config::{EvalCase, PackConfig};
 
 /// Decode the same canonical authored bundle for document and graph packs.
 /// Callers provide asset bytes and environment lookup; distribution admission,
@@ -102,6 +102,7 @@ pub fn decode_pack_config(
             }
         }
     }
+    hydrate_eval_cases(root, read_sidecar)?;
     let mut config: PackConfig =
         serde_json::from_value(value).context("decoding canonical pack configuration")?;
     for context in &mut config.contexts {
@@ -189,6 +190,51 @@ fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
             value.as_str() == Some(owner),
             "{location} owner does not match installation scope"
         ),
+    }
+    Ok(())
+}
+
+/// A case of an eval definition may be authored as a `./` sidecar path: the
+/// file holds one `EvalCase`, read through the caller's sidecar boundary after
+/// interpolation, so its prompts stay literal like every other sidecar. The
+/// installed definition carries the cases inline; the paths never reach it.
+fn hydrate_eval_cases(
+    root: &mut serde_json::Map<String, Value>,
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> Result<String>,
+) -> Result<()> {
+    let Some(definitions) = root
+        .get_mut("eval_definitions")
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    for definition in definitions {
+        let definition_id = definition
+            .get("definition_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(cases) = definition.get_mut("cases").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for case in cases {
+            let Some(reference) = case.as_str().map(str::to_owned) else {
+                continue;
+            };
+            anyhow::ensure!(
+                reference.starts_with("./"),
+                "eval definition {definition_id:?} case {reference:?} must be an inline case or a ./ sidecar path"
+            );
+            let text = read_sidecar(
+                crate::Collection::EvalDefinition,
+                &definition_id,
+                &reference,
+            )?;
+            let parsed: EvalCase = serde_json::from_str(&text).with_context(|| {
+                format!("eval definition {definition_id:?} case sidecar {reference} is not one EvalCase")
+            })?;
+            *case = serde_json::to_value(parsed)?;
+        }
     }
     Ok(())
 }

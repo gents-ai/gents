@@ -277,7 +277,6 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-tool-chat-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -291,8 +290,10 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
+    // Bound, not dropped: the server must outlive the chat child below.
+    let (_serve, port, _readiness) =
+        spawn_server_with_ready_json_recovering(&home_dir, port, &[], &[])?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
@@ -334,12 +335,94 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         "expected chat output to contain tool start, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("[tool done] read_file"),
-        "expected chat output to contain tool completion, got:\n{stdout}"
+        stdout.contains("[tool] read_file notes.txt -> ok"),
+        "expected chat output to contain the short tool completion summary (name, path, outcome), got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("gents_fs:") && !stdout.contains("\"path\":\"notes.txt\""),
+        "raw tool JSON should not appear without --verbose, got:\n{stdout}"
     );
     assert!(
         stdout.contains(expected_reply),
         "expected chat output to contain final reply {expected_reply}, got:\n{stdout}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    fs::write(home_dir.join("notes.txt"), "chat-tool-token\n")?;
+
+    let expected_reply = "chat-tool-token";
+    let model_name = format!("mock-verbose-tool-chat-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockOpenAIEndpoint::start(&model_name, expected_reply)?;
+
+    let port = allocate_port()?;
+    let agent_name = format!("cli-verbose-tool-chat-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+
+    let mut child = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .arg("chat")
+        .arg("--verbose")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning gents chat --verbose")?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("chat child missing stdin"))?;
+        stdin
+            .write_all(b"Read notes.txt and reply with its token.\n/exit\n")
+            .context("writing interactive chat input")?;
+        stdin.flush().context("flushing interactive chat input")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("waiting for gents chat --verbose")?;
+    if !output.status.success() {
+        bail!(
+            "gents chat --verbose failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[tool done] read_file") || stdout.contains("[tool] read_file"),
+        "expected --verbose chat output to keep the raw tool markers, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"path\":\"notes.txt\"") || stdout.contains("\"path\": \"notes.txt\""),
+        "expected --verbose chat output to contain raw tool call arguments, got:\n{stdout}"
     );
 
     Ok(())

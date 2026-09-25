@@ -1,4 +1,11 @@
 use super::*;
+use tokio::sync::Notify;
+
+#[derive(Default)]
+pub(super) struct StreamEntryGate {
+    pub(super) entered: Notify,
+    pub(super) release: Notify,
+}
 
 pub(super) enum ScriptedCall {
     Turn(Vec<RawStreamingChoice<()>>),
@@ -33,6 +40,7 @@ pub(super) struct ScriptedModel {
     /// capture — a stand-in for a mis-wired provider stack that lacks
     /// `RenderedRequestCapturingHttpClient`.
     capture_requests: bool,
+    stream_entry_gate: Option<Arc<StreamEntryGate>>,
 }
 
 impl ScriptedModel {
@@ -53,7 +61,13 @@ impl ScriptedModel {
             seen_requests: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
             capture_requests: true,
+            stream_entry_gate: None,
         }
+    }
+
+    pub(super) fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
+        self.stream_entry_gate = Some(gate);
+        self
     }
 
     /// Model a mis-wired transport: the provider streams without claiming the
@@ -111,6 +125,10 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        if let Some(gate) = &self.stream_entry_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
         if self.capture_requests {
             crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
         }
@@ -427,6 +445,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns,
         output_obligation_gate: None,
@@ -596,6 +615,17 @@ pub(super) async fn owned_test_hook() -> (
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
+    owned_test_hook_with_policy(FailurePolicy::default()).await
+}
+
+pub(super) async fn owned_test_hook_with_policy(
+    policy: FailurePolicy,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+) {
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -648,7 +678,7 @@ pub(super) async fn owned_test_hook() -> (
         "general",
         "did:test:test",
         None,
-        FailurePolicy::default(),
+        policy,
     )
     .await
     .unwrap();

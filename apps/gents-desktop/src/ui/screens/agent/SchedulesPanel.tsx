@@ -1,28 +1,22 @@
 import { useState } from "react";
+import { dependentsWarning } from "./dependents";
 import { toast } from "sonner";
 import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
-  AreaRow,
   ChoiceRow,
   DraftActions,
   FactRow,
   NumberRow,
   TextRow,
+  TagsRow,
 } from "./editors";
-import {
-  fromLinesOrNull,
-  newId,
-  optionalInteger,
-  str,
-  toLines,
-  useDraft,
-  validateCronSchedule,
-} from "./draft";
+import { newId, optionalInteger, str, useDraft, validateCronSchedule } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { RowMenu } from "./RowMenu";
 
 function cadenceLabel(s: Schedule) {
   return s.cadence.kind === "cron"
@@ -30,14 +24,17 @@ function cadenceLabel(s: Schedule) {
     : `every ${s.cadence.interval_secs}s`;
 }
 
-function Editor({
+export function ScheduleEditor({
   shell,
   deployment,
   schedule,
+  embedded = false,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   schedule: Schedule;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
 }) {
   const base = {
     name: "agent" as const,
@@ -51,7 +48,7 @@ function Editor({
       schedule.cadence.kind === "interval" ? str(schedule.cadence.interval_secs) : "",
     expression: schedule.cadence.kind === "cron" ? schedule.cadence.expression : "",
     timezone: schedule.cadence.kind === "cron" ? schedule.cadence.timezone : "UTC",
-    tags: toLines(schedule.tags ?? []),
+    tags: schedule.tags ?? [],
   };
   const d = useDraft(saved, async (next) => {
     const cadence =
@@ -75,7 +72,7 @@ function Editor({
           ...schedule,
           display_name: next.displayName.trim() || null,
           cadence,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
         },
       }),
     );
@@ -106,7 +103,9 @@ function Editor({
   };
   return (
     <>
-      <Group title={schedule.display_name ?? schedule.schedule_id}>
+      <Group
+        title={embedded ? undefined : (schedule.display_name ?? schedule.schedule_id)}
+      >
         <FactRow label="Schedule ID" mono>
           {schedule.schedule_id}
         </FactRow>
@@ -158,14 +157,11 @@ function Editor({
             />
           </>
         )}
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <DraftActions
@@ -192,18 +188,21 @@ function Editor({
           </FactRow>
         )}
       </Group>
-      <DeleteButton
-        label={schedule.display_name ?? schedule.schedule_id}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteScheduleConfig({
-              scheduleId: schedule.schedule_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && (
+        <DeleteButton
+          label={schedule.display_name ?? schedule.schedule_id}
+          warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteScheduleConfig({
+                scheduleId: schedule.schedule_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
 }
@@ -231,6 +230,37 @@ export function SchedulesPanel({
         title: s.display_name ?? s.schedule_id,
         meta: cadenceLabel(s),
         tags: s.tags,
+        trailing: (
+          <RowMenu
+            name={s.display_name ?? s.schedule_id}
+            base={base}
+            id={s.schedule_id}
+            onDuplicate={async () => {
+              const schedule_id = newId("sched");
+              await shell.applyConfig((api) =>
+                api.saveScheduleConfig({
+                  document: {
+                    ...s,
+                    schedule_id,
+                    display_name: `${s.display_name ?? s.schedule_id} copy`,
+                    created_at: null,
+                    updated_at: null,
+                  },
+                }),
+              );
+              return schedule_id;
+            }}
+            onDelete={() =>
+              shell.applyConfig((api) =>
+                api.deleteScheduleConfig({
+                  scheduleId: s.schedule_id,
+                  agentDid: deployment.agentDid,
+                }),
+              )
+            }
+            warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
+          />
+        ),
       }))}
       createLabel="New schedule"
       empty="No schedules. A trigger binds a task to a schedule."
@@ -256,7 +286,7 @@ export function SchedulesPanel({
       detail={(id) => {
         const schedule = deployment.schedules.find((s) => s.schedule_id === id)!;
         return (
-          <Editor
+          <ScheduleEditor
             key={schedule.schedule_id}
             shell={shell}
             deployment={deployment}

@@ -3,7 +3,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::deserialize_optional_string_vec;
 
@@ -133,12 +133,7 @@ pub(crate) async fn list_eth_tool_records(
         "{{ EthTool(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{_docID {}}} }}",
         tool_fields()?
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "list EthTool failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "list EthTool").await?;
     super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "EthTool")
 }
 

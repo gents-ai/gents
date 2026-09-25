@@ -1,0 +1,29 @@
+{
+  "manifest_version": 1,
+  "name": "eval_canary",
+  "version": "1.0.0",
+  "description": "Eval-runner canary subject: one behavior, read-only file tools, no bash.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/canary/system_prompt.md",
+    "notes.txt",
+    "pack_config.json"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "primary",
+      "description": "Runs the canary behavior.",
+      "behaviors": [
+        "canary"
+      ]
+    }
+  ]
+}

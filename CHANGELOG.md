@@ -1,17 +1,205 @@
 # Changelog
 
 All desktop crates and npm packages release together at `workspace.package.version`
-(lockstep train). Bridge **contract** version (`MAJOR.MINOR`) moves independently
-and is what compatibility decisions key on — see `contracts/desktop-bridge.json`.
+(lockstep train). The bundled frontend and Rust bridge use generated types and
+source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+### Breaking
+
+- `gents subagent list` JSON: `state` replaced by `edge_state` (null on
+  root/forest rows) and `request_lifecycle_state`; table column `STATE` →
+  `EDGE_STATE`/`REQUEST_STATE` (#1783).
+
 ### Changed
 
+- `write_file` no longer replaces an existing file blindly: pass the
+  `content_hash` from your latest read (rejected if the file changed since) or
+  `overwrite: true`. Creating new files is unchanged (#1605).
+- GitHub Releases attach the gents CLI archives again, with per-OS checksum
+  files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
+
+### Fixed
+
+- Desktop onboarding explains what Gents keeps for you (a record of every step,
+  so work can be reviewed and resumed) instead of saying every step is a
+  document. After a subscription sign-in the next button reads "Find models"
+  rather than asking to connect again, and the empty mailbox says what arrives
+  there before offering to start a session (#1619).
+- A running command's live output in the desktop transcript stays on its
+  newest line unless you scroll up, and multi-line command output says how many
+  lines it holds (#1620).
+- CLI integration tests recover from a port taken between allocation and the
+  server's bind, instead of failing the run (#1641).
+- A runtime with one permanently invalid behavior it is not using now settles
+  instead of waiting forever. Reference visibility is decided by whether the
+  referenced documents exist, not by whether every behavior's inference
+  selection is valid; runnability is still decided separately and an invalid
+  behavior stays unavailable (#1756).
+- A pack scenario sidecar reference can no longer resolve outside its pack
+  directory: the CLI holds sidecar paths to the same canonical asset-path rule
+  the pack loader uses (#1642).
+- `gents subagent list --root` works while a fan-out is still running. Each row
+  reports the parent bridge's `edge_state` (`running`,
+  `awaiting_child_materialization`, `pending_child_authorization`, ...) apart
+  from the child request's own `request_lifecycle_state`, instead of failing
+  to decode the edge as a request (#1783).
+- `last_progress_age_ms` no longer reports a working request as stalled
+  between tool batches. Progress is the newest of the claim, any tool call's
+  start or completion, and any inference call's start or end for that request,
+  so the age no longer jumps back to `claimed_at` when a tool call finishes
+  (#1782).
+- The agent loop stops re-running a tool call that failed three times in a row
+  with the same arguments and error. The next identical call returns a notice
+  instead of running, and repeating it again ends the request with a
+  `repeated_tool_failure` reason instead of spinning to the turn cap (#1734).
+- Truncated tool output no longer drops an oversized line that follows a short
+  one: the model sees as much of that line as fits (its start, or its end for
+  shell output), and the notice says how many of its bytes are shown (#1726).
+- A stale `list_subagents` cursor no longer ends the parent request. A cursor
+  that names no subagent in scope restarts the listing and reports
+  `stale_cursor`, and settling a failed spawn no longer rewrites its start
+  time, so cursors handed out earlier keep resolving (#1808).
+- A spawned subagent is created and claimed within about a second on an
+  idle runtime, however long its parent's run has been. To find the spawn
+  arguments, creating a child reloaded the parent's whole run, including
+  every earlier child's transcript, one spawn at a time, and claiming it
+  reloaded the parent's whole session. A long orchestrator's children waited
+  minutes, and background spawns hit their 60 s unclaimed deadline (#1807).
+
+## 0.19.0 - 2026-09-24
+
+This release changes how conversations are stored. Earlier stores are not
+carried forward: start from a fresh `~/.gents`, and update the desktop app and
+every runtime you pair with to 0.19.0 together.
+
+### Breaking
+
+- Conversations use one canonical transcript: messages and output segments
+  are immutable, append-only records with exact provider input, and tool calls
+  keep their lifecycle state separately (#1571). Data from earlier versions is
+  not migrated.
+- The desktop compares the collection versions it replicates with an agent
+  runtime's. It refuses to enroll with a runtime whose replicated collections
+  differ, and its sync status shows "Update required", naming the differing
+  collections, when the managed runtime it starts differs, instead of
+  accepting messages the runtime can never receive. Versions whose replicated
+  collections match stay compatible (#1122, #1729). Checks on remote-peer
+  reconnect follow in a later release.
+- A provider that goes silent no longer holds a request until its deadline.
+  The new InferenceExecution `provider_idle_timeout_secs` (default 300s)
+  bounds how long an attempt's provider connection may deliver no bytes,
+  including the wait for response headers; expiry fails the attempt and
+  follows the configured completion retry policy. Keepalives and thinking
+  output count as activity. Queueing for a backend slot, tool execution and
+  retry backoff are not bounded by it, and `stream_liveness_timeout_secs`
+  now only sets the execution lease. The profile editor shows both fields
+  (#1365, #1733).
+- Live tests and evals choose their model endpoint from inference target files
+  (`GENTS_EVAL_TARGET`). The old `GENTS_D4F_*` and provider environment
+  variables are gone.
+- A behavior set as default must be enabled. A stored config with a disabled
+  default fails its next apply until you enable that behavior or choose
+  another default (#1718).
+
+### Added
+
+- The desktop window can be as narrow as half of a 1440pt display. Navigation
+  and side panels become menus and sheets at narrow widths (#1717).
+- "Make default" enables the behavior and sets it as the default in one step.
+- When the desktop finds a home an earlier version created, it says so and
+  offers to back it up and start fresh (the default: the old home moves to a
+  dated folder beside it), delete it and start fresh, or keep it and quit.
+  Only the files a Gents runtime writes are moved or deleted, and the panel
+  lists them first; other agents' homes, backups and your own files in
+  `~/.gents` stay in place. `gents server` refuses such a store before
+  writing its schema and exits with status 65 (67 for a store another,
+  possibly newer, version extended), which systemd does not restart.
+- `gents eval` measures a behavior against an eval definition pack. Each
+  trial runs in a fresh embedded home against an inference target, grading is
+  deterministic, and runs can be resumed. `gents eval init` interviews a model
+  to draft, validate and optionally pilot a new definition pack.
+- `gents optimization` runs prompt optimization jobs over eval runs. The
+  promotion gates are modeled in Lean; the paired sign-flip permutation test
+  they consult runs in Rust. A job is promotable only when its baseline pack
+  matches the live configuration. Promotion publishes only if the frozen
+  configuration is unchanged, and revert only if the promoted prompt is.
+- Tools documents can set how much command output a completed call returns:
+  `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
+  and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
+  Background completion notices and interrupted-call diagnostics keep their
+  fixed budgets for now (#1770). Runtimes older than 0.19.0 reject documents
+  that set them.
+
+### Changed
+
+- The README covers installing the desktop app. Build-from-source steps are in
+  DEVELOPMENT.md.
+- A backend rewrite no longer interrupts admission. Calls already running
+  finish on the connection they started with, and new calls use the new one.
+  Concurrency stays within `max_concurrent` across rewrites and outages
+  (#1366, #897). Rotating only an API key now rebuilds the behavior's client.
 - GitHub Releases attach the desktop installers and their checksums. CLI
   archives, install notes, debug symbols, build metrics, and desktop npm
   packages stay off the release page. The container image takes the Linux
   CLI from the release workflow's artifacts.
+- The execution lease defaults to two minutes instead of 30, so crash recovery
+  takes over sooner (#1626).
+- The ChatGPT subscription advertises Codex client 0.157.0, which unlocks the
+  GPT-6 models. New setups default to `gpt-6-astra` for the ChatGPT
+  subscription, `claude-opus-5-5` for the Claude subscription, and `grok-4.7`
+  for the Grok subscription.
+
+### Fixed
+
+- A tool that returns one line larger than the output limit shows a UTF-8-safe
+  prefix or suffix instead of nothing.
+- Desktop startup waits for a background agent that is still booting instead
+  of failing, and shows how long it has waited. It fails when the service
+  stops, when it keeps exiting (with the exit reason), or after five minutes,
+  and then offers Try again, Restart agent, or continuing without it. Stop and
+  Restart work while a start is waiting (#1607, #1609).
+- On macOS, desktop startup detects that Gents still needs approval under
+  Login Items & Extensions, explains what to allow, offers a button that opens
+  that settings pane, and continues once Gents is allowed (#1608).
+- Desktop status reports a background agent that exits a few seconds into
+  boot as failed, with its exit reason, instead of waiting five minutes. On
+  Linux, a unit systemd gave up on is reported with its exit cause, and Start
+  clears its failed state (#1745).
+- Two runtimes can no longer open one store: `gents server` and `gents init`
+  hold an exclusive lock beside the data directory (`data.lock`). When another agent serves port 9191,
+  setup, startup, Stop and Restart name its DID and home and say how to stop
+  or move it; Stop and Restart of the desktop's own agent are never blocked by
+  it. `gents server` for a non-default home warns when it takes port 9191
+  without `--http-port` (#1746).
+- On macOS, a start that launchd refuses before Gents is approved waits for
+  approval and retries instead of failing. Approval revoked while the agent
+  runs is shown on the agent screen, and after approval at launch the desktop
+  starts an agent that is enabled at login with its reviewed access (#1748).
+- Claude sign-in no longer discards a completed login when the runtime is not
+  serving (#1614).
+- "New Behaviour" is no longer stored before you save it (#1610). The code
+  diff no longer marks every change as removed (#1617).
+- `gents chat` shows when the agent is working, and keeps tool activity apart
+  from answers (#1622).
+- An admission rejection ends the request, so Codex clients no longer wait
+  forever (#1637). Requests waiting in InputRequired are recovered (#1628).
+  Steering input durability is proven again (#1627).
+- First-run setup keeps each finished step visible with a one-line result and
+  pauses on the completed list before moving on.
+- Several test flakes and cancellation contracts are fixed (#1613, #1638,
+  #1723, #1728).
+
+### Security
+
+- If you stored inline API keys under an earlier version, rotate them (#1394).
+
+### Known issues
+
+- A desktop build that isn't signed with the release identity can sit on
+  "Starting the secure client…" instead of reporting that it can't read its
+  keychain identity (#1739). Install the published release.
 
 ## 0.18.5 - 2026-09-22
 

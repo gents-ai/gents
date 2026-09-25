@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use defra_p2p_adapter::P2POperations;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string, rows};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::AgentIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentOfferRecord,
@@ -145,11 +145,17 @@ async fn consume_operator_nonce(
             let query = format!(
                 r#"{{ EnrollmentOperatorNonce(filter: {{ nonce_key: {{ _eq: "{nonce_key_escaped}" }} }}) {{ nonce_key expires_at }} }}"#
             );
-            let response = node.execute(&query).await;
-            if ensure_no_errors(&response, "check consumed enrollment operator nonce").is_ok()
-                && rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
+            let consumed = graphql_with_transaction_retry(
+                node,
+                &query,
+                "check consumed enrollment operator nonce",
+            )
+            .await
+            .is_ok_and(|response| {
+                rows::<ConsumedNonceRow>(&response, "EnrollmentOperatorNonce")
                     .is_ok_and(|rows| rows.iter().any(|row| row.nonce_key == nonce_key))
-            {
+            });
+            if consumed {
                 anyhow::bail!("enrollment operator nonce was already consumed");
             }
             Err(write_error).context("persisting enrollment operator nonce replay fence")
@@ -337,12 +343,12 @@ pub(crate) async fn ensure_enrollment_network(
     identity: &dyn AgentIdentity,
     display_name: &str,
 ) -> Result<NetworkRecord> {
-    let response = node
-        .execute(
-            "{ AgentNetwork { network_id admin_did display_name default_template created_at admin_sig } }",
-        )
-        .await;
-    ensure_no_errors(&response, "loading enrollment AgentNetwork")?;
+    let response = graphql_with_transaction_retry(
+        node,
+        "{ AgentNetwork { network_id admin_did display_name default_template created_at admin_sig } }",
+        "loading enrollment AgentNetwork",
+    )
+    .await?;
     let existing = rows::<AgentNetworkRow>(&response, "AgentNetwork")?;
     match existing.as_slice() {
         [row] => {
@@ -418,6 +424,7 @@ pub(crate) async fn ensure_enrollment_network(
 mod tests {
     use super::*;
     use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::graphql::ensure_no_errors;
     use gents_protocol::enrollment::{
         EnrollmentOperatorAction, EnrollmentOperatorQuery,
         DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,

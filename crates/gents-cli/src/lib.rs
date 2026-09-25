@@ -42,8 +42,8 @@ const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
-const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
-const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.5";
+const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-6-astra";
+const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
@@ -67,7 +67,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::trigger_engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
 const CLI_AFTER_HELP: &str = "\
 Quick start:
   gents init
@@ -400,6 +400,14 @@ async fn async_main() -> Result<()> {
         }
         command => command,
     };
+    if let Command::Eval { command } = &command {
+        if let Some(message) = commands::eval::usage_error(command) {
+            use clap::CommandFactory;
+            Cli::command()
+                .error(clap::error::ErrorKind::ArgumentConflict, message)
+                .exit();
+        }
+    }
 
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
@@ -442,6 +450,8 @@ async fn async_main() -> Result<()> {
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
+        Command::Eval { command } => commands::eval::dispatch(command).await,
+        Command::Optimization { command } => commands::optimization::dispatch(command).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();
@@ -601,7 +611,9 @@ pub(crate) async fn resolve_config_access(
                     format!("building embedded DefraDB node from {}", data_dir.display())
                 })?,
         );
-        gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
+        gents::migration::ensure_all_runtime_migrations(node_arc.clone())
+            .await
+            .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
         Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
             unreachable!("node_arc had exactly one strong reference at this point")
         })
@@ -648,25 +660,80 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
-    if !home_dir.exists() {
-        return Ok(());
-    }
+/// Removes everything under the resolved home `home` except `keep` (the held
+/// store lock), so a runtime cannot take the store while it is wiped. `home`
+/// must come from [`overwritable_home`]; every removal stays under it.
+pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
+    remove_tree_except(home, keep)
+        .with_context(|| format!("dangerously overwriting {}", home.display()))
+}
 
-    if home_dir.as_os_str().is_empty() || home_dir == Path::new("/") {
-        anyhow::bail!("refusing to dangerously overwrite {}", home_dir.display());
+/// Resolves the directory an overwrite of `home_dir` would wipe, through
+/// every symlink and `.`/`..` alias, and refuses the filesystem root, the
+/// user home and any ancestor of it. An unknown user home is refused, not
+/// skipped. `None` when the home does not exist.
+pub(crate) fn overwritable_home(
+    home_dir: &Path,
+    user_home: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    if home_dir.as_os_str().is_empty() {
+        anyhow::bail!("refusing to dangerously overwrite an empty home path");
     }
-    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if home_dir == user_home {
-            anyhow::bail!(
-                "refusing to dangerously overwrite the user home directory {}; pass a dedicated gents home instead",
-                home_dir.display()
-            );
+    let home = match fs::canonicalize(home_dir) {
+        Ok(home) => home,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("resolving {}", home_dir.display()))
+        }
+    };
+    if home.parent().is_none() {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {} (the filesystem root)",
+            home_dir.display()
+        );
+    }
+    let Some(user_home) = user_home.filter(|path| !path.as_os_str().is_empty()) else {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {}: the user home directory cannot be determined, so it cannot be shown not to be inside the home",
+            home_dir.display()
+        );
+    };
+    let user_home = fs::canonicalize(user_home).with_context(|| {
+        format!(
+            "refusing to dangerously overwrite {}: the user home directory {} cannot be resolved, so it cannot be shown not to be inside the home",
+            home_dir.display(),
+            user_home.display()
+        )
+    })?;
+    if user_home.starts_with(&home) {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead",
+            home_dir.display(),
+            home.display()
+        );
+    }
+    if !home.is_dir() {
+        anyhow::bail!("{} is not a directory", home_dir.display());
+    }
+    Ok(Some(home))
+}
+
+fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() && keep.starts_with(&path) {
+            remove_tree_except(&path, keep)?;
+        } else if file_type.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
         }
     }
-
-    fs::remove_dir_all(home_dir)
-        .with_context(|| format!("dangerously overwriting {}", home_dir.display()))?;
     Ok(())
 }
 

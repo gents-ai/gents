@@ -41,6 +41,7 @@ pub mod descendant_graph;
 pub mod document_config;
 pub mod error;
 pub mod eth;
+pub mod eval;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
 pub mod goal;
@@ -219,6 +220,7 @@ pub mod meta_tools;
 pub mod migration;
 pub mod native_executor_status;
 pub mod oneshot;
+pub mod optimization;
 pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
@@ -302,8 +304,8 @@ pub use compaction::CompactionStrategy;
 pub use config::{
     ReasoningEffort, ResolvedBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
-    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 pub use config_client::ConfigAccess;
 pub use defra_node;
@@ -314,6 +316,8 @@ pub use descendant_graph::{
     DescendantGraphAccess, DescendantMaterializationState, DescendantPage, DescendantQuery,
     DescendantScope, MAX_DESCENDANT_PAGE_LIMIT,
 };
+#[cfg(test)]
+pub(crate) use document_config::upsert_agent_principal;
 pub use document_config::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -322,12 +326,11 @@ pub use document_config::{
     list_chain_key_bindings_query, list_datastore_tool_surfaces, list_eth_tools,
     list_inference_profile_records, load_agent_behavior, load_agent_principal,
     load_inference_profile, merge_datastore_tool_surfaces, upsert_agent_behavior,
-    upsert_agent_principal, upsert_chain_key_binding, upsert_chain_key_binding_mutation,
-    upsert_inference_profile, AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument,
-    ConfigReferences, DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile,
-    MergedSurfaceTools, QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools,
-    WriteToolDecl, WriteToolField, WriteToolFieldFill, WriteToolOutputObligation,
-    WriteToolOutputObligationScope,
+    upsert_chain_key_binding, upsert_chain_key_binding_mutation, upsert_inference_profile,
+    AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument, ConfigReferences,
+    DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
+    QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
@@ -431,9 +434,7 @@ pub mod __test_internals {
     };
     pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
-    pub use crate::lifecycle::queue::{
-        drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
-    };
+    pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
     pub use crate::trigger_engine::run_subagent_source_for_test;
 
     /// Drive one scan through the same owner as the runtime's cancel-mirror loop.

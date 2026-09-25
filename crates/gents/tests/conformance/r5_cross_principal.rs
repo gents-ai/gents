@@ -30,12 +30,7 @@ struct ToolCallRow {
 }
 
 pub(super) async fn generated_r5_cross_principal_cases_drive_production_dispatch() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents::trigger_engine::subagent_source=trace,gents::trigger_engine::production_materializer=debug,gents::agent::p2p_reconcile::enrollment_reconcile=debug",
-        ))
-        .try_init();
+    crate::support::r5_conformance::init_tracing();
     let cases = lean_r5_cross_principal_cases();
     assert_eq!(
         cases.len(),

@@ -66,6 +66,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             bash: BashMode::Unrestricted,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -145,6 +146,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
                     .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
             ),
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -207,6 +209,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             bash: BashMode::ReadOnly,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -259,6 +262,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             bash: BashMode::ReadOnly,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -310,6 +314,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             bash: BashMode::Off,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -360,6 +365,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             bash: BashMode::ReadOnly,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -410,6 +416,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             bash: BashMode::ReadOnly,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -458,6 +465,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
                     .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
             ),
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -504,6 +512,7 @@ fn selection_without_root_inherits_operator_root() {
             bash: BashMode::Unrestricted,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -563,6 +572,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             bash: BashMode::Off,
             command_policy: None,
             cli_tool_names: vec!["rg".to_string()],
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -619,6 +629,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             bash: BashMode::Off,
             command_policy: None,
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -674,6 +685,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             bash: BashMode::Off,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -809,6 +821,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             bash: BashMode::Unrestricted,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -859,6 +872,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             bash: BashMode::ReadOnly,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -914,6 +928,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             bash: BashMode::Unrestricted,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -2522,6 +2537,87 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         .tool_names
         .contains(&crate::meta_tools::flat_tool_name("denied", "write")));
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn configured_command_output_caps_bound_bash_and_cli_results() {
+    let root = temp_root("gents-command-output-cap");
+    let ceiling = ToolCeiling::readwrite(root)
+        .with_cli_tool(cli_tool("sh", "/bin/sh", "shell"))
+        .with_cli_tool(cli_tool("sh_default", "/bin/sh", "shell"));
+    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "capped", "agent_did": "did:key:example",
+        "host": {
+            "bash": {"mode": "Unrestricted", "max_output_chars": 10},
+            "cli": [{"name": "sh", "max_output_chars": 12}, {"name": "sh_default"}]
+        }
+    }))
+    .unwrap();
+    let config =
+        BehaviorToolConfig::from_tools_documents("capped", &tools, &[], &[], &[], &ceiling, vec![])
+            .unwrap();
+    let cli_caps = config
+        .host_tools()
+        .native_tools()
+        .iter()
+        .filter_map(|tool| match tool {
+            crate::toolset::NativeTool::Cli(tool) => {
+                Some((tool.name.as_str(), tool.max_output_chars))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cli_caps,
+        vec![
+            ("sh", 12),
+            ("sh_default", crate::toolset::DEFAULT_MAX_COMMAND_CHARS)
+        ]
+    );
+    let built = config.host_tools().build_native_tools().unwrap();
+    let call = |name: &str, args: serde_json::Value| {
+        let tool = built.iter().find(|tool| tool.name() == name).unwrap();
+        tool.call(args.to_string())
+    };
+
+    let bash = call(
+        "bash_unrestricted",
+        serde_json::json!({"command": "printf '%100s' x", "raw_json": true}),
+    )
+    .await
+    .unwrap();
+    let text = |raw: String| serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let bash: serde_json::Value = serde_json::from_str(&text(bash)).unwrap();
+    let truncation = &bash["stdout_truncation"];
+    assert_eq!(truncation["max_bytes"], 10, "{bash}");
+    assert_eq!(truncation["total_bytes"], 100, "{bash}");
+    assert_eq!(truncation["truncated"], true, "{bash}");
+    assert_eq!(truncation["returned_bytes"], 10, "{bash}");
+    assert!(
+        bash["stdout"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{:10}\n", "")),
+        "{bash}"
+    );
+
+    let cli = call(
+        "sh",
+        serde_json::json!({"argv": ["-c", "printf '%100s' x"]}),
+    )
+    .await
+    .unwrap();
+    let cli = text(cli);
+    let stdout = cli
+        .split_once("stdout:\n")
+        .unwrap()
+        .1
+        .split_once("\nstderr:")
+        .unwrap()
+        .0;
+    assert!(stdout.starts_with(&format!("{:12}\n", "")), "{cli}");
+    assert!(stdout.contains("first 12 of 100 bytes"), "{cli}");
 }
 
 #[test]

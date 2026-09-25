@@ -5,6 +5,7 @@ import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteReq
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
+import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
@@ -15,6 +16,7 @@ import type { InferenceBackendRecommendationRequest } from "../generated/Inferen
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
 import type {
   AgentConfigSaveRequest,
+  DefaultBehaviorSetRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
   BehaviorDeleteRequest,
@@ -93,10 +95,15 @@ export type DesktopApiAdapter = {
     agentName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
+  /** Omit `confirmation` to preview a home this version cannot open. */
   resetManagedServer?: (
     confirmation?: string,
+    disposition?: HomeResetDisposition,
   ) => Promise<ManagedServerResetResult>;
+  /** Quits the application, leaving all local state untouched. */
+  quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
+  openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
     agentName: string,
   ) => Promise<ManagedServerStatus>;
@@ -175,6 +182,9 @@ export type DesktopApiAdapter = {
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
+  setDefaultBehavior: (
+    request: DefaultBehaviorSetRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveBehaviorConfig: (
     request: BehaviorSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -251,6 +261,12 @@ export type DesktopApiAdapter = {
     agentDid: string,
     credentialId: string,
   ) => Promise<void>;
+  /** Saves a sign-in the bridge holds after a failed credential save,
+   *  without repeating the browser login. `provider` is the credential kind. */
+  retrySaveProviderAccount?: (
+    agentDid: string,
+    provider: string,
+  ) => Promise<ProviderAccountView>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -289,4 +305,4 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
 };
 
-export type { ManagedServerResetResult, ManagedServerStatus };
+export type { HomeResetDisposition, ManagedServerResetResult, ManagedServerStatus };

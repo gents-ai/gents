@@ -51,6 +51,50 @@ pub(crate) async fn load_session_tool_calls(
     .await
 }
 
+/// Canonical accepted arguments of one exact physical tool document in an
+/// authorized session scope, one entry per matching physical row. Reads only
+/// the tool row and the messages at its accepted sequence, binding them with
+/// the session timeline's accepted-header rules, so the cost is independent of
+/// the session or run transcript. Deliveries are not resolved.
+pub(crate) async fn load_accepted_tool_arguments(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    tool_doc_id: &str,
+) -> Result<Vec<String>> {
+    let observations = event_loaders::load_timeline_tool_observation(
+        access,
+        agent_did,
+        session_id,
+        requester_did,
+        tool_doc_id,
+    )
+    .await?;
+    let mut arguments = Vec::with_capacity(observations.len());
+    for observation in observations {
+        // Delegated arguments are carried on the host row itself.
+        let messages = if observation.delegated_input.is_some() {
+            Vec::new()
+        } else {
+            let sequence = observation
+                .row
+                .message_sequence
+                .context("accepted tool lacks its accepted message sequence")?;
+            event_loaders::resolve_timeline_messages_at_sequence(
+                access,
+                agent_did,
+                session_id,
+                requester_did,
+                sequence,
+            )
+            .await?
+        };
+        arguments.push(event_loaders::resolve_tool_payloads(observation, &messages)?.args);
+    }
+    Ok(arguments)
+}
+
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
     match load_timeline_descendant_edges(access, request_id).await {
@@ -221,6 +265,9 @@ async fn load_timeline_descendant_edges(
             },
         )
         .await?;
+        // This loop only follows cursors it was just handed; an anchor that
+        // vanished between pages would restart the scope and duplicate edges.
+        anyhow::ensure!(!page.stale_cursor, "descendant graph changed while paging");
         edges.extend(page.edges);
         if !page.has_more {
             break;

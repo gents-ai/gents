@@ -172,8 +172,8 @@ async fn run_contract_with_streaming_cadence(
         core.set_selected_agent_did(Some(agent_did.clone()));
         let enrollment_started = Instant::now();
         let enrollment = timeout(ENROLL_BUDGET, async {
-            let (_, offer) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
-            let pending = core.request_status_enrollment_with_label(&offer, Some("Contract")).await?;
+            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+            let pending = core.request_status_enrollment_with_label(&status, Some("Contract")).await?;
             anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;

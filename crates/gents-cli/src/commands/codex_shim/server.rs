@@ -94,7 +94,7 @@ pub(crate) async fn bind_codex_shim(
     validate_bind_security(args.bind_addr, args.auth_token.as_deref())
         .map_err(CodexShimBindError::HostResource)?;
 
-    let codex_home = args.home.join("codex-ui");
+    let codex_home = args.home.join(gents::home::CODEX_UI_DIR_NAME);
     let codex_log_dir = codex_home.join("log");
     fs::create_dir_all(&codex_log_dir)
         .with_context(|| format!("creating Codex UI log dir {}", codex_log_dir.display()))

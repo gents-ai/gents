@@ -22,7 +22,7 @@ import { isTerminalTurnState } from "./live-bridge-runner/observations";
    nonterminal streaming observation is required; and the session is reloaded
    afterwards to prove the assistant final text and tool calls are durable.
    The fixture ships only the generic "Live Repo Audit Default" behavior; The
-   Engineer behavior is NOT exercised here (see tests/NATIVE_QA.md). Real
+   Engineer behavior is NOT exercised here. Real
    DMG install, first-run setup/start/config, and manual acceptance remain
    separate requirements.
    Requires GENTS_TAURI_LIVE=1 (set by tests/run-live-test.mjs) and real
@@ -53,7 +53,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       // (2) Fixture runtime configuration, asserted through the canonical
       // generated DeploymentView types (no guessed fields). bridge_runner
       // here is the test fixture runtime, not the managed backend; the
-      // real setup/start/config acceptance is separate (NATIVE_QA.md).
+      // real setup/start/config acceptance is separate.
       const expectedInferenceUrl =
         process.env.GENTS_TAURI_LIVE_INFERENCE_URL ??
         process.env.GENTS_DESKTOP_LIVE_BACKEND_ENDPOINT ??
@@ -84,7 +84,7 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
       ).toBeDefined();
       // The fixture ships a generic repository-audit behavior, not The
       // Engineer; Engineer behavior acceptance is out of scope for this
-      // fixture and stays documented as uncovered (NATIVE_QA.md).
+      // fixture and stays uncovered.
       expect(defaultBehavior?.displayName).toBe(FIXTURE_DEFAULT_BEHAVIOR_DISPLAY_NAME);
       const profile = deployment.inferenceProfiles.find(
         (candidate) => candidate.profile_id === defaultBehavior?.inferenceProfileId,

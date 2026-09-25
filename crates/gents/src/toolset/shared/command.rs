@@ -20,7 +20,7 @@ pub use gents_loop::tool_policy::{
     WorkspaceAuthority,
 };
 
-const OUTPUT_META_PREFIX: &str = "gents_exec: ";
+use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -424,6 +424,7 @@ pub(crate) async fn run_command(
     timeout: Duration,
     policy: &CommandExecutionPolicy,
     raw_json: bool,
+    max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
     let policy = effective_command_policy(policy);
     let cwd = context.resolve_existing_dir(cwd)?;
@@ -507,8 +508,8 @@ pub(crate) async fn run_command(
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let stderr_raw = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
-    let stdout = truncate_stream(&stdout_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
-    let stderr = truncate_stream(&stderr_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
+    let stdout = truncate_stream(&stdout_raw, max_output_chars);
+    let stderr = truncate_stream(&stderr_raw, max_output_chars);
     let status = if timed_out {
         "timeout"
     } else if exit_code == Some(0) {
@@ -533,6 +534,10 @@ pub(crate) async fn run_command(
         stderr_capture_incomplete,
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
+        hint: (timed_out
+            && !crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .is_some_and(|context| context.background))
+        .then(|| foreground_timeout_hint(duration_ms)),
     };
     let output = CommandOutput {
         metadata,
@@ -1478,6 +1483,20 @@ struct CommandMetadata {
     stderr_capture_incomplete: bool,
     stdout_truncation: StreamTruncationMetadata,
     stderr_truncation: StreamTruncationMetadata,
+    /// Model-facing next step; present only when the foreground timeout
+    /// stopped the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+}
+
+/// The foreground timeout keeps the output captured so far; point the model
+/// at the background owner instead of a blind retry.
+fn foreground_timeout_hint(duration_ms: u64) -> String {
+    format!(
+        "timed out after {:.1}s; stdout and stderr below were captured before it was stopped. For long-running work use {} and poll its output.",
+        duration_ms as f64 / 1000.0,
+        crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+    )
 }
 
 #[derive(Clone, Copy, Serialize)]

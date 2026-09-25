@@ -212,6 +212,16 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+    #[command(about = "Run, inspect, compare and clean up evals")]
+    Eval {
+        #[command(subcommand)]
+        command: EvalCommand,
+    },
+    #[command(about = "Run, inspect, promote and revert configuration optimization jobs")]
+    Optimization {
+        #[command(subcommand)]
+        command: OptimizationCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1505,8 +1515,11 @@ pub(crate) struct ServeArgs {
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) http_addr: IpAddr,
-    #[arg(long, default_value_t = crate::DEFAULT_HTTP_PORT)]
-    pub(crate) http_port: u16,
+    #[arg(
+        long,
+        help = "HTTP port. Defaults to 9191, where the desktop and CLI expect the default home's runtime"
+    )]
+    pub(crate) http_port: Option<u16>,
     #[arg(long)]
     pub(crate) agent_name: Option<String>,
     #[arg(long)]
@@ -1732,6 +1745,11 @@ pub(crate) struct ChatArgs {
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
+    #[arg(
+        long,
+        help = "Print raw tool call arguments/results as JSON instead of the short summary line"
+    )]
+    pub(crate) verbose: bool,
     #[arg(value_name = "MESSAGE")]
     pub(crate) message: Vec<String>,
 }
@@ -3799,6 +3817,606 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
+}
+
+/// `--home` and `--graphql`, resolved the way every home-reading command
+/// resolves them.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub(crate) struct EvalScopeArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum EvalCommand {
+    #[command(
+        about = "Freeze and run an eval over one or more cells; Ctrl-C cancels",
+        long_about = "Freeze and run an eval over one or more cells; Ctrl-C cancels.\n\n\
+                      Each stage's captures come from the eval definition (its stage's \
+                      `capture` list); this command adds none.",
+        after_help = EVAL_RUN_AFTER_HELP
+    )]
+    Run(EvalRunArgs),
+    #[command(
+        about = "Continue a run from what it already wrote",
+        after_help = EVAL_RUN_AFTER_HELP
+    )]
+    Resume(EvalResumeArgs),
+    #[command(about = "List eval runs; invalidated runs only with --all")]
+    List(EvalListArgs),
+    #[command(about = "Show a run's report: slot counts, case means, headline, usage, exposure")]
+    Show(EvalShowArgs),
+    #[command(about = "Show one slot's latest attempt with its stages and verdicts")]
+    Trial(EvalTrialArgs),
+    #[command(about = "Ask the process hosting a run to stop at its next check")]
+    Cancel(EvalRunIdArgs),
+    #[command(about = "Invalidate a run as this home; its documents stay")]
+    Invalidate(EvalInvalidateArgs),
+    #[command(about = "Delete a run's directory (homes, packs, sidecars); its documents stay")]
+    Rm(EvalRmArgs),
+    #[command(
+        about = "Paired statistics between two cells; a policy verdict only with --policy; --by check|stage breaks it down, --case shows one case side by side"
+    )]
+    Compare(EvalCompareArgs),
+    #[command(
+        about = "Re-render a run's report and its in-flight slots until no process runs it",
+        after_help = EVAL_WATCH_AFTER_HELP
+    )]
+    Watch(EvalWatchArgs),
+    #[command(
+        about = "Delete the directories of old, finished runs no optimization job references; their documents stay"
+    )]
+    Gc(EvalGcArgs),
+    #[command(
+        about = "List the checks a definition may name, with their params schema and reason codes"
+    )]
+    Checks(EvalChecksArgs),
+    #[command(
+        about = "Interview a model about one behavior of a pack and write the eval definition pack it drafts",
+        after_help = EVAL_INIT_AFTER_HELP
+    )]
+    Init(EvalInitArgs),
+}
+
+impl EvalCommand {
+    pub(crate) fn scope(&self) -> &EvalScopeArgs {
+        match self {
+            Self::Run(args) => &args.scope,
+            Self::Resume(args) => &args.scope,
+            Self::List(args) => &args.scope,
+            Self::Show(args) => &args.scope,
+            Self::Trial(args) => &args.scope,
+            Self::Cancel(args) => &args.scope,
+            Self::Invalidate(args) => &args.scope,
+            Self::Rm(args) => &args.scope,
+            Self::Compare(args) => &args.scope,
+            Self::Watch(args) => &args.scope,
+            Self::Gc(args) => &args.scope,
+            Self::Init(args) => &args.scope,
+            // `dispatch` answers `checks` before resolving any home.
+            Self::Checks(_) => &NO_SCOPE,
+        }
+    }
+}
+
+/// The scope of a command that reads no home.
+static NO_SCOPE: EvalScopeArgs = EvalScopeArgs {
+    home: None,
+    graphql: None,
+};
+
+#[derive(clap::Args)]
+pub(crate) struct EvalListArgs {
+    /// Only runs of this eval definition.
+    #[arg(long)]
+    pub(crate) definition: Option<String>,
+    /// Include invalidated runs.
+    #[arg(long)]
+    pub(crate) all: bool,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalShowArgs {
+    pub(crate) run_id: String,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalTrialArgs {
+    pub(crate) run_id: String,
+    pub(crate) cell: String,
+    pub(crate) case_id: String,
+    /// Defaults to 0.
+    pub(crate) trial_index: Option<u32>,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalRunIdArgs {
+    pub(crate) run_id: String,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalInvalidateArgs {
+    pub(crate) run_id: String,
+    /// Operator-authored; replicates with the run.
+    #[arg(long)]
+    pub(crate) reason: String,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalRmArgs {
+    pub(crate) run_id: String,
+    /// Delete even when the run still owes slots, a live process runs it, or
+    /// a job that is not settled still needs it.
+    #[arg(long)]
+    pub(crate) force: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `--interval`: at least 250 ms, so a watcher never spins, and at most an
+/// hour, so every wait the watch derives from it is representable. Takes
+/// `ms` as well as the `s`, `m` and `h` suffixes.
+pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
+    let interval = match raw.trim().strip_suffix("ms") {
+        Some(millis) => millis
+            .parse::<u64>()
+            .map(std::time::Duration::from_millis)
+            .map_err(|_| format!("invalid duration number in {raw}"))?,
+        None => {
+            crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?
+        }
+    };
+    if interval < std::time::Duration::from_millis(250) {
+        return Err(format!("--interval {raw:?} is under 250ms"));
+    }
+    if interval > std::time::Duration::from_secs(3600) {
+        return Err(format!("--interval {raw:?} is over 1h"));
+    }
+    Ok(interval)
+}
+
+/// `gents eval run` and `gents eval resume`'s exit statuses: scripts must
+/// not read a stopped run as a success.
+const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents eval resume` continues it) or the command was refused; 2 on a usage error.";
+
+/// `gents eval watch`'s exit statuses: scripts must not read a stopped run
+/// as a success.
+const EVAL_WATCH_AFTER_HELP: &str = "Exit status: 0 when the run ends finished, or after the one render of --once; 1 when it ends stopped (slots still owed, as after a cancel, or the report unavailable) or the watch fails; 2 on a usage error.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalWatchArgs {
+    pub(crate) run_id: String,
+    /// How long to wait between renders; at least 250ms, at most 1h.
+    #[arg(long, value_parser = parse_interval, default_value = "2s")]
+    pub(crate) interval: std::time::Duration,
+    /// Render once and return.
+    #[arg(long)]
+    pub(crate) once: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `--older-than`: any duration, zero included, that a cutoff can be taken
+/// from: one that reaches back no further than the earliest representable
+/// time from the Unix epoch, so it does from any later now.
+pub(crate) fn parse_age(raw: &str) -> Result<std::time::Duration, String> {
+    let age =
+        crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?;
+    chrono::Duration::from_std(age)
+        .ok()
+        .and_then(|age| chrono::DateTime::UNIX_EPOCH.checked_sub_signed(age))
+        .ok_or_else(|| {
+            format!("--older-than {raw:?} reaches before the earliest representable time")
+        })?;
+    Ok(age)
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalGcArgs {
+    /// Only runs created at least this long ago (`30m`, `14d`; `0s` for any).
+    #[arg(long, value_parser = parse_age, default_value = "14d")]
+    pub(crate) older_than: std::time::Duration,
+    /// Only runs of this eval definition.
+    #[arg(long)]
+    pub(crate) definition: Option<String>,
+    /// List what would be removed; remove nothing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Also remove the directories of this home's settled optimization jobs
+    /// (nothing to promote, exhausted, failed, stale, promoted or reverted)
+    /// last modified before the threshold; with --definition, only that
+    /// definition's.
+    #[arg(long)]
+    pub(crate) jobs: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// No scope: the catalog is the binary's builtin registry, read with no home.
+#[derive(clap::Args)]
+pub(crate) struct EvalChecksArgs {
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+/// `--policy defaults` or a path to a `PolicyV2` JSON document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PolicyArg {
+    Defaults,
+    File(PathBuf),
+}
+
+pub(crate) fn parse_policy(raw: &str) -> Result<PolicyArg, String> {
+    match raw.trim() {
+        "" => Err("--policy takes `defaults` or a path to a policy JSON file".to_owned()),
+        "defaults" => Ok(PolicyArg::Defaults),
+        path => Ok(PolicyArg::File(PathBuf::from(path))),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BreakdownArg {
+    Check,
+    Stage,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalCompareArgs {
+    pub(crate) baseline_run: String,
+    pub(crate) candidate_run: String,
+    /// Required when the baseline run has more than one cell.
+    #[arg(long)]
+    pub(crate) baseline_cell: Option<String>,
+    /// Required when the candidate run has more than one cell.
+    #[arg(long)]
+    pub(crate) candidate_cell: Option<String>,
+    #[arg(long, value_parser = parse_policy)]
+    pub(crate) policy: Option<PolicyArg>,
+    /// Aggregate the paired difference by check name or stage id.
+    #[arg(long, value_enum, conflicts_with = "case_id")]
+    pub(crate) by: Option<BreakdownArg>,
+    /// Print this case's trials side by side with each verdict.
+    #[arg(long = "case")]
+    pub(crate) case_id: Option<String>,
+    /// Compare a pilot run (purpose `pilot`) as if it were evidence.
+    #[arg(long)]
+    pub(crate) include_pilot: bool,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// One `--cell <id>=<pack>[:<behavior>]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CellArg {
+    pub(crate) cell_id: String,
+    /// A directory, or a pack name resolved like `gents pack install`.
+    pub(crate) pack: String,
+    pub(crate) behavior: Option<String>,
+}
+
+/// Split at the first `:` after the `=`: behavior ids may hold colons
+/// (`did:key:…:default`), pack names and ordinary paths do not.
+pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String> {
+    let (cell_id, rest) = raw
+        .split_once('=')
+        .ok_or_else(|| format!("--cell {raw:?} must be <id>=<pack>[:<behavior>]"))?;
+    let (pack, behavior) = match rest.split_once(':') {
+        Some((pack, behavior)) => (pack, Some(behavior)),
+        None => (rest, None),
+    };
+    if cell_id.trim().is_empty()
+        || pack.trim().is_empty()
+        || behavior.is_some_and(|behavior| behavior.trim().is_empty())
+    {
+        return Err(format!("--cell {raw:?} has an empty id, pack or behavior"));
+    }
+    Ok(CellArg {
+        cell_id: cell_id.trim().to_owned(),
+        pack: pack.trim().to_owned(),
+        behavior: behavior.map(|behavior| behavior.trim().to_owned()),
+    })
+}
+
+/// `<key>=<value>`, both non-empty.
+pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
+    match raw.split_once('=') {
+        Some((key, value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
+            Ok((key.trim().to_owned(), value.trim().to_owned()))
+        }
+        _ => Err(format!("{raw:?} must be <cell>=<profile_id>")),
+    }
+}
+
+/// `gents eval run --purpose`: anything but `pilot`, which leaves a run out
+/// of exposure and so belongs to `gents eval init --pilot` alone.
+pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
+    let purpose = raw.trim();
+    if purpose == gents::eval::scoring::PILOT_PURPOSE {
+        return Err(format!(
+            "{purpose:?} is recorded only by `gents eval init --pilot`; a pilot run is left out of exposure"
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
+pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit, String> {
+    serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
+        .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
+}
+
+// Each stage's captures come from the eval definition (`EvalStage.capture`),
+// not from this command; `run` passes no run-level fallback.
+#[derive(clap::Args)]
+pub(crate) struct EvalRunArgs {
+    pub(crate) definition_id: String,
+    /// `<id>=<pack>[:<behavior>]`, once per cell. `<pack>` is a pack name,
+    /// resolved as `gents pack install` resolves one, or a pack directory
+    /// written as a path (`./subject`, `/packs/subject`).
+    #[arg(long = "cell", value_parser = parse_cell, required = true)]
+    pub(crate) cells: Vec<CellArg>,
+    /// `<cell>=<inference_profile_id>`; a cell without one uses the home's
+    /// default profile.
+    #[arg(long = "profile", value_parser = parse_assignment)]
+    pub(crate) profiles: Vec<(String, String)>,
+    #[arg(long, value_parser = parse_split, default_value = "validation")]
+    pub(crate) split: gents::document_config::EvalSplit,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) trials: u32,
+    #[arg(long, default_value_t = 1000)]
+    pub(crate) seed_base: i64,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) concurrency: u32,
+    /// Why the run exists: `eval` by default, or `optimization:<job_id>`.
+    /// `pilot` is refused; only `gents eval init --pilot` records a pilot.
+    #[arg(long, default_value = "eval", value_parser = parse_run_purpose)]
+    pub(crate) purpose: String,
+    /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
+    /// time; name a run with `--run-id` to reuse it (the idempotent freeze).
+    #[arg(long)]
+    pub(crate) run_id: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) max_infra_retries: u32,
+    /// The pack registry to fall back to for a pack not compiled in. As with
+    /// `gents pack install`, a registry download is cached under the default
+    /// home, not `--home` (inherited behavior).
+    #[arg(long)]
+    pub(crate) registry: Option<String>,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `gents eval init`'s exit statuses.
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalInitArgs {
+    /// A pack name, resolved as `gents pack install` resolves one, or a pack
+    /// directory written as a path (`./subject`, `/packs/subject`).
+    pub(crate) subject: String,
+    /// The behavior to draft cases for; implied when the pack has one.
+    #[arg(long)]
+    pub(crate) behavior: Option<String>,
+    /// Where the definition pack is written; refused when it exists, unless
+    /// --force.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// The definition's id; the author's draft names one when absent.
+    #[arg(long)]
+    pub(crate) definition_id: Option<String>,
+    /// The inference profile the author (and the pilot) runs on; the home's
+    /// default when absent.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
+    /// Run the written draft once, one trial per case on every split, and let
+    /// the author revise it from the evidence.
+    #[arg(long)]
+    pub(crate) pilot: bool,
+    /// Pilot without asking first.
+    #[arg(long)]
+    pub(crate) yes: bool,
+    /// Replace an existing --out that gents eval init wrote.
+    #[arg(long)]
+    pub(crate) force: bool,
+    /// The fewest validation cases a draft may have.
+    #[arg(long, default_value_t = 6)]
+    pub(crate) validation_min: usize,
+    /// How long one author turn may go without progress.
+    #[arg(long, default_value_t = 86_400)]
+    pub(crate) timeout_secs: u64,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) poll_secs: u64,
+    /// The pack registry to fall back to for a subject not compiled in.
+    #[arg(long)]
+    pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalResumeArgs {
+    pub(crate) run_id: String,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `--subject <pack>[:<behavior>]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SubjectArg {
+    pub(crate) pack: String,
+    pub(crate) behavior: Option<String>,
+}
+
+pub(crate) fn parse_subject(raw: &str) -> Result<SubjectArg, String> {
+    let (pack, behavior) = match raw.split_once(':') {
+        Some((pack, behavior)) => (pack, Some(behavior)),
+        None => (raw, None),
+    };
+    if pack.trim().is_empty() || behavior.is_some_and(|behavior| behavior.trim().is_empty()) {
+        return Err(format!("--subject {raw:?} must be <pack>[:<behavior>]"));
+    }
+    Ok(SubjectArg {
+        pack: pack.trim().to_owned(),
+        behavior: behavior.map(|behavior| behavior.trim().to_owned()),
+    })
+}
+
+/// `--proposer scripted:<file>`: a script of proposals, the only proposer
+/// for now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProposerArg {
+    pub(crate) script: PathBuf,
+}
+
+pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
+    match raw.strip_prefix("scripted:") {
+        Some(path) if !path.trim().is_empty() => Ok(ProposerArg {
+            script: PathBuf::from(path.trim()),
+        }),
+        _ => Err(format!(
+            "unknown proposer {raw:?}; no model-driven proposer is available yet; pass --proposer scripted:<file>"
+        )),
+    }
+}
+
+/// `gents optimization run`'s exit statuses: scripts must not read a job left
+/// running as a success.
+const OPTIMIZATION_RUN_AFTER_HELP: &str = "Exit status: 0 when the job settled; 1 when it stopped still running (Ctrl-C; the same command with --job-id resumes it) or the command was refused; 2 on a usage error.";
+
+#[derive(Subcommand)]
+pub(crate) enum OptimizationCommand {
+    #[command(
+        about = "Run an optimization job over a subject pack; Ctrl-C stops it for a resume",
+        long_about = "Run an optimization job over a subject pack; Ctrl-C stops it for a resume.\n\n\
+                      Each stage's captures come from the eval definition (its stage's \
+                      `capture` list); this command adds none.",
+        after_help = OPTIMIZATION_RUN_AFTER_HELP
+    )]
+    Run(OptimizationRunArgs),
+    #[command(about = "Show a job's journal and every decision recomputed from its runs")]
+    Show(OptimizationShowArgs),
+    #[command(about = "Promote a ready job's checkpoint into the live configuration")]
+    Promote(OptimizationDigestArgs),
+    #[command(about = "Restore the text a promotion replaced; Reverted is final")]
+    Revert(OptimizationDigestArgs),
+    #[command(
+        about = "Delete a settled job's directory (candidate packs, staging); its documents stay"
+    )]
+    Rm(OptimizationRmArgs),
+}
+
+impl OptimizationCommand {
+    pub(crate) fn scope(&self) -> &EvalScopeArgs {
+        match self {
+            Self::Run(args) => &args.scope,
+            Self::Show(args) => &args.scope,
+            Self::Promote(args) | Self::Revert(args) => &args.scope,
+            Self::Rm(args) => &args.scope,
+        }
+    }
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OptimizationRunArgs {
+    pub(crate) definition_id: String,
+    /// `<pack>[:<behavior>]`: a pack name, resolved as `gents pack install`
+    /// resolves one, or a pack directory written as a path. Without a
+    /// behavior, the pack's only inference-slot behavior.
+    #[arg(long, value_parser = parse_subject)]
+    pub(crate) subject: SubjectArg,
+    #[arg(long, default_value_t = 3)]
+    pub(crate) rounds: u32,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) trials: u32,
+    #[arg(long, default_value_t = 1000)]
+    pub(crate) seed_base: i64,
+    /// `defaults` (with max_rounds set to --rounds) when absent.
+    #[arg(long, value_parser = parse_policy)]
+    pub(crate) policy: Option<PolicyArg>,
+    /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
+    /// time; name the job with `--job-id` and repeat the same flags to
+    /// resume it.
+    #[arg(long)]
+    pub(crate) job_id: Option<String>,
+    /// `scripted:<file>`: a JSON array of `{"text", "rationale"}`, one per
+    /// round; a file holding fewer than `--rounds` is refused before the job
+    /// is frozen.
+    #[arg(long, value_parser = parse_proposer)]
+    pub(crate) proposer: Option<ProposerArg>,
+    /// The inference profile both arms run on; the home's default when absent.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
+    #[arg(long, default_value_t = 10_000)]
+    pub(crate) max_case_trials: u64,
+    /// The job's token budget; unlimited when absent.
+    #[arg(long)]
+    pub(crate) max_tokens: Option<u64>,
+    /// The structural gate's cap on a proposed text, in bytes.
+    #[arg(long, default_value_t = crate::commands::optimization::DEFAULT_MAX_TEXT_BYTES)]
+    pub(crate) max_text_bytes: usize,
+    /// The pack registry to fall back to for a pack not compiled in.
+    #[arg(long)]
+    pub(crate) registry: Option<String>,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OptimizationShowArgs {
+    pub(crate) job_id: String,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OptimizationDigestArgs {
+    pub(crate) job_id: String,
+    /// promote: the checkpoint's pack digest (`optimization show`);
+    /// revert: the target digest the promotion printed.
+    #[arg(long)]
+    pub(crate) digest: String,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct OptimizationRmArgs {
+    pub(crate) job_id: String,
+    /// Delete even while the job is running or waiting to be promoted; a
+    /// job waiting to be promoted can no longer be promoted afterwards, since
+    /// its retained checkpoint pack is gone. A job whose directory is not
+    /// under this home is never removed.
+    #[arg(long)]
+    pub(crate) force: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
 }
 
 #[cfg(test)]

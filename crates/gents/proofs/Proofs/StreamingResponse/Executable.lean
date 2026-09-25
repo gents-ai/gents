@@ -105,6 +105,48 @@ def sampleNativeMessage : MessageEnvelope :=
           ⟨⟨110, 1⟩, .full⟩ (some "tool-sig") (some "{\"mode\":\"fast\"}")]
     createdAt := 7 }
 
+def sampleMixedReasoningPayload : Segment :=
+  { id := 120, coordinate := sampleCoordinate, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 1, some { block := 0, part := 0, kind := .reasoning }⟩,
+       ⟨1, 1, some { block := 0, part := 1, kind := .summary }⟩,
+       ⟨2, 1, some { block := 0, part := 2, kind := .opaque }⟩,
+       ⟨3, 1, some { block := 0, part := 3, kind := .opaque }⟩],
+      [97, 98, 99, 100]⟩
+    close := some (.closed .complete 1 [1, 1, 1, 1]), createdAt := 5 }
+
+def sampleMixedReasoningMessage : MessageEnvelope :=
+  { header :=
+      { id := 220, session := 1, request := some 10, origin := none
+        refs := [⟨120, 0⟩, ⟨120, 1⟩, ⟨120, 2⟩, ⟨120, 3⟩]
+        outcome := .complete, role := .assistant, publication := .requestExecution 7 }
+    key := "mixed-reasoning", sequence := 2, nativeId := some "mixed-native"
+    blocks := [.reasoning (some "mixed-reasoning-id")
+      [.text ⟨⟨120, 0⟩, .full⟩ (some "sig"),
+       .summary ⟨⟨120, 1⟩, .full⟩,
+       .encrypted ⟨⟨120, 2⟩, .full⟩,
+       .redacted ⟨⟨120, 3⟩, .full⟩]]
+    createdAt := 7 }
+
+def sampleAllOpaqueReasoningPayload : Segment :=
+  { id := 121, coordinate := sampleCoordinate, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 1, some { block := 0, part := 0, kind := .opaque }⟩,
+       ⟨1, 1, some { block := 0, part := 1, kind := .opaque }⟩],
+      [101, 102]⟩
+    close := some (.closed .complete 1 [1, 1]), createdAt := 5 }
+
+def sampleAllOpaqueReasoningMessage : MessageEnvelope :=
+  { header :=
+      { id := 221, session := 1, request := some 10, origin := none
+        refs := [⟨121, 0⟩, ⟨121, 1⟩]
+        outcome := .complete, role := .assistant, publication := .requestExecution 7 }
+    key := "all-opaque-reasoning", sequence := 3, nativeId := some "opaque-native"
+    blocks := [.reasoning (some "opaque-reasoning-id")
+      [.encrypted ⟨⟨121, 0⟩, .full⟩,
+       .redacted ⟨⟨121, 1⟩, .full⟩]]
+    createdAt := 7 }
+
 def baseObservation
     (records : List Segment := [sampleComplete])
     (messages : List MessageEnvelope := [sampleMessage])
@@ -118,6 +160,14 @@ def baseObservation
   , deniedHeaders := [], deniedSegments := [], dependencyDenials := []
   , owner, target := ⟨coordinate, writer, messageId⟩
   , requestTerminal, terminalSelection }
+
+def mixedReasoningObservation : Observation :=
+  baseObservation (records := [sampleMixedReasoningPayload])
+    (messages := [sampleMixedReasoningMessage]) (messageId := some 220)
+
+def allOpaqueReasoningObservation : Observation :=
+  baseObservation (records := [sampleAllOpaqueReasoningPayload])
+    (messages := [sampleAllOpaqueReasoningMessage]) (messageId := some 221)
 
 def viewName : View → String
   | .absent => "absent"
@@ -227,9 +277,13 @@ def outputProjectionCases : List OutputProjectionCase :=
       (baseObservation
         (records := CanonicalOutput.deliver [sampleOpen] sampleOpenContinuation)
         (messages := []) (messageId := none))
+  , case "published_mixed_reasoning_renders_text_and_summary_only"
+      mixedReasoningObservation
+  , case "published_all_opaque_reasoning_renders_nothing"
+      allOpaqueReasoningObservation
   ]
 
-theorem outputProjectionCases_count : outputProjectionCases.length = 23 := by decide
+theorem outputProjectionCases_count : outputProjectionCases.length = 25 := by decide
 
 theorem projection_cases_pin_boundaries :
     outputProjectionCases.map (fun witness => viewName witness.expected) =
@@ -237,12 +291,20 @@ theorem projection_cases_pin_boundaries :
        "conflicted", "loading", "denied",
        "live", "absent", "loading", "retained_partial", "loading",
        "retracted", "absent", "settling", "loading", "settling", "published", "conflicted",
-       "live"] := by
+       "live", "published", "published"] := by
   native_decide
 
 theorem published_presentation_excludes_opaque :
     (outputProjectionCases.map (fun witness => renderedKinds witness.expected)).head? =
       some ["text"] := by native_decide
+
+theorem mixed_reasoning_presentation_excludes_opaque :
+    renderedKinds (project mixedReasoningObservation) = ["reasoning", "summary"] := by
+  native_decide
+
+theorem all_opaque_reasoning_presentation_is_empty :
+    renderedKinds (project allOpaqueReasoningObservation) = [] := by
+  native_decide
 
 theorem header_before_payload_dependencies_is_loading :
     project (baseObservation (records := [])) = .loading := by

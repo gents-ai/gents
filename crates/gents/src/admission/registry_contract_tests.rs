@@ -1,7 +1,11 @@
 use super::*;
 
-use anyhow::{ensure, Context, Result};
+use std::collections::VecDeque;
+use std::time::Duration;
+
+use anyhow::{bail, ensure, Result};
 use serde::Deserialize;
+use tokio::task::JoinHandle;
 
 #[derive(Deserialize)]
 struct Snapshot {
@@ -18,71 +22,68 @@ struct Case {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Action {
-    Reconcile {
-        desired: Option<Desired>,
-    },
-    Acquire,
-    Release {
-        generation: u64,
-        returned_permit: bool,
-    },
+    Reconcile { desired: Option<Desired> },
+    Acquire { slot: u64 },
+    Release,
 }
 
 #[derive(Deserialize)]
 struct Desired {
-    key: u64,
+    connection: u64,
     generation: u64,
     capacity: usize,
+    queue_depth: usize,
     available: bool,
     name: String,
     catalog: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 struct Observation {
-    pending_generation: Option<u64>,
-    controller_generation: Option<u64>,
+    admitting_generation: Option<u64>,
     capacity: usize,
-    in_flight: usize,
-    permits: usize,
-    is_open: bool,
+    held: usize,
+    queued: usize,
+    admitted: usize,
+    queue_full: usize,
+    gone: usize,
+    attributed: Vec<u64>,
 }
 
-fn observe(registry: &AdmissionRegistry, backend_id: &str) -> Result<Observation> {
-    let state = registry.inner.state.lock().unwrap();
-    let controllers = state
-        .active
-        .get(backend_id)
-        .into_iter()
-        .chain(state.draining.get(backend_id).into_iter().flatten())
-        .collect::<Vec<_>>();
-    ensure!(
-        controllers.len() <= 1,
-        "replacement overlapped retiring ownership"
-    );
-    let controller = controllers.first();
-    Ok(Observation {
-        pending_generation: state.pending.get(backend_id).map(|p| p.generation),
-        controller_generation: controller.map(|c| c.generation),
-        capacity: controller.map_or(0, |c| c.config.max_concurrent),
-        in_flight: controller.map_or(0, |c| c.in_flight_for_test()),
-        permits: controller.map_or(0, |c| {
-            c.config.max_concurrent - c.available_permits_for_test()
-        }),
-        is_open: controller.is_some_and(|c| !c.is_closed()),
-    })
+fn backend_document(
+    backend_id: &str,
+    connection: u64,
+    capacity: usize,
+    queue_depth: usize,
+    name: &str,
+) -> Result<crate::document_config::InferenceBackend> {
+    Ok(serde_json::from_value(serde_json::json!({
+        "agent_did":"did:test:registry", "backend_id":backend_id, "name":name,
+        "provider_kind":"OpenAiCompatible",
+        "endpoint":format!("http://127.0.0.1/resource-{connection}/v1"),
+        "auth":{"kind":"unauthenticated"}, "max_concurrent":i64::try_from(capacity)?,
+        "max_queue_depth":i64::try_from(queue_depth)?
+    }))?)
+}
+
+/// The connection fingerprint a behavior slot built against `connection`
+/// carries, derived the way `build_admitted_model` derives it.
+fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
+    let backend = backend_document(backend_id, connection, 1, 0, "slot")?;
+    Ok(super::super::config::backend_connection_fingerprint(
+        &backend.backend_fields(),
+    ))
 }
 
 fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmissionConfig> {
     // Go through the real backend mapping: otherwise a test-only fingerprint
     // would hide metadata-triggered controller replacement.
-    let backend: crate::document_config::InferenceBackend = serde_json::from_value(
-        serde_json::json!({
-            "agent_did":"did:test:registry", "backend_id":backend_id, "name":desired.name,
-            "provider_kind":"OpenAiCompatible", "endpoint":format!("http://127.0.0.1/resource-{}/v1", desired.key),
-            "auth":{"kind":"unauthenticated"}, "max_concurrent":i64::try_from(desired.capacity)?,
-            "max_queue_depth":0
-        }),
+    let backend = backend_document(
+        backend_id,
+        desired.connection,
+        desired.capacity,
+        desired.queue_depth,
+        &desired.name,
     )?;
     let observation = serde_json::from_value::<crate::document_config::InferenceBackendObservation>(
         serde_json::json!({
@@ -97,14 +98,128 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
     )
 }
 
+/// Drives real acquisitions as spawned calls and observes the registry only
+/// once every call is either finished or parked on the pool.
+struct Harness {
+    registry: AdmissionRegistry,
+    backend_id: String,
+    calls: Vec<JoinHandle<Result<AdmissionPermit, CompletionError>>>,
+    held: VecDeque<AdmissionPermit>,
+    outcomes: Observation,
+    started: usize,
+    slots: std::collections::HashMap<String, u64>,
+}
+
+impl Harness {
+    fn acquire(&mut self, slot: u64, connection: String) {
+        self.slots.insert(connection.clone(), slot);
+        let registry = self.registry.clone();
+        let backend_id = self.backend_id.clone();
+        let request_id = format!("{}-{}", self.backend_id, self.started);
+        self.started += 1;
+        self.calls.push(tokio::spawn(async move {
+            registry
+                .acquire_with_connection_for_test(
+                    request_id,
+                    backend_id,
+                    "default",
+                    "did:test:registry",
+                    CallKind::Inference,
+                    &connection,
+                )
+                .await
+        }));
+    }
+
+    async fn settle(&mut self) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let mut pending = Vec::new();
+            for call in self.calls.drain(..) {
+                if !call.is_finished() {
+                    pending.push(call);
+                    continue;
+                }
+                match call.await? {
+                    Ok(permit) => {
+                        self.outcomes.admitted += 1;
+                        let Some(slot) = self.slots.get(permit.attribution_for_test()) else {
+                            bail!("admitted call is not attributed to a caller's slot");
+                        };
+                        self.outcomes.attributed.push(*slot);
+                        self.outcomes.attributed.sort_unstable();
+                        self.held.push_back(permit);
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if message.contains("QueueFull") {
+                            self.outcomes.queue_full += 1;
+                        } else if message.contains("BackendGone") {
+                            self.outcomes.gone += 1;
+                        } else {
+                            bail!("unexpected admission error: {message}");
+                        }
+                    }
+                }
+            }
+            self.calls = pending;
+            let pool = self.registry.pool_for_test(&self.backend_id);
+            let (waiters, transit, available) = pool.as_ref().map_or((0, 0, 0), |pool| {
+                (
+                    pool.queue_waiters_for_test(),
+                    pool.in_transit_for_test(),
+                    pool.available_permits_for_test(),
+                )
+            });
+            // Parked calls exist only while admission is open and no permit
+            // is free; closing admission wakes and fails every one of them.
+            let open = self.registry.active_for_test(&self.backend_id).is_some();
+            let parked_only = waiters == 0 || (open && available == 0);
+            if self.calls.len() == waiters && transit == 0 && parked_only {
+                return Ok(());
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "admission never settled: {} calls, {waiters} waiters, {transit} in transit",
+                self.calls.len()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn observe(&self) -> Observation {
+        let admitting = self.registry.active_for_test(&self.backend_id);
+        let pool = self.registry.pool_for_test(&self.backend_id);
+        Observation {
+            admitting_generation: admitting.as_ref().map(|c| c.generation),
+            capacity: admitting.as_ref().map_or(0, |c| c.config.max_concurrent),
+            held: pool.as_ref().map_or(0, |pool| pool.held_for_test()),
+            queued: pool
+                .as_ref()
+                .map_or(0, |pool| pool.queue_waiters_for_test()),
+            admitted: self.outcomes.admitted,
+            queue_full: self.outcomes.queue_full,
+            gone: self.outcomes.gone,
+            attributed: self.outcomes.attributed.clone(),
+        }
+    }
+}
+
 async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
     ensure!(
         case.actions.len() == case.expected.len(),
         "missing step expectations"
     );
     let backend_id = format!("registry-{}", case.name);
-    let registry = AdmissionRegistry::new(node);
-    let mut held: Vec<(u64, AdmissionPermit)> = Vec::new();
+    let mut harness = Harness {
+        registry: AdmissionRegistry::new(node),
+        backend_id: backend_id.clone(),
+        calls: Vec::new(),
+        held: VecDeque::new(),
+        outcomes: Observation::default(),
+        started: 0,
+        slots: std::collections::HashMap::new(),
+    };
     for (index, (action, expected)) in case.actions.iter().zip(&case.expected).enumerate() {
         match action {
             Action::Reconcile { desired } => {
@@ -119,48 +234,33 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
                     .transpose()?
                     .into_iter()
                     .collect();
-                registry.reconcile(desired.as_ref().map_or(0, |d| d.generation), &configs);
+                harness
+                    .registry
+                    .reconcile(desired.as_ref().map_or(0, |d| d.generation), &configs);
             }
-            Action::Acquire => {
-                let generation = observe(&registry, &backend_id)?.controller_generation;
-                if let Ok(permit) = registry
-                    .acquire_for_test(
-                        format!("{}-{index}", case.name),
-                        &backend_id,
-                        "default",
-                        "did:test:registry",
-                        CallKind::Inference,
-                    )
-                    .await
-                {
-                    held.push((generation.context("admitted without a controller")?, permit));
-                }
+            Action::Acquire { slot } => {
+                harness.acquire(*slot, slot_connection(&backend_id, *slot)?);
             }
-            Action::Release {
-                generation,
-                returned_permit,
-            } => {
-                ensure!(
-                    *returned_permit,
-                    "queue releases belong to ControllerBookkeeping coverage"
-                );
-                let position = held
-                    .iter()
-                    .position(|(g, _)| g == generation)
-                    .context("trace must release an actual owned permit")?;
-                let (_, mut permit) = held.swap_remove(position);
+            Action::Release => {
+                let Some(mut permit) = harness.held.pop_front() else {
+                    bail!("trace released without an admitted call");
+                };
                 permit.finish_success(None).await?;
                 drop(permit);
             }
         }
-        let actual = observe(&registry, &backend_id)?;
+        harness.settle().await?;
+        let actual = harness.observe();
         ensure!(
             actual == *expected,
             "step {index}: expected {expected:?}, got {actual:?}"
         );
     }
-    for (_, mut permit) in held {
+    for mut permit in harness.held.drain(..) {
         permit.finish_success(None).await?;
+    }
+    for call in harness.calls.drain(..) {
+        call.abort();
     }
     Ok(())
 }
@@ -168,7 +268,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
 #[tokio::test]
 async fn generated_inference_registry_cases_drive_real_permits() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.inference_registry_cases.len(), 8);
+    assert_eq!(snapshot.inference_registry_cases.len(), 11);
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -182,90 +282,11 @@ async fn generated_inference_registry_cases_drive_real_permits() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Rollback may reuse an epoch. The restored configuration is a distinct
+/// incarnation on the same pool, so the replaced incarnation's permit still
+/// counts against capacity and its release frees the shared slot.
 #[tokio::test]
-async fn deferred_drain_callback_cannot_leave_stale_pending_configuration() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
-    let registry = AdmissionRegistry::new(node);
-    let backend_id = "registry-deferred-drain";
-    let config = |generation, capacity| {
-        config_from_case(
-            backend_id,
-            &Desired {
-                key: 7,
-                generation,
-                capacity,
-                available: true,
-                name: "backend".to_owned(),
-                catalog: "model".to_owned(),
-            },
-        )
-        .unwrap()
-    };
-
-    // Defer only the registry notification, not real permit bookkeeping.
-    // In production this gap occurs after release_in_flight decrements to
-    // zero while controller_drained is waiting for the registry mutex.
-    let retiring = BackendAdmissionController::new(1, config(1, 1), std::sync::Weak::new());
-    registry
-        .inner
-        .state
-        .lock()
-        .unwrap()
-        .active
-        .insert(backend_id.to_owned(), retiring.clone());
-    let mut permit = registry
-        .acquire_for_test(
-            "deferred-drain-owner",
-            backend_id,
-            "default",
-            "did:test:registry",
-            CallKind::Inference,
-        )
-        .await
-        .unwrap();
-    registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
-    assert_eq!(
-        observe(&registry, backend_id).unwrap(),
-        Observation {
-            pending_generation: Some(2),
-            controller_generation: Some(1),
-            capacity: 1,
-            in_flight: 1,
-            permits: 1,
-            is_open: false,
-        }
-    );
-
-    permit.finish_success(None).await.unwrap();
-    drop(permit);
-    assert!(retiring.is_drained());
-    assert_eq!(retiring.available_permits_for_test(), 1);
-
-    // Reconciliation wins the mutex before the deferred callback. It must
-    // replace pending generation 2 with generation 3 and consume that entry
-    // when installing, rather than leave an active controller plus stale work.
-    registry.reconcile(3, &[(backend_id.to_owned(), config(3, 3))].into());
-    let installed = Observation {
-        pending_generation: None,
-        controller_generation: Some(3),
-        capacity: 3,
-        in_flight: 0,
-        permits: 0,
-        is_open: true,
-    };
-    assert_eq!(observe(&registry, backend_id).unwrap(), installed);
-    registry
-        .inner
-        .clone()
-        .controller_drained(backend_id.to_owned());
-    assert_eq!(observe(&registry, backend_id).unwrap(), installed);
-}
-
-#[tokio::test]
-async fn rollback_reuses_epoch_with_distinct_controller_ownership() {
+async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -276,9 +297,10 @@ async fn rollback_reuses_epoch_with_distinct_controller_ownership() {
         config_from_case(
             backend_id,
             &Desired {
-                key: 7,
+                connection: 7,
                 generation,
                 capacity,
+                queue_depth: 0,
                 available: true,
                 name: "backend".to_owned(),
                 catalog: "model".to_owned(),
@@ -286,69 +308,40 @@ async fn rollback_reuses_epoch_with_distinct_controller_ownership() {
         )
         .unwrap()
     };
-    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
-    let old = registry.inner.state.lock().unwrap().active[backend_id].clone();
-    let mut first = registry
-        .acquire_for_test(
-            "rollback-old-owner",
+    let acquire = |request_id: &'static str| {
+        registry.acquire_for_test(
+            request_id,
             backend_id,
             "default",
             "did:test:registry",
             CallKind::Inference,
         )
-        .await
-        .unwrap();
+    };
+    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
+    let old = registry.active_for_test(backend_id).unwrap();
+    let mut first = acquire("rollback-old-owner").await.unwrap();
     registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
     // Failed snapshot publication restores the prior full configuration and
-    // epoch. The closed controller must still drain; rollback cannot reopen it.
+    // epoch.
     registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
-    assert_eq!(
-        observe(&registry, backend_id).unwrap(),
-        Observation {
-            pending_generation: Some(1),
-            controller_generation: Some(1),
-            capacity: 1,
-            in_flight: 1,
-            permits: 1,
-            is_open: false,
-        }
-    );
+    let restored = registry.active_for_test(backend_id).unwrap();
+    assert!(!Arc::ptr_eq(&old, &restored));
+    assert!(Arc::ptr_eq(&old.pool, &restored.pool));
+    assert_eq!(old.generation, restored.generation);
+    assert_eq!(restored.pool.held_for_test(), 1);
+    let error = match acquire("rollback-over-capacity").await {
+        Ok(_) => panic!("the replaced incarnation's permit must still count"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+
     first.finish_success(None).await.unwrap();
     drop(first);
-    let replacement = registry.inner.state.lock().unwrap().active[backend_id].clone();
-    assert!(!Arc::ptr_eq(&old, &replacement));
-    assert_eq!(old.generation, replacement.generation);
-    assert!(old.is_closed());
-    assert!(old.is_drained());
-    let mut second = registry
-        .acquire_for_test(
-            "rollback-new-owner",
-            backend_id,
-            "default",
-            "did:test:registry",
-            CallKind::Inference,
-        )
-        .await
-        .unwrap();
-    let held = Observation {
-        pending_generation: None,
-        controller_generation: Some(1),
-        capacity: 1,
-        in_flight: 1,
-        permits: 1,
-        is_open: true,
-    };
-    assert_eq!(observe(&registry, backend_id).unwrap(), held);
-    // Deliver a late notification for the retired incarnation. Epoch equality
-    // does not authorize it to release the replacement's real permit.
-    registry
-        .inner
-        .clone()
-        .controller_drained(backend_id.to_owned());
-    assert_eq!(observe(&registry, backend_id).unwrap(), held);
-    assert_eq!(replacement.available_permits_for_test(), 0);
+    assert_eq!(restored.pool.held_for_test(), 0);
+    let mut second = acquire("rollback-new-owner").await.unwrap();
+    assert_eq!(restored.pool.held_for_test(), 1);
     second.finish_success(None).await.unwrap();
     drop(second);
-    assert!(replacement.is_drained());
-    assert_eq!(replacement.available_permits_for_test(), 1);
+    assert_eq!(restored.pool.held_for_test(), 0);
+    assert_eq!(restored.pool.available_permits_for_test(), 1);
 }

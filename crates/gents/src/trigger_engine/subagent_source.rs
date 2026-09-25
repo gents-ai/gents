@@ -22,8 +22,8 @@ use crate::background_tools::{
 };
 use crate::config_client::ConfigAccess;
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
-use crate::graphql::escape_graphql_string;
-use crate::run_timeline_fetch::load_run_timeline_rows;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::run_timeline_fetch::load_accepted_tool_arguments;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::tool_call_lifecycle::subagent_request::{
     create_subagent_request_with_request_id_and_workspace,
@@ -292,13 +292,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query AgentToolCall for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query AgentToolCall for SubagentSource",
+        )
+        .await?;
         let rows: Vec<ToolCallRow> = response
             .data
             .as_ref()
@@ -310,9 +309,14 @@ impl SubagentSource {
 
     /// The bridge row is lifecycle-only.  Its spawn arguments remain in the
     /// accepted provider header, so resolve them through the shared canonical
-    /// timeline reader by exact physical tool document identity.  There is no
-    /// retired `AgentToolCall.args` fallback and no logical-id/proximity join.
-    async fn load_spawn_args(&self, row: &ToolCallRow) -> anyhow::Result<SpawnArgs> {
+    /// reader by exact physical tool document identity in the parent session.
+    /// There is no retired `AgentToolCall.args` fallback and no
+    /// logical-id/proximity join.
+    async fn load_spawn_args(
+        &self,
+        row: &ToolCallRow,
+        parent: Option<&AgentRequestRow>,
+    ) -> anyhow::Result<SpawnArgs> {
         if let Some(input) = &row.delegated_input {
             return serde_json::from_str(&input.arguments).with_context(|| {
                 format!(
@@ -321,27 +325,33 @@ impl SubagentSource {
                 )
             });
         }
-        let request_id = non_empty(row.request_id.as_deref())
-            .context("subagent bridge lacks parent request identity")?;
-        let rows = load_run_timeline_rows(&ConfigAccess::Local(self.node.clone()), request_id)
-            .await
-            .with_context(|| {
-                format!(
-                    "resolve canonical spawn admission for physical tool {}",
-                    row.doc_id
-                )
-            })?;
-        let matches = rows
-            .tool_calls
-            .into_iter()
-            .filter(|candidate| candidate.doc_id.as_deref() == Some(row.doc_id.as_str()))
-            .collect::<Vec<_>>();
+        let parent = parent.context("subagent bridge parent request is not local")?;
+        let parent_agent_did = parent
+            .agent_did
+            .as_deref()
+            .context("subagent bridge parent request lacks agent_did")?;
+        let parent_session_id = non_empty(parent.session_id.as_deref())
+            .context("subagent bridge parent request lacks session_id")?;
+        let matches = load_accepted_tool_arguments(
+            &ConfigAccess::Local(self.node.clone()),
+            parent_agent_did,
+            parent_session_id,
+            parent.requester_did.as_deref(),
+            &row.doc_id,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "resolve canonical spawn admission for physical tool {}",
+                row.doc_id
+            )
+        })?;
         anyhow::ensure!(
             matches.len() == 1,
-            "canonical timeline did not resolve exactly one physical spawn bridge {}",
+            "canonical session did not resolve exactly one physical spawn bridge {}",
             row.doc_id
         );
-        let args = &matches[0].args;
+        let args = &matches[0];
         anyhow::ensure!(
             !args.trim().is_empty(),
             "canonical spawn admission has no arguments for physical bridge {}",
@@ -368,6 +378,8 @@ impl SubagentSource {
                 ) {{
                     request_id
                     agent_did
+                    requester_did
+                    session_id
                     subagent_depth
                     workspace_id
                     workspace_authority
@@ -376,13 +388,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query parent AgentRequest for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query parent AgentRequest for SubagentSource",
+        )
+        .await?;
         let value = response
             .data
             .as_ref()
@@ -416,13 +427,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query parent AgentRequest terminal state for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query parent AgentRequest terminal state for SubagentSource",
+        )
+        .await?;
         let value = response
             .data
             .as_ref()
@@ -443,13 +453,12 @@ impl SubagentSource {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query child AgentRequest for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query child AgentRequest for SubagentSource",
+        )
+        .await?;
         Ok(response
             .data
             .as_ref()
@@ -467,13 +476,12 @@ impl SubagentSource {
                 }
             ) { _docID }
         }"#;
-        let response = self.node.execute(query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query running AgentToolCall bridge rows for SubagentSource rescan failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            query,
+            "query running AgentToolCall bridge rows for SubagentSource rescan",
+        )
+        .await?;
         let rows: Vec<ToolCallDocIdRow> = response
             .data
             .as_ref()
@@ -603,7 +611,8 @@ impl SubagentSource {
             Some(value) => value.to_string(),
             None => return Ok(None),
         };
-        let spawn_args = self.load_spawn_args(&row).await?;
+        let parent = self.load_parent_request(&parent_request_doc_id).await?;
+        let spawn_args = self.load_spawn_args(&row, parent.as_ref()).await?;
         let Some(row_spawn_target_did) = non_empty(row.spawn_target_did.as_deref()) else {
             return Ok(None);
         };
@@ -621,7 +630,6 @@ impl SubagentSource {
             return Ok(None);
         };
 
-        let parent = self.load_parent_request(&parent_request_doc_id).await?;
         let snapshot = self.snapshot_rx.borrow().clone();
         let bridge_authoring_did = non_empty(row.agent_did.as_deref())
             .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
@@ -1401,3 +1409,6 @@ mod delegated_workspace_tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod delegated_child_tests;

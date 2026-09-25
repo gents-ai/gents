@@ -35,7 +35,10 @@ impl PackStore {
     /// The store of the gents home at `home`.
     pub fn new(home: &Path) -> Self {
         Self {
-            root: home.join("packs").join("store").join("sha256"),
+            root: home
+                .join(crate::home::PACKS_DIR_NAME)
+                .join("store")
+                .join("sha256"),
         }
     }
 

@@ -16,6 +16,7 @@ import {
   terminateRunnerProcess,
   waitForReadyMessage,
 } from "./live-bridge-runner/process";
+import { requestProgressSignature } from "./live-bridge-runner/observations";
 
 describe("live bridge runner invocation", () => {
   it("keeps Cargo as the default and forwards configured provider arguments", () => {
@@ -385,7 +386,6 @@ function requestDiagnosticsBundle({
     response: {
       status: turnState === "completed" ? "complete" : null,
       errorMessage: null,
-      progressSeq: turnState === "completed" ? 15 : 14,
       materializedMessageSequence: turnState === "completed" ? 62 : 61,
       materializedAt: turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
       completedAt: turnState === "completed" ? "2026-04-22T00:00:02Z" : null,
@@ -489,6 +489,40 @@ describe("live bridge runner stall observer", () => {
 });
 
 describe("live bridge runner progress lag observer", () => {
+  it("detects message-sequence and live-overlay progress without a response progress counter", () => {
+    const messageSequence = requestDiagnosticsBundle({
+      desktopTurnState: "running",
+      remoteTurnState: "running",
+    });
+    const desktopSignature = requestProgressSignature(messageSequence.desktop);
+    messageSequence.remote.response!.materializedMessageSequence = 62;
+    expect(requestProgressSignature(messageSequence.remote)).not.toBe(desktopSignature);
+    expect(
+      observeRemoteAheadDesktopLag({
+        diagnostics: messageSequence,
+        desktopProgressed: false,
+        previousStartedAt: null,
+        now: 10_000,
+      }).startedAt,
+    ).toBe(10_000);
+
+    const liveOverlay = requestDiagnosticsBundle({
+      desktopTurnState: "running",
+      remoteTurnState: "running",
+    });
+    const beforeOverlay = requestProgressSignature(liveOverlay.remote);
+    liveOverlay.remote.activeResponseOverlayContentLen += 1;
+    expect(requestProgressSignature(liveOverlay.remote)).not.toBe(beforeOverlay);
+    expect(
+      observeRemoteAheadDesktopLag({
+        diagnostics: liveOverlay,
+        desktopProgressed: false,
+        previousStartedAt: null,
+        now: 10_000,
+      }).startedAt,
+    ).toBe(10_000);
+  });
+
   it("starts tracking when the remote advances ahead of a stale desktop", () => {
     const observation = observeRemoteAheadDesktopLag({
       diagnostics: requestDiagnosticsBundle(),

@@ -1,8 +1,12 @@
 //! Preserve provider bytes while refusing EOF without a protocol terminal event.
 //! Some provider adapters synthesize a final response on raw EOF; this guard
 //! makes transport truncation an error before that adapter can report success.
+use std::sync::Arc;
+
 use futures::StreamExt;
 use rig::http_client::{self, StreamingResponse};
+
+use crate::provider_activity::ProviderActivity;
 
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
@@ -27,37 +31,63 @@ impl ProviderStreamProtocol {
     }
 }
 
+/// `activity`, when present, is stamped on every received chunk and settled
+/// at the protocol terminal event, end of body, or a body error.
 pub fn guard_response(
     response: StreamingResponse,
     protocol: Option<ProviderStreamProtocol>,
+    activity: Option<Arc<ProviderActivity>>,
 ) -> StreamingResponse {
-    let Some(protocol) = protocol.filter(|_| response.status().is_success()) else {
+    let protocol = protocol.filter(|_| response.status().is_success());
+    if protocol.is_none() && activity.is_none() {
         return response;
-    };
+    }
     let (parts, body) = response.into_parts();
     let stream = futures::stream::unfold(
-        (body, TerminalEvents::new(protocol), false),
-        |(mut body, mut events, ended)| async move {
+        (body, protocol.map(TerminalEvents::new), activity, false),
+        |(mut body, mut events, activity, ended)| async move {
             if ended {
                 return None;
             }
+            let settle = |activity: &Option<Arc<ProviderActivity>>| {
+                if let Some(activity) = activity {
+                    activity.settle();
+                }
+            };
             match body.next().await {
                 Some(Ok(bytes)) => {
-                    events.feed(&bytes);
-                    Some((Ok(bytes), (body, events, false)))
+                    if let Some(activity) = &activity {
+                        activity.touch();
+                    }
+                    if let Some(events) = events.as_mut() {
+                        events.feed(&bytes);
+                        if events.terminal {
+                            settle(&activity);
+                        }
+                    }
+                    Some((Ok(bytes), (body, events, activity, false)))
                 }
-                Some(Err(error)) => Some((Err(error), (body, events, true))),
-                None if crate::execution_policy::provider_eof_is_failure(events.terminal) => {
-                    let error = std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "provider stream ended without an explicit protocol terminal event",
-                    );
-                    Some((
-                        Err(http_client::Error::Instance(Box::new(error))),
-                        (body, events, true),
-                    ))
+                Some(Err(error)) => {
+                    settle(&activity);
+                    Some((Err(error), (body, events, activity, true)))
                 }
-                None => None,
+                None => {
+                    settle(&activity);
+                    if events.as_ref().is_some_and(|events| {
+                        crate::execution_policy::provider_eof_is_failure(events.terminal)
+                    }) {
+                        let error = std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "provider stream ended without an explicit protocol terminal event",
+                        );
+                        Some((
+                            Err(http_client::Error::Instance(Box::new(error))),
+                            (body, events, activity, true),
+                        ))
+                    } else {
+                        None
+                    }
+                }
             }
         },
     );

@@ -50,14 +50,15 @@ use lean_vocab_test::{
     lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
     lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_compaction_cursor_cases, lean_compaction_reducer_cases,
-    lean_contract_snapshot, lean_descendant_graph_cases, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_inference_slot_accounting_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
-    lean_r4c_background_work_case, lean_r4c_background_work_cases,
-    lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_reserved_child_materialization_cases,
-    lean_restart_disposition_cases, lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_contract_snapshot, lean_descendant_cursor_cases, lean_descendant_graph_cases,
+    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
+    lean_mcp_health_cases, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
+    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases,
+    lean_reserved_child_materialization_cases, lean_restart_disposition_cases,
+    lean_startup_readiness_cases, lean_state_machine_contract,
     lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
     lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
     LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
@@ -104,6 +105,8 @@ mod directory_projection;
 mod enrollment;
 #[path = "conformance/eth_submission.rs"]
 mod eth_submission;
+#[path = "conformance/eval.rs"]
+mod eval;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
 #[path = "conformance/fleet.rs"]
@@ -232,13 +235,21 @@ fn generated_r5_cross_principal_cases_drive_production_dispatch() {
         .expect("r5 cross-deployment conformance thread panicked");
 }
 
+// Drives two full agents and two P2P nodes. A single-threaded executor lets one
+// agent's shutdown starve behind a blocking DefraDB call on the other's, which the
+// 30s shutdown bound then reports as a hang. The std::thread wrapper stays:
+// block_on polls the root future on this thread, and thread_stack_size sizes only
+// the spawned workers, so the 16 MiB stack the fixture setup and teardown run on
+// comes from here.
 #[test]
 fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
     std::thread::Builder::new()
         .name("native-remote-spawn-conformance".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_stack_size(16 * 1024 * 1024)
                 .enable_all()
                 .build()
                 .expect("build native remote-spawn runtime")
@@ -443,6 +454,11 @@ fn event_delivery_source_instances_match_runtime() {
 #[tokio::test]
 async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
+}
+
+#[test]
+fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
+    eval::rust_eval_outcome_vocabulary_and_projection_match_lean();
 }
 
 #[path = "conformance/docs.rs"]

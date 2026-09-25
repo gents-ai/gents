@@ -22,7 +22,8 @@ def toolDeliveryMessage (sequence : Nat := 1) : MessageEnvelope :=
 
 def wakeEntry : SessionQueue.QueueEntry :=
   { requestId := 901, createdAt := 5, source := .backgroundCompletion
-    policy := .coalesce, queueKey := some 1, queuedAfter := some 10 }
+    policy := .coalesce, queueKey := some 1, queuedAfter := some 10
+    origin := .scheduled }
 
 def wakeNotificationMessage (sequence : Nat := 2) : MessageEnvelope :=
   { toolDeliveryMessage sequence with

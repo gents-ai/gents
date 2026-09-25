@@ -8,6 +8,20 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 use super::fs::read_captured_log;
+use super::ports;
+
+/// Bound on replacement ports tried after a lost bind race.
+const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
+
+/// Positive evidence that the child's preflight bind found `addr` already
+/// taken. The context string alone is not enough: `serve.rs` attaches it to
+/// every bind failure, so descriptor exhaustion or a permission error would
+/// otherwise be misread as a stolen port and silently retried. Unix renders
+/// `io::ErrorKind::AddrInUse` as this text on both macOS and Linux.
+pub fn is_address_in_use(text: &str, addr: &str) -> bool {
+    text.contains(&format!("embedded HTTP listener cannot bind to {addr}"))
+        && text.contains("Address already in use")
+}
 
 pub struct ServeProcess {
     pub child: Child,
@@ -144,59 +158,120 @@ fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
     }
 }
 
+/// Spawn a `gents server` and wait for its readiness JSON.
+///
+/// Never replaces a raced-away port: a caller holding this signature cannot
+/// observe a port change, so moving the server would strand it on a port
+/// nothing is listening on. Use `spawn_server_with_ready_json_recovering`
+/// to opt into recovery and take the resulting port back.
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
-    let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
-    let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
-    let stdout = stdout_log.reopen().context("opening gents stdout log")?;
-    let stderr = stderr_log.reopen().context("opening gents stderr log")?;
-    let mut command = Command::new(cli_bin());
-    command
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .current_dir(home_dir)
-        .arg("server")
-        .arg("--http-port")
-        .arg(port.to_string())
-        .args(codex_shim_opt_out(extra_args))
-        .args(extra_args)
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
-    configure_foreground_server_env(&mut command, envs);
-    let child = command.spawn().context("spawning gents server")?;
-    let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
+    // Recovery is off, so the bound port is always the requested one.
+    let (serve, _port, value) =
+        spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false)?;
+    Ok((serve, value))
+}
 
+/// `spawn_server_with_ready_json`, but if the child's preflight bind finds
+/// the requested port already taken and this process reserved that port,
+/// release it, allocate another and respawn.
+///
+/// Returns the port the child actually bound, which may differ from `port`.
+/// Derive `graphql_url` and every other address from the returned port,
+/// after this call.
+pub fn spawn_server_with_ready_json_recovering(
+    home_dir: &Path,
+    port: u16,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(ServeProcess, u16, Value)> {
+    spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true)
+}
+
+/// Single owner of the readiness wait and the port-replacement policy.
+/// `recover_stolen_port` gates replacement by zeroing the attempt budget, so
+/// the non-recovering caller keeps reporting the child's own bind failure.
+/// The 30s budget spans the whole sequence, replacements included.
+fn spawn_server_with_ready_json_inner(
+    home_dir: &Path,
+    port: u16,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+    recover_stolen_port: bool,
+) -> Result<(ServeProcess, u16, Value)> {
+    let mut port = port;
+    let mut attempts_left = if recover_stolen_port {
+        MAX_STOLEN_PORT_ATTEMPTS
+    } else {
+        0
+    };
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
-        if let Some(value) = server_readiness_json(&stdout_so_far) {
-            return Ok((serve, value));
+    'attempt: loop {
+        let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
+        let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
+        let stdout = stdout_log.reopen().context("opening gents stdout log")?;
+        let stderr = stderr_log.reopen().context("opening gents stderr log")?;
+        let mut command = Command::new(cli_bin());
+        command
+            .env("HOME", home_dir)
+            .env("RUST_LOG", "error")
+            .current_dir(home_dir)
+            .arg("server")
+            .arg("--http-port")
+            .arg(port.to_string())
+            .args(codex_shim_opt_out(extra_args))
+            .args(extra_args)
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        configure_foreground_server_env(&mut command, envs);
+        let child = command.spawn().context("spawning gents server")?;
+        let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
+
+        loop {
+            let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
+            if let Some(value) = server_readiness_json(&stdout_so_far) {
+                return Ok((serve, port, value));
+            }
+            let exited = serve
+                .child
+                .try_wait()
+                .context("checking serve child status")?;
+            let timed_out = Instant::now() >= deadline;
+            if exited.is_some() || timed_out {
+                let (stdout, stderr) = serve.captured_output()?;
+                let addr = format!("127.0.0.1:{port}");
+                let recoverable = !timed_out
+                    && attempts_left > 0
+                    && ports::is_reserved(port)
+                    && (is_address_in_use(&stdout, &addr) || is_address_in_use(&stderr, &addr));
+                if recoverable {
+                    attempts_left -= 1;
+                    ports::release(port);
+                    port = ports::allocate_port()?;
+                    // Reap the losing child before its replacement starts, so
+                    // two servers never hold the same home.
+                    drop(serve);
+                    continue 'attempt;
+                }
+                if let Some(status) = exited {
+                    bail!(
+                        "server exited before emitting readiness JSON ({status})\nstdout:\n{}\nstderr:\n{}",
+                        stdout,
+                        stderr
+                    );
+                }
+                bail!(
+                    "timed out waiting for gents server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                    stdout,
+                    stderr
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
         }
-        if let Some(status) = serve
-            .child
-            .try_wait()
-            .context("checking serve child status")?
-        {
-            let (stdout, stderr) = serve.captured_output()?;
-            bail!(
-                "server exited before emitting readiness JSON ({status})\nstdout:\n{}\nstderr:\n{}",
-                stdout,
-                stderr
-            );
-        }
-        if Instant::now() >= deadline {
-            let (stdout, stderr) = serve.captured_output()?;
-            bail!(
-                "timed out waiting for gents server readiness JSON\nstdout:\n{}\nstderr:\n{}",
-                stdout,
-                stderr
-            );
-        }
-        thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -250,6 +325,13 @@ pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&s
     }
 }
 
+/// Wait until something accepts TCP on `port`.
+///
+/// Any listener satisfies this, so a success is not evidence that `serve`
+/// owns the port: if an unrelated process holds it, this returns as soon as
+/// that process answers. Use `spawn_server_with_ready_json_recovering` when
+/// ownership matters -- the child publishes its readiness JSON only after an
+/// instance-specific probe confirms the listener is its own.
 pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

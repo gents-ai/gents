@@ -2,10 +2,12 @@
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { isLocalAgent } from "@/lib/firstRun";
-import { AreaRow, ChoiceRow, DraftActions, SwitchRow, TextRow } from "./editors";
-import { fromLinesOrNull, toLines, useDraft } from "./draft";
+import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
+import { useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
+import { AgentCard } from "./AgentCard";
+import { saveDefault } from "./BehaviorsPanel";
 
 export function AgentPanel({
   shell,
@@ -15,20 +17,26 @@ export function AgentPanel({
   deployment: DeploymentView;
 }) {
   const agent = deployment.agentPrincipal;
-  const behaviours = deployment.behaviors.map((b) => ({
+  const behaviors = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
-    label: b.displayName,
+    label: b.enabled
+      ? b.displayName
+      : `${b.displayName} · disabled, enabled when saved as default`,
   }));
   const d = useDraft(
     {
       displayName: agent.displayName ?? "",
       defaultBehaviorId: agent.defaultBehaviorId ?? "",
       enabled: agent.enabled ?? true,
-      tags: toLines(deployment.principalConfig?.tags ?? []),
+      tags: deployment.principalConfig?.tags ?? [],
     },
     async (next) => {
       if (!next.displayName.trim()) throw new Error("Display name is required");
-      if (!next.defaultBehaviorId) throw new Error("Default behaviour is required");
+      if (!next.defaultBehaviorId) throw new Error("Default behavior is required");
+      /* a new default lands with its enablement first; the principal's other
+         fields then save against an already valid default */
+      if (next.defaultBehaviorId !== agent.defaultBehaviorId)
+        await saveDefault(shell, deployment, next.defaultBehaviorId);
       await shell.saveAgentConfig({
         document: {
           agent_did: agent.agentDid,
@@ -37,7 +45,7 @@ export function AgentPanel({
           enabled: next.enabled,
           created_at: agent.createdAt,
           created_by: agent.createdBy,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
         },
       });
     },
@@ -45,6 +53,7 @@ export function AgentPanel({
 
   return (
     <div>
+      <AgentCard shell={shell} deployment={deployment} />
       <Group title="Agent details">
         <TextRow
           id="agent-name"
@@ -55,13 +64,20 @@ export function AgentPanel({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <ChoiceRow
+        <RefRow
           id="agent-default"
-          label="Default behaviour"
+          label="Default behavior"
           description="Used when a session does not choose one."
           value={d.draft.defaultBehaviorId}
           onChange={(v) => d.choose("defaultBehaviorId", v)}
-          items={behaviours}
+          items={behaviors}
+          createLabel="New behavior…"
+          openRoute={(behaviorId) => ({
+            name: "agent",
+            agentDid: deployment.agentDid,
+            section: "behaviors",
+            item: behaviorId,
+          })}
         />
         <SwitchRow
           id="agent-enabled"
@@ -70,14 +86,12 @@ export function AgentPanel({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
-        <AreaRow
+        <TagsRow
           id="agent-tags"
           label="Tags"
-          description="One optional discovery label per line."
+          description="Optional discovery labels."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={2}
         />
       </Group>
       <DraftActions
@@ -100,7 +114,7 @@ export function AgentPanel({
         </Row>
         <Row
           label="Tool ceiling"
-          description="The most any behaviour on this agent may do."
+          description="The most any behavior on this agent may do."
         >
           <Fact>{shell.snapshot?.bootstrap.initToolCeiling ?? "not configured"}</Fact>
         </Row>
@@ -127,7 +141,7 @@ export function AgentPanel({
             {deployment.runtime?.lastReconcileResult}
           </Fact>
         </Row>
-        <Row label="Executors" description="Behaviour executors in use over capacity.">
+        <Row label="Executors" description="Behavior executors in use over capacity.">
           <Fact>
             {deployment.runtime?.behaviorExecutorQueueDepth ?? 0} /{" "}
             {deployment.runtime?.behaviorExecutorCapacity ?? 0}

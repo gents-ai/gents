@@ -39,7 +39,7 @@ import { href, type Route } from "@/lib/router";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { applyTheme, themePreference, type ThemePreference } from "@/theme";
 import { navPreference, saveNavPreference, type NavMode } from "@/nav";
-import { useMediaQuery } from "@/lib/media";
+import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { AgentHoverCard } from "@/screens/HoverCards";
 import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
@@ -207,6 +207,9 @@ export function AppShell({
   const [nav, setNav] = useState<NavMode>(navPreference);
   const [menuOpen, setMenuOpen] = useState(false);
   const wide = useMediaQuery("(min-width: 768px)");
+  const roomy = useMediaQuery(ROOMY_WINDOW);
+  /* the preference is kept; a narrow window shows the rail in its place */
+  const shownNav: NavMode = nav === "expanded" && !roomy ? "hover" : nav;
   const windowBar = headerIsWindowBar();
   const onNav = (mode: NavMode) => {
     saveNavPreference(mode);
@@ -332,7 +335,7 @@ export function AppShell({
         className={cn(
           "grid min-h-0",
           "grid-cols-[1fr]",
-          nav === "expanded"
+          shownNav === "expanded"
             ? "md:grid-cols-[16.5rem_1fr]"
             : "md:grid-cols-[3.5rem_1fr]",
         )}
@@ -346,7 +349,7 @@ export function AppShell({
             online={online}
             mailboxCount={mailboxCount}
             holds={holds}
-            mode={nav}
+            mode={shownNav}
             settings={panelSettings}
           >
             <nav className="flex h-full flex-col items-center gap-2 pt-4">
@@ -414,7 +417,7 @@ export function AppShell({
             </nav>
           </RailFlyout>
         </div>
-        <main className="relative min-h-0 overflow-hidden">
+        <main className="@container relative min-h-0 overflow-hidden">
           {error && (
             <div
               role="alert"

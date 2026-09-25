@@ -23,6 +23,13 @@ async fn generated_r5_p2p_crash_reopens_same_durable_peer_identity() {
     assert_eq!(db.process_generation, 1);
 }
 
+#[tokio::test]
+async fn replicated_output_ordinal_twin_fails_closed_after_physical_p2p_import() {
+    crate::support::r5_conformance::runner::assert_replicated_nonclosing_ordinal_twin_rejected()
+        .await
+        .expect("replicated ordinal twin must invalidate the original canonical projection");
+}
+
 #[test]
 fn generated_r5_actions_decode_without_handwritten_fixture_defaults() {
     let cases = lean_r5_scenario_cases();
@@ -38,6 +45,22 @@ fn generated_r5_actions_decode_without_handwritten_fixture_defaults() {
 #[tokio::test]
 async fn generated_r5_happy_path_uses_native_owners_and_physical_p2p_docs() {
     run_generated_case("happy_path").await;
+}
+
+#[tokio::test]
+async fn generated_r5_provider_discovery_preserves_fixture_readiness() {
+    let raw = lean_r5_scenario_cases()
+        .iter()
+        .find(|case| case["name"] == "happy_path")
+        .expect("Lean exports the R5 happy path");
+    let case: ModeledScenario = serde_json::from_value(raw.clone()).expect("decode modeled R5");
+    let harness = Harness::start_generated(&case)
+        .await
+        .expect("start generated R5 peers");
+    harness
+        .assert_generated_provider_configuration_ready()
+        .await
+        .expect("generated fixture remains ready after native model discovery");
 }
 
 #[tokio::test]
@@ -120,6 +143,11 @@ async fn run_generated_case(name: &str) -> Vec<Observation> {
         .run_modeled(&case)
         .await
         .expect("execute modeled R5 actions");
+    assert_eq!(
+        harness.observed_cancel_ack_events(),
+        case.expected_cancel_ack_events.as_slice(),
+        "native cancel-ack owner events differ from the generated R5 trace"
+    );
     let history = harness.observation_history();
     for snapshot in &history {
         invariants::assert_all_safety(snapshot);
@@ -152,46 +180,8 @@ async fn run_generated_case(name: &str) -> Vec<Observation> {
     );
     assert_eq!(last.a_process_generation, case.expected_a_generation);
     assert_eq!(last.b_process_generation, case.expected_b_generation);
-    for expected in &case.expected_a_bridges {
-        let bridge = last
-            .a_bridge_rows
-            .iter()
-            .find(|bridge| bridge.tool_call_id == expected.tool)
-            .unwrap_or_else(|| panic!("modeled bridge {} missing from A", expected.tool));
-        assert_eq!(
-            bridge.lifecycle_state, expected.state,
-            "Lean-derived final state of bridge {}",
-            expected.tool
-        );
-        let physical_child = harness
-            .generated_child_request_id(&expected.child)
-            .expect("modeled bridge has exact physical child");
-        assert_eq!(bridge.child_request_id.as_deref(), Some(physical_child));
-    }
-    for expected in &case.expected_b_children {
-        let physical_child = harness
-            .generated_child_request_id(&expected.child)
-            .expect("modeled B child has exact physical reservation");
-        let child = last
-            .b_child_requests
-            .iter()
-            .find(|child| child.request_id == physical_child)
-            .unwrap_or_else(|| panic!("modeled B child {} is missing", expected.child));
-        assert_eq!(
-            expected.terminal.as_deref(),
-            child
-                .lifecycle_state
-                .is_terminal()
-                .then_some(child.lifecycle_state.as_str()),
-            "Lean-derived terminal state of B child {}",
-            expected.child
-        );
-        assert_eq!(
-            child.interrupt_requested_at.is_some(),
-            expected.interrupt_requested,
-            "Lean-derived interrupt fact of B child {}",
-            expected.child
-        );
-    }
+    harness
+        .assert_final_child_and_bridge_facts(&case)
+        .expect("Lean-derived final child and bridge facts differ from native records");
     history.to_vec()
 }

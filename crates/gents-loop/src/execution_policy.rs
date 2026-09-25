@@ -18,7 +18,7 @@
 //!   [`authorize_renewal`] advances the deadline.
 //! - Bounded renewal: due at `deadline - max(1, duration / 2)`, CAS on the
 //!   expected deadline, strictly extending to `now + duration`, and only in
-//!   renewable lifecycles (`claimed`, `processing`, `inputRequired`).
+//!   renewable lifecycles (`claimed`, `processing`).
 //! - Revocation is external policy authority, independent of wall-clock expiry.
 //!
 //! The millisecond timeline is the native instantiation of the model's discrete
@@ -47,14 +47,11 @@ pub fn is_live(observed: LeaseObservation<'_>, expected_generation: &str, now_ms
 }
 
 /// Lifecycles in which the owned completion loop may keep its explicit lease
-/// alive. `inputRequired` remains owned while waiting for user input; it is
-/// not an implicit relinquishment or an output-derived timeout policy.
+/// alive. This is not an implicit relinquishment or output-derived timeout policy.
 pub fn renewable_lifecycle(request: RequestLifecycleState) -> bool {
     matches!(
         request,
-        RequestLifecycleState::Claimed
-            | RequestLifecycleState::Processing
-            | RequestLifecycleState::InputRequired
+        RequestLifecycleState::Claimed | RequestLifecycleState::Processing
     )
 }
 
@@ -321,15 +318,13 @@ mod tests {
         assert_eq!(authorize_renewal(observed, GEN, 10, 1, 9), None);
     }
 
-    // Conformance: `terminal_lifecycle_rejects_renewal_even_with_active_lease`
-    // and `input_required_wait_keeps_explicit_owner_heartbeat`.
+    // Conformance: `terminal_lifecycle_rejects_renewal_even_with_active_lease`.
     #[test]
-    fn renewable_lifecycle_includes_input_required_and_excludes_terminal() {
+    fn renewable_lifecycle_includes_claimed_and_processing_and_excludes_terminal() {
         let deadline = 10;
         for (request, ok) in [
             (RequestLifecycleState::Claimed, true),
             (RequestLifecycleState::Processing, true),
-            (RequestLifecycleState::InputRequired, true),
             (RequestLifecycleState::Pending, false),
             (RequestLifecycleState::WorkspaceBindingPending, false),
             (RequestLifecycleState::Completed, false),
@@ -372,17 +367,9 @@ mod tests {
     // identity. Admission requires `processing`.
     #[test]
     fn output_and_producer_writes_never_renew_and_require_processing() {
-        for request in [
-            RequestLifecycleState::Claimed,
-            RequestLifecycleState::InputRequired,
-        ] {
-            let observed = observation(request, 10);
-            assert!(!authorize_output_append(observed, GEN, 5), "{request:?}");
-            assert!(
-                !authorize_producer_decision(observed, GEN, 5),
-                "{request:?}"
-            );
-        }
+        let claimed = observation(RequestLifecycleState::Claimed, 10);
+        assert!(!authorize_output_append(claimed, GEN, 5));
+        assert!(!authorize_producer_decision(claimed, GEN, 5));
         let observed = observation(RequestLifecycleState::Processing, 10);
         assert!(authorize_output_append(observed, GEN, 5));
         assert!(authorize_producer_decision(observed, GEN, 5));
@@ -398,13 +385,6 @@ mod tests {
         assert!(authorize_finalize(claimed, GEN, 5, false));
         assert!(authorize_finalize(processing, GEN, 5, true));
         assert!(authorize_finalize(processing, GEN, 5, false));
-        // inputRequired is not finalizable in either direction.
-        assert!(!authorize_finalize(
-            observation(RequestLifecycleState::InputRequired, 10),
-            GEN,
-            5,
-            false
-        ));
     }
 
     // Modeled: `policy_authority_can_supersede_live_generation`,
@@ -466,13 +446,6 @@ mod tests {
                 "{outcome:?}"
             );
         }
-        // inputRequired is not an active revocation pair.
-        assert!(!authorize_execution_revocation(
-            observation(RequestLifecycleState::InputRequired, 10),
-            expected,
-            OTHER,
-            RequestLifecycleState::Dead
-        ));
     }
 
     // Modeled: `provider_eof_without_final_fails` and the generated case

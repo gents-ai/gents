@@ -4,7 +4,7 @@ import { DocumentSelection } from "./DocumentSelection";
 import { Group } from "./rows";
 import type { Shell } from "@/hooks/useShell";
 import { RemoteToolDiscovery } from "./RemoteToolDiscovery";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 // Mirrors the canonical effective defaults used by Tools::validation_violations.
 // The desktop bridge does not currently publish these values in its catalog.
@@ -15,6 +15,11 @@ export const TOOL_LIMIT_DEFAULTS = {
   lspTimeout: 20,
   maxLspTimeout: 300,
 } as const;
+
+/* a note that belongs to the group, set in the row's own padding */
+function Note({ children }: { children: ReactNode }) {
+  return <p className="px-5 py-3 text-sm text-muted-foreground">{children}</p>;
+}
 
 function SecondsRow({
   id,
@@ -295,9 +300,9 @@ export function ToolGroupControls({
           ["self_config_no_lockout", "Prevent self-configuration lockout"],
           ["self_config_dry_run", "Preview configuration changes"],
         ])}
-        <p className="px-4 pb-4 text-sm text-muted-foreground">
+        <Note>
           Permissions are independent opt-ins. Process authority remains the ceiling.
-        </p>
+        </Note>
       </Group>
       <Group title="Subagents">
         {flags("subagents", [
@@ -319,6 +324,7 @@ export function ToolGroupControls({
         />
         <DocumentSelection
           label="Subagent targets"
+          description="Explicit delegation targets. Enabling spawn does not grant access to unselected behaviors."
           options={(deployment.subagentTargets ?? []).map((target) => ({
             value: target.target_id,
             label: target.name,
@@ -329,13 +335,10 @@ export function ToolGroupControls({
             update("subagents", { target_ids: ids.length ? ids : null })
           }
         />
-        <p className="px-4 pb-4 text-sm text-muted-foreground">
-          Select explicit delegation targets. Enabling spawn does not grant access to
-          unselected behaviors.
-        </p>
         <ChoiceRow
           id="tools-create-target"
           label="Add a local delegation target"
+          description="Created with Save; select it above to grant access."
           value=""
           items={[
             { value: "", label: "Choose a behavior…" },
@@ -357,9 +360,6 @@ export function ToolGroupControls({
             if (id) onCreateTarget(id);
           }}
         />
-        <p className="px-4 pb-4 text-sm text-muted-foreground">
-          New targets are created with Save. Select the target above to grant access.
-        </p>
       </Group>
       <Group title="Remote Tools">
         <DocumentSelection
@@ -467,6 +467,7 @@ export function ToolGroupControls({
                   ),
                 });
               }}
+              stacked
             />
             <DocumentSelection
               label="Background remote tools"
@@ -643,6 +644,7 @@ export function ToolGroupControls({
               }
               rows={5}
               mono
+              stacked
             />
             {seconds(
               "tools-lsp-timeout",

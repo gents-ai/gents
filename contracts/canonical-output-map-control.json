@@ -173,6 +173,43 @@
     }
   },
   {
+    "id": "control.interrupt-wake-cutoff",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptScoped" },
+      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved" },
+      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObservedScoped" },
+      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterruptObserved_preserves_unobserved" },
+      { "file": "crates/gents/proofs/Proofs/Session/Interrupt.lean", "symbol": "SessionQueue.latchInterrupt_replay_preserves_later_queue" },
+      { "file": "crates/gents/proofs/Proofs/Session/InterruptCases.lean", "symbol": "SessionQueue.InterruptCases.cases" }
+    ],
+    "constructors": ["SessionQueue.Action.drainObservedAutomated"],
+    "generated_groups": ["interrupt_queue_cases"],
+    "fixture_status": "concrete_inputs",
+    "native_owner_paths": ["crates/gents/src/interrupt.rs", "crates/gents/src/lifecycle/queue/draining.rs"],
+    "consumer_paths": ["crates/gents/src/lean_vocab_test/support.rs", "crates/gents/src/interrupt/queue_tests.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "completion_before_interrupt",
+      "completion_after_interrupt",
+      "interrupt_replay_preserves_later_same_key",
+      "coalesced_before_interrupt",
+      "user_and_other_wake_keys",
+      "same_time_after_interrupt_is_not_old",
+      "empty_scan_completion_before_latch_commit",
+      "observed_old_then_later_same_key_completion",
+      "interactive_background_metadata_preserved",
+      "Native background publication supplies its own wall-clock timestamp; bindings cover event order, physical identity, pending membership and replay, while exact equal-time inputs and pending queue ordering remain model-only",
+      "Bind first-latch and drain atomicity, rollback and concurrent completion through the real transaction owner; notification facts must remain intact",
+      "Keep exact session, principal and requester selection; repeat interruption must not expand the original cutoff"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "SessionQueue.latchInterruptScoped",
+      "disposition": "routed",
+      "reason": "First interruption drains observed physical wake identities in its transaction. Replay does not rescan. An unobserved concurrent pre-latch completion may survive; post-latch completions and notification facts are preserved. Explicit subagent cascade cancellation is a separate owner and is not constrained by this foreground-interrupt cutoff."
+    }
+  },
+  {
     "id": "control.physical-wake-claim-and-acknowledgement",
     "model_symbols": [
       { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.canonicalWakeBindings" },

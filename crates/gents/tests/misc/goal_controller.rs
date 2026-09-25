@@ -2710,7 +2710,6 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
     for (label, state) in [
         ("missing", None),
         ("unknown", Some("unknownState")),
-        ("input", Some("inputRequired")),
         ("workspace", Some("workspaceBindingPending")),
     ] {
         let db = test_db(&format!("operator-resume-unfinished-{label}")).await;

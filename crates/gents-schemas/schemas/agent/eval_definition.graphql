@@ -1,0 +1,15 @@
+# A pack-carried eval definition (#1515). Holds acceptance checks and held-out
+# case bodies, so it is local-audit: never bulk-synced, never on a P2P list.
+# `@branchable` is deliberate and irreversible; it is the precondition for
+# branchable sync and for collection-scoped ACP reads.
+type EvalDefinition @branchable @index(fields: ["agent_did", "definition_id"], unique: true) {
+    definition_id: String @immutable
+    agent_did: String @index @immutable
+    comparability_version: Int
+    title: String
+    subject: JSON
+    fixtures: JSON
+    cases: JSON
+    updated_at: String
+    tags: [String]
+}

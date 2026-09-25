@@ -507,8 +507,8 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 }
 
 #[tokio::test]
-async fn verify_existing_desired_state_plan_rejects_drifted_live_rows() -> Result<()> {
-    // Gap test: `verify_existing_desired_state_plan` guards graph-package
+async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
+    // Gap test: `expect_existing_documents_unchanged` guards graph-package
     // re-install against out-of-band mutation of live package documents.
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
@@ -521,7 +521,7 @@ async fn verify_existing_desired_state_plan_rejects_drifted_live_rows() -> Resul
     access
         .transact("test.verify.matching", |txn| {
             let plan = &matching;
-            Box::pin(async move { verify_existing_desired_state_plan(txn, plan).await })
+            Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
         .await?;
 
@@ -530,12 +530,12 @@ async fn verify_existing_desired_state_plan_rejects_drifted_live_rows() -> Resul
     let error = access
         .transact("test.verify.drifted", |txn| {
             let plan = &matching;
-            Box::pin(async move { verify_existing_desired_state_plan(txn, plan).await })
+            Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("drifted"),
+        stale_expectation(&error).is_some(),
         "drifted live row must be rejected: {error:#}"
     );
     Ok(())
@@ -564,6 +564,300 @@ fn removals_require_unique_scoped_identities() {
             (Collection::Tools, "owner".into(), "tools".into())
         ])
         .is_err());
+}
+
+fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExpectation {
+    DesiredStateExpectation {
+        collection: Collection::InferenceBackend,
+        owner: owner.to_owned(),
+        id: id.to_owned(),
+        digest,
+    }
+}
+
+async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    Ok((ConfigAccess::Local(node), "did:key:owner"))
+}
+
+async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
+    let (owner, id) = (owner.to_owned(), id.to_owned());
+    access
+        .transact("test.cas.read", |txn| {
+            let (owner, id) = (owner.clone(), id.clone());
+            Box::pin(async move {
+                read_desired_state_document_in_txn(txn, Collection::InferenceBackend, &owner, &id)
+                    .await?
+                    .map(|live| desired_state_document_digest(&live))
+                    .transpose()
+            })
+        })
+        .await
+}
+
+fn renamed(owner: &str, id: &str, name: &str) -> Value {
+    let mut value = backend(owner, id);
+    value["name"] = name.into();
+    value
+}
+
+#[tokio::test]
+async fn matching_expectation_applies_the_plan() -> Result<()> {
+    let (access, owner) = cas_node().await?;
+    apply(&access, vec![document(backend(owner, "target"))]).await?;
+    let digest = live_digest(&access, owner, "target").await?;
+    let plan = DesiredStateApplyPlan::new(vec![document(renamed(owner, "target", "Promoted"))])?
+        .with_expected(vec![expectation(owner, "target", digest)])?;
+    access
+        .transact("test.cas.apply", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+    assert_ne!(live_digest(&access, owner, "target").await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
+    let (access, owner) = cas_node().await?;
+    apply(
+        &access,
+        vec![
+            document(backend(owner, "target")),
+            document(backend(owner, "other")),
+        ],
+    )
+    .await?;
+    let frozen_other = live_digest(&access, owner, "other").await?;
+    let frozen_target = live_digest(&access, owner, "target").await?;
+    // An operator edits a closure document after the freeze.
+    apply(&access, vec![document(renamed(owner, "other", "Edited"))]).await?;
+    let before = live_digest(&access, owner, "target").await?;
+
+    let plan = DesiredStateApplyPlan::new(vec![document(renamed(owner, "target", "Promoted"))])?
+        .with_expected(vec![
+            expectation(owner, "target", frozen_target),
+            expectation(owner, "other", frozen_other.clone()),
+        ])?;
+    let error = access
+        .transact("test.cas.stale", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap_err();
+
+    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    assert_eq!(stale.drifted.len(), 1);
+    assert_eq!(stale.drifted[0].id, "other");
+    assert_eq!(stale.drifted[0].expected, frozen_other);
+    assert_eq!(
+        live_digest(&access, owner, "target").await?,
+        before,
+        "target must be untouched"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
+    let (access, owner) = cas_node().await?;
+    apply(&access, vec![document(backend(owner, "present"))]).await?;
+
+    let must_be_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "fresh"))])?
+        .with_expected(vec![expectation(owner, "fresh", None)])?;
+    access
+        .transact("test.cas.absent_ok", |txn| {
+            let plan = &must_be_absent;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+
+    let wrongly_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "again"))])?
+        .with_expected(vec![expectation(owner, "present", None)])?;
+    let error = access
+        .transact("test.cas.absent_stale", |txn| {
+            let plan = &wrongly_absent;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap_err();
+    assert!(stale_expectation(&error).is_some());
+
+    let wrongly_present =
+        DesiredStateApplyPlan::new(vec![document(backend(owner, "third"))])?.with_expected(
+            vec![expectation(owner, "missing", Some("sha256:00".into()))],
+        )?;
+    let error = access
+        .transact("test.cas.present_stale", |txn| {
+            let plan = &wrongly_present;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap_err();
+    let stale = stale_expectation(&error).expect("typed StaleExpectation");
+    assert_eq!(stale.drifted[0].found, None);
+    Ok(())
+}
+
+/// `ApplyReconcile.publishIf` refinement: the Lean model compares desired
+/// fields, Rust compares digests. Each Lean `content` string is mapped onto the
+/// `name` field of an `InferenceBackend`, so two rows share a digest exactly
+/// when they share a Lean content. The Lean collection is deliberately ignored
+/// (ids are distinct across the scenario's collections) and the Lean `refs` are
+/// not materialized: reference closure is a separate, already-tested gate and
+/// these cases exercise only the expectation precondition.
+#[tokio::test]
+async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
+    use crate::lean_vocab_test::lean_publish_if_cases;
+
+    fn doc_for(owner: &str, id: &str, content: &str) -> Value {
+        renamed(owner, id, content)
+    }
+
+    fn authored_digest(owner: &str, id: &str, content: &str) -> Result<String> {
+        let (_, projected) = config_projection(
+            Collection::InferenceBackend,
+            Some(&doc_for(owner, id, content)),
+        )?;
+        desired_state_document_digest(&projected.context("projection")?)
+    }
+
+    let mut exercised = Vec::new();
+    for case in lean_publish_if_cases() {
+        let (access, _) = cas_node().await?;
+        let prior = case
+            .pre_desired
+            .iter()
+            .map(|row| document(doc_for(&row.target.agent_did, &row.target.id, &row.content)))
+            .collect::<Vec<_>>();
+        apply(&access, prior).await?;
+
+        let expected = case
+            .expected
+            .iter()
+            .map(|row| {
+                let digest = row
+                    .content
+                    .as_deref()
+                    .map(|content| authored_digest(&row.target.agent_did, &row.target.id, content))
+                    .transpose()?;
+                Ok(expectation(&row.target.agent_did, &row.target.id, digest))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let plan = DesiredStateApplyPlan::new(
+            case.candidate
+                .iter()
+                .map(|row| document(doc_for(&row.target.agent_did, &row.target.id, &row.content)))
+                .collect(),
+        )?
+        .with_expected(expected)?;
+
+        let outcome = access
+            .transact("test.cas.lean", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await;
+        assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
+        if let Err(error) = &outcome {
+            assert!(
+                stale_expectation(error).is_some(),
+                "case {}: {error:#}",
+                case.name
+            );
+        }
+
+        let mut after_first = Vec::new();
+        for row in &case.expected_after_desired {
+            let live = live_digest(&access, &row.target.agent_did, &row.target.id).await?;
+            let want = authored_digest(&row.target.agent_did, &row.target.id, &row.content)?;
+            assert_eq!(
+                live,
+                Some(want),
+                "case {} document {}",
+                case.name,
+                row.target.id
+            );
+            after_first.push(live);
+        }
+
+        // Witness for `publishIf_idempotent`: an expectation names the
+        // pre-publication digest, so replaying an applied plan refuses once
+        // the publication moved a document the scope names, and is a
+        // legitimate no-op when it moved none (an empty scope, or a scope
+        // naming only documents the candidate never writes). Decide which
+        // from the emitted post-state, never from the case name; either way
+        // the replay leaves every published digest exactly as it found it,
+        // which is the shape promotion retry relies on.
+        if case.applied {
+            let replay_holds = case.expected.iter().all(|expectation| {
+                case.expected_after_desired
+                    .iter()
+                    .find(|row| row.target == expectation.target)
+                    .map(|row| row.content.as_str())
+                    == expectation.content.as_deref()
+            });
+            let replay = access
+                .transact("test.cas.lean.replay", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                })
+                .await;
+            assert_eq!(
+                replay.is_ok(),
+                replay_holds,
+                "case {} replay: {replay:?}",
+                case.name
+            );
+            if let Err(error) = &replay {
+                assert!(
+                    stale_expectation(error).is_some(),
+                    "case {} replay: {error:#}",
+                    case.name
+                );
+            }
+            for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
+                assert_eq!(
+                    live_digest(&access, &row.target.agent_did, &row.target.id).await?,
+                    *first,
+                    "case {} document {} changed on replay",
+                    case.name,
+                    row.target.id
+                );
+            }
+        }
+        exercised.push(case.name.as_str());
+    }
+    // Every emitted scenario must be exercised: a case reaches this list only
+    // after all of its assertions hold, so emitter drift fails loudly here.
+    assert_eq!(
+        exercised,
+        [
+            "all_expectations_match",
+            "target_drifted",
+            "closure_document_drifted",
+            "expected_absent_but_present",
+            "expected_absent_and_absent",
+            "expected_present_but_absent",
+            "empty_scope_is_publish",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn duplicate_expectations_are_rejected() {
+    let plan = DesiredStateApplyPlan::new(Vec::new()).unwrap();
+    let error = plan
+        .with_expected(vec![
+            expectation("did:key:owner", "a", None),
+            expectation("did:key:owner", "a", None),
+        ])
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("duplicate expectation"));
 }
 
 #[tokio::test]

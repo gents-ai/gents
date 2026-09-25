@@ -205,6 +205,10 @@ pub struct ListSubagentsResponse {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// The `after` cursor no longer names a subagent in this scope; the
+    /// listing restarted from the first subagent instead.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stale_cursor: bool,
     pub entries: Vec<ListSubagentsEntry>,
 }
 

@@ -23,9 +23,9 @@ def main : IO Unit := do
      .managedServerError, .configurationError, .clientError, .ready]
   let startupRows := phases.flatMap fun phase =>
     [false, true].flatMap fun running =>
-      [false, true].map fun pristine =>
+      [false, true].map fun autostartDeclined =>
         "{\"phase\":\"" ++ phaseName phase ++ "\",\"running\":" ++ toString running ++
-        ",\"pristine\":" ++ toString pristine ++ ",\"expected\":\"" ++
-        phaseName (ClientSnapshotObservation.observeStartup phase running pristine) ++ "\"}"
+        ",\"autostartDeclined\":" ++ toString autostartDeclined ++ ",\"expected\":\"" ++
+        phaseName (ClientSnapshotObservation.observeStartup phase running autostartDeclined) ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++ "]}")

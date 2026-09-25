@@ -57,7 +57,7 @@ use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tool_call_lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -457,8 +457,12 @@ pub(super) async fn project_tools(
         .as_deref()
         .filter(|id| !id.is_empty())
         .context("tool request physical identity missing")?;
-    let tool_response = node.execute(&tool_calls_query(request)?).await;
-    ensure_no_errors(&tool_response, "grok shim tool call query")?;
+    let tool_response = graphql_with_transaction_retry(
+        node,
+        &tool_calls_query(request)?,
+        "grok shim tool call query",
+    )
+    .await?;
     let values = tool_response
         .data
         .as_ref()
@@ -1051,6 +1055,7 @@ fn decode_tool_call_rows(response: &defra_node::QueryResponse) -> Result<Vec<Too
 
 #[cfg(test)]
 mod tests {
+    use gents::graphql::ensure_no_errors;
     fn request_fixture(
         id: &str,
         session: &str,

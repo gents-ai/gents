@@ -16,6 +16,36 @@ pub(super) async fn resolve_timeline_messages_for_session(
     let header_doc_ids =
         load_timeline_message_header_ids_for_session(access, agent_did, session_id, requester_did)
             .await?;
+    resolve_timeline_messages(access, agent_did, session_id, requester_did, header_doc_ids).await
+}
+
+/// The canonical messages at one accepted sequence of an exact session scope.
+/// Duplicate headers at a sequence are returned, never silently picked.
+pub(super) async fn resolve_timeline_messages_at_sequence(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    sequence: i64,
+) -> Result<Vec<TimelineMessageRow>> {
+    let header_doc_ids = load_message_header_ids(
+        access,
+        agent_did,
+        session_id,
+        requester_did,
+        &format!(", sequence: {{ _eq: {sequence} }}"),
+    )
+    .await?;
+    resolve_timeline_messages(access, agent_did, session_id, requester_did, header_doc_ids).await
+}
+
+async fn resolve_timeline_messages(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    header_doc_ids: Vec<String>,
+) -> Result<Vec<TimelineMessageRow>> {
     let mut rows = Vec::with_capacity(header_doc_ids.len());
     for header_doc_id in header_doc_ids {
         let (header, message) =
@@ -50,11 +80,21 @@ pub(super) async fn load_timeline_message_header_ids_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<String>> {
+    load_message_header_ids(access, agent_did, session_id, requester_did, "").await
+}
+
+async fn load_message_header_ids(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    extra_filter: &str,
+) -> Result<Vec<String>> {
     let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ {scope} }},
+                filter: {{ {scope}{extra_filter} }},
                 order: {{ sequence: ASC }}
             ) {{
                 _docID
@@ -80,11 +120,41 @@ pub(super) async fn load_timeline_tool_observations_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<ToolLifecycleObservation>> {
+    load_tool_observations(access, agent_did, session_id, requester_did, "").await
+}
+
+/// Lifecycle observations for one exact physical tool document in a session
+/// scope. A document outside the scope yields no rows.
+pub(super) async fn load_timeline_tool_observation(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    tool_doc_id: &str,
+) -> Result<Vec<ToolLifecycleObservation>> {
+    let tool_doc_id = escape_graphql_string(tool_doc_id);
+    load_tool_observations(
+        access,
+        agent_did,
+        session_id,
+        requester_did,
+        &format!(r#", _docID: {{ _eq: "{tool_doc_id}" }}"#),
+    )
+    .await
+}
+
+async fn load_tool_observations(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    extra_filter: &str,
+) -> Result<Vec<ToolLifecycleObservation>> {
     let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ {scope} }},
+                filter: {{ {scope}{extra_filter} }},
                 order: {{ started_at: ASC }}
             ) {{
                 _docID

@@ -29,7 +29,6 @@ pub use config::{
     AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
     TracingConfig,
 };
-pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_VERSION};
 pub use error::{BridgeError, BridgeErrorCode};
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 pub use plugin::init;

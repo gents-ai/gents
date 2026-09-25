@@ -1,0 +1,22 @@
+# One check's result for one trial (#1515). Append-only: every field is immutable
+# and a re-grade appends a row naming the verdict it supersedes. `feedback` can
+# quote transcripts, so the collection is local-audit. `score_bp` is basis points
+# in 0..=10000 and null for a non-evidence verdict.
+type EvalVerdict @branchable @index(fields: ["owner_agent_did", "verdict_id"], unique: true) {
+    verdict_id: String @immutable
+    owner_agent_did: String @index @immutable
+    run_id: String @index @immutable
+    trial_id: String @index @immutable
+    stage_id: String @immutable
+    check: String @immutable
+    check_version: String @immutable
+    tier: String @immutable
+    outcome_kind: String @immutable
+    provider_reason: String @immutable
+    score_bp: Int @immutable
+    weight: Int @immutable
+    raw: JSON @immutable
+    feedback: String @immutable
+    regrade_of: String @immutable
+    created_at: String @immutable
+}

@@ -466,7 +466,12 @@ export function projectClientOperationalStatus(
   return null;
 }
 
-export type SyncHealthStateName = "healthy" | "syncing" | "offline" | "failed";
+export type SyncHealthStateName =
+  | "healthy"
+  | "syncing"
+  | "offline"
+  | "failed"
+  | "incompatible";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
@@ -476,6 +481,7 @@ export function syncHealthState(
     case "syncing":
     case "offline":
     case "failed":
+    case "incompatible":
       return syncHealth.state;
     default:
       return null;
@@ -503,7 +509,9 @@ export function projectSyncOperationalStatus(
         ? "Syncing"
         : state === "offline"
           ? "Offline"
-          : "Sync failed";
+          : state === "incompatible"
+            ? "Update required"
+            : "Sync failed";
   return status({
     kind:
       state === "healthy"

@@ -298,6 +298,9 @@ pub struct TimelineInferenceCallRow {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
+    /// Keyed connection fingerprint of the behavior slot that made the call;
+    /// one `controller_generation` can carry two values across a connection
+    /// change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -702,6 +705,9 @@ pub struct TimelineInferenceCallEvent {
     pub queue_depth_at_enqueue: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub controller_generation: Option<i64>,
+    /// Keyed connection fingerprint of the behavior slot that made the call;
+    /// one `controller_generation` can carry two values across a connection
+    /// change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_config_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

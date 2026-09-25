@@ -42,6 +42,22 @@ pub struct PackIdentity {
     pub plugins: Vec<InstalledPackPlugin>,
 }
 
+impl PackIdentity {
+    /// The identity of the pack `manifest` describes, whose contents hash to `digest`.
+    pub fn new(
+        manifest: &super::PackManifest,
+        digest: impl Into<String>,
+        plugins: Vec<InstalledPackPlugin>,
+    ) -> Self {
+        Self {
+            coordinate: format!("{}/{}", manifest.metadata.namespace, manifest.name),
+            version: manifest.version.clone(),
+            digest: digest.into(),
+            plugins,
+        }
+    }
+}
+
 /// A plugin a pack install stored, by name and artifact digest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledPackPlugin {

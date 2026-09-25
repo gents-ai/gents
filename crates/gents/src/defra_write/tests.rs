@@ -94,6 +94,25 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
 }
 
 #[tokio::test]
+async fn rejects_a_persisted_protected_collection_at_execution() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let mut protected = decl();
+    protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
+    let tool = BoundedWriteTool::new(node, protected);
+    assert!(!tool.is_well_formed());
+    let err = Tool::call(
+        &tool,
+        serde_json::from_value(json!({
+            "drift_sig": "abc", "summary": "stale host doc", "status": "open"
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("protected"), "{err:#}");
+}
+
+#[tokio::test]
 async fn writes_one_bounded_doc() {
     let node = node_with_actionrequest().await;
     let tool = BoundedWriteTool::new(Arc::clone(&node), decl());

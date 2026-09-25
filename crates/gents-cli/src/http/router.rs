@@ -17,8 +17,8 @@ use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::mcp_pool::load_mcp_pool_snapshot;
 use crate::http::prometheus::{
-    load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
-    MetricsRuntimeRow, P2pMetricsSnapshot,
+    load_metrics_core_data, load_metrics_query_data, render_prometheus_metrics,
+    with_local_native_executors, MetricsRuntimeRow, P2pMetricsSnapshot,
 };
 use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
@@ -42,6 +42,9 @@ pub(crate) struct RuntimeHttpState {
     /// Lowercase `meta-only` / `readonly` / `readwrite`, matching `gents status`.
     pub(crate) tool_ceiling: String,
     pub(crate) tool_root: Option<String>,
+    /// The home this runtime serves, so a client that finds a different
+    /// runtime on its port can name it.
+    pub(crate) home: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
@@ -56,6 +59,29 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
     pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
     pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
+    /// This node's `client` route collection versions, set once by serve after
+    /// its migrations register every collection.
+    pub(crate) replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    pub(crate) serve_lifecycle: ServeLifecycleHandle,
+}
+
+/// Serve's `/status` lifecycle. It becomes ready only after serve writes
+/// `runtime.json` for this process, and never returns to starting.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ServeLifecycleHandle(Arc<std::sync::OnceLock<()>>);
+
+impl ServeLifecycleHandle {
+    pub(crate) fn mark_ready(&self) {
+        let _ = self.0.set(());
+    }
+
+    pub(crate) fn current(&self) -> gents_protocol::serve_lifecycle::ServeLifecycle {
+        if self.0.get().is_some() {
+            gents_protocol::serve_lifecycle::ServeLifecycle::Ready
+        } else {
+            gents_protocol::serve_lifecycle::ServeLifecycle::Starting
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -98,6 +124,7 @@ pub(crate) fn runtime_contract_router(
     agent_did: String,
     tool_ceiling: String,
     tool_root: Option<String>,
+    home: Option<String>,
     // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
@@ -109,6 +136,8 @@ pub(crate) fn runtime_contract_router(
     enrollment_decisions: EnrollmentDecisionServiceHandle,
     activation_runtime: Arc<OnceCell<gents::Gents>>,
     activation_observation: watch::Receiver<RuntimeActivationObservation>,
+    replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    serve_lifecycle: ServeLifecycleHandle,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -123,6 +152,7 @@ pub(crate) fn runtime_contract_router(
         agent_did,
         tool_ceiling,
         tool_root,
+        home,
         started_at: chrono::Utc::now().to_rfc3339(),
         started_instant: Instant::now(),
         backend_health,
@@ -134,6 +164,8 @@ pub(crate) fn runtime_contract_router(
         enrollment_decisions,
         activation_runtime,
         activation_observation,
+        replicated_schema,
+        serve_lifecycle,
     };
 
     let mut router = Router::new()
@@ -460,11 +492,21 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             map.insert("p2p_admission".to_string(), admission.to_json());
         }
     }
-    let metrics = tokio::time::timeout(
-        STATUS_PROBE_BUDGET,
-        load_metrics_query_data(&state.graphql, &state.agent_did),
+    // The probe budget bounds core health only; the optional progress
+    // observation gets whatever remains of it and never flips `ok`.
+    let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
+    let metrics = tokio::time::timeout_at(
+        probe_deadline,
+        load_metrics_core_data(&state.graphql, &state.agent_did),
     )
     .await;
+    let metrics = match metrics {
+        Ok(Ok(core)) => Ok(Ok(core
+            .with_liveness_activity(&state.graphql, probe_deadline)
+            .await)),
+        Ok(Err(error)) => Ok(Err(error)),
+        Err(elapsed) => Err(elapsed),
+    };
     let mut body = match metrics {
         Ok(Ok(data)) => {
             let data = with_local_native_executors(data);
@@ -485,6 +527,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "agent_did": state.agent_did,
                 "tool_ceiling": state.tool_ceiling,
                 "tool_root": state.tool_root,
+                "home": state.home,
                 "runtime": runtime,
                 "runtimes": data.agent_runtimes,
                 "backends": data.inference_backends,
@@ -504,6 +547,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "agent_did": state.agent_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "home": state.home,
             "runtime": Value::Null,
             "runtimes": [],
             "backends": [],
@@ -522,6 +566,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "agent_did": state.agent_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "home": state.home,
             "runtime": Value::Null,
             "runtimes": [],
             "backends": [],
@@ -564,10 +609,27 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));
+        map.insert(
+            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
+            replicated_schema_status(&state.replicated_schema),
+        );
+        map.insert(
+            gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
+            json!(state.serve_lifecycle.current()),
+        );
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+/// `null` until serve publishes the schema after its migrations complete.
+fn replicated_schema_status(
+    replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
+) -> Value {
+    replicated_schema
+        .get()
+        .map_or(Value::Null, |schema| json!(schema))
 }
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -762,6 +824,31 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn replicated_schema_is_null_until_published_then_complete() {
+        let cell = OnceCell::new();
+        assert_eq!(replicated_schema_status(&cell), Value::Null);
+
+        let schema: gents_protocol::peer_schema::ReplicatedSchema =
+            gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
+                .iter()
+                .map(|name| {
+                    (
+                        (*name).to_string(),
+                        gents_protocol::peer_schema::ReplicatedCollectionIdentity {
+                            version_id: format!("bafy-{name}"),
+                            branchable: true,
+                            policy_resource: None,
+                        },
+                    )
+                })
+                .collect();
+        cell.set(schema.clone()).unwrap();
+        let published: gents_protocol::peer_schema::ReplicatedSchema =
+            serde_json::from_value(replicated_schema_status(&cell)).unwrap();
+        assert_eq!(published, schema);
+    }
+
     fn state() -> RuntimeHttpState {
         let (activation_runtime, activation_observation) = empty_activation_state();
         RuntimeHttpState {
@@ -770,6 +857,7 @@ mod tests {
             agent_did: "did:key:zAgent".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/Users/test".to_string()),
+            home: None,
             started_at: "2026-06-04T00:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
@@ -781,6 +869,8 @@ mod tests {
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
         }
     }
 
@@ -896,6 +986,137 @@ mod tests {
         assert_eq!(sync.next_pending_retry_in_ms, Some(71));
         assert_eq!(sync.pending_dag_terminal_quarantined, 73);
         assert_eq!(sync.quarantined_pending_dags, 79);
+    }
+
+    #[tokio::test]
+    async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
+        async fn lifecycle(state: &RuntimeHttpState) -> Value {
+            let response = status_handler(State(state.clone())).await;
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("status body");
+            serde_json::from_slice::<Value>(&body).expect("status json")
+                [gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD]
+                .clone()
+        }
+        let mut state = state();
+        state.graphql = "http://127.0.0.1:9/api/v0/graphql".to_string();
+
+        assert_eq!(lifecycle(&state).await, json!("starting"));
+        state.serve_lifecycle.mark_ready();
+        assert_eq!(lifecycle(&state).await, json!("ready"));
+    }
+
+    /// Mock GraphQL whose core health read answers after `core_delay` and
+    /// whose optional activity reads stall far past every probe budget.
+    async fn stalled_activity_state(core_delay: Duration) -> RuntimeHttpState {
+        use axum::{routing::post, Json, Router};
+
+        let claimed_at = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let core = json!({
+            "data": {
+                "AgentRuntime": [serde_json::to_value(runtime()).unwrap()],
+                "AgentBehaviorReadiness": [serde_json::to_value(readiness("default")).unwrap()],
+                "InferenceBackend": [],
+                "AgentRequest": [{
+                    "_docID": "doc-req-1",
+                    "request_id": "req-1",
+                    "agent_did": "did:key:zAgent",
+                    "claimed_at": claimed_at.to_rfc3339(),
+                    "deadline": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+                }],
+                "AgentToolCall": []
+            }
+        });
+        let mock = Router::new().route(
+            "/api/v0/graphql",
+            post(move |Json(body): Json<Value>| {
+                let core = core.clone();
+                async move {
+                    let query = body["query"].as_str().unwrap_or_default().to_string();
+                    if query.contains("AgentRuntime") {
+                        tokio::time::sleep(core_delay).await;
+                        return Ok(Json(core));
+                    }
+                    if query.contains("InferenceCall(") {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        return Ok(Json(json!({ "data": {} })));
+                    }
+                    Err(StatusCode::NOT_FOUND)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock graphql");
+        let addr = listener.local_addr().expect("mock addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, mock).await;
+        });
+        let mut state = state();
+        state.graphql = format!("http://{addr}/api/v0/graphql");
+        state
+    }
+
+    async fn health_body(response: Response) -> (StatusCode, Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("health body");
+        (status, serde_json::from_slice(&bytes).expect("health json"))
+    }
+
+    fn progress_age_ms(body: &Value) -> i64 {
+        body.pointer("/liveness/requests/0/last_progress_age_ms")
+            .and_then(Value::as_i64)
+            .expect("liveness request row")
+    }
+
+    /// A stalled optional activity read must not delay or fail core health:
+    /// `/healthz` and `/status` stay ok and on time, and progress falls back
+    /// to `claimed_at`.
+    #[tokio::test]
+    async fn stalled_liveness_activity_read_does_not_hold_health() {
+        let state = stalled_activity_state(Duration::ZERO).await;
+
+        let started = std::time::Instant::now();
+        let (status, healthz) = health_body(healthz_handler(State(state.clone())).await).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "/healthz waited {:?} on a stalled activity read",
+            started.elapsed()
+        );
+        assert_eq!(status, StatusCode::OK, "{healthz}");
+        assert_eq!(healthz["ok"], json!(true), "{healthz}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&healthz)));
+
+        let started = std::time::Instant::now();
+        let (_, status_body) = health_body(status_handler(State(state)).await).await;
+        assert!(
+            started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
+            "/status waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(status_body["ok"], json!(true), "{status_body}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
+    }
+
+    /// The `/status` probe budget covers core health only: a core read that
+    /// lands late in the budget leaves activity only the remainder, so the
+    /// response stays ok with progress from `claimed_at`.
+    #[tokio::test]
+    async fn late_core_read_leaves_status_ok_when_activity_stalls() {
+        let state = stalled_activity_state(Duration::from_millis(1_700)).await;
+
+        let started = std::time::Instant::now();
+        let (_, status_body) = health_body(status_handler(State(state)).await).await;
+        assert!(
+            started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
+            "/status waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(status_body["ok"], json!(true), "{status_body}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
     }
 
     #[tokio::test]

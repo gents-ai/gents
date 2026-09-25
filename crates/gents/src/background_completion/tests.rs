@@ -191,3 +191,88 @@ async fn cancel_ack_observer_skips_bridge_whose_parent_is_remote_only() {
     assert_eq!(tool.cancel_pending_remote_ack, Some(true));
     assert!(tool.stuck_since.is_none());
 }
+
+#[tokio::test]
+async fn settlement_writes_keep_bridge_start_and_descendant_cursor() {
+    let node = test_node().await;
+    let parent_doc_id = write_parent_request(node.as_ref(), "parent-cursor", LOCAL_DID).await;
+    let started_at = "2026-09-25T14:47:11.196551Z";
+    exec(
+        node.as_ref(),
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "parent-cursor:toolu-cursor",
+                    request_id: "parent-cursor",
+                    request_doc_id: "{parent_doc_id}",
+                    session_id: "session-parent-cursor",
+                    agent_did: "{LOCAL_DID}",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "toolu-cursor",
+                    status: "running",
+                    lifecycle_state: "running",
+                    started_at: "{started_at}",
+                    deadline_at: "2026-09-25T15:47:11.196551Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "child-never-materialized",
+                    cancel_cascade_intent_at: "2026-09-25T14:49:07Z",
+                    cancel_pending_remote_ack: true
+                }}) {{ _docID }}
+            }}"#
+        ),
+    )
+    .await;
+    let query = crate::DescendantQuery::direct("parent-cursor");
+    let listed =
+        crate::resolve_descendant_graph(crate::DescendantGraphAccess::Local(&node), &query)
+            .await
+            .unwrap();
+    let [edge] = listed.edges.as_slice() else {
+        panic!("one awaiting edge: {listed:?}");
+    };
+    let cursor = edge.cursor.clone();
+
+    // #1808: these settlement writes re-supply every DateTime field; they once
+    // truncated `started_at` to whole seconds and moved the edge out from
+    // under every cursor the parent had already been handed.
+    #[derive(Deserialize)]
+    struct DocIdRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+    }
+    let doc_id = crate::graphql::rows::<DocIdRow>(
+        &node
+            .execute(r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "toolu-cursor" } }) { _docID } }"#)
+            .await,
+        "AgentToolCall",
+    )
+    .unwrap()
+    .remove(0)
+    .doc_id;
+    set_stuck_since(node.as_ref(), &doc_id, Utc::now())
+        .await
+        .unwrap();
+    clear_cancel_pending_ack(node.as_ref(), &doc_id)
+        .await
+        .unwrap();
+
+    let page = crate::resolve_descendant_graph(
+        crate::DescendantGraphAccess::Local(&node),
+        &crate::DescendantQuery {
+            after: Some(cursor.clone()),
+            ..crate::DescendantQuery::direct("parent-cursor")
+        },
+    )
+    .await
+    .expect("a settled edge's cursor never fails the page");
+    assert!(!page.stale_cursor, "cursor {cursor:?} went stale");
+    assert!(page.edges.is_empty());
+    let relisted =
+        crate::resolve_descendant_graph(crate::DescendantGraphAccess::Local(&node), &query)
+            .await
+            .unwrap();
+    assert_eq!(relisted.edges[0].cursor, cursor);
+    assert_eq!(relisted.edges[0].created_at.as_deref(), Some(started_at));
+}

@@ -640,15 +640,12 @@ jobs:
             ${{ steps.measurement.outputs.metrics_file }}
           if-no-files-found: error
 
-      - name: Attach artifacts to GitHub Release
+      - name: Attach CLI archive to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           TARBALL: ${{ steps.package.outputs.tarball }}
           CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
-          DSYM_TARBALL: ${{ steps.package.outputs.dsym_tarball }}
-          DSYM_CHECKSUM_FILE: ${{ steps.package.outputs.dsym_checksum_file }}
-          METRICS_FILE: ${{ steps.measurement.outputs.metrics_file }}
         run: |
           set -euo pipefail
 
@@ -657,14 +654,26 @@ jobs:
             exit 1
           fi
 
+          # dSYM and build metrics stay on the workflow artifact.
+          dist_dir="$(dirname "${TARBALL}")"
+          sums_file="${dist_dir}/SHA256SUMS-cli-macos.txt"
+          cp "${CHECKSUM_FILE}" "${sums_file}"
+          (
+            cd "${dist_dir}"
+            shasum -a 256 -c "$(basename "${sums_file}")"
+          )
+
           if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
               --title "${GITHUB_REF_NAME}" \
-              --notes "Desktop installers are attached as they finish." \
+              --notes "Installers and CLI archives are attached as they finish." \
               || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
-          echo "CLI archive ${TARBALL} stays on the workflow artifact."
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${TARBALL}" \
+            "${sums_file}" \
+            --clobber
 
       - uses: actions/setup-node@v6
         if: env.SIGNING_ENABLED == 'true'

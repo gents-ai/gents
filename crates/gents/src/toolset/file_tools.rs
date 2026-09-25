@@ -38,13 +38,59 @@ fn merge_optional_notes(left: Option<String>, right: Option<String>) -> Option<S
     }
 }
 
+/// write_file's stale-content guard, checked under the per-path mutation
+/// lock. Replacing existing bytes requires either the hash the model last
+/// observed or an explicit overwrite, never both. No refusal discloses the
+/// current hash, so a retry cannot replace changed content without re-reading.
+async fn guard_existing_file_overwrite(
+    path: &Path,
+    display: &str,
+    created: bool,
+    expected: Option<&str>,
+    overwrite: bool,
+) -> Result<(), ToolError> {
+    if expected.is_some() && overwrite {
+        return Err(anyhow!(
+            "expected_content_hash and overwrite=true conflict: pass the hash to replace only the content you read, or overwrite=true to replace it regardless, not both."
+        )
+        .into());
+    }
+    if created {
+        if let Some(expected) = expected {
+            return Err(anyhow!(
+                "{display} has changed since it was read: expected {expected}, but the file no longer exists. Re-read the directory, or omit expected_content_hash to create a new file."
+            )
+            .into());
+        }
+        return Ok(());
+    }
+    if let Some(expected) = expected {
+        let current = content_hash(&tokio::fs::read(path).await?);
+        if expected != current {
+            return Err(anyhow!(
+                "{display} has changed since it was read (expected {expected}). Re-read it and rebuild the write from its current content."
+            )
+            .into());
+        }
+        return Ok(());
+    }
+    if overwrite {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "{display} already exists and write_file will not replace it blindly. read_file it and pass its content_hash as expected_content_hash (write_file and edit_file results also report the latest hash), use edit_file for a targeted change, or set overwrite=true to replace it regardless of its current content."
+    )
+    .into())
+}
+
 pub(crate) fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 /// Per-path serialization for FILE MUTATORS — edit_file's read →
-/// hash-check → match → write sequence AND write_file's overwrite share it:
+/// hash-check → match → write sequence AND write_file's hash-check →
+/// overwrite share it:
 /// without it, a concurrent mutation can land inside edit_file's validated
 /// window and be silently overwritten (lost update). Scope: WITHIN this
 /// process, keyed by canonical path (falling back to the resolved path for
@@ -273,7 +319,7 @@ impl Tool for ReadFileTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable gents_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
+                "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable gents_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file or write_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
                 self.context.root().display()
             ),
             parameters: serde_json::json!({
@@ -491,7 +537,7 @@ impl Tool for WriteFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Write full file contents under the configured root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact success metadata by default. Set raw_json=true for structured JSON.".to_string(),
+            description: "Write full file contents under the configured root. Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Creating a new file needs no guard. Replacing an existing file requires expected_content_hash (the content_hash from your latest read_file, write_file, or edit_file of that file) and is rejected if the file changed since then; set overwrite=true only to replace it regardless of its current content. Prefer edit_file for targeted changes. Returns compact success metadata, including the written content_hash. Set raw_json=true for structured JSON.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -502,6 +548,15 @@ impl Tool for WriteFileTool {
                     "content": {
                         "type": "string",
                         "description": "Complete file contents to write. Existing file contents are replaced."
+                    },
+                    "expected_content_hash": {
+                        "type": "string",
+                        "description": "content_hash from your latest read_file (or write_file/edit_file result) of this file. Required to replace an existing file unless overwrite=true; if the file's current bytes hash differently, the write is rejected."
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, replace an existing file without checking whether it changed since you last saw it. Do not combine with expected_content_hash."
                     },
                     "raw_json": {
                         "type": "boolean",
@@ -520,6 +575,14 @@ impl Tool for WriteFileTool {
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
         let created = !path.exists();
+        guard_existing_file_overwrite(
+            &path,
+            &self.context.display_path(&path),
+            created,
+            args.expected_content_hash.as_deref(),
+            args.overwrite,
+        )
+        .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -658,7 +721,7 @@ impl Tool for EditFileTool {
         if let Some(expected) = &args.expected_content_hash {
             if expected != &pre_edit_hash {
                 return Err(anyhow!(
-                    "{display} has changed since it was read: expected {expected}, but the current content hashes to {pre_edit_hash}. Re-read the file and rebuild the edit from current content."
+                    "{display} has changed since it was read (expected {expected}). Re-read it and rebuild the edit from its current content."
                 )
                 .into());
             }

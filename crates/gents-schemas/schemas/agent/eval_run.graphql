@@ -1,0 +1,10 @@
+# One frozen eval invocation (#1515). Facts only: a run's progress is derived from
+# its trials. `invalidated` is the only mutable field.
+type EvalRun @branchable @index(fields: ["owner_agent_did", "run_id"], unique: true) {
+    run_id: String @immutable
+    owner_agent_did: String @index @immutable
+    evaluator_did: String @immutable
+    origin: JSON @immutable
+    created_at: String @index @immutable
+    invalidated: JSON
+}

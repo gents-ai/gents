@@ -1296,12 +1296,17 @@ async fn persist_child_terminal(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&update_request).await;
-    assert!(
-        !response.has_errors(),
-        "update child AgentRequest {lifecycle_state} failed: {:?}",
-        response.errors
-    );
+    // The child runtime may renew its execution lease while this fixture
+    // forces a terminal state, which can race a DefraDB transaction
+    // conflict. `graphql::graphql_with_transaction_retry` is a read-only
+    // owner that rejects mutations outright, so route this one mutation
+    // through the existing auto-commit transaction-conflict retry owner
+    // instead; unrelated GraphQL errors still fail the test below.
+    gents::ConfigAccess::write_local(node, "test.persist_child_terminal", &update_request)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("update child AgentRequest {lifecycle_state} failed: {error:#}")
+        });
 }
 
 fn skip_reason_json(action: ToolCallHookAction) -> Value {

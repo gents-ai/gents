@@ -148,15 +148,6 @@ export function App() {
           </button>
           <button
             disabled={busy}
-            data-testid="bridge-contract"
-            onClick={() =>
-              runQuiet("bridge_contract", () => bridge.bridgeContract())
-            }
-          >
-            Contract
-          </button>
-          <button
-            disabled={busy}
             data-testid="bridge-snapshot"
             onClick={() => runQuiet("client_snapshot", () => store.refresh())}
           >

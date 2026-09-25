@@ -141,7 +141,12 @@ impl CollectionScope {
         matches!(self, Self::All)
     }
 
+    /// A protected collection is refused before the scope is consulted, so
+    /// neither an unrestricted endpoint nor an explicit `Only` entry can grant
+    /// one. Every generic read reaches this: rows through
+    /// [`build_query`], and the discovery field inventory directly.
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
+        crate::document_config::reject_protected_collection_name(collection)?;
         match self {
             Self::All => Ok(()),
             Self::Only(allowed) if allowed.contains(collection) => Ok(()),
@@ -356,6 +361,24 @@ mod tests {
     fn allows_any_collection_when_unrestricted() {
         let scope = CollectionScope::all();
         assert!(build_query(&params("AnythingGoes", &["x"]), &scope).is_ok());
+    }
+
+    #[test]
+    fn no_scope_grants_a_protected_collection() {
+        // Unrestricted is the endpoint default for MCP and `gents query`, and
+        // an operator can name a collection explicitly. Neither may reach the
+        // eval or optimization material.
+        for name in crate::document_config::PROTECTED_DATASTORE_COLLECTIONS {
+            for scope in [
+                CollectionScope::all(),
+                CollectionScope::restricted(vec![name.to_string()]),
+            ] {
+                let err = build_query(&params(name, &["x"]), &scope).unwrap_err();
+                let message = format!("{err:#}");
+                assert!(message.contains("protected"), "{message}");
+                assert!(message.contains(name), "{message}");
+            }
+        }
     }
 
     #[test]

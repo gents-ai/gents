@@ -201,7 +201,7 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
     fallback
 }
 
-fn title_generation_preamble() -> String {
+pub(super) fn title_generation_preamble() -> String {
     TITLE_GENERATION_PREAMBLE.to_string()
 }
 

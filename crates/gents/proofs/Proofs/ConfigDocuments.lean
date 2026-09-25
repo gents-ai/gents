@@ -33,10 +33,11 @@ inductive Collection where
   | callbackModule
   | repositoryPlacement
   | graphDefinition
+  | evalDefinition
   deriving DecidableEq, Repr
 
 def all : List Collection :=
-  [.agentPrincipal, .agentBehavior, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .subagentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .graphDefinition]
+  [.agentPrincipal, .agentBehavior, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .subagentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .graphDefinition, .evalDefinition]
 
 /-- One formal catalog row per canonical document; projections below serve
 existing consumers without parallel name/key/field tables. -/
@@ -61,7 +62,7 @@ def documentSpec : Collection → DocumentSpec
   | .inferenceBackend => ⟨"InferenceBackend", "backend_id", "backend", ["agent_did", "backend_id", "name", "provider_kind", "openai_wire_api", "endpoint", "auth", "connect_timeout_secs", "discovery_timeout_secs", "max_concurrent", "max_queue_depth", "enabled", "tags"]⟩
   | .inferenceProfile => ⟨"InferenceProfile", "profile_id", "profile", ["agent_did", "profile_id", "display_name", "description", "backend_id", "model_name", "reasoning_effort", "context_window", "max_output_tokens", "sampling_id", "execution_id", "tags"]⟩
   | .inferenceSampling => ⟨"InferenceSampling", "sampling_id", "profile", ["agent_did", "sampling_id", "display_name", "temperature", "top_p", "top_k", "seed", "min_p", "frequency_penalty", "presence_penalty", "repetition_penalty", "tags"]⟩
-  | .inferenceExecution => ⟨"InferenceExecution", "execution_id", "profile", ["agent_did", "execution_id", "display_name", "max_turns", "max_total_tokens", "stream_batch_ms", "stream_liveness_timeout_secs", "deadline_duration_secs", "retry_policy_id", "tags"]⟩
+  | .inferenceExecution => ⟨"InferenceExecution", "execution_id", "profile", ["agent_did", "execution_id", "display_name", "max_turns", "max_total_tokens", "stream_batch_ms", "stream_liveness_timeout_secs", "provider_idle_timeout_secs", "deadline_duration_secs", "retry_policy_id", "tags"]⟩
   | .inferenceRetryPolicy => ⟨"InferenceRetryPolicy", "retry_policy_id", "profile", ["agent_did", "retry_policy_id", "display_name", "max_transport_retries", "backoff_ms", "max_resample_retries", "allow_repair", "interactive_max_retries", "tags"]⟩
   | .toolServiceRegistry => ⟨"ToolServiceRegistry", "service_id", "mcp_service", ["service_id", "agent_did", "display_name", "description", "hostname", "tailscale_ip", "lan_ip", "mcp_port", "mcp_path", "send_agent_did", "enabled", "tags"]⟩
   | .projectionAcpBinding => ⟨"ProjectionAcpBinding", "binding_id", "persona", ["binding_id", "agent_did", "behavior_id", "projection_id", "policy_id", "staged_policy_id", "previous_policy_id", "resource_map_json", "enabled", "tags"]⟩
@@ -74,6 +75,7 @@ def documentSpec : Collection → DocumentSpec
   | .callbackModule => ⟨"CallbackModule", "module_id", "automation", ["module_id", "agent_did", "abi_version", "wasm_bytes", "canonical_args", "signer_did", "provenance", "enabled", "fuel_limit", "memory_pages", "max_input_bytes", "max_output_bytes", "tags"]⟩
   | .repositoryPlacement => ⟨"RepositoryPlacement", "repository_id", "automation", ["repository_id", "agent_did", "host_path", "enabled", "tags"]⟩
   | .graphDefinition => ⟨"GraphDefinition", "graph_id", "automation", ["graph_id", "agent_did", "enabled", "created_at", "updated_at", "tags"]⟩
+  | .evalDefinition => ⟨"EvalDefinition", "definition_id", "automation", ["definition_id", "agent_did", "comparability_version", "title", "subject", "fixtures", "cases", "updated_at", "tags"]⟩
 
 abbrev Collection.collectionName (c : Collection) := (documentSpec c).collectionName
 abbrev Collection.uniqueField (c : Collection) := (documentSpec c).uniqueField

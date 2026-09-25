@@ -9,8 +9,8 @@ use tokio::sync::{watch, OnceCell};
 
 use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::config::{
-    ResolvedBehavior, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_BATCH_MS,
-    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    ResolvedBehavior, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
@@ -157,7 +157,7 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
     fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DocumentRuntimeOptions {
     pub tool_ceiling: ToolCeiling,
     pub mcp_pool: McpPool,
@@ -419,6 +419,11 @@ pub(crate) fn behavior_config_from_documents(
         liveness_secs < deadline_duration_secs,
         "stream liveness must be shorter than request deadline"
     );
+    let provider_idle_secs = positive_duration_secs_or_default(
+        execution.provider_idle_timeout_secs,
+        "provider_idle_timeout_secs",
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    )?;
     let max_total_tokens = execution
         .max_total_tokens
         .map(|limit| {
@@ -458,6 +463,7 @@ pub(crate) fn behavior_config_from_documents(
         compaction_inference,
         stream_batch_ms,
         stream_liveness_timeout: Duration::from_secs(liveness_secs),
+        provider_idle_timeout: Duration::from_secs(provider_idle_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         completion_retry: completion_retry::CompletionRetryProfileFields {
             retry_max_transport: retry.max_transport_retries,

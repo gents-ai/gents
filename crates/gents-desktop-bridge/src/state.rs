@@ -31,29 +31,205 @@ pub struct ResolvedBridgePolicy {
 pub enum ClientStartProgress {
     Pending,
     Ready,
-    Failed(String),
+    Failed(crate::error::BridgeError),
 }
 
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
-    /// Serializes start *install* / shutdown mutations against bridge state.
-    /// Long-running node open does **not** hold this lock (see single-flight
-    /// `start_inflight` instead) so a cancelled Tauri command cannot drop the
-    /// lock while the store is still opening on a background thread.
-    pub client_lifecycle: tokio::sync::Mutex<()>,
+    /// Owns the desktop store for install, shutdown, init and reset. The
+    /// detached starter holds it from before the store opens until the core is
+    /// installed, or, after a start that stalled past its bound, until that
+    /// late core is closed.
+    pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
     /// Serializes managed server start/stop operations. Startup intentionally
     /// spans provisioning and server readiness, so the state flag alone is
     /// not sufficient to prevent two callers from racing the port bind.
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
+    /// OAuth credentials issued by a completed provider sign-in whose save to
+    /// the agent's canonical configuration failed. Held only in memory so the
+    /// user can retry the save without repeating the browser login.
+    pub pending_oauth_credentials: PendingOAuthCredentials,
+}
+
+type CredentialKey = (String, String);
+
+/// A credential issued by a completed sign-in, ordered by issuance for its
+/// (agent DID, credential provider) key.
+pub struct IssuedOAuthCredential {
+    sequence: u64,
+    credential: gents::oauth_credential::OAuthCredential,
+}
+
+impl IssuedOAuthCredential {
+    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
+        &self.credential
+    }
+
+    fn key(&self) -> CredentialKey {
+        (
+            self.credential.agent_did.clone(),
+            self.credential.provider.clone(),
+        )
+    }
+}
+
+pub enum CredentialSave<T> {
+    Saved(T),
+    /// A newer sign-in for the same key was already saved or held.
+    Superseded,
+    Failed(anyhow::Error),
+}
+
+#[derive(Default)]
+struct CredentialSlot {
+    write_gate: Arc<tokio::sync::Mutex<()>>,
+    newest: u64,
+    held: Option<IssuedOAuthCredential>,
+}
+
+/// Issued-but-unsaved OAuth credentials, keyed by agent DID and credential
+/// provider. Never serialized, never written to disk, and never returned to
+/// the webview; the process exit discards them. Saves and retries for one key
+/// run one at a time in issuance order, so an older credential can neither
+/// overwrite a newer one in the store nor discard a newer held one.
+#[derive(Default)]
+pub struct PendingOAuthCredentials {
+    issued: std::sync::atomic::AtomicU64,
+    slots: Mutex<std::collections::HashMap<CredentialKey, CredentialSlot>>,
+}
+
+impl PendingOAuthCredentials {
+    pub fn issue(
+        &self,
+        credential: gents::oauth_credential::OAuthCredential,
+    ) -> IssuedOAuthCredential {
+        IssuedOAuthCredential {
+            sequence: self
+                .issued
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1,
+            credential,
+        }
+    }
+
+    fn slots(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<CredentialKey, CredentialSlot>> {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_gate(&self, key: &CredentialKey) -> Arc<tokio::sync::Mutex<()>> {
+        self.slots()
+            .entry(key.clone())
+            .or_default()
+            .write_gate
+            .clone()
+    }
+
+    /// Writes `issued` unless a newer credential for its key was already saved
+    /// or held. A failed write holds it for retry; a successful one releases
+    /// any older held credential.
+    pub async fn save<T, F, Fut>(
+        &self,
+        issued: IssuedOAuthCredential,
+        write: F,
+    ) -> CredentialSave<T>
+    where
+        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        let key = issued.key();
+        let gate = self.write_gate(&key);
+        let _ordered = gate.lock().await;
+        {
+            let mut slots = self.slots();
+            let slot = slots.entry(key.clone()).or_default();
+            if issued.sequence < slot.newest {
+                return CredentialSave::Superseded;
+            }
+            slot.newest = issued.sequence;
+        }
+        let written = write(issued.credential.clone()).await;
+        let mut slots = self.slots();
+        let slot = slots.entry(key).or_default();
+        match written {
+            Ok(value) => {
+                slot.held = None;
+                CredentialSave::Saved(value)
+            }
+            Err(error) => {
+                slot.held = Some(issued);
+                CredentialSave::Failed(error)
+            }
+        }
+    }
+
+    /// Writes the credential held for this key, if any, and releases it once
+    /// stored. Returns `None` when nothing is held.
+    pub async fn retry<T, F, Fut>(
+        &self,
+        agent_did: &str,
+        provider: &str,
+        write: F,
+    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
+    where
+        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        let key = (agent_did.to_string(), provider.to_string());
+        let gate = self.write_gate(&key);
+        let _ordered = gate.lock().await;
+        let credential = self
+            .slots()
+            .get(&key)?
+            .held
+            .as_ref()
+            .map(|held| held.credential.clone())?;
+        let written = write(credential.clone()).await;
+        if written.is_ok() {
+            if let Some(slot) = self.slots().get_mut(&key) {
+                slot.held = None;
+            }
+        }
+        Some((credential, written))
+    }
+
+    pub fn held_for(&self, agent_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
+        let mut held: Vec<_> = self
+            .slots()
+            .iter()
+            .filter(|((agent, _), _)| agent == agent_did)
+            .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
+            .collect();
+        held.sort_by(|left, right| left.provider.cmp(&right.provider));
+        held
+    }
 }
 
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
+    /// Cancels `pairing_task` while it still waits for the runtime's status,
+    /// before any enrollment document is authored.
+    pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
+    /// The single in-flight replicated-schema observation of the managed runtime.
+    pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
+    /// Cancels a start that is waiting outside the lifecycle lock.
+    pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
+    /// Crash-loop evidence carried across status reads.
+    pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
+    /// launchd refused this start because macOS has not approved a
+    /// background item it has not registered yet.
+    pub approval_refused: bool,
+    /// The managed runtime refused its store as incompatible, as observed by
+    /// the last failed start or status read. Scopes a home reset.
+    pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
 pub struct DesktopBridge {
@@ -70,6 +246,9 @@ pub struct DesktopBridge {
     /// the detached starter task; waiters hold receivers and do not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
+    /// The last client start refused the client store as incompatible.
+    /// Scopes a home reset.
+    pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
 impl DesktopAppState {
@@ -82,11 +261,13 @@ impl DesktopAppState {
                 claude_login_cancel: None,
                 grok_login_cancel: None,
                 start_inflight: None,
+                incompatible_client_store: None,
             }),
-            client_lifecycle: tokio::sync::Mutex::new(()),
+            client_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
+            pending_oauth_credentials: PendingOAuthCredentials::default(),
         }
     }
 }

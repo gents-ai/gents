@@ -4138,7 +4138,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "fixture-domain-plugin"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "acp",
  "afterburner",
@@ -4593,6 +4593,7 @@ dependencies = [
  "gents-loop",
  "gents-migration",
  "gents-protocol",
+ "glob",
  "hmac",
  "hostname",
  "identity",
@@ -4653,7 +4654,7 @@ dependencies = [
 
 [[package]]
 name = "gents-chatgpt-login"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4673,7 +4674,7 @@ dependencies = [
 
 [[package]]
 name = "gents-claude-login"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4691,7 +4692,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "acp",
  "afterburner",
@@ -4722,6 +4723,9 @@ dependencies = [
  "include_dir",
  "iroh",
  "jsonschema",
+ "libc",
+ "objc2",
+ "objc2-foundation",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -4741,6 +4745,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4751,7 +4756,7 @@ dependencies = [
 
 [[package]]
 name = "gents-codex-protocol"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4762,7 +4767,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4776,7 +4781,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-bridge"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -4790,6 +4795,7 @@ dependencies = [
  "gents-lean-contract",
  "gents-protocol",
  "hostname",
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4797,6 +4803,7 @@ dependencies = [
  "tauri-plugin",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml 0.8.2",
  "tracing",
  "tracing-subscriber",
@@ -4807,7 +4814,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4839,7 +4846,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4859,6 +4866,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tempfile",
  "tokio",
  "tracing",
@@ -4867,7 +4875,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fixture-host"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
@@ -4880,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -4892,7 +4900,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4914,14 +4922,14 @@ dependencies = [
 
 [[package]]
 name = "gents-login-ui"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "tiny_http",
 ]
 
 [[package]]
 name = "gents-loop"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4929,6 +4937,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "gents-lean-contract",
  "gents-protocol",
  "rand 0.9.2",
  "rig-core",
@@ -4946,7 +4955,7 @@ dependencies = [
 
 [[package]]
 name = "gents-migration"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "defra-node",
@@ -4964,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.18.5"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4972,6 +4981,7 @@ dependencies = [
  "bs58",
  "chrono",
  "ciborium",
+ "gents-lean-contract",
  "gents-schemas",
  "graphql-parser",
  "reqwest 0.12.28",
@@ -4986,7 +4996,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.18.5"
+version = "0.19.0"
 
 [[package]]
 name = "getrandom"
@@ -10005,9 +10015,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
- "futures-util",
  "h2",
  "http",
  "http-body",
@@ -12083,6 +12091,22 @@ dependencies = [
  "thiserror 2.0.18",
  "url",
  "windows 0.61.3",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db817fe9295e19b7d8357e900af31edb93703dd9fb6de524b007b47b6afc63b0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
  "zbus",
 ]
 

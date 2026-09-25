@@ -92,7 +92,8 @@ def toolDeliveryMessage (sequence : Nat := 1) : MessageEnvelope :=
 
 def wakeEntry : SessionQueue.QueueEntry :=
   { requestId := 11, createdAt := 5, source := .backgroundCompletion
-    policy := .coalesce, queueKey := some 1, queuedAfter := none }
+    policy := .coalesce, queueKey := some 1, queuedAfter := none
+    origin := .scheduled }
 
 def wakeBinding : WakeDocumentBinding :=
   { entry := wakeEntry, agent := 1, session := 1

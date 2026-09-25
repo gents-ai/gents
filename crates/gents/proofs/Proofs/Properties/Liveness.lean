@@ -13,7 +13,6 @@ def terminationMeasure (r : RequestContext) : Nat :=
   | .pending => r.maxRetries + 4
   | .claimed => r.maxRetries + 3
   | .processing => (r.maxRetries - r.retryCount) + 2
-  | .inputRequired => (r.maxRetries - r.retryCount) + 2
 
 theorem phase_change_decreases_measure
     {pre post : RequestContext}

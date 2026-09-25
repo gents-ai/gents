@@ -57,6 +57,7 @@ pub(super) struct ReadOnlyBashTool {
     context: ToolContext,
     default_timeout: Duration,
     max_timeout: Duration,
+    max_output_chars: usize,
     policy: CommandExecutionPolicy,
 }
 
@@ -71,6 +72,7 @@ impl ReadOnlyBashTool {
             context,
             default_timeout,
             max_timeout: default_timeout,
+            max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
             policy: CommandExecutionPolicy::read_only(allowlist),
         }
     }
@@ -79,12 +81,14 @@ impl ReadOnlyBashTool {
         context: ToolContext,
         default_timeout: Duration,
         max_timeout: Duration,
+        max_output_chars: usize,
         policy: CommandExecutionPolicy,
     ) -> Self {
         Self {
             context,
             default_timeout,
             max_timeout: max_timeout.max(default_timeout),
+            max_output_chars,
             policy,
         }
     }
@@ -95,6 +99,7 @@ pub(super) struct UnrestrictedBashTool {
     context: ToolContext,
     default_timeout: Duration,
     max_timeout: Duration,
+    max_output_chars: usize,
     policy: CommandExecutionPolicy,
 }
 
@@ -105,6 +110,7 @@ impl UnrestrictedBashTool {
             context,
             default_timeout,
             max_timeout: default_timeout,
+            max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
             policy: CommandExecutionPolicy::write_capable(),
         }
     }
@@ -113,12 +119,14 @@ impl UnrestrictedBashTool {
         context: ToolContext,
         default_timeout: Duration,
         max_timeout: Duration,
+        max_output_chars: usize,
         policy: CommandExecutionPolicy,
     ) -> Self {
         Self {
             context,
             default_timeout,
             max_timeout: max_timeout.max(default_timeout),
+            max_output_chars,
             policy,
         }
     }
@@ -126,6 +134,7 @@ impl UnrestrictedBashTool {
 
 impl Tool for ReadOnlyBashTool {
     const NAME: &'static str = "bash";
+    const EMITS_COMMAND_ENVELOPE: bool = true;
 
     type Error = ToolError;
     type Args = BashArgs;
@@ -182,6 +191,7 @@ impl Tool for ReadOnlyBashTool {
             ),
             &policy,
             args.raw_json,
+            self.max_output_chars,
         )
         .await
     }
@@ -193,6 +203,7 @@ impl Tool for ReadOnlyBashTool {
 
 impl Tool for UnrestrictedBashTool {
     const NAME: &'static str = "bash_unrestricted";
+    const EMITS_COMMAND_ENVELOPE: bool = true;
 
     type Error = ToolError;
     type Args = BashArgs;
@@ -268,6 +279,7 @@ impl Tool for UnrestrictedBashTool {
             ),
             &policy,
             args.raw_json,
+            self.max_output_chars,
         )
         .await
     }

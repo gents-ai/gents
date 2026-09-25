@@ -344,6 +344,72 @@ theorem disabled_behavior_rejected (reg : Registry) (scope id : String) (behavio
     resolveBehavior reg scope id = .error .disabledBehavior := by
   simp [resolveBehavior, lookupOwned, hb, he, bind, Except.bind]
 
+/-- A principal's `default_behavior_id` selects the behavior for requests that
+name none, so a default must be an owned, enabled behavior. A disabled default
+would leave every such request to fail with `disabledBehavior`; publication
+(`ConfigReferences`) rejects the candidate instead, whichever write disables the
+default or points the default at a disabled behavior. Clients that couple the
+Default and Enabled controls only guide input toward this rule. -/
+def defaultBehaviorPublishable (reg : Registry) (scope : String) : Option String → Bool
+  | none => true
+  | some id =>
+    match lookupOwned reg.behaviors scope id .missingBehavior .foreignBehavior with
+    | .ok behavior => behavior.enabled
+    | .error _ => false
+
+theorem disabled_default_not_publishable (reg : Registry) (scope id : String)
+    (behavior : Behavior) (hb : reg.behaviors scope id = some ⟨scope, behavior⟩)
+    (he : behavior.enabled = false) :
+    defaultBehaviorPublishable reg scope (some id) = false := by
+  simp [defaultBehaviorPublishable, lookupOwned, hb, he]
+
+private theorem lookupOwned_error_cases {α : Type} {docs : String → String → Option (Owned α)}
+    {scope id : String} {missing foreign e : ResolveError}
+    (h : lookupOwned docs scope id missing foreign = .error e) : e = missing ∨ e = foreign := by
+  unfold lookupOwned at h
+  split at h
+  · exact Or.inl (Except.error.inj h).symm
+  · split at h
+    · contradiction
+    · exact Or.inr (Except.error.inj h).symm
+
+/-- A publishable default never resolves to `disabledBehavior`. -/
+theorem publishable_default_not_disabled (reg : Registry) (scope id : String)
+    (h : defaultBehaviorPublishable reg scope (some id) = true) :
+    resolveBehavior reg scope id ≠ .error .disabledBehavior := by
+  cases hl : lookupOwned reg.behaviors scope id .missingBehavior .foreignBehavior with
+  | error e => simp [defaultBehaviorPublishable, hl] at h
+  | ok behavior =>
+    have he : behavior.enabled = true := by simpa [defaultBehaviorPublishable, hl] using h
+    intro hr
+    simp only [resolveBehavior, hl, he, bind, Except.bind] at hr
+    cases hc : resolveContext reg scope behavior.contextId with
+    | error e =>
+      simp only [hc, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.error.injEq] at hr
+      subst hr
+      cases hid : behavior.contextId with
+      | none => simp [resolveContext, hid] at hc
+      | some key =>
+        simp only [resolveContext, hid] at hc
+        rcases lookupOwned_error_cases hc with h | h <;> cases h
+    | ok context =>
+      simp only [hc] at hr
+      cases hp : lookupOwned reg.profiles scope behavior.profileId .missingProfile .foreignProfile with
+      | error e =>
+        simp only [hp, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.error.injEq] at hr
+        subst hr
+        rcases lookupOwned_error_cases hp with h | h <;> cases h
+      | ok inference =>
+        simp only [hp] at hr
+        cases hk : lookupOwned reg.backends scope inference.backendId .missingBackend .foreignBackend with
+        | error e =>
+          simp only [hk, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Except.error.injEq] at hr
+          subst hr
+          rcases lookupOwned_error_cases hk with h | h <;> cases h
+        | ok backend =>
+          simp only [hk] at hr
+          by_cases hb : backend.enabled = false <;> simp [hb] at hr
+
 theorem behavior_missing_selected_context_rejected (reg : Registry) (scope id key : String)
     (behavior : Behavior) (hb : reg.behaviors scope id = some ⟨scope, behavior⟩)
     (he : behavior.enabled = true) (hr : behavior.contextId = some key)

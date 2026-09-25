@@ -5,8 +5,12 @@ import {
   type DesktopStartupPhase,
   type LoadingStepState,
 } from "../lib/loadingStatus";
+import {
+  describeManagedServerWait,
+  type ManagedServerWait,
+} from "../lib/managedServerStartup";
 import { Mark } from "../ui/app/Mark";
-import type { ManagedServerResetResult } from "@source-inc/gents-desktop-client";
+import { DiagnosticsHint } from "../ui/screens/setup/SetupProgress";
 
 const STARTUP_ASIDES = [
   "Catalyzing dilithium converters.",
@@ -22,8 +26,11 @@ type StartupScreenProps = {
   managedServerSupported?: boolean;
   onRetry: () => Promise<void>;
   phase: Exclude<DesktopStartupPhase, "ready">;
-  managedServerReset?: ManagedServerResetResult | null;
-  onResetManagedServer?: () => Promise<void>;
+  managedServerWait?: ManagedServerWait | null;
+  onSkipManagedServerWait?: () => void;
+  onOpenLoginItems?: () => Promise<void>;
+  onRestartManagedServer?: () => Promise<void>;
+  diagnosticsHint?: string | null;
 };
 
 export function StartupScreen({
@@ -31,12 +38,29 @@ export function StartupScreen({
   managedServerSupported = false,
   onRetry,
   phase,
-  managedServerReset = null,
-  onResetManagedServer,
+  managedServerWait = null,
+  onSkipManagedServerWait,
+  onOpenLoginItems,
+  onRestartManagedServer,
+  diagnosticsHint = null,
 }: StartupScreenProps) {
   const [asideIndex, setAsideIndex] = useState(0);
-  const [resetConfirmed, setResetConfirmed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const status = projectStartupLoadingStatus(phase, managedServerSupported);
+  const wait =
+    managedServerWait && phase === "checking-managed-server"
+      ? describeManagedServerWait(
+          managedServerWait,
+          Math.max(now, managedServerWait.since),
+        )
+      : null;
+
+  useEffect(() => {
+    if (!managedServerWait) return;
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [managedServerWait]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -65,12 +89,38 @@ export function StartupScreen({
             {status.title}
           </h2>
           <p aria-live="polite" className="text-sm font-medium">
-            {status.currentLabel}
+            {wait?.label ?? status.currentLabel}
             {!status.failed ? (
               <span aria-hidden="true" className="startup-ellipsis" />
             ) : null}
           </p>
-          {!status.failed ? (
+          {wait ? (
+            <div className="grid gap-3" data-testid="startup-managed-server-wait">
+              <p className="text-sm text-muted-foreground">{wait.detail}</p>
+              <div className="flex flex-wrap gap-2">
+                {managedServerWait?.kind === "approval" && onOpenLoginItems ? (
+                  <button
+                    className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
+                    data-testid="startup-open-login-items"
+                    onClick={() => void onOpenLoginItems()}
+                    type="button"
+                  >
+                    Open Login Items settings
+                  </button>
+                ) : null}
+                {onSkipManagedServerWait ? (
+                  <button
+                    className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                    data-testid="startup-skip-managed-server-wait"
+                    onClick={onSkipManagedServerWait}
+                    type="button"
+                  >
+                    Continue without the local agent
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : !status.failed ? (
             <p
               aria-hidden="true"
               className="min-h-[1.5em] font-mono text-sm text-brand"
@@ -94,46 +144,41 @@ export function StartupScreen({
             <p className="text-sm text-destructive">
               {error ?? "Gents could not finish starting."}
             </p>
-            {phase === "managed-server-error" && managedServerReset ? (
-              <div className="grid gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
-                <p>
-                  This installation contains an incompatible local database at{" "}
-                  <code className="break-all">{managedServerReset.dataPath}</code>.
-                </p>
-                <p>{managedServerReset.consequence}</p>
-                <label className="flex items-start gap-2">
-                  <input
-                    checked={resetConfirmed}
-                    data-testid="managed-server-reset-confirmation"
-                    onChange={(event) => setResetConfirmed(event.currentTarget.checked)}
-                    type="checkbox"
-                  />
-                  <span>
-                    Archive this exact managed home and initialize a new local database:
-                    <code className="block break-all">
-                      {managedServerReset.managedHome}
-                    </code>
-                  </span>
-                </label>
-                <button
-                  className="inline-flex h-8 w-fit items-center rounded-lg bg-destructive px-3 text-sm font-medium text-destructive-foreground disabled:opacity-50"
-                  data-testid="managed-server-reset"
-                  disabled={!resetConfirmed || !onResetManagedServer}
-                  onClick={() => void onResetManagedServer?.()}
-                  type="button"
-                >
-                  Archive old data and start fresh
-                </button>
-              </div>
-            ) : null}
-            <button
-              className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
-              data-testid="startup-retry"
-              onClick={() => void onRetry()}
-              type="button"
-            >
-              Try again
-            </button>
+            <DiagnosticsHint hint={diagnosticsHint} />
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
+                data-testid="startup-retry"
+                onClick={() => void onRetry()}
+                type="button"
+              >
+                Try again
+              </button>
+              {phase === "managed-server-error" ? (
+                <>
+                  {onRestartManagedServer ? (
+                    <button
+                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                      data-testid="startup-restart-managed-server"
+                      onClick={() => void onRestartManagedServer()}
+                      type="button"
+                    >
+                      Restart agent
+                    </button>
+                  ) : null}
+                  {onSkipManagedServerWait ? (
+                    <button
+                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                      data-testid="startup-continue-without-managed-server"
+                      onClick={onSkipManagedServerWait}
+                      type="button"
+                    >
+                      Continue without the local agent
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>

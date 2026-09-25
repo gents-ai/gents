@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-app-quit"
+description = "Enables the desktop_app_quit command without any pre-configured scope."
+commands.allow = ["desktop_app_quit"]
+
+[[permission]]
+identifier = "deny-desktop-app-quit"
+description = "Denies the desktop_app_quit command without any pre-configured scope."
+commands.deny = ["desktop_app_quit"]

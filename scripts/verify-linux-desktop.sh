@@ -70,7 +70,6 @@ rm -rf -- "$appimage_extract"
 mkdir -p target/desktop-dist
 cp "${debs[0]}" "target/desktop-dist/gents-desktop_${version}_amd64.deb"
 cp "${images[0]}" "target/desktop-dist/gents-desktop_${version}_x86_64.AppImage"
-cp docs/linux-desktop-install.md target/desktop-dist/INSTALL-linux-desktop.md
 (
   cd target/desktop-dist
   sha256sum ./*.deb ./*.AppImage > SHA256SUMS-desktop-linux.txt

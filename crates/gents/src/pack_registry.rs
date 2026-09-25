@@ -384,7 +384,7 @@ pub async fn fetch_pack(
             let hex = crate::pack_archive::digest_hex(&advertised)
                 .context("the registry advertised a malformed digest")?;
             Ok(home
-                .join("packs")
+                .join(crate::home::PACKS_DIR_NAME)
                 .join("store")
                 .join("by-download")
                 .join(hex))
@@ -404,7 +404,7 @@ pub async fn fetch_pack(
         // With a home, the download streams to disk and into the store, and
         // the pack is opened from there: no step holds it in memory.
         (None, Some(store), Some(index), Some(home)) => {
-            let staging_dir = home.join("packs");
+            let staging_dir = home.join(crate::home::PACKS_DIR_NAME);
             std::fs::create_dir_all(&staging_dir)
                 .with_context(|| format!("creating {}", staging_dir.display()))?;
             let mut staged = tempfile::NamedTempFile::new_in(&staging_dir)
@@ -475,7 +475,8 @@ pub mod credentials {
     use anyhow::{Context, Result};
 
     fn path(home: &Path) -> PathBuf {
-        home.join("registry").join("credentials.json")
+        home.join(crate::home::REGISTRY_DIR_NAME)
+            .join("credentials.json")
     }
 
     fn read_all(home: &Path) -> Result<BTreeMap<String, String>> {

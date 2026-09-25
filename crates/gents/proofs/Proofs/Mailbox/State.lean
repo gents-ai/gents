@@ -4,10 +4,9 @@ import Mathlib.Data.Finset.Basic
 /-!
 # Mailbox state
 
-Payload-abstract model for the human-attention index.  `Item` models one
-immutable envelope plus its mutable terminal projection.  `RegistryState`
-models the collection-wide facts used by stamped create/idempotence without
-pulling UI payload fields into the proof.
+Model for the human-attention index. `Item` models one immutable identity plus
+its mutable terminal projection. `RegistryState` keeps one row collection;
+open-prefix and key observations are derived from it.
 -/
 
 namespace Mailbox
@@ -139,12 +138,46 @@ structure StampContext where
 structure CreateRequest where
   identity : Identity
   context : StampContext
+  /-- Physical document identity allocated by the storage create owner. -/
+  docId : String := ""
+  handling : Handling := .ack
+  sessionId : String := ""
+  requestId : RequestId := 0
+  content : String := ""
   deriving DecidableEq, Repr
 
-/-- Collection-wide facts required by the stamped create/idempotence owner. -/
+/-- Immutable fields of a row actually written by the stamped-create owner. -/
+structure StoredEnvelope where
+  docId : String
+  identity : Identity
+  handling : Handling
+  sessionId : String
+  requestId : RequestId
+  content : String
+  deriving DecidableEq, Repr
+
+structure StoredRow where
+  envelope : StoredEnvelope
+  isOpen : Bool
+  deriving DecidableEq, Repr
+
+def CreateRequest.storedEnvelope (request : CreateRequest) : StoredEnvelope :=
+  { docId := request.docId
+  , identity := request.identity
+  , handling := request.handling
+  , sessionId := request.sessionId
+  , requestId := request.requestId
+  , content := request.content }
+
+/-- The one stored collection used by stamped create and open-row reuse. -/
 structure RegistryState where
-  openPrefixes : Finset OwnerPrefix
-  itemKeys : Finset String
+  rows : List StoredRow := []
   deriving DecidableEq
+
+def RegistryState.openPrefixes (state : RegistryState) : Finset OwnerPrefix :=
+  ((state.rows.filter (·.isOpen)).map (·.envelope.identity.ownerPrefix)).toFinset
+
+def RegistryState.itemKeys (state : RegistryState) : Finset String :=
+  (state.rows.map (·.envelope.identity.itemKey)).toFinset
 
 end Mailbox

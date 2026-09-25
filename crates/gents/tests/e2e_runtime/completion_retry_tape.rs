@@ -17,7 +17,9 @@ use crate::support::interrupt::{
     wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
 };
 use crate::support::snapshots::fetch_request_snapshot;
-use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
+use crate::support::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
 use crate::support::{first_row, test_db};
 
 const RETRY_MODEL: &str = "retry-tape-model";
@@ -380,6 +382,214 @@ async fn interactive_budget_is_quick() {
     assert_eq!(timeline.request.retry_summary.retry_count, 1);
     assert!(!timeline.request.retry_summary.recovered);
 
+    agent.shutdown().await;
+}
+
+/// Stall responses hold the HTTP connection open without further bytes until
+/// the mock stops, so only the owned loop's provider idle window can end the
+/// attempt. The execution lease keeps its default: the window is independent.
+async fn start_stall_tape(
+    marker: &str,
+    responses: Vec<StreamResponse>,
+    execution_origin: &str,
+) -> (
+    MockStreamingBackend,
+    crate::support::TestDb,
+    BootedAgent,
+    String,
+    Instant,
+) {
+    let backend = MockStreamingBackend::start_with_plans(
+        RETRY_MODEL,
+        vec![StreamPlan::new(marker, responses)],
+    )
+    .unwrap();
+    let test_name = format!("completion-retry-{marker}");
+    let db = test_db(&test_name).await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&test_name));
+    upsert_retry_backend(db.node.as_ref(), identity.did(), backend.endpoint(), 1).await;
+    let agent = Gents::builder()
+        .node(db.node.clone())
+        .identity(identity)
+        .default_behavior_id(RETRY_BEHAVIOR_ID)
+        .tool_ceiling(ToolCeiling::meta_only())
+        .behavior(RETRY_BEHAVIOR_ID)
+        .backend_id(RETRY_BACKEND_ID)
+        .model_name(RETRY_MODEL)
+        .stream_batch_ms(0)
+        .deadline_duration_secs(60)
+        .provider_idle_timeout_secs(1)
+        .done()
+        .build()
+        .await
+        .expect("build stall tape agent");
+    let agent_did = agent.agent_did().to_string();
+    let agent = spawn_agent(db.node.as_ref(), agent, agent_did).await;
+    let started = Instant::now();
+    let doc_id = create_runtime_request_with_execution_origin(
+        db.node.as_ref(),
+        &agent.agent_did,
+        RETRY_BEHAVIOR_ID,
+        &format!("req-{marker}"),
+        &format!("session-{marker}"),
+        execution_origin,
+        &format!("stall the provider {marker}"),
+    )
+    .await;
+    (backend, db, agent, doc_id, started)
+}
+
+async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
+    let (backend, db, agent, doc_id, started) =
+        start_stall_tape(marker, responses, "interactive").await;
+    wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let elapsed = started.elapsed();
+    let request = fetch_terminal_request(db.node.as_ref(), &doc_id).await;
+    let calls = fetch_inference_calls(db.node.as_ref(), &format!("req-{marker}")).await;
+    assert_eq!(
+        request.lifecycle_state,
+        RequestLifecycleState::Completed,
+        "failure_reason={:?}; calls={calls:?}",
+        request.failure_reason
+    );
+    assert!(matches!(
+        request.terminal_output,
+        TerminalOutput::Message { .. }
+    ));
+    assert_eq!(backend.observed_requests(marker), 2);
+    assert_retry_recovered(&calls, 1);
+    assert_stall_reason(&calls[0]);
+    assert!(elapsed < Duration::from_secs(20), "elapsed={elapsed:?}");
+    agent.shutdown().await;
+}
+
+fn assert_stall_reason(call: &TimelineInferenceCallRow) {
+    assert!(
+        call.failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("provider stream stalled")),
+        "stalled call must record the stall, not a generic drop: {call:?}"
+    );
+}
+
+#[tokio::test]
+async fn provider_headers_that_never_arrive_fail_the_attempt_and_retry() {
+    let marker = "stall-headers";
+    assert_stall_recovered(
+        marker,
+        vec![
+            StreamResponse::HoldHeaders(StreamScript::completes(marker, ["never released"])),
+            StreamResponse::completes(marker, ["recovered after header stall"]),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn provider_silent_after_headers_fails_the_attempt_and_retries() {
+    let marker = "stall-first-item";
+    assert_stall_recovered(
+        marker,
+        vec![
+            StreamResponse::Stream(StreamScript::paused_before(
+                marker,
+                vec![StreamChunk::text("never released")],
+            )),
+            StreamResponse::completes(marker, ["recovered after first-item stall"]),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn provider_silent_between_chunks_retracts_and_retries() {
+    let marker = "stall-between-chunks";
+    assert_stall_recovered(
+        marker,
+        vec![
+            StreamResponse::Stream(StreamScript::paused(marker, ["partial before stall"])),
+            StreamResponse::completes(marker, ["recovered after inter-chunk stall"]),
+        ],
+    )
+    .await;
+}
+
+/// A scheduled retry backs off for seconds; the stalled call must already be
+/// terminal (its admission slot returned) while that backoff is running.
+#[tokio::test]
+async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
+    let marker = "stall-releases-permit";
+    let (backend, db, agent, doc_id, _) = start_stall_tape(
+        marker,
+        vec![
+            StreamResponse::Stream(StreamScript::paused_before(
+                marker,
+                vec![StreamChunk::text("never released")],
+            )),
+            StreamResponse::completes(marker, ["recovered after backoff"]),
+        ],
+        "scheduled",
+    )
+    .await;
+    let request_id = format!("req-{marker}");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let calls = fetch_inference_calls(db.node.as_ref(), &request_id).await;
+            if calls
+                .first()
+                .is_some_and(|call| call.call_state == "failed")
+            {
+                assert_eq!(
+                    backend.observed_requests(marker),
+                    1,
+                    "the retry must still be backing off: {calls:?}"
+                );
+                assert_stall_reason(&calls[0]);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("stalled call must reach a terminal state during backoff");
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await,
+        RequestLifecycleState::Completed
+    );
+    assert_eq!(backend.observed_requests(marker), 2);
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn repeated_provider_silence_fails_the_request_through_the_retry_owner() {
+    let marker = "stall-exhausts-retry";
+    let (backend, db, agent, doc_id, started) = start_stall_tape(
+        marker,
+        vec![
+            StreamResponse::Stream(StreamScript::paused_before(
+                marker,
+                vec![StreamChunk::text("never released")],
+            )),
+            StreamResponse::Stream(StreamScript::paused(marker, ["partial before stall"])),
+            StreamResponse::completes(marker, ["should not be reached"]),
+        ],
+        "interactive",
+    )
+    .await;
+    wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let elapsed = started.elapsed();
+    let request = fetch_terminal_request(db.node.as_ref(), &doc_id).await;
+    let calls = fetch_inference_calls(db.node.as_ref(), &format!("req-{marker}")).await;
+    assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
+    assert!(
+        request.failure_reason.contains("retry budget exhausted"),
+        "failure_reason={:?}",
+        request.failure_reason
+    );
+    assert_eq!(backend.observed_requests(marker), 2);
+    assert_eq!(call_states(&calls), vec!["failed", "failed"]);
+    calls.iter().for_each(assert_stall_reason);
+    assert!(elapsed < Duration::from_secs(20), "elapsed={elapsed:?}");
     agent.shutdown().await;
 }
 

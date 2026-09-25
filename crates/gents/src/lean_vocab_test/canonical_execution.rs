@@ -11,6 +11,43 @@ use super::request_execution_lease::LeanRequestExecutionWorld;
 pub(crate) type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationCase {
+    pub(crate) name: String,
+    pub(crate) inputs: Vec<LeanDispatchObservationInput>,
+    pub(crate) expected: Vec<LeanDispatchObservationResult>,
+    pub(crate) completion_probe_outcome: String,
+    pub(crate) completion_probe_accepted: bool,
+    pub(crate) parent_outcome: String,
+    pub(crate) expected_after_parent_failure: LeanDispatchParentFailure,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchParentFailure {
+    pub(crate) running: bool,
+    pub(crate) in_flight: bool,
+    pub(crate) needs_recovery: bool,
+    pub(crate) message_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationInput {
+    pub(crate) acknowledged: bool,
+    pub(crate) policy_allows: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationResult {
+    pub(crate) observation: String,
+    pub(crate) may_invoke: bool,
+    pub(crate) running: bool,
+    pub(crate) in_flight: bool,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanCanonicalExecutionCase {
     TraceSummary {
@@ -41,6 +78,8 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
     pub(crate) principal: u64,
+    pub(crate) subagent_depth: u64,
+    pub(crate) workspace: Option<LeanCanonicalDelegatedWorkspace>,
     pub(crate) remote_routes: Vec<LeanCanonicalRemoteRoute>,
     pub(crate) lease: LeanRequestExecutionWorld,
     pub(crate) transcript_session_id: u64,
@@ -88,13 +127,70 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) delegated_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalDelegatedWorkspace {
     pub(crate) workspace_id: u64,
     pub(crate) workspace_owner_agent_did: u64,
     pub(crate) workspace_seal_hash: Option<u64>,
     pub(crate) workspace_authority: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildResolutionCase {
+    pub(crate) name: String,
+    pub(crate) parent_depth: u32,
+    pub(crate) parent_agent: u64,
+    pub(crate) child_agent: u64,
+    pub(crate) delegated_input: Option<LeanDelegatedChildInput>,
+    pub(crate) parent_workspace: Option<LeanCanonicalDelegatedWorkspace>,
+    pub(crate) choice: LeanDelegatedChildChoice,
+    pub(crate) expected: Option<LeanDelegatedChildResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanDelegatedChildChoice {
+    None,
+    Inherit {
+        workspace: LeanObservedChildWorkspace,
+    },
+    Bind {
+        workspace: LeanObservedChildWorkspace,
+        requested_authority: Option<String>,
+    },
+    Provision {
+        observed_parent: LeanObservedChildWorkspace,
+        parent_path_exact: bool,
+        created_child: Option<LeanObservedChildWorkspace>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanObservedChildWorkspace {
+    pub(crate) workspace_id: u64,
+    pub(crate) workspace_owner_agent_did: u64,
+    pub(crate) workspace_seal_hash: Option<u64>,
+    pub(crate) state: String,
+    pub(crate) available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildInput {
+    pub(crate) source_close_doc_id: u64,
+    pub(crate) source_stream: u64,
+    pub(crate) arguments: String,
+    pub(crate) parent_subagent_depth: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildResult {
+    pub(crate) child_depth: u32,
+    pub(crate) child_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
 /// A background tool spawned by an already running parent tool. It shares the
@@ -215,6 +311,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
+    AppendToolOutput {
+        actor: u64,
+        now: u64,
+        document: u64,
+        record: LeanCanonicalSegment,
+    },
     /// The same guarded insert attempted by a same-task holder whose sibling
     /// awaits the gate. The holder is unpollable, so nothing may commit.
     AppendOutputWhileSiblingWaits {
@@ -304,6 +406,7 @@ impl LeanCanonicalExecutionOperation {
             | Self::ClosePartial { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
+            | Self::AppendToolOutput { actor, now, .. }
             | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
             | Self::AcceptTurn { actor, now, .. }
             | Self::BackgroundTool { actor, now, .. }

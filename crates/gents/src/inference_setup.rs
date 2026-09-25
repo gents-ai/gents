@@ -156,6 +156,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                 Some(crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
             ),
             (
+                "providerIdleSecs",
+                Some(crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
+            ),
+            (
                 "deadlineSecs",
                 Some(crate::config::DEFAULT_DEADLINE_DURATION_SECS as i64),
             ),
@@ -375,6 +379,7 @@ fn reasoning_model(model: &str) -> bool {
         || model.starts_with("o3")
         || model.starts_with("o4")
         || model.contains("gpt-5")
+        || model.contains("gpt-6")
         || model.contains("deepseek-r1")
         || model.contains("glm-5.3")
 }
@@ -394,6 +399,12 @@ pub(crate) fn claude_model_defaults(
             128_000,
             vec![Low, Medium, High, XHigh, Max],
             High,
+        )),
+        "claude-opus-5-5" => Some((
+            1_000_000,
+            128_000,
+            vec![Low, Medium, High, XHigh, Max],
+            Medium,
         )),
         "claude-opus-4-7" | "claude-opus-4-8" => Some((
             1_000_000,
@@ -761,6 +772,33 @@ mod tests {
             codex.reasoning_effort.unwrap().recommended,
             ReasoningEffort::Medium
         );
+    }
+
+    #[test]
+    fn opus_5_5_defaults_to_medium_effort() {
+        let opus = recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ClaudeOauth,
+            &advertised("claude-opus-5-5"),
+        )
+        .unwrap();
+        let effort = opus.reasoning_effort.unwrap();
+        assert_eq!(effort.recommended, ReasoningEffort::Medium);
+        assert!(effort.choices.contains(&ReasoningEffort::Max));
+        assert_eq!(opus.context_window.unwrap().recommended, 1_000_000);
+        assert_eq!(opus.max_output_tokens.unwrap().max, Some(128_000));
+    }
+
+    #[test]
+    fn gpt_6_models_are_reasoning_models() {
+        let gpt6 = recommendation_for_model(
+            InferenceProviderId::OpenAi,
+            InferenceAuthMethod::ApiKey,
+            &advertised("gpt-6-astra"),
+        )
+        .unwrap();
+        assert!(gpt6.temperature.is_none());
+        assert!(gpt6.reasoning_effort.is_some());
     }
 
     #[test]
