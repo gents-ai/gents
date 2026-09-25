@@ -187,14 +187,15 @@ fn diagnostic_replay_matches(raw: &str, cause: &str, stored: &PayloadPresentatio
 }
 
 /// `output_budget` bounds an interrupted call's diagnostic tail; it comes from
-/// current configuration (`ToolCallLifecycle::output_budget`).
+/// current configuration (`ToolCallLifecycle::output_budget`) and is `None`
+/// only for a completed call, whose presentation its tool prepared.
 fn terminal_output_plan<'a>(
     prefix: &'a str,
     text: &'a str,
     pending_raw: Option<&'a str>,
     prepared: Option<&PayloadPresentation>,
     state: ToolCallState,
-    output_budget: usize,
+    output_budget: Option<usize>,
 ) -> Result<TerminalOutputPlan<'a>> {
     let candidate_raw = if prepared.is_some() {
         pending_raw.unwrap_or(prefix)
@@ -202,6 +203,8 @@ fn terminal_output_plan<'a>(
         text
     };
     if state != ToolCallState::Completed && !candidate_raw.starts_with(prefix) {
+        let output_budget =
+            output_budget.context("interrupted tool call has no resolved output budget")?;
         let presentation = terminal_diagnostic_presentation(prefix, text, output_budget)?;
         let rendered = render_presentation(prefix, &presentation)?;
         return Ok(TerminalOutputPlan {
@@ -1125,12 +1128,10 @@ impl ToolCallLifecycle {
         }
         let tool_name = self.tool_name.clone();
         let deadline_at = self.deadline_at;
-        // Only an interrupted call renders a budgeted diagnostic; a completed
-        // call's presentation is prepared by its tool and never reads it.
         let output_budget = if fields.state == ToolCallState::Completed {
-            crate::toolset::DEFAULT_MAX_COMMAND_CHARS
+            None
         } else {
-            self.output_budget().await
+            Some(self.output_budget().await)
         };
         let terminal_status = self.terminal_persistence_status(fields.completion_reason);
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
@@ -1221,7 +1222,7 @@ async fn terminalize_transaction(
     text: &str,
     pending_raw: Option<&str>,
     presentation: Option<&PayloadPresentation>,
-    output_budget: usize,
+    output_budget: Option<usize>,
     adopt_competing_terminal: bool,
     publish_native_result: bool,
 ) -> Result<bool> {
@@ -2136,7 +2137,7 @@ mod spawned_background_tests {
             Some(&cause),
             Some(&PayloadPresentation::Full),
             ToolCallState::TimedOut,
-            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+            Some(crate::toolset::DEFAULT_MAX_COMMAND_CHARS),
         )
         .unwrap();
         assert_eq!(empty.raw, cause);
@@ -2149,7 +2150,7 @@ mod spawned_background_tests {
             Some(&cause),
             Some(&PayloadPresentation::Full),
             ToolCallState::TimedOut,
-            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+            Some(crate::toolset::DEFAULT_MAX_COMMAND_CHARS),
         )
         .unwrap();
         let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok {
