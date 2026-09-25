@@ -36,6 +36,14 @@ fn validate_read_only_bash_input(
     })
 }
 
+fn unrestricted_argv(args: &BashArgs) -> (&str, Vec<String>) {
+    if args.args.is_empty() {
+        ("/bin/sh", vec!["-lc".to_string(), args.command.clone()])
+    } else {
+        (args.command.as_str(), args.args.clone())
+    }
+}
+
 fn timeout_secs_schema(
     default_timeout: Duration,
     max_timeout: Duration,
@@ -201,9 +209,14 @@ impl Tool for ReadOnlyBashTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
         let policy = crate::toolset::effective_command_policy(&self.policy);
-        validate_read_only_bash_input(&args.command, &args.args, &policy)?;
+        validate_read_only_bash_input(&args.command, &args.args, &policy)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Tool::admit(self, &args)?;
+        let policy = crate::toolset::effective_command_policy(&self.policy);
         run_command(
             &self.context,
             Self::NAME,
@@ -287,15 +300,16 @@ impl Tool for UnrestrictedBashTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let (command, command_args) = if args.args.is_empty() {
-            ("/bin/sh", vec!["-lc".to_string(), args.command.clone()])
-        } else {
-            (args.command.as_str(), args.args.clone())
-        };
-
+    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
+        let (command, command_args) = unrestricted_argv(args);
         let policy = crate::toolset::effective_command_policy(&self.policy);
-        validate_command_policy(command, &command_args, &policy)?;
+        validate_command_policy(command, &command_args, &policy)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Tool::admit(self, &args)?;
+        let (command, command_args) = unrestricted_argv(&args);
+        let policy = crate::toolset::effective_command_policy(&self.policy);
         run_command(
             &self.context,
             Self::NAME,

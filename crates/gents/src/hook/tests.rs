@@ -21,6 +21,9 @@ mod background_panic;
 #[path = "tests/background_budget.rs"]
 mod background_budget;
 
+#[path = "tests/background_admission.rs"]
+mod background_admission;
+
 #[path = "tests/wait_settlement.rs"]
 mod wait_settlement;
 

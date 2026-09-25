@@ -1132,6 +1132,25 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         DefraSessionHook::on_tool_call(self, tool_name, tool_call_id, internal_call_id, args).await
     }
 
+    async fn on_tool_admission_rejected(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        DefraSessionHook::on_tool_admission_rejected(
+            self,
+            tool_name,
+            tool_call_id,
+            internal_call_id,
+            args,
+            outcome,
+        )
+        .await
+    }
+
     async fn on_tool_result(
         &self,
         tool_name: &str,

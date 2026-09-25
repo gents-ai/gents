@@ -35,6 +35,18 @@ use subagent::{
 
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
 
+#[cfg(test)]
+pub(crate) fn read_only_bash_for_test(
+    root: &std::path::Path,
+    allowlist: Vec<String>,
+) -> Box<dyn crate::llm::tool::ToolDyn> {
+    Box::new(ReadOnlyBashTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        allowlist,
+    ))
+}
+
 pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
     LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,

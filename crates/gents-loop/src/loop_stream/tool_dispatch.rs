@@ -10,6 +10,20 @@ pub fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
+/// Tool-policy admission, evaluated before the dispatch election. `Some` is
+/// the pre-dispatch failure that settles the still-Pending call; the tool is
+/// never invoked. Unknown names are left to `dispatch_tool`.
+pub(super) fn admit_tool(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: &str,
+) -> Option<ToolOutcome> {
+    let tool = tools.iter().find(|tool| tool.name() == name)?;
+    tool.admit(args)
+        .err()
+        .map(|error| ToolOutcome::from_dispatch(name, Err(error)))
+}
+
 pub async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,

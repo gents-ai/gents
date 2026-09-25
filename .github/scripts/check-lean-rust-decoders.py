@@ -22,6 +22,7 @@ GROUPS = {
     "current_input_cases": "LeanCurrentInputCase",
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
+    "canonical_spawned_target_rejection_cases": "LeanSpawnedTargetRejectionCase",
     "interrupt_queue_cases": "LeanInterruptQueueCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
     "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",

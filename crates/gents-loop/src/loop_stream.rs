@@ -71,6 +71,7 @@ pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
 };
+use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
@@ -805,6 +806,64 @@ where
                         repeated_tool_failure.stop_reason(),
                     )))?;
                     unreachable!("repeated tool failure ends the stream");
+                }
+                if let Some(outcome) = admit_tool(tools.as_slice(), &tool_name, &tool_args) {
+                    if let Some(hook) = hook.as_ref() {
+                        let action = hook
+                            .on_tool_admission_rejected(
+                                &tool_name,
+                                tool_call.call_id.clone(),
+                                &internal_call_id,
+                                &tool_args,
+                                &outcome,
+                            )
+                            .await;
+                        if let HookAction::Terminate { reason } = action {
+                            Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                                chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                                    &history,
+                                    &new_messages,
+                                )),
+                                reason,
+                            })))?;
+                        }
+                    }
+                    invalid_tool_progress.record(&outcome);
+                    let command_envelope = tools
+                        .iter()
+                        .find(|tool| tool.name() == tool_name)
+                        .is_some_and(|tool| tool.emits_command_envelope());
+                    repeated_tool_failure.record_dispatched(
+                        &tool_name,
+                        &tool_args,
+                        &outcome,
+                        command_envelope,
+                    );
+                    let (bounded, _, _) = truncate_text(
+                        outcome.model_facing_text(),
+                        tool_result_truncation_mode(&tool_name),
+                        &TruncationLimits::default(),
+                    );
+                    pending_results.push((
+                        rig_compat::from_rig_tool_call(&tool_call),
+                        internal_call_id,
+                        bounded,
+                    ));
+                    if invalid_tool_progress.exhausted() {
+                        for item in close_streaming_turn(
+                            &mut new_messages,
+                            &mut accumulator,
+                            stream.message_id.clone(),
+                            pending_results,
+                        ) {
+                            yield item;
+                        }
+                        Err(StreamingError::Completion(CompletionError::ProviderError(
+                            invalid_tool_progress.exhaustion_reason(),
+                        )))?;
+                        unreachable!("invalid tool budget exhaustion ends the stream");
+                    }
+                    continue;
                 }
                 let call_action = match hook.as_ref() {
                     Some(hook) => {

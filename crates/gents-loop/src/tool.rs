@@ -86,6 +86,15 @@ pub trait Tool: Sized + Send + Sync {
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 
+    /// Tool-policy admission for these arguments. The loop evaluates it before
+    /// the dispatch election, so a rejection leaves the call Pending and is
+    /// settled as a pre-dispatch failure. It must be side-effect free and must
+    /// reject only what `call` would reject before any external effect; launch
+    /// preparation that depends on the host remains in `call`.
+    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     /// Convert the concrete tool error at the trusted adapter boundary. Tools
     /// that deliberately return a recoverable, model-facing failure override
     /// this to preserve its typed class and rendered detail.
@@ -105,6 +114,12 @@ pub trait ToolDyn: Send + Sync {
     /// text is its own, even when it has the same shape.
     fn emits_command_envelope(&self) -> bool {
         false
+    }
+
+    /// See [`Tool::admit`]. Arguments that do not parse are admitted so that
+    /// `call` reports them with its argument diagnostics.
+    fn admit(&self, _args: &str) -> Result<(), ToolError> {
+        Ok(())
     }
 }
 
@@ -136,6 +151,15 @@ impl<T: Tool> ToolDyn for T {
                 .map_err(<Self as Tool>::into_dyn_error)
                 .and_then(|output| serialize_tool_output(output).map_err(ToolError::JsonError))
         })
+    }
+
+    fn admit(&self, args: &str) -> Result<(), ToolError> {
+        match parse_tool_args::<<Self as Tool>::Args>(args) {
+            Ok(parsed) => {
+                <Self as Tool>::admit(self, &parsed).map_err(<Self as Tool>::into_dyn_error)
+            }
+            Err(_) => Ok(()),
+        }
     }
 }
 

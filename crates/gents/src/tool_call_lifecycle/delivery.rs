@@ -1743,12 +1743,19 @@ async fn terminalize_transaction(
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
 
     let completed_at = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
-    let started_at = started_at
-        .unwrap_or(now)
-        .to_rfc3339_opts(SecondsFormat::Nanos, true);
+    // A call settled from Pending never started; it records neither a start
+    // nor a latency.
+    let (started_at, latency_ms) = match started_at {
+        Some(started) => (
+            format!(
+                "\"{}\"",
+                started.to_rfc3339_opts(SecondsFormat::Nanos, true)
+            ),
+            (now - started).num_milliseconds().to_string(),
+        ),
+        None => ("null".to_owned(), "null".to_owned()),
+    };
     let deadline_at = deadline_at.to_rfc3339_opts(SecondsFormat::Nanos, true);
-    let latency_ms =
-        (now - DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&Utc)).num_milliseconds();
     let failure = fields
         .failure
         .map(|value| format!(r#", tool_failure_class: "{}""#, value.as_str()))
@@ -1779,7 +1786,7 @@ async fn terminalize_transaction(
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
         message_sequence: {{ _eq: {message_sequence} }},
         lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter} }}, input: {{
-        status: "{}", lifecycle_state: "{state}", started_at: "{started_at}",
+        status: "{}", lifecycle_state: "{state}", started_at: {started_at},
         deadline_at: "{deadline_at}", completed_at: "{completed_at}", latency_ms: {latency_ms}{failure}{cancel}{remote_handoff}
     }}) {{ _docID }} }}"#, escape_graphql_string(terminal_status))).await?;
     if !lifecycle["data"]["update_AgentToolCall"]

@@ -22,20 +22,26 @@ async fn complete_spawn_process_failure(
     lifecycle: &mut ToolCallLifecycle,
     failure: FailureClass,
     result: String,
+    denial: Option<&crate::toolset::CommandPolicyDenial>,
 ) -> anyhow::Result<ToolCallHookAction> {
     let (bounded, presentation) = bounded_tool_result_with_presentation(
         SPAWN_PROCESS_TOOL_NAME,
         &result,
         &hook.truncation_limits,
     );
-    let won = lifecycle
-        .fail_raw_with_presentation(
-            &result,
-            &bounded,
-            failure,
-            presentation.unwrap_or(gents_protocol::output::PayloadPresentation::Full),
-        )
-        .await?;
+    let won = match denial {
+        Some(denial) => lifecycle.fail_with_command_denial(&bounded, denial).await?,
+        None => {
+            lifecycle
+                .fail_raw_with_presentation(
+                    &result,
+                    &bounded,
+                    failure,
+                    presentation.unwrap_or(gents_protocol::output::PayloadPresentation::Full),
+                )
+                .await?
+        }
+    };
     if won {
         return Ok(ToolCallHookAction::skip(bounded));
     }
@@ -78,6 +84,7 @@ impl DefraSessionHook {
                         "/",
                         format!("invalid spawn_process arguments: {error}"),
                     ),
+                    None,
                 )
                 .await;
             }
@@ -94,6 +101,7 @@ impl DefraSessionHook {
                     "/tool_name",
                     "tool_name is required",
                 ),
+                None,
             )
             .await;
         }
@@ -112,6 +120,7 @@ impl DefraSessionHook {
                     ),
                     self.background_tool_registry.allowlist(),
                 ),
+                None,
             )
             .await;
         };
@@ -123,12 +132,31 @@ impl DefraSessionHook {
                 &mut parent_lifecycle,
                 FailureClass::ArgumentInvalid,
                 background_budget_exceeded_payload(live_count),
+                None,
             )
             .await;
         }
 
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
+        if let Err(error) = target_tool.admit(&target_args) {
+            let crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                denial,
+                text,
+            } = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(target_name, Err(error))
+            else {
+                anyhow::bail!("admission rejection must carry a failed outcome");
+            };
+            return complete_spawn_process_failure(
+                self,
+                &mut parent_lifecycle,
+                class,
+                text,
+                denial.as_ref(),
+            )
+            .await;
+        }
         let selected_tool_identity = self.remote_tools.as_ref().and_then(|remote| {
             crate::meta_tools::selected_remote_identity(target_name, &target_args, remote)
         });

@@ -194,6 +194,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
+    pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
@@ -1536,6 +1537,11 @@ pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalEx
 pub(crate) fn lean_canonical_dispatch_observation_cases() -> &'static [LeanDispatchObservationCase]
 {
     &lean_contract_snapshot().canonical_dispatch_observation_cases
+}
+
+pub(crate) fn lean_canonical_spawned_target_rejection_cases(
+) -> &'static [LeanSpawnedTargetRejectionCase] {
+    &lean_contract_snapshot().canonical_spawned_target_rejection_cases
 }
 
 pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {

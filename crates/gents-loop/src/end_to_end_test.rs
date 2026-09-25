@@ -77,6 +77,7 @@ impl CompletionModel for ScriptedModel {
 /// echoes its argument back, uppercased.
 struct EchoTool {
     calls: Arc<Mutex<Vec<String>>>,
+    policy_allows: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -86,7 +87,7 @@ struct EchoArgs {
 
 impl Tool for EchoTool {
     const NAME: &'static str = "echo";
-    type Error = std::convert::Infallible;
+    type Error = crate::tool::ToolError;
     type Args = EchoArgs;
     type Output = String;
 
@@ -100,6 +101,21 @@ impl Tool for EchoTool {
                 "required": ["text"],
             }),
         }
+    }
+
+    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+        if self.policy_allows {
+            Ok(())
+        } else {
+            Err(crate::tool::ToolError::ReportedFailure {
+                class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                text: "echo denied by tool policy".into(),
+            })
+        }
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::tool::ToolError {
+        error
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -116,6 +132,7 @@ impl Tool for EchoTool {
 enum RecordedCall {
     CompletionCall { prompt: String },
     ToolCall { tool_name: String },
+    AdmissionRejected { tool_name: String, outcome: String },
     ToolResult { tool_name: String, outcome: String },
 }
 
@@ -172,6 +189,21 @@ impl SessionHook for RecordingHook {
         } else {
             ToolCallHookAction::Continue
         }
+    }
+
+    async fn on_tool_admission_rejected(
+        &self,
+        tool_name: &str,
+        _tool_call_id: Option<String>,
+        _internal_call_id: &str,
+        _args: &str,
+        outcome: &ToolOutcome,
+    ) -> HookAction {
+        self.log(RecordedCall::AdmissionRejected {
+            tool_name: tool_name.to_string(),
+            outcome: outcome.model_facing_text().to_string(),
+        });
+        HookAction::Continue
     }
 
     async fn on_tool_result(
@@ -265,6 +297,7 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
     let tool_calls = Arc::new(Mutex::new(Vec::new()));
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
         calls: tool_calls.clone(),
+        policy_allows: true,
     })]);
     let final_text = run_loop_to_text(
         model,
@@ -284,8 +317,9 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
     );
 }
 
-/// This binds the loop's hook-action boundary, not database receipt semantics.
-/// The native hook test separately checks actual receipt failures against the
+/// This binds the loop's admission and hook-action boundaries, not database
+/// receipt semantics or the native command-policy owner. The native hook tests
+/// separately check actual receipt failures and policy settlement against the
 /// same generated permission outcomes.
 #[tokio::test]
 async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
@@ -295,9 +329,18 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
         .as_array()
         .unwrap();
     assert!(!cases.is_empty());
+    assert!(cases.iter().any(|case| case["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|input| !input["policy_allows"].as_bool().unwrap())));
     for case in cases {
-        for expected in case["expected"].as_array().unwrap() {
+        let inputs = case["inputs"].as_array().unwrap();
+        let expected_results = case["expected"].as_array().unwrap();
+        assert_eq!(inputs.len(), expected_results.len());
+        for (input, expected) in inputs.iter().zip(expected_results) {
             let may_invoke = expected["may_invoke"].as_bool().unwrap();
+            let policy_allows = input["policy_allows"].as_bool().unwrap();
             let model = ScriptedModel::new(vec![
                 vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
                 vec![
@@ -308,9 +351,10 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
             let calls = Arc::new(Mutex::new(Vec::new()));
             let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
                 calls: calls.clone(),
+                policy_allows,
             })]);
             let hook = RecordingHook {
-                deny_dispatch: !may_invoke,
+                deny_dispatch: policy_allows && !may_invoke,
                 ..Default::default()
             };
             let observed_hook = hook.clone();
@@ -353,26 +397,46 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
             })
             .await;
             assert_eq!(
-                failure.is_some(),
-                !may_invoke,
-                "{}: {expected}; {failure:?}",
-                case["name"]
-            );
-            assert_eq!(
                 calls.lock().unwrap().len(),
                 usize::from(may_invoke),
                 "{}: {expected}",
                 case["name"]
             );
-            assert_eq!(
-                observed_hook
-                    .calls()
-                    .iter()
-                    .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
-                    .count(),
-                1,
-                "the test must reach the hook"
-            );
+            let recorded = observed_hook.calls();
+            let elections = recorded
+                .iter()
+                .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
+                .count();
+            let rejections = recorded
+                .iter()
+                .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
+                .count();
+            if policy_allows {
+                assert_eq!(
+                    failure.is_some(),
+                    !may_invoke,
+                    "{}: {expected}; {failure:?}",
+                    case["name"]
+                );
+                assert_eq!(
+                    (elections, rejections),
+                    (1, 0),
+                    "the test must reach the hook"
+                );
+            } else {
+                assert!(!may_invoke && !expected["running"].as_bool().unwrap());
+                assert!(
+                    failure.is_none(),
+                    "{}: a policy rejection is a tool result, not a loop failure: {failure:?}",
+                    case["name"]
+                );
+                assert_eq!(
+                    (elections, rejections),
+                    (0, 1),
+                    "{}: a rejected call must never reach the dispatch election",
+                    case["name"]
+                );
+            }
         }
     }
 }

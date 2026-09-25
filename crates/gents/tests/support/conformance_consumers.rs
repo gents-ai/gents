@@ -770,6 +770,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "project_filters_to_background_await_mode_only",
         },
         ConformanceConsumer::RustTest {
+            id: "hook::tests::background_admission::spawn_process_rejects_target_policy_before_spawned_admission",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests/background_admission.rs",
+            module_path: "hook::tests::background_admission",
+            function: "spawn_process_rejects_target_policy_before_spawned_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "gents",
             source_path: "crates/gents/src/hook/tests.rs",
