@@ -6,10 +6,29 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+### Breaking
+
+- `gents subagent list` JSON: `state` replaced by `edge_state` (null on
+  root/forest rows) and `request_lifecycle_state`; table column `STATE` →
+  `EDGE_STATE`/`REQUEST_STATE` (#1783).
+
 ### Changed
 
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
+
+### Fixed
+
+- `gents subagent list --root` works while a fan-out is still running. Each row
+  reports the parent bridge's `edge_state` (`running`,
+  `awaiting_child_materialization`, `pending_child_authorization`, ...) apart
+  from the child request's own `request_lifecycle_state`, instead of failing
+  to decode the edge as a request (#1783).
+- `last_progress_age_ms` no longer reports a working request as stalled
+  between tool batches. Progress is the newest of the claim, any tool call's
+  start or completion, and any inference call's start or end for that request,
+  so the age no longer jumps back to `claimed_at` when a tool call finishes
+  (#1782).
 
 ## 0.19.0 - 2026-09-24
 

@@ -17,8 +17,8 @@ use crate::http::fleet_slots::load_fleet_slot_snapshot;
 use crate::http::healthz::render_healthz_payload;
 use crate::http::mcp_pool::load_mcp_pool_snapshot;
 use crate::http::prometheus::{
-    load_metrics_query_data, render_prometheus_metrics, with_local_native_executors,
-    MetricsRuntimeRow, P2pMetricsSnapshot,
+    load_metrics_core_data, load_metrics_query_data, render_prometheus_metrics,
+    with_local_native_executors, MetricsRuntimeRow, P2pMetricsSnapshot,
 };
 use crate::http::self_view::{load_self_view, ContextBudget, SelfBehavior};
 use crate::http::sessions::{load_session_history_snapshot, SessionHistoryParams};
@@ -492,11 +492,21 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             map.insert("p2p_admission".to_string(), admission.to_json());
         }
     }
-    let metrics = tokio::time::timeout(
-        STATUS_PROBE_BUDGET,
-        load_metrics_query_data(&state.graphql, &state.agent_did),
+    // The probe budget bounds core health only; the optional progress
+    // observation gets whatever remains of it and never flips `ok`.
+    let probe_deadline = tokio::time::Instant::now() + STATUS_PROBE_BUDGET;
+    let metrics = tokio::time::timeout_at(
+        probe_deadline,
+        load_metrics_core_data(&state.graphql, &state.agent_did),
     )
     .await;
+    let metrics = match metrics {
+        Ok(Ok(core)) => Ok(Ok(core
+            .with_liveness_activity(&state.graphql, probe_deadline)
+            .await)),
+        Ok(Err(error)) => Ok(Err(error)),
+        Err(elapsed) => Err(elapsed),
+    };
     let mut body = match metrics {
         Ok(Ok(data)) => {
             let data = with_local_native_executors(data);
@@ -995,6 +1005,118 @@ mod tests {
         assert_eq!(lifecycle(&state).await, json!("starting"));
         state.serve_lifecycle.mark_ready();
         assert_eq!(lifecycle(&state).await, json!("ready"));
+    }
+
+    /// Mock GraphQL whose core health read answers after `core_delay` and
+    /// whose optional activity reads stall far past every probe budget.
+    async fn stalled_activity_state(core_delay: Duration) -> RuntimeHttpState {
+        use axum::{routing::post, Json, Router};
+
+        let claimed_at = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let core = json!({
+            "data": {
+                "AgentRuntime": [serde_json::to_value(runtime()).unwrap()],
+                "AgentBehaviorReadiness": [serde_json::to_value(readiness("default")).unwrap()],
+                "InferenceBackend": [],
+                "AgentRequest": [{
+                    "_docID": "doc-req-1",
+                    "request_id": "req-1",
+                    "agent_did": "did:key:zAgent",
+                    "claimed_at": claimed_at.to_rfc3339(),
+                    "deadline": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+                }],
+                "AgentToolCall": []
+            }
+        });
+        let mock = Router::new().route(
+            "/api/v0/graphql",
+            post(move |Json(body): Json<Value>| {
+                let core = core.clone();
+                async move {
+                    let query = body["query"].as_str().unwrap_or_default().to_string();
+                    if query.contains("AgentRuntime") {
+                        tokio::time::sleep(core_delay).await;
+                        return Ok(Json(core));
+                    }
+                    if query.contains("InferenceCall(") {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        return Ok(Json(json!({ "data": {} })));
+                    }
+                    Err(StatusCode::NOT_FOUND)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock graphql");
+        let addr = listener.local_addr().expect("mock addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, mock).await;
+        });
+        let mut state = state();
+        state.graphql = format!("http://{addr}/api/v0/graphql");
+        state
+    }
+
+    async fn health_body(response: Response) -> (StatusCode, Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("health body");
+        (status, serde_json::from_slice(&bytes).expect("health json"))
+    }
+
+    fn progress_age_ms(body: &Value) -> i64 {
+        body.pointer("/liveness/requests/0/last_progress_age_ms")
+            .and_then(Value::as_i64)
+            .expect("liveness request row")
+    }
+
+    /// A stalled optional activity read must not delay or fail core health:
+    /// `/healthz` and `/status` stay ok and on time, and progress falls back
+    /// to `claimed_at`.
+    #[tokio::test]
+    async fn stalled_liveness_activity_read_does_not_hold_health() {
+        let state = stalled_activity_state(Duration::ZERO).await;
+
+        let started = std::time::Instant::now();
+        let (status, healthz) = health_body(healthz_handler(State(state.clone())).await).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "/healthz waited {:?} on a stalled activity read",
+            started.elapsed()
+        );
+        assert_eq!(status, StatusCode::OK, "{healthz}");
+        assert_eq!(healthz["ok"], json!(true), "{healthz}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&healthz)));
+
+        let started = std::time::Instant::now();
+        let (_, status_body) = health_body(status_handler(State(state)).await).await;
+        assert!(
+            started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
+            "/status waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(status_body["ok"], json!(true), "{status_body}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
+    }
+
+    /// The `/status` probe budget covers core health only: a core read that
+    /// lands late in the budget leaves activity only the remainder, so the
+    /// response stays ok with progress from `claimed_at`.
+    #[tokio::test]
+    async fn late_core_read_leaves_status_ok_when_activity_stalls() {
+        let state = stalled_activity_state(Duration::from_millis(1_700)).await;
+
+        let started = std::time::Instant::now();
+        let (_, status_body) = health_body(status_handler(State(state)).await).await;
+        assert!(
+            started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
+            "/status waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(status_body["ok"], json!(true), "{status_body}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
     }
 
     #[tokio::test]

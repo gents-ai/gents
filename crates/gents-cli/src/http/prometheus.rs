@@ -10,13 +10,24 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::http::liveness::{
-    compute_request_liveness_summary, with_active_native_executors, LivenessRequestRow,
-    LivenessToolCallRow, RuntimeLivenessSnapshot,
+    compute_request_liveness_summary, owns_liveness_row, with_active_native_executors,
+    LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
+use gents::graphql::escape_graphql_string;
 
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
+/// Processing requests per activity document. Each contributes four
+/// `limit: 1` reads, which bound the rows returned per request, not the work
+/// to order that request's tool or inference history.
+const LIVENESS_ACTIVITY_CHUNK: usize = 32;
+/// One deadline for the whole optional activity phase, well under the
+/// `/status` probe budget, so a slow activity read never turns a healthy
+/// runtime not-ok or stalls `/healthz`. Requests not yet covered when it
+/// expires fall back to `claimed_at`.
+pub(crate) const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
+    std::time::Duration::from_millis(500);
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
@@ -1231,10 +1242,32 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
     value.map(|value| value.max(0))
 }
 
+/// Core health rows (runtime, readiness, backends, processing requests and
+/// running tool calls), before the optional progress observation.
+pub(crate) struct MetricsCoreData {
+    envelope: MetricsQueryEnvelope,
+    local_agent_did: String,
+}
+
 pub(crate) async fn load_metrics_query_data(
     graphql: &str,
     local_agent_did: &str,
 ) -> Result<MetricsQueryData> {
+    let core = load_metrics_core_data(graphql, local_agent_did).await?;
+    Ok(core
+        .with_liveness_activity(
+            graphql,
+            tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET,
+        )
+        .await)
+}
+
+/// Reads core health only. Callers with their own deadline bound this read,
+/// then pass what remains to [`MetricsCoreData::with_liveness_activity`].
+pub(crate) async fn load_metrics_core_data(
+    graphql: &str,
+    local_agent_did: &str,
+) -> Result<MetricsCoreData> {
     let response = post_graphql(
         graphql,
         r#"{
@@ -1260,6 +1293,7 @@ pub(crate) async fn load_metrics_query_data(
             AgentRequest(filter: {
                 lifecycle_state: { _eq: "processing" }
             }) {
+                _docID
                 request_id
                 agent_did
                 claimed_at
@@ -1288,18 +1322,151 @@ pub(crate) async fn load_metrics_query_data(
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
-    let liveness = compute_request_liveness_summary(
-        Utc::now(),
-        local_agent_did,
-        envelope.requests,
-        envelope.tool_calls,
-    );
-    Ok(MetricsQueryData {
-        agent_runtimes: envelope.agent_runtimes,
-        behavior_readiness: envelope.behavior_readiness,
-        inference_backends: envelope.inference_backends,
-        liveness,
+    Ok(MetricsCoreData {
+        envelope,
+        local_agent_did: local_agent_did.to_string(),
     })
+}
+
+impl MetricsCoreData {
+    /// Adds the optional progress observation. Activity reads stop at
+    /// `deadline`, capped at [`LIVENESS_ACTIVITY_BUDGET`] from now; a deadline
+    /// already passed skips them and progress falls back to `claimed_at`.
+    pub(crate) async fn with_liveness_activity(
+        self,
+        graphql: &str,
+        deadline: tokio::time::Instant,
+    ) -> MetricsQueryData {
+        let Self {
+            envelope,
+            local_agent_did,
+        } = self;
+        let deadline = deadline.min(tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET);
+        let activity =
+            load_liveness_activity(graphql, &local_agent_did, &envelope.requests, deadline).await;
+        let liveness = compute_request_liveness_summary(
+            Utc::now(),
+            &local_agent_did,
+            envelope.requests,
+            envelope.tool_calls,
+            activity,
+        );
+        MetricsQueryData {
+            agent_runtimes: envelope.agent_runtimes,
+            behavior_readiness: envelope.behavior_readiness,
+            inference_backends: envelope.inference_backends,
+            liveness,
+        }
+    }
+}
+
+/// Newest tool-call and inference-call activity for each local processing
+/// request, keyed by the immutable `request_doc_id` and bound to the
+/// request's owning `agent_did`.
+///
+/// Progress is an observation layered on the processing-request read: a
+/// failed activity read drops that chunk's activity (its requests fall back
+/// to `claimed_at`) instead of failing `/healthz`, `/status`, `/metrics` or
+/// `/self`. All chunks share the caller's single `deadline`.
+async fn load_liveness_activity(
+    graphql: &str,
+    local_agent_did: &str,
+    requests: &[LivenessRequestRow],
+    deadline: tokio::time::Instant,
+) -> Vec<LivenessActivityRow> {
+    let request_doc_ids = requests
+        .iter()
+        .filter(|row| {
+            owns_liveness_row(
+                local_agent_did.trim(),
+                row.agent_did.as_deref().unwrap_or_default(),
+            )
+        })
+        .filter_map(|row| {
+            let doc_id = row.doc_id.as_deref().map(str::trim)?;
+            let agent_did = row.agent_did.as_deref().map(str::trim)?;
+            (!doc_id.is_empty() && !agent_did.is_empty()).then_some((doc_id, agent_did))
+        })
+        .collect::<Vec<_>>();
+    let mut activity = Vec::new();
+    let mut chunks = request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK);
+    while let Some(chunk) = chunks.next() {
+        match tokio::time::timeout_at(deadline, load_liveness_activity_chunk(graphql, chunk)).await
+        {
+            Ok(Ok(rows)) => activity.extend(rows),
+            Ok(Err(error)) => tracing::warn!(
+                request_count = chunk.len(),
+                error = format!("{error:#}"),
+                "liveness activity read failed; progress falls back to claimed_at"
+            ),
+            Err(_) => {
+                let request_count = chunk.len() + chunks.map(<[_]>::len).sum::<usize>();
+                tracing::warn!(
+                    request_count,
+                    budget_ms = LIVENESS_ACTIVITY_BUDGET.as_millis() as u64,
+                    "liveness activity budget exhausted; progress falls back to claimed_at"
+                );
+                break;
+            }
+        }
+    }
+    activity
+}
+
+async fn load_liveness_activity_chunk(
+    graphql: &str,
+    requests: &[(&str, &str)],
+) -> Result<Vec<LivenessActivityRow>> {
+    let response = post_graphql(graphql, &liveness_activity_query(requests)).await?;
+    let data = response
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let pages: BTreeMap<String, Vec<LivenessActivityRow>> =
+        serde_json::from_value(data).context("decoding liveness activity response")?;
+    Ok(pages.into_values().flatten().collect())
+}
+
+fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
+    let mut selections = String::new();
+    for (index, (request_doc_id, agent_did)) in requests.iter().enumerate() {
+        let request_doc_id = escape_graphql_string(request_doc_id);
+        let agent_did = escape_graphql_string(agent_did);
+        for (alias, collection, field, fields) in [
+            (
+                "ts",
+                "AgentToolCall",
+                "started_at",
+                "started_at completed_at",
+            ),
+            (
+                "tc",
+                "AgentToolCall",
+                "completed_at",
+                "started_at completed_at",
+            ),
+            ("is", "InferenceCall", "started_at", "started_at ended_at"),
+            ("ie", "InferenceCall", "ended_at", "started_at ended_at"),
+        ] {
+            selections.push_str(&format!(
+                r#"
+            {alias}{index}: {collection}(
+                filter: {{
+                    request_doc_id: {{ _eq: "{request_doc_id}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    {field}: {{ _ne: null }}
+                }},
+                order: {{ {field}: DESC }},
+                limit: 1
+            ) {{
+                request_doc_id
+                agent_did
+                {fields}
+            }}"#
+            ));
+        }
+    }
+    format!("{{{selections}\n}}")
 }
 
 pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
@@ -1417,6 +1584,61 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_liveness_activity_read_degrades_to_claimed_at() {
+        use axum::{http::StatusCode, routing::post, Json, Router};
+
+        let claimed_at = (Utc::now() - Duration::seconds(120)).to_rfc3339();
+        let base = serde_json::json!({
+            "data": {
+                "AgentRuntime": [],
+                "AgentBehaviorReadiness": [],
+                "InferenceBackend": [],
+                "AgentRequest": [{
+                    "_docID": "doc-req-1",
+                    "request_id": "req-1",
+                    "agent_did": "did:test:local",
+                    "claimed_at": claimed_at,
+                }],
+                "AgentToolCall": []
+            }
+        });
+        let router = Router::new().route(
+            "/api/v0/graphql",
+            post(move |Json(body): Json<Value>| {
+                let base = base.clone();
+                async move {
+                    let query = body["query"].as_str().unwrap_or_default().to_string();
+                    if query.contains("AgentRuntime") {
+                        Ok(Json(base))
+                    } else {
+                        Err(StatusCode::BAD_REQUEST)
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock graphql");
+        let addr = listener.local_addr().expect("mock addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let data =
+            load_metrics_query_data(&format!("http://{addr}/api/v0/graphql"), "did:test:local")
+                .await
+                .expect("an activity read failure must not fail the liveness owner");
+        let request = &data.liveness.requests[0];
+        assert_eq!(request.request_id, "req-1");
+        assert!(
+            (120_000..180_000).contains(&request.last_progress_age_ms),
+            "progress falls back to claimed_at: {}",
+            request.last_progress_age_ms
+        );
+    }
+
     use gents_protocol::row::{
         BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
         BehaviorReadinessState, BehaviorReadinessUnavailableReason,

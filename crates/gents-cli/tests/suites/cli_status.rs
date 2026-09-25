@@ -382,8 +382,9 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     retry_count: 0
                 }}) {{ _docID }}
             }}"#,
-            request_id = stuck_request_id,
-            session_id = stuck_session_id,
+            request_id = escape_graphql_string(&stuck_request_id),
+            agent_did = escape_graphql_string(&agent_did),
+            session_id = escape_graphql_string(&stuck_session_id),
         ),
     )
     .await?;
@@ -406,10 +407,11 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     deadline_at: "2024-01-01T11:00:30Z"
                 }}) {{ _docID }}
             }}"#,
-            key = stuck_tool_call_key,
-            request_id = stuck_request_id,
-            session_id = stuck_session_id,
-            tool_call_id = stuck_tool_call_id,
+            key = escape_graphql_string(&stuck_tool_call_key),
+            agent_did = escape_graphql_string(&agent_did),
+            request_id = escape_graphql_string(&stuck_request_id),
+            session_id = escape_graphql_string(&stuck_session_id),
+            tool_call_id = escape_graphql_string(&stuck_tool_call_id),
         ),
     )
     .await?;
@@ -501,6 +503,261 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             .get("deadline_expired")
             .and_then(Value::as_bool),
         Some(true)
+    );
+
+    Ok(())
+}
+
+/// #1782: progress counts completed tool calls and inference activity, read
+/// through bounded per-request queries, not only currently running calls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_liveness_progress_counts_completed_tools_and_inference() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-progress-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-progress-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let now = chrono::Utc::now();
+    let at = |offset_secs: i64| (now + chrono::Duration::seconds(offset_secs)).to_rfc3339();
+
+    let seed_request = |request_id: String| {
+        let graphql = graphql.clone();
+        let agent_did = agent_did.clone();
+        let claimed_at = at(-600);
+        let deadline = at(3600);
+        async move {
+            let request_id = escape_graphql_string(&request_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let claimed_at = escape_graphql_string(&claimed_at);
+            let deadline = escape_graphql_string(&deadline);
+            let response = graphql_query(
+                &graphql,
+                &format!(
+                    r#"mutation {{
+                        create_AgentRequest(input: {{
+                            request_id: "{request_id}",
+                            agent_did: "{agent_did}",
+                            behavior_id: "default",
+                            session_id: "session-{request_id}",
+                            content: "liveness progress seed",
+                            lifecycle_state: "processing",
+                            created_at: "{claimed_at}",
+                            claimed_at: "{claimed_at}",
+                            deadline: "{deadline}",
+                            retry_count: 0
+                        }}) {{ _docID }}
+                    }}"#
+                ),
+            )
+            .await?;
+            doc_id_from_create(&response, "add_AgentRequest")
+        }
+    };
+    let seed_tool = |request_id: String,
+                     request_doc_id: String,
+                     index: usize,
+                     started_at: String,
+                     completed_at: Option<String>| {
+        let graphql = graphql.clone();
+        let agent_did = agent_did.clone();
+        async move {
+            let request_id = escape_graphql_string(&request_id);
+            let request_doc_id = escape_graphql_string(&request_doc_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let started_at = escape_graphql_string(&started_at);
+            let (state, completed) = match completed_at {
+                Some(completed_at) => (
+                    "completed",
+                    format!(
+                        r#"completed_at: "{}","#,
+                        escape_graphql_string(&completed_at)
+                    ),
+                ),
+                None => ("running", String::new()),
+            };
+            graphql_query(
+                &graphql,
+                &format!(
+                    r#"mutation {{
+                        create_AgentToolCall(input: {{
+                            tool_call_key: "{request_id}-tc-{index}",
+                            agent_did: "{agent_did}",
+                            request_id: "{request_id}",
+                            request_doc_id: "{request_doc_id}",
+                            session_id: "session-{request_id}",
+                            message_sequence: {index},
+                            tool_name: "read_file",
+                            tool_call_id: "{request_id}-call-{index}",
+                            status: "{state}",
+                            lifecycle_state: "{state}",
+                            {completed}
+                            started_at: "{started_at}"
+                        }}) {{ _docID }}
+                    }}"#
+                ),
+            )
+            .await
+        }
+    };
+    let seed_inference = |request_id: String,
+                          request_doc_id: String,
+                          seq: usize,
+                          started_at: String,
+                          ended_at: Option<String>| {
+        let graphql = graphql.clone();
+        let agent_did = agent_did.clone();
+        async move {
+            let request_id = escape_graphql_string(&request_id);
+            let request_doc_id = escape_graphql_string(&request_doc_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let started_at = escape_graphql_string(&started_at);
+            let (state, ended) = match ended_at {
+                Some(ended_at) => (
+                    "completed",
+                    format!(r#"ended_at: "{}","#, escape_graphql_string(&ended_at)),
+                ),
+                None => ("running", String::new()),
+            };
+            graphql_query(
+                &graphql,
+                &format!(
+                    r#"mutation {{
+                        create_InferenceCall(input: {{
+                            call_id: "{request_id}-inference-{seq}",
+                            request_id: "{request_id}",
+                            request_doc_id: "{request_doc_id}",
+                            agent_did: "{agent_did}",
+                            call_kind: "inference",
+                            call_seq: {seq},
+                            call_state: "{state}",
+                            {ended}
+                            queued_at: "{started_at}",
+                            started_at: "{started_at}"
+                        }}) {{ _docID }}
+                    }}"#
+                ),
+            )
+            .await
+        }
+    };
+
+    // Completed tool batch, none running: newest completion is 20s old.
+    let batched = format!("batched-{}", Uuid::new_v4().simple());
+    let batched_doc = seed_request(batched.clone()).await?;
+    for (index, (started, completed)) in [(-200, -190), (-40, -20), (-120, -100)]
+        .into_iter()
+        .enumerate()
+    {
+        seed_tool(
+            batched.clone(),
+            batched_doc.clone(),
+            index + 1,
+            at(started),
+            Some(at(completed)),
+        )
+        .await?;
+    }
+    seed_inference(
+        batched.clone(),
+        batched_doc.clone(),
+        1,
+        at(-300),
+        Some(at(-250)),
+    )
+    .await?;
+
+    // Another principal's newer row naming the same request document is not
+    // this request's progress.
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{batched}-foreign",
+                    agent_did: "did:key:zForeignProgress",
+                    request_id: "{batched}",
+                    request_doc_id: "{batched_doc}",
+                    session_id: "session-{batched}",
+                    message_sequence: 9,
+                    tool_name: "read_file",
+                    tool_call_id: "{batched}-foreign-call",
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    started_at: "{started_at}",
+                    completed_at: "{completed_at}"
+                }}) {{ _docID }}
+            }}"#,
+            batched = escape_graphql_string(&batched),
+            batched_doc = escape_graphql_string(&batched_doc),
+            started_at = escape_graphql_string(&at(-2)),
+            completed_at = escape_graphql_string(&at(-1)),
+        ),
+    )
+    .await?;
+
+    // Between tool batches, waiting on an in-flight inference started 5s ago.
+    let thinking = format!("thinking-{}", Uuid::new_v4().simple());
+    let thinking_doc = seed_request(thinking.clone()).await?;
+    seed_tool(
+        thinking.clone(),
+        thinking_doc.clone(),
+        1,
+        at(-90),
+        Some(at(-60)),
+    )
+    .await?;
+    seed_inference(
+        thinking.clone(),
+        thinking_doc.clone(),
+        1,
+        at(-120),
+        Some(at(-95)),
+    )
+    .await?;
+    seed_inference(thinking.clone(), thinking_doc.clone(), 2, at(-5), None).await?;
+
+    let output = run_cli_json(&home_dir, &["status"])?;
+    let requests = output
+        .pointer("/liveness/requests")
+        .and_then(Value::as_array)
+        .context("status liveness must expose requests")?;
+    let age = |request_id: &str| -> Result<i64> {
+        requests
+            .iter()
+            .find(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id))
+            .and_then(|row| row.get("last_progress_age_ms"))
+            .and_then(Value::as_i64)
+            .with_context(|| format!("missing liveness row for {request_id}: {output}"))
+    };
+    let batched_age = age(&batched)?;
+    assert!(
+        (20_000..120_000).contains(&batched_age),
+        "newest completed tool call (20s ago) is progress, not claimed_at: {batched_age}"
+    );
+    let thinking_age = age(&thinking)?;
+    assert!(
+        (5_000..20_000).contains(&thinking_age),
+        "in-flight inference (5s ago) is progress: {thinking_age}"
     );
 
     Ok(())
