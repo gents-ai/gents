@@ -102,6 +102,43 @@ fn a_home_lock_without_a_store_excludes_the_store_created_later() {
     lock_store(&home, &default_data_dir(&home)).unwrap();
 }
 
+/// A forked child blocked until its release pipe closes. Dropping it
+/// closes the pipe and reaps the child, so a failed assertion neither
+/// leaves the child blocked nor leaks it.
+#[cfg(unix)]
+struct BlockedChild {
+    pid: libc::pid_t,
+    release: libc::c_int,
+}
+
+#[cfg(unix)]
+impl BlockedChild {
+    /// Lets the child exec and returns its wait status.
+    fn release(mut self) -> libc::c_int {
+        self.release_and_reap()
+    }
+
+    fn release_and_reap(&mut self) -> libc::c_int {
+        let mut status = 0;
+        if self.release >= 0 {
+            unsafe { libc::close(self.release) };
+            self.release = -1;
+            while unsafe { libc::waitpid(self.pid, &mut status, 0) } == -1
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+            }
+        }
+        status
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BlockedChild {
+    fn drop(&mut self) {
+        self.release_and_reap();
+    }
+}
+
 /// The premise the binary split rests on: a child forked while the lock is
 /// held keeps the store excluded after the parent drops its `StoreLock`,
 /// until the child execs.
@@ -122,18 +159,29 @@ fn a_forked_child_holds_the_store_lock_until_it_execs() {
     let argv = [program.as_ptr(), std::ptr::null()];
     let mut go = [0; 2];
     assert_eq!(unsafe { libc::pipe(go.as_mut_ptr()) }, 0);
-    let child = unsafe { libc::fork() };
-    assert!(child >= 0, "fork failed");
-    if child == 0 {
+    let pid = unsafe { libc::fork() };
+    if pid == 0 {
         unsafe {
             libc::close(go[1]);
+            // EOF is the release signal; anything but EINTR ends the wait.
             let mut byte = 0u8;
-            libc::read(go[0], (&mut byte as *mut u8).cast(), 1);
+            while libc::read(go[0], (&mut byte as *mut u8).cast(), 1) == -1
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+            }
             libc::execv(program.as_ptr(), argv.as_ptr());
             libc::_exit(127);
         }
     }
     unsafe { libc::close(go[0]) };
+    if pid < 0 {
+        unsafe { libc::close(go[1]) };
+        panic!("fork failed: {}", std::io::Error::last_os_error());
+    }
+    let child = BlockedChild {
+        pid,
+        release: go[1],
+    };
 
     drop(held);
     let error = lock_store(temp.path(), &data)
@@ -144,10 +192,7 @@ fn a_forked_child_holds_the_store_lock_until_it_execs() {
         "the holder is recorded as this process: {error}"
     );
 
-    assert_eq!(unsafe { libc::write(go[1], [1u8].as_ptr().cast(), 1) }, 1);
-    unsafe { libc::close(go[1]) };
-    let mut status = 0;
-    assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+    let status = child.release();
     assert!(
         libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
         "the child exec'd: {status}"
