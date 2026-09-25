@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -27,6 +29,21 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
         diagnostics = gents::native_logging::diagnostics_hint(),
         "desktop logs initialized"
     );
+}
+
+/// Where the managed runtime service appends its stderr: failures that occur
+/// before tracing starts, the runtime's exit error, and panics.
+pub fn runtime_error_log(desktop_root: &Path) -> PathBuf {
+    desktop_root.join("logs").join("runtime-errors.log")
+}
+
+/// The platform log instructions plus the managed runtime's error log.
+pub fn diagnostics_hint(desktop_root: &Path) -> String {
+    format!(
+        "{}. Runtime startup errors: {}",
+        gents::native_logging::diagnostics_hint(),
+        runtime_error_log(desktop_root).display()
+    )
 }
 
 fn default_env_filter() -> EnvFilter {

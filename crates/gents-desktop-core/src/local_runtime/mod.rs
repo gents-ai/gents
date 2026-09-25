@@ -22,6 +22,9 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long discovery waits for a bound runtime to report it finished starting.
+const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
+const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct DesktopInitOptions {
@@ -367,6 +370,7 @@ pub(crate) async fn discover_standard_runtime(
         .timeout(HTTP_TIMEOUT)
         .build()
         .context("building local runtime HTTP client")?;
+    await_serving_runtime(&client, &runtime).await?;
     let api_base = p2p_api_base(&runtime.graphql)?;
     let shareable_address: ShareableAddressResponse =
         http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
@@ -392,6 +396,40 @@ pub(crate) async fn discover_standard_runtime(
         p2p_peer_id,
         p2p_listen_address,
     })
+}
+
+/// A runtime.json left by an earlier process names a runtime that may still be
+/// migrating or not listening at all. Discovery proceeds only once the live
+/// `/status` reports this identity ready.
+async fn await_serving_runtime(
+    client: &reqwest::Client,
+    runtime: &StoredRuntimeState,
+) -> Result<()> {
+    let status_url = runtime_status_url(&runtime.graphql)?;
+    let deadline = tokio::time::Instant::now() + SERVE_READY_TIMEOUT;
+    loop {
+        let status: Value = http_get_json(client, &status_url).await?;
+        if serving_runtime_ready(&status, &runtime.agent_did)? {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "the local Gents runtime at {status_url} did not finish starting within {} seconds",
+                SERVE_READY_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(SERVE_READY_POLL).await;
+    }
+}
+
+fn serving_runtime_ready(status: &Value, expected_did: &str) -> Result<bool> {
+    let live_did = string_at(status, "/agent_did").unwrap_or_default();
+    if live_did != expected_did {
+        anyhow::bail!(
+            "the runtime answering for this home serves {live_did:?}, not {expected_did}"
+        );
+    }
+    Ok(gents_protocol::serve_lifecycle::ServeLifecycle::observed(status).is_ready())
 }
 
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {

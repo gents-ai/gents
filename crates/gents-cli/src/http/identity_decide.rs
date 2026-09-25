@@ -324,6 +324,7 @@ mod tests {
             activation_runtime,
             activation_observation,
             Default::default(),
+            Default::default(),
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;

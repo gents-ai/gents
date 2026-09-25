@@ -38,15 +38,36 @@ impl ClientCore {
         paths: DesktopPaths,
         options: ClientCoreOptions,
     ) -> Result<Self> {
+        Self::start_reporting_stages(paths, options, None).await
+    }
+
+    /// Starts the client and publishes the name of each startup stage as it
+    /// completes, so a caller bounding the start can say where it stalled.
+    pub async fn start_with_paths_reporting_stages(
+        paths: DesktopPaths,
+        completed_stage: watch::Sender<&'static str>,
+    ) -> Result<Self> {
+        Self::start_reporting_stages(paths, ClientCoreOptions::default(), Some(completed_stage))
+            .await
+    }
+
+    async fn start_reporting_stages(
+        paths: DesktopPaths,
+        options: ClientCoreOptions,
+        completed_stage: Option<watch::Sender<&'static str>>,
+    ) -> Result<Self> {
         let started = Instant::now();
         let mut previous = started;
         let mut checkpoint = |stage: &'static str| {
             let now = Instant::now();
-            tracing::debug!(target: "gents_desktop_core::startup", stage,
+            tracing::info!(target: "gents_desktop_core::startup", stage,
                 stage_ms = now.duration_since(previous).as_millis(),
                 elapsed_ms = now.duration_since(started).as_millis(),
                 "client startup stage completed");
             previous = now;
+            if let Some(completed_stage) = completed_stage.as_ref() {
+                completed_stage.send_replace(stage);
+            }
         };
         paths.ensure_root_dirs().await?;
         gents::storage_backend::reject_legacy_store(paths.node_data_dir())?;

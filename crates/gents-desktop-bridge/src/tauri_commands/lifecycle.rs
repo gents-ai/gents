@@ -19,6 +19,10 @@ use crate::types::{
 };
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
+/// A client start that has not finished by then fails, so shutdown, init and
+/// quit, which wait for an in-flight start, are never held indefinitely.
+const CLIENT_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const NO_STAGE_COMPLETED: &str = "none";
 
 #[tauri::command]
 pub async fn desktop_bootstrap_summary(
@@ -357,12 +361,24 @@ async fn start_client_core_async(
     paths: gents_desktop_core::client::DesktopPaths,
 ) -> Result<ClientCore, BridgeError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
     std::thread::Builder::new()
         .name("desktop-client-start".to_string())
         .stack_size(CLIENT_START_STACK_SIZE)
         .spawn(move || {
-            let result = tauri::async_runtime::block_on(ClientCore::start_with_paths(paths));
-            let _ = tx.send(result);
+            tauri::async_runtime::block_on(async move {
+                let result = ClientCore::start_with_paths_reporting_stages(paths, stage_tx).await;
+                // The start outlived its bound and nobody owns the core. Close
+                // it so its store is released for the next start.
+                if let Err(Ok(core)) = tx.send(result) {
+                    tracing::warn!(
+                        "desktop client start: closing a core that opened after its start timed out"
+                    );
+                    if let Err(error) = core.shutdown().await {
+                        tracing::warn!(error = %error, "desktop client start: failed to close the late core");
+                    }
+                }
+            })
         })
         .map_err(|error| {
             BridgeError::new(
@@ -370,13 +386,28 @@ async fn start_client_core_async(
                 format!("spawning desktop client startup thread: {error}"),
             )
         })?;
+    bounded_client_start(rx, stage_rx, CLIENT_START_TIMEOUT).await
+}
 
-    match rx.await {
-        Ok(Ok(core)) => Ok(core),
-        Ok(Err(error)) => Err(BridgeError::untyped(error.to_string())),
-        Err(_) => Err(BridgeError::new(
+async fn bounded_client_start<T>(
+    result: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
+    completed_stage: watch::Receiver<&'static str>,
+    timeout: std::time::Duration,
+) -> Result<T, BridgeError> {
+    match tokio::time::timeout(timeout, result).await {
+        Ok(Ok(Ok(core))) => Ok(core),
+        Ok(Ok(Err(error))) => Err(BridgeError::untyped(error.to_string())),
+        Ok(Err(_)) => Err(BridgeError::new(
             BridgeErrorCode::ClientStartFailed,
             "desktop client startup thread panicked or dropped its result",
+        )),
+        Err(_) => Err(BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            format!(
+                "the desktop client did not start within {} seconds (last completed stage: {})",
+                timeout.as_secs(),
+                *completed_stage.borrow()
+            ),
         )),
     }
 }
@@ -484,6 +515,32 @@ mod tests {
         assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
         assert!(error.message.contains("shut down"));
         assert!(ensure_client_stopped_for_init(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_stalled_client_start_fails_with_its_last_completed_stage() {
+        let (_result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+        let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
+        stage_tx.send_replace("embedded_node");
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            bounded_client_start(result_rx, stage_rx, std::time::Duration::from_millis(20)),
+        )
+        .await
+        .expect("the start is bounded")
+        .expect_err("a stalled start fails");
+        assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
+        assert!(error.message.contains("embedded_node"), "{}", error.message);
+
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let (_stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
+        result_tx.send(Ok(7)).unwrap();
+        assert_eq!(
+            bounded_client_start(result_rx, stage_rx, std::time::Duration::from_secs(5))
+                .await
+                .unwrap(),
+            7
+        );
     }
 
     #[test]

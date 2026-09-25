@@ -10,6 +10,7 @@ import {
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
 import { Mark } from "../ui/app/Mark";
+import { DiagnosticsHint } from "../ui/screens/setup/SetupProgress";
 import type { ManagedServerResetResult } from "@source-inc/gents-desktop-client";
 
 const STARTUP_ASIDES = [
@@ -32,6 +33,7 @@ type StartupScreenProps = {
   onSkipManagedServerWait?: () => void;
   onOpenLoginItems?: () => Promise<void>;
   onRestartManagedServer?: () => Promise<void>;
+  diagnosticsHint?: string | null;
 };
 
 export function StartupScreen({
@@ -45,6 +47,7 @@ export function StartupScreen({
   onSkipManagedServerWait,
   onOpenLoginItems,
   onRestartManagedServer,
+  diagnosticsHint = null,
 }: StartupScreenProps) {
   const [asideIndex, setAsideIndex] = useState(0);
   const [resetConfirmed, setResetConfirmed] = useState(false);
@@ -147,6 +150,7 @@ export function StartupScreen({
             <p className="text-sm text-destructive">
               {error ?? "Gents could not finish starting."}
             </p>
+            <DiagnosticsHint hint={diagnosticsHint} />
             {phase === "managed-server-error" && managedServerReset ? (
               <div className="grid gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
                 <p>

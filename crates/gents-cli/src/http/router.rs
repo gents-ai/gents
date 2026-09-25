@@ -59,6 +59,26 @@ pub(crate) struct RuntimeHttpState {
     /// This node's `client` route collection versions, set once by serve after
     /// its migrations register every collection.
     pub(crate) replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    pub(crate) serve_lifecycle: ServeLifecycleHandle,
+}
+
+/// Serve's `/status` lifecycle. It becomes ready only after serve writes
+/// `runtime.json` for this process, and never returns to starting.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ServeLifecycleHandle(Arc<std::sync::OnceLock<()>>);
+
+impl ServeLifecycleHandle {
+    pub(crate) fn mark_ready(&self) {
+        let _ = self.0.set(());
+    }
+
+    pub(crate) fn current(&self) -> gents_protocol::serve_lifecycle::ServeLifecycle {
+        if self.0.get().is_some() {
+            gents_protocol::serve_lifecycle::ServeLifecycle::Ready
+        } else {
+            gents_protocol::serve_lifecycle::ServeLifecycle::Starting
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -113,6 +133,7 @@ pub(crate) fn runtime_contract_router(
     activation_runtime: Arc<OnceCell<gents::Gents>>,
     activation_observation: watch::Receiver<RuntimeActivationObservation>,
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    serve_lifecycle: ServeLifecycleHandle,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -139,6 +160,7 @@ pub(crate) fn runtime_contract_router(
         activation_runtime,
         activation_observation,
         replicated_schema,
+        serve_lifecycle,
     };
 
     let mut router = Router::new()
@@ -573,6 +595,10 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
             replicated_schema_status(&state.replicated_schema),
         );
+        map.insert(
+            gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
+            json!(state.serve_lifecycle.current()),
+        );
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
@@ -825,6 +851,7 @@ mod tests {
             activation_runtime,
             activation_observation,
             replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
         }
     }
 
@@ -940,6 +967,25 @@ mod tests {
         assert_eq!(sync.next_pending_retry_in_ms, Some(71));
         assert_eq!(sync.pending_dag_terminal_quarantined, 73);
         assert_eq!(sync.quarantined_pending_dags, 79);
+    }
+
+    #[tokio::test]
+    async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
+        async fn lifecycle(state: &RuntimeHttpState) -> Value {
+            let response = status_handler(State(state.clone())).await;
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("status body");
+            serde_json::from_slice::<Value>(&body).expect("status json")
+                [gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD]
+                .clone()
+        }
+        let mut state = state();
+        state.graphql = "http://127.0.0.1:9/api/v0/graphql".to_string();
+
+        assert_eq!(lifecycle(&state).await, json!("starting"));
+        state.serve_lifecycle.mark_ready();
+        assert_eq!(lifecycle(&state).await, json!("ready"));
     }
 
     #[tokio::test]

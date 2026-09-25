@@ -3,9 +3,11 @@ use super::{
     augment_peer_status_payload_for_desktop, dangerously_overwrite_desktop_home,
     default_agent_home, graphql_endpoint_for_desktop_access, load_standard_runtime_identity,
     render_human_summary, reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url,
+    serving_runtime_ready,
     DesktopInitSummary, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
+use serde_json::json;
 
 fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
@@ -230,4 +232,22 @@ fn dangerously_overwrite_desktop_home_removes_root_dir() {
     dangerously_overwrite_desktop_home(&desktop_root).expect("overwrite desktop home");
 
     assert!(!desktop_root.exists());
+}
+
+#[test]
+fn discovery_waits_for_the_live_runtime_to_report_ready() {
+    let did = "did:key:z6MkLocal";
+    assert!(!serving_runtime_ready(&json!({ "agent_did": did }), did).unwrap());
+    assert!(
+        !serving_runtime_ready(&json!({ "agent_did": did, "lifecycle": "starting" }), did).unwrap()
+    );
+    assert!(
+        serving_runtime_ready(&json!({ "agent_did": did, "lifecycle": "ready" }), did).unwrap()
+    );
+    let error = serving_runtime_ready(
+        &json!({ "agent_did": "did:key:z6MkOther", "lifecycle": "ready" }),
+        did,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("did:key:z6MkOther"), "{error}");
 }

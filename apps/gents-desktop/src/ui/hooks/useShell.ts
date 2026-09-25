@@ -157,6 +157,7 @@ export function useShell(
       onResetManagedServer: d.onResetManagedServer,
       managedServerReset: d.managedServerReset,
       managedServerWait: d.managedServerWait,
+      diagnosticsHint: d.diagnosticsHint,
       skipManagedServerWait: d.onSkipManagedServerWait,
       restartManagedServer: d.canRestartManagedServer
         ? d.onRestartManagedServer

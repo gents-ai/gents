@@ -90,6 +90,27 @@ export function useDesktopClientLifecycle({
   const managedServerWaitAbort = useRef<AbortController | null>(null);
   const [managedServerFailure, setManagedServerFailure] =
     useState<ManagedServerStartupError | null>(null);
+  const [startupDiagnosticsHint, setStartupDiagnosticsHint] = useState<string | null>(
+    null,
+  );
+  const managedServerFailed = startupPhase === "managed-server-error";
+
+  // A managed-server failure precedes the first snapshot read; later startup
+  // errors already have one. The bootstrap summary of a client-less snapshot
+  // names where the logs are, and is read here without publishing it.
+  useEffect(() => {
+    if (!managedServerFailed || startupDiagnosticsHint || snapshot) return;
+    let current = true;
+    Promise.resolve()
+      .then(() => api.fetchDesktopSnapshot())
+      .then((next) => {
+        if (current) setStartupDiagnosticsHint(next.bootstrap.diagnosticsHint || null);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [api, managedServerFailed, startupDiagnosticsHint, snapshot]);
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -355,6 +376,7 @@ export function useDesktopClientLifecycle({
     onResetManagedServer,
     managedServerReset,
     managedServerWait,
+    diagnosticsHint: snapshot?.bootstrap.diagnosticsHint || startupDiagnosticsHint,
     onSkipManagedServerWait,
     canRestartManagedServer: Boolean(
       managedServerFailure?.status.agentName &&

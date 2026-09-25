@@ -211,6 +211,7 @@ mod tests {
             activation_runtime,
             activation_observation,
             replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
         }
     }
 

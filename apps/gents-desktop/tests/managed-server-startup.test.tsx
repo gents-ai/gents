@@ -136,6 +136,31 @@ describe("managed server startup waits", () => {
     expect(skip).toHaveBeenCalledOnce();
   });
 
+  it("names where the logs are when launch startup fails", () => {
+    const { rerender } = render(
+      <StartupScreen
+        diagnosticsHint="Console.app: subsystem ai.gents. Runtime startup errors: /desk/logs/runtime-errors.log"
+        error="the native Gents service exited normally before it published runtime readiness"
+        managedServerSupported
+        onRetry={vi.fn(async () => undefined)}
+        phase="managed-server-error"
+      />,
+    );
+    expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
+      "/desk/logs/runtime-errors.log",
+    );
+    rerender(
+      <StartupScreen
+        diagnosticsHint="Console.app: subsystem ai.gents"
+        error={null}
+        managedServerSupported
+        onRetry={vi.fn(async () => undefined)}
+        phase="checking-managed-server"
+      />,
+    );
+    expect(screen.queryByTestId("diagnostics-hint")).not.toBeInTheDocument();
+  });
+
   it("lets launch continue without the local agent while approval is pending", async () => {
     const api = {
       managedServerStatus: vi.fn(async () =>
@@ -321,6 +346,9 @@ describe("first-run local agent startup", () => {
     expect(steps[0]).toHaveTextContent("Forge is running as did:key:z6MkFo");
     expect(log).toHaveTextContent("Load configuration");
     expect(screen.getByText("Try again")).toBeInTheDocument();
+    expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
+      `Logs: ${bootstrap.diagnosticsHint}`,
+    );
     expect(screen.queryByTestId("setup-continue")).not.toBeInTheDocument();
   });
 

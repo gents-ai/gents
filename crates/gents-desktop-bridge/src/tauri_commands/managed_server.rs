@@ -9,12 +9,15 @@ use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::{
     fetch_runtime_connection_payload, init_standard_local_runtime, DesktopInitOptions,
 };
+use gents_protocol::serve_lifecycle::ServeLifecycle;
 
 use crate::config::ManagedServerPolicy;
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
-use crate::tauri_commands::service_executable::resolve_service_executable;
+use crate::tauri_commands::service_executable::{
+    ensure_installable_location, resolve_service_executable,
+};
 use crate::types::{
     ManagedServerResetRequest, ManagedServerResetResult, ManagedServerRestartRequest,
     ManagedServerRootValidation, ManagedServerRootValidationRequest, ManagedServerStartRequest,
@@ -515,9 +518,11 @@ async fn start_managed_server<'a, R: Runtime>(
             let enabled = initial_native.enabled;
             exited_while_loaded = initial_native.job_loaded
                 && !initial_native.running
-                && run_native(native_service(app, state)?, |service| service.last_exit())
-                    .await
-                    .is_ok_and(|exit| exit.is_some());
+                && run_native(native_service(app, state)?, |service| {
+                    Ok(service.last_exit()?.is_some() || service.installed_executable_differs()?)
+                })
+                .await
+                .unwrap_or(false);
             if initial_native.is_active_or_transitioning()
                 && !initial_native.requires_approval
                 && !exited_while_loaded
@@ -569,9 +574,9 @@ async fn start_managed_server<'a, R: Runtime>(
 
     let provisioned: anyhow::Result<()> = async {
         if exited_while_loaded {
-            // The loaded job will not run again by itself (a clean exit) or
-            // is crash looping. Unload it so an updated definition can be
-            // installed and the launch below starts it fresh.
+            // The loaded job will not run again by itself (a clean exit or a
+            // runtime that moved) or is crash looping. Unload it so an updated
+            // definition can be installed and the launch below starts it fresh.
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
         ensure_default_port_identity(&agent_home).await?;
@@ -1105,7 +1110,7 @@ where
                     "port {port} is already in use by {who}. Stop that server before starting the managed agent."
                 );
             }
-            PortReadiness::NotListening => {}
+            PortReadiness::NotListening | PortReadiness::Booting => {}
         }
         match native().await? {
             NativeProgress::AwaitingApproval => return Ok(Readiness::ApprovalRequired),
@@ -1273,7 +1278,12 @@ pub async fn desktop_managed_server_open_login_items<R: Runtime>(
 
 enum PortReadiness {
     Ready(ManagedServerStatus),
-    Foreign { port: u16, live_did: String },
+    Foreign {
+        port: u16,
+        live_did: String,
+    },
+    /// This home's runtime is bound but has not reported it finished starting.
+    Booting,
     NotListening,
 }
 
@@ -1293,15 +1303,27 @@ async fn observe_port_readiness(
         return Ok(PortReadiness::NotListening);
     }
     let initialized_did = read_initialized_did(agent_home).await;
-    if ensure_matching_identity(initialized_did.as_deref(), &live_did, config.http_port).is_err() {
-        return Ok(PortReadiness::Foreign {
-            port: config.http_port,
-            live_did,
-        });
+    Ok(port_readiness_from_payload(
+        payload,
+        live_did,
+        initialized_did.as_deref(),
+        config.http_port,
+    ))
+}
+
+fn port_readiness_from_payload(
+    payload: serde_json::Value,
+    live_did: String,
+    initialized_did: Option<&str>,
+    port: u16,
+) -> PortReadiness {
+    if ensure_matching_identity(initialized_did, &live_did, port).is_err() {
+        return PortReadiness::Foreign { port, live_did };
     }
-    Ok(PortReadiness::Ready(managed_status_from_payload(
-        payload, &live_did,
-    )))
+    if !ServeLifecycle::observed(&payload).is_ready() {
+        return PortReadiness::Booting;
+    }
+    PortReadiness::Ready(managed_status_from_payload(payload, &live_did))
 }
 
 fn validate_ready_runtime(
@@ -1384,12 +1406,35 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
             "refreshed the Gents runtime from the application package"
         );
     }
+    if let Err(error) = ensure_installable_location(executable.service_path()) {
+        tracing::warn!(
+            target: "gents_desktop::managed_server",
+            error = %error.message,
+            "leaving the installed service definition unchanged"
+        );
+        return Ok(());
+    }
     let service = native_service(app, state)?;
     let status = service.status().map_err(native_error)?;
     if !status.installed {
         return Ok(());
     }
     if status.is_active_or_transitioning() {
+        // A loaded job that is not running and names a runtime that moved
+        // cannot launch again. Unload it so its definition can be replaced.
+        if !status.running
+            && service
+                .installed_executable_differs()
+                .map_err(native_error)?
+        {
+            tracing::info!(
+                target: "gents_desktop::managed_server",
+                runtime = %executable.service_path().display(),
+                "reinstalling the stopped agent service, whose definition names a runtime that moved"
+            );
+            service.stop(false).map_err(native_error)?;
+            return service.install().map_err(native_error);
+        }
         // `install` refuses a live Linux job, and on macOS it bootouts a
         // loaded job whose definition differs. Leave that job alone.
         tracing::info!(
@@ -1414,6 +1459,7 @@ fn build_native_service<R: Runtime>(
     })?;
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
     if install_runtime {
+        ensure_installable_location(executable.service_path())?;
         executable.install()?;
     }
     let mut config = gents_server::native_service::NativeServiceConfig::new(
@@ -1421,6 +1467,9 @@ fn build_native_service<R: Runtime>(
         executable.service_path().to_path_buf(),
     )
     .map_err(native_error)?;
+    config.stderr_path = Some(crate::logging::runtime_error_log(
+        state.policy.desktop_paths.root(),
+    ));
     // Login Items shows the code-signing personal name unless the agent
     // names the desktop bundle that installed it.
     let bundle_id = app.config().identifier.clone();
@@ -1540,26 +1589,135 @@ async fn start_managed_runtime_pairing(
     let cancel = tokio_util::sync::CancellationToken::new();
     managed.pairing_cancel = Some(cancel.clone());
     managed.pairing_task = Some(tauri::async_runtime::spawn(async move {
-        if let Err(error) =
-            ensure_managed_runtime_pairing(core, &agent_home, &target, &cancel).await
-        {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                agent_did = %target.agent_did,
-                error = %error,
-                "background managed runtime pairing failed"
-            );
+        let paired = retry_managed_pairing(
+            &cancel,
+            MANAGED_PAIRING_ATTEMPTS,
+            MANAGED_PAIRING_RETRY_DELAY,
+            || ensure_managed_runtime_pairing(Arc::clone(&core), &agent_home, &target, &cancel),
+        )
+        .await;
+        match paired {
+            Ok(()) => {}
+            Err(_) if cancel.is_cancelled() => {
+                tracing::info!(
+                    target: "gents_desktop::managed_server",
+                    agent_did = %target.agent_did,
+                    "background managed runtime pairing was cancelled"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    agent_did = %target.agent_did,
+                    error = %error,
+                    "background managed runtime pairing failed"
+                );
+            }
         }
     }));
 }
 
-/// How long a just-started runtime may take to publish its replicated schema,
-/// which it does only after its migrations finish.
+/// Background pairing retries a failed attempt this many times in total.
+const MANAGED_PAIRING_ATTEMPTS: u32 = 4;
+/// The wait before retry `n` is `n` times this.
+const MANAGED_PAIRING_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// How long one attempt waits for its approved enrollment to become chat-ready.
+const MANAGED_PAIRING_APPROVAL_WINDOW: Duration = Duration::from_secs(30);
+const MANAGED_PAIRING_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MANAGED_PAIRING_CANCELLED: &str = "managed runtime pairing was cancelled";
+
+/// Runs pairing attempts until one succeeds, the attempts run out, or the
+/// pairing is cancelled.
+async fn retry_managed_pairing<A, AF>(
+    cancel: &tokio_util::sync::CancellationToken,
+    attempts: u32,
+    delay: Duration,
+    mut attempt: A,
+) -> Result<(), String>
+where
+    A: FnMut() -> AF,
+    AF: Future<Output = Result<(), String>>,
+{
+    let mut failure = String::new();
+    for number in 1..=attempts {
+        match attempt().await {
+            Ok(()) => return Ok(()),
+            Err(error) if cancel.is_cancelled() => return Err(error),
+            Err(error) => failure = error,
+        }
+        if number == attempts {
+            break;
+        }
+        tracing::info!(
+            target: "gents_desktop::managed_server",
+            attempt = number,
+            attempts,
+            error = %failure,
+            "managed runtime pairing attempt failed; retrying"
+        );
+        tokio::select! {
+            () = tokio::time::sleep(delay * number) => {}
+            () = cancel.cancelled() => return Err(MANAGED_PAIRING_CANCELLED.to_string()),
+        }
+    }
+    Err(format!("{failure} (after {attempts} attempts)"))
+}
+
+enum PairingApproval {
+    Committed,
+    NotVisibleYet,
+}
+
+/// Approves an authored enrollment and waits for it to become chat-ready.
+/// Cancellation is observed between steps; each step is left to finish.
+async fn await_managed_pairing_approval<P, PF, A, AF, R, RF>(
+    cancel: &tokio_util::sync::CancellationToken,
+    window: Duration,
+    interval: Duration,
+    mut paired: P,
+    mut approve: A,
+    mut repair: R,
+) -> Result<(), String>
+where
+    P: FnMut() -> PF,
+    PF: Future<Output = bool>,
+    A: FnMut() -> AF,
+    AF: Future<Output = Result<PairingApproval, String>>,
+    R: FnMut() -> RF,
+    RF: Future<Output = Result<(), String>>,
+{
+    let deadline = tokio::time::Instant::now() + window;
+    let mut approval_committed = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(MANAGED_PAIRING_CANCELLED.to_string());
+        }
+        if paired().await {
+            return Ok(());
+        }
+        if !approval_committed {
+            match approve().await? {
+                PairingApproval::Committed => approval_committed = true,
+                PairingApproval::NotVisibleYet => {}
+            }
+        }
+        repair().await?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err("timed out waiting for managed runtime pairing".to_string());
+        }
+        tokio::select! {
+            () = tokio::time::sleep(interval) => {}
+            () = cancel.cancelled() => return Err(MANAGED_PAIRING_CANCELLED.to_string()),
+        }
+    }
+}
+
+/// How long a just-started runtime may take to report it finished starting.
+/// Its replicated schema and enrollment offer are published by then.
 const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
 
 /// Fetch the managed runtime's `/status`, retrying within
-/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or has not yet
-/// published its replicated schema.
+/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or still starting.
 async fn fetch_managed_runtime_status(
     graphql: &str,
     cancel: &tokio_util::sync::CancellationToken,
@@ -1577,11 +1735,9 @@ async fn fetch_managed_runtime_status(
             }
             () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
         };
-        let published = fetched.as_ref().is_ok_and(|status| {
-            !status
-                .get(gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD)
-                .is_some_and(serde_json::Value::is_null)
-        });
+        let published = fetched
+            .as_ref()
+            .is_ok_and(|status| ServeLifecycle::observed(status).is_ready());
         if published || tokio::time::Instant::now() >= deadline {
             return fetched;
         }
@@ -1632,28 +1788,26 @@ async fn ensure_managed_runtime_pairing(
     let status = fetch_managed_runtime_status(&target.graphql, cancel)
         .await
         .map_err(|error| format!("loading managed runtime enrollment offer: {error}"))?;
+    // Authoring installs and unwinds bootstrap replication state, so it is
+    // not interrupted; cancellation is observed once it returns.
     let enrollment = core
         .request_status_enrollment_with_label(&status, Some(&target.agent_name))
         .await
         .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut approval_committed = false;
-    loop {
-        if core.peer_records().await.iter().any(|peer| {
-            peer.agent_did == target.agent_did
-                && peer.is_enrollment()
-                && peer.is_managed_runtime()
-                && peer.is_chat_ready_at(chrono::Utc::now())
-        }) {
-            tracing::info!(
-                target: "gents_desktop::managed_server",
-                agent_did = %target.agent_did,
-                "managed runtime desktop pairing is ready"
-            );
-            return Ok(());
-        }
-        if !approval_committed {
+    await_managed_pairing_approval(
+        cancel,
+        MANAGED_PAIRING_APPROVAL_WINDOW,
+        MANAGED_PAIRING_POLL_INTERVAL,
+        || async {
+            core.peer_records().await.iter().any(|peer| {
+                peer.agent_did == target.agent_did
+                    && peer.is_enrollment()
+                    && peer.is_managed_runtime()
+                    && peer.is_chat_ready_at(chrono::Utc::now())
+            })
+        },
+        || async {
             match gents_server::server_host::approve_managed_client_enrollment(
                 agent_home,
                 &target.graphql,
@@ -1661,7 +1815,7 @@ async fn ensure_managed_runtime_pairing(
             )
             .await
             {
-                Ok(()) => approval_committed = true,
+                Ok(()) => Ok(PairingApproval::Committed),
                 Err(error) => {
                     let message = format!("{error:#}");
                     if enrollment_request_is_not_visible_yet(&message) {
@@ -1669,20 +1823,26 @@ async fn ensure_managed_runtime_pairing(
                             request_id = %enrollment.request_id,
                             "managed enrollment request is not yet visible to operator approval"
                         );
+                        Ok(PairingApproval::NotVisibleYet)
                     } else {
-                        return Err(format!("approving managed runtime enrollment: {message}"));
+                        Err(format!("approving managed runtime enrollment: {message}"))
                     }
                 }
             }
-        }
-        core.request_p2p_repair()
-            .await
-            .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))?;
-        if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for managed runtime pairing".to_string());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+        },
+        || async {
+            core.request_p2p_repair()
+                .await
+                .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))
+        },
+    )
+    .await?;
+    tracing::info!(
+        target: "gents_desktop::managed_server",
+        agent_did = %target.agent_did,
+        "managed runtime desktop pairing is ready"
+    );
+    Ok(())
 }
 
 fn enrollment_request_is_not_visible_yet(message: &str) -> bool {
@@ -1747,6 +1907,11 @@ async fn matching_external_server(
     }
     let initialized_did = read_initialized_did(agent_home).await;
     if ensure_matching_identity(initialized_did.as_deref(), &live_did, config.http_port).is_err() {
+        return Ok(None);
+    }
+    // A booting runtime is observed through its native service until it
+    // reports ready; discovery and pairing need its runtime.json.
+    if !ServeLifecycle::observed(&payload).is_ready() {
         return Ok(None);
     }
     Ok(Some(managed_status_from_payload(payload, &live_did)))
@@ -2836,6 +3001,178 @@ mod tests {
         assert_eq!(probes.load(Ordering::SeqCst), 6);
     }
 
+    #[test]
+    fn this_homes_runtime_is_ready_only_once_it_reports_ready() {
+        let did = "did:key:managed";
+        let payload = |lifecycle: serde_json::Value| {
+            serde_json::json!({
+                "agent_did": did,
+                "agent_name": "Managed",
+                "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+                gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: lifecycle,
+            })
+        };
+        for booting in [serde_json::Value::Null, serde_json::json!("starting")] {
+            assert!(matches!(
+                port_readiness_from_payload(payload(booting), did.to_string(), Some(did), 9191),
+                PortReadiness::Booting
+            ));
+        }
+        let PortReadiness::Ready(status) = port_readiness_from_payload(
+            payload(serde_json::json!("ready")),
+            did.to_string(),
+            Some(did),
+            9191,
+        ) else {
+            panic!("a runtime that reports ready is ready");
+        };
+        assert_eq!(status.agent_did.as_deref(), Some(did));
+        assert!(matches!(
+            port_readiness_from_payload(
+                payload(serde_json::json!("ready")),
+                did.to_string(),
+                Some("did:key:other"),
+                9191,
+            ),
+            PortReadiness::Foreign { port: 9191, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_booting_runtime_is_waited_on_until_it_reports_ready() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let probes = AtomicUsize::new(0);
+        let ready = await_runtime_readiness(
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            || {
+                let attempt = probes.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(if attempt < 3 {
+                        PortReadiness::Booting
+                    } else {
+                        PortReadiness::Ready(ready_status("did:key:booted"))
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect("a bound runtime that is still starting is waited on");
+        assert!(matches!(ready, Readiness::Ready(_)));
+        assert_eq!(probes.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn pairing_retries_a_failed_attempt_within_its_bounds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let calls = AtomicU32::new(0);
+        retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || async {
+            if calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err("runtime_not_ready".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .expect("a later attempt pairs");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        let calls = AtomicU32::new(0);
+        let error = retry_managed_pairing(&cancel, 3, Duration::from_millis(1), || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err::<(), _>("offer_mint_failed".to_string())
+        })
+        .await
+        .expect_err("attempts are bounded");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(
+            error.contains("offer_mint_failed") && error.contains("3 attempts"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_retry_ends_when_cancelled_during_its_backoff() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let retry = retry_managed_pairing(&cancel, 4, Duration::from_secs(60), || async {
+            Err::<(), _>("runtime_not_ready".to_string())
+        });
+        let cancelled = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(retry, cancelled)
+        })
+        .await
+        .expect("cancellation ends the backoff");
+        assert_eq!(result.unwrap_err(), MANAGED_PAIRING_CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_approval_wait_returns_without_waiting_out_its_window() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let approvals = AtomicU32::new(0);
+        let wait = await_managed_pairing_approval(
+            &cancel,
+            Duration::from_secs(600),
+            Duration::from_millis(5),
+            || async { false },
+            || async {
+                approvals.fetch_add(1, Ordering::SeqCst);
+                Ok(PairingApproval::NotVisibleYet)
+            },
+            || async { Ok(()) },
+        );
+        let cancelled = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(wait, cancelled)
+        })
+        .await
+        .expect("a drain is not held for the approval window");
+        assert_eq!(result.unwrap_err(), MANAGED_PAIRING_CANCELLED);
+        assert!(
+            approvals.load(Ordering::SeqCst) > 1,
+            "approval was retried while waiting"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approval_is_committed_once_then_waits_for_chat_readiness() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (checks, approvals, repairs) =
+            (AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0));
+        await_managed_pairing_approval(
+            &cancel,
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            || async { checks.fetch_add(1, Ordering::SeqCst) >= 3 },
+            || async {
+                approvals.fetch_add(1, Ordering::SeqCst);
+                Ok(PairingApproval::Committed)
+            },
+            || async {
+                repairs.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .expect("paired");
+        assert_eq!(approvals.load(Ordering::SeqCst), 1);
+        assert_eq!(repairs.load(Ordering::SeqCst), 3);
+    }
+
     #[tokio::test]
     async fn readiness_wait_fails_as_soon_as_the_service_stops() {
         let error = await_runtime_readiness(
@@ -3794,6 +4131,7 @@ mod tests {
             serde_json::json!({
                 "agent_did": agent_did,
                 gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: next_release,
+                gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
             })
             .to_string(),
         )

@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
-use crate::http::router::RuntimeActivationObservation;
+use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
@@ -697,6 +697,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
+    let serve_lifecycle = ServeLifecycleHandle::default();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -714,6 +715,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         activation_runtime.clone(),
         activation_rx,
         replicated_schema.clone(),
+        serve_lifecycle.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -1125,6 +1127,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             p2p_admission: p2p_admission_state,
         },
     )?;
+    // Local discovery reads runtime.json, so /status reports ready only after
+    // it names this process.
+    serve_lifecycle.mark_ready();
 
     // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
     // pager client. Binding follows pack apply and readiness fencing so a

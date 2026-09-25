@@ -50,6 +50,10 @@ pub struct NativeServiceConfig {
     /// Desktop bundle that owns this agent. macOS Login Items otherwise
     /// names the background item after the code-signing identity.
     pub associated_bundle_id: Option<String>,
+    /// Where the service manager appends the runtime's stderr. With the
+    /// native log sink enabled that holds only what precedes or escapes
+    /// tracing: argument errors, the exit error and panics.
+    pub stderr_path: Option<PathBuf>,
 }
 
 impl NativeServiceConfig {
@@ -91,6 +95,7 @@ impl NativeServiceConfig {
                 std::env::var_os("APPIMAGE").as_deref().map(Path::new),
             ),
             associated_bundle_id: None,
+            stderr_path: None,
         })
     }
 
@@ -394,6 +399,11 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             .context("native service definition has no parent")?;
         fs::create_dir_all(parent)
             .with_context(|| format!("creating service directory {}", parent.display()))?;
+        // Neither launchd nor systemd creates a missing log directory.
+        if let Some(log_dir) = self.config.stderr_path.as_deref().and_then(Path::parent) {
+            fs::create_dir_all(log_dir)
+                .with_context(|| format!("creating service log directory {}", log_dir.display()))?;
+        }
         let contents = self.render_definition()?;
         if path.exists() {
             let installed = fs::read(&path)
@@ -697,6 +707,25 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
+    /// Whether the installed definition launches an executable other than
+    /// this configuration's, as it does after the application moved.
+    pub fn installed_executable_differs(&self) -> Result<bool> {
+        let path = self.config.definition_path(self.platform);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let definition = fs::read(&path)
+            .with_context(|| format!("reading native service definition {}", path.display()))?;
+        self.ensure_owned_definition(&definition)?;
+        let text =
+            std::str::from_utf8(&definition).context("native service definition is not UTF-8")?;
+        let installed = match self.platform {
+            NativeServicePlatform::Macos => launchd_executable(text)?,
+            NativeServicePlatform::Linux => systemd_executable(text)?,
+        };
+        Ok(Path::new(&installed) != self.config.executable)
+    }
+
     pub fn uninstall(&self) -> Result<()> {
         // Service definitions are disposable; the configured Gents home and
         // all runtime data deliberately remain untouched.
@@ -911,6 +940,17 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         .transpose()?
         .unwrap_or_default();
     let environment = format!("\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>");
+    let stderr = config
+        .stderr_path
+        .as_deref()
+        .map(|path| -> Result<String> {
+            Ok(format!(
+                "\n  <key>StandardErrorPath</key><string>{}</string>",
+                xml_path(path, "stderr log")?
+            ))
+        })
+        .transpose()?
+        .unwrap_or_default();
     // Without this, macOS attributes the LaunchAgent to the signing
     // certificate's personal name instead of the desktop app.
     let associated_bundle = config
@@ -931,7 +971,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
   <key>Label</key><string>{SERVICE_LABEL}</string>
   <key>ProgramArguments</key><array>
     <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>
-  </array>{environment}{associated_bundle}
+  </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Background</string>
@@ -960,7 +1000,27 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .transpose()?
         .map(|value| format!("Environment={value}\n"))
         .unwrap_or_default();
-    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError=journal\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    let stderr = config
+        .stderr_path
+        .as_deref()
+        .map(systemd_append_target)
+        .transpose()?
+        .unwrap_or_else(|| "journal".to_string());
+    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+}
+
+/// `append:` takes the rest of the line as the path after specifier expansion.
+fn systemd_append_target(path: &Path) -> Result<String> {
+    let path = path
+        .to_str()
+        .context("stderr log path is not valid UTF-8")?;
+    if path
+        .chars()
+        .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
+    {
+        bail!("stderr log path contains an unsupported control character");
+    }
+    Ok(format!("append:{}", path.replace('%', "%%")))
 }
 
 fn xml_path(path: &Path, name: &str) -> Result<String> {
@@ -1022,6 +1082,14 @@ fn installed_home(platform: NativeServicePlatform, definition: &[u8]) -> Result<
 }
 
 fn launchd_home(plist: &str) -> Result<String> {
+    launchd_arguments(plist).map(|mut values| values.swap_remove(3))
+}
+
+fn launchd_executable(plist: &str) -> Result<String> {
+    launchd_arguments(plist).map(|mut values| values.swap_remove(0))
+}
+
+fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
     let value = plist::Value::from_reader_xml(std::io::Cursor::new(plist.as_bytes()))
         .context("parsing launchd property list")?;
     let dictionary = value
@@ -1048,7 +1116,7 @@ fn launchd_home(plist: &str) -> Result<String> {
     {
         bail!("launchd definition is not a Gents foreground server invocation");
     }
-    Ok(values[3].to_owned())
+    Ok(values.into_iter().map(str::to_owned).collect())
 }
 
 fn systemd_home(unit: &str) -> Result<String> {
@@ -1061,6 +1129,17 @@ fn systemd_home(unit: &str) -> Result<String> {
         .split_once(marker)
         .context("systemd definition is not a Gents foreground server invocation")?;
     parse_systemd_quoted(home)
+}
+
+fn systemd_executable(unit: &str) -> Result<String> {
+    let exec = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .context("systemd definition has no ExecStart")?;
+    let (executable, _) = exec
+        .split_once(" \"server\" \"--home\" ")
+        .context("systemd definition is not a Gents foreground server invocation")?;
+    parse_systemd_quoted(executable)
 }
 
 fn parse_systemd_quoted(value: &str) -> Result<String> {
@@ -1311,6 +1390,7 @@ mod tests {
             service_config_dir: root.join("service-config"),
             search_path: Some("/a path/bin:/usr/bin".into()),
             associated_bundle_id: None,
+            stderr_path: None,
         }
     }
 
@@ -1413,6 +1493,72 @@ mod tests {
         assert!(!plist.contains("sh -c"));
         assert!(!plist.contains("AssociatedBundleIdentifiers"));
         assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());
+    }
+
+    #[test]
+    fn service_definitions_append_stderr_to_the_configured_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = config(temp.path());
+        assert!(!render_launchd(&config)
+            .unwrap()
+            .contains("StandardErrorPath"));
+        assert!(render_systemd(&config)
+            .unwrap()
+            .contains("StandardError=journal\n"));
+
+        config.stderr_path = Some(temp.path().join("desk & top/logs/100% runtime.log"));
+        let plist = render_launchd(&config).unwrap();
+        assert!(plist.contains(&format!(
+            "<key>StandardErrorPath</key><string>{}</string>",
+            xml_escape(
+                &temp
+                    .path()
+                    .join("desk & top/logs/100% runtime.log")
+                    .to_string_lossy()
+            )
+            .unwrap()
+        )));
+        assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());
+        let unit = render_systemd(&config).unwrap();
+        assert!(unit.contains(&format!(
+            "StandardError=append:{}\n",
+            temp.path()
+                .join("desk & top/logs/100%% runtime.log")
+                .to_string_lossy()
+        )));
+        assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
+    }
+
+    #[test]
+    fn a_moved_executable_is_detected_in_the_installed_definition() {
+        struct NoCommands;
+        impl CommandRunner for NoCommands {
+            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+                bail!("no service manager in this test")
+            }
+        }
+        for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = config(temp.path());
+            fs::create_dir_all(&config.home).unwrap();
+            fs::create_dir_all(&config.service_config_dir).unwrap();
+            let installed = NativeServiceManager::with_runner(config.clone(), platform, NoCommands);
+            assert!(!installed.installed_executable_differs().unwrap());
+            fs::write(
+                config.definition_path(platform),
+                installed.render_definition().unwrap(),
+            )
+            .unwrap();
+            assert!(!installed.installed_executable_differs().unwrap());
+
+            let mut moved = config.clone();
+            moved.executable = temp.path().join("Applications/gents");
+            let moved = NativeServiceManager::with_runner(moved, platform, NoCommands);
+            assert!(
+                moved.installed_executable_differs().unwrap(),
+                "{platform:?}"
+            );
+        }
     }
 
     #[test]

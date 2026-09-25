@@ -153,6 +153,26 @@ fn classify_with_package(
     ServiceExecutable::InPlace(executable)
 }
 
+/// Refuses to record a runtime the service would lose. macOS runs a
+/// quarantined app from a randomized App Translocation mount and serves a disk
+/// image under `/Volumes` only until it is ejected; a service definition
+/// naming either stops launching once the app quits or moves.
+pub(crate) fn ensure_installable_location(path: &Path) -> Result<(), BridgeError> {
+    let translocated = path
+        .components()
+        .any(|component| component.as_os_str() == "AppTranslocation");
+    if translocated || path.starts_with("/Volumes") {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            format!(
+                "Gents is running from a disk image or a temporary location ({}). Move Gents to the Applications folder, open it from there, and start the agent again.",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Copies the packaged runtime to its durable path, keyed by content so an
 /// upgraded package refreshes it and an unchanged one costs only a read.
 fn install_packaged_executable(source: &Path, installed: &Path) -> std::io::Result<bool> {
@@ -542,6 +562,33 @@ mod tests {
         assert_eq!(error.code, BridgeErrorCode::Backend);
         assert!(error.message.contains(&installed.display().to_string()));
         assert!(!installed.exists());
+    }
+
+    #[test]
+    fn translocated_and_disk_image_runtimes_are_refused() {
+        for refused in [
+            "/private/var/folders/xy/abc/T/AppTranslocation/1F2E/d/Gents.app/Contents/MacOS/gents",
+            "/Volumes/Gents/Gents.app/Contents/MacOS/gents",
+        ] {
+            let error = ensure_installable_location(Path::new(refused)).expect_err(refused);
+            assert_eq!(error.code, BridgeErrorCode::Unsupported);
+            assert!(
+                error.message.contains("Applications folder"),
+                "{}",
+                error.message
+            );
+        }
+        for accepted in [
+            "/Applications/Gents.app/Contents/MacOS/gents",
+            "/Users/me/Applications/Gents.app/Contents/MacOS/gents",
+            "/home/user/.local/share/gents/desktop/runtime/gents",
+            "/usr/bin/gents",
+        ] {
+            assert!(
+                ensure_installable_location(Path::new(accepted)).is_ok(),
+                "{accepted}"
+            );
+        }
     }
 
     #[test]
