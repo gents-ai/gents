@@ -132,7 +132,7 @@ mod tests {
             digest: format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
             language: "rust".to_owned(),
             granted: None,
-            declaration: store::declaration_from_artifact(
+            declaration: crate::commands::plugin::declaration_from_artifact(
                 &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
             )
             .unwrap(),

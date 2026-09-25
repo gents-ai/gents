@@ -76,7 +76,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         format!("{namespace}/{name}@{version} from the registry is not a readable plugin")
     })?;
     verify_plugin_coordinate(&afb, namespace, name, &version)?;
-    let declaration = store::declaration_from_artifact(&afb)?;
+    let declaration = super::declaration_from_artifact(&afb)?;
     gents::plugin::PluginRunner::compile(&bytes, &declaration)
         .with_context(|| format!("admitting plugin {namespace}/{name}@{version}"))?;
 

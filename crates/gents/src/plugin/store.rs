@@ -63,6 +63,16 @@ fn checked_component(kind: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Splits `namespace/name`, refusing anything that is not a plugin coordinate.
+pub fn parse_coordinate(coordinate: &str) -> Result<(&str, &str)> {
+    let (namespace, name) = coordinate
+        .split_once('/')
+        .with_context(|| format!("{coordinate:?} is not a plugin; name it as namespace/name"))?;
+    checked_component("namespace", namespace)?;
+    checked_component("name", name)?;
+    Ok((namespace, name))
+}
+
 fn record_path(home: &Path, namespace: &str, name: &str) -> Result<PathBuf> {
     checked_component("namespace", namespace)?;
     checked_component("name", name)?;
@@ -74,64 +84,43 @@ fn record_path(home: &Path, namespace: &str, name: &str) -> Result<PathBuf> {
 /// One installed plugin's identity: enough to find its bytes in the
 /// content store and to show `gents plugin list` what is installed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct InstalledPlugin {
-    pub(crate) namespace: String,
-    pub(crate) name: String,
-    pub(crate) version: String,
+pub struct InstalledPlugin {
+    pub namespace: String,
+    pub name: String,
+    pub version: String,
     /// `sha256:<hex>`, matching the pack registry's own digest format.
-    pub(crate) digest: String,
-    pub(crate) language: String,
+    pub digest: String,
+    pub language: String,
     /// Authored admission metadata, retained verbatim rather than reconstructed
     /// from artifact capabilities at execution time.
-    pub(crate) declaration: gents::pack::PackPlugin,
+    pub declaration: crate::pack::PackPlugin,
     /// The authority the operator granted at install; absent means sealed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) granted: Option<gents::plugin::Manifold>,
+    pub granted: Option<crate::plugin::Manifold>,
 }
 
 impl InstalledPlugin {
     /// The ceiling a call runs under: the recorded grant.
-    pub(crate) fn ceiling(&self) -> gents::plugin::Manifold {
+    pub fn ceiling(&self) -> crate::plugin::Manifold {
         self.granted
             .clone()
-            .unwrap_or_else(gents::plugin::Manifold::sealed)
+            .unwrap_or_else(crate::plugin::Manifold::sealed)
     }
 }
 
 /// The grant to record when `plugin` is installed as `namespace/name`,
 /// asking for consent only when it wants more than was granted before.
-pub(crate) fn grant_on_install(
+pub fn grant_on_install(
     home: &Path,
     namespace: &str,
-    plugin: &gents::pack::PackPlugin,
+    plugin: &crate::pack::PackPlugin,
     consent: bool,
-) -> Result<Option<gents::plugin::Manifold>> {
+) -> Result<Option<crate::plugin::Manifold>> {
     let previous = read_record(home, namespace, &plugin.name)
         .ok()
         .map(|record| record.ceiling());
-    let granted = gents::plugin::authority::grant_for(plugin, previous.as_ref(), consent)?;
-    Ok((granted != gents::plugin::Manifold::sealed()).then_some(granted))
-}
-
-/// Standalone artifacts have no enclosing pack declaration. Capture their own
-/// manifest and authority once at installation; pack installs retain theirs.
-pub(crate) fn declaration_from_artifact(
-    afb: &afterburner_cloud::Afb,
-) -> Result<gents::pack::PackPlugin> {
-    let package = &afb.manifest.package;
-    Ok(gents::pack::PackPlugin {
-        name: package.name.clone(),
-        description: package
-            .description
-            .clone()
-            .unwrap_or_else(|| format!("installed plugin {}/{}", package.namespace, package.name)),
-        artifact: format!("plugins/{}.afb", package.name),
-        source: None,
-        language: package.language.clone(),
-        // The AFB manifest has no model-facing input schema.
-        input_schema: serde_json::json!({"type": "object"}),
-        manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
-    })
+    let granted = crate::plugin::authority::grant_for(plugin, previous.as_ref(), consent)?;
+    Ok((granted != crate::plugin::Manifold::sealed()).then_some(granted))
 }
 
 /// Writes `bytes` into the content-addressed store under `digest_hex`.
@@ -139,14 +128,14 @@ pub(crate) fn declaration_from_artifact(
 /// concurrent installs of the same content race safely, and a second
 /// install of content already present is a no-op, never a partial file a
 /// concurrent `gents plugin run` could observe.
-pub(crate) fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
+pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
     let dir = store_dir(home);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    crate::commands::pack::registry::stage_and_persist(&dir, &path, bytes)
+    crate::pack_registry::stage_and_persist(&dir, &path, bytes)
 }
 
-pub(crate) fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
+pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
     std::fs::read(&path)
         .with_context(|| format!("reading the installed plugin bytes at {}", path.display()))
@@ -155,7 +144,7 @@ pub(crate) fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
 /// Points `namespace/name` at `record`, replacing whatever it pointed to
 /// before. The content the old pointer named is left in the store: see
 /// this module's own doc for why that is deliberate, not a leak.
-pub(crate) fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
+pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -167,7 +156,7 @@ pub(crate) fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> 
     Ok(())
 }
 
-pub(crate) fn read_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
+pub fn read_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
     let path = record_path(home, namespace, name)?;
     let bytes = std::fs::read(&path).with_context(|| {
         format!(
@@ -180,7 +169,7 @@ pub(crate) fn read_record(home: &Path, namespace: &str, name: &str) -> Result<In
 
 /// Removes `namespace/name`'s installed record, returning it. The content
 /// store is untouched (see this module's own doc for why).
-pub(crate) fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
+pub fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
     let record = read_record(home, namespace, name)?;
     let path = record_path(home, namespace, name)?;
     std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
@@ -189,7 +178,7 @@ pub(crate) fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<
 
 /// Every installed plugin under `home`, across every namespace, sorted by
 /// namespace then name for a stable `gents plugin list` order.
-pub(crate) fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
+pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     let root = installed_dir(home);
     if !root.is_dir() {
         return Ok(Vec::new());
