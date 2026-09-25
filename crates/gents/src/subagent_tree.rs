@@ -135,14 +135,52 @@ pub async fn build_subagent_tree(
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTree> {
+    build_subagent_tree_from(
+        accesses,
+        SubagentTreeRoot::Request(root_request_id),
+        agent_did,
+        include_terminal,
+        max_depth,
+    )
+    .await
+}
+
+/// How a caller names the tree's root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTreeRoot<'a> {
+    /// A logical `AgentRequest.request_id`.
+    Request(&'a str),
+    /// An exact `AgentRequest` document, as session provenance records a
+    /// spawned session's causal request. The tree is rooted at that document
+    /// only; its logical id is read from it, never guessed.
+    Document(&'a str),
+}
+
+/// [`build_subagent_tree`] with the root named either way. A document root
+/// must also belong to `agent_did` when one is given; the walk then proceeds
+/// exactly as for a logical root, from that document.
+pub async fn build_subagent_tree_from(
+    accesses: &[SubagentTreeAccess],
+    root: SubagentTreeRoot<'_>,
+    agent_did: Option<&str>,
+    include_terminal: bool,
+    max_depth: usize,
+) -> Result<SubagentTree> {
     let mut nodes: BTreeMap<String, SubagentTreeNode> = BTreeMap::new();
     let mut partial_errors: Vec<String> = Vec::new();
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
-    let mut root_doc_id: Option<String> = None;
+    let (mut root_doc_id, mut logical_root) = match root {
+        SubagentTreeRoot::Request(id) => (None, Some(id.to_string())),
+        SubagentTreeRoot::Document(doc_id) => (Some(doc_id.to_string()), None),
+    };
+    let named = match root {
+        SubagentTreeRoot::Request(id) | SubagentTreeRoot::Document(id) => id,
+    };
 
     for (index, entry) in accesses.iter().enumerate() {
-        match fetch_root_request(&entry.access, root_request_id, agent_did).await {
+        match fetch_root_request(&entry.access, root, agent_did).await {
             Ok(Some(root)) => {
+                let root_request_id = named;
                 let Some(doc_id) = clean_optional_string(root.doc_id.as_deref()) else {
                     let error = anyhow::anyhow!("root request {root_request_id} has no _docID");
                     record_dead_access(
@@ -171,6 +209,24 @@ pub async fn build_subagent_tree(
                     Some(_) => {}
                     None => root_doc_id = Some(doc_id),
                 }
+                let logical = clean_string(&root.request_id);
+                match logical_root.as_deref() {
+                    Some(held) if held != logical => {
+                        let error = anyhow::anyhow!(
+                            "root document {named} is request {logical} here but {held} on another access"
+                        );
+                        record_dead_access(
+                            &mut partial_errors,
+                            &mut dead_accesses,
+                            index,
+                            entry,
+                            &error,
+                        );
+                        continue;
+                    }
+                    Some(_) => {}
+                    None => logical_root = Some(logical),
+                }
                 let mut node = request_row_into_node(root);
                 node.resolved_via = entry.label.clone();
                 nodes.entry(node.request_id.clone()).or_insert(node);
@@ -188,9 +244,15 @@ pub async fn build_subagent_tree(
         }
     }
 
+    // A document root that no access resolved has no logical id to walk from.
+    let root_request_id = logical_root.unwrap_or_default();
+    let root_request_id = root_request_id.as_str();
     let mut canonical =
         BTreeMap::<(String, String, String), (Option<String>, DescendantEdge)>::new();
     for (index, entry) in accesses.iter().enumerate() {
+        if root_request_id.is_empty() {
+            break;
+        }
         if dead_accesses.contains(&index) {
             continue;
         }
@@ -330,9 +392,13 @@ fn request_row_into_node(row: AgentRequestRow) -> SubagentTreeNode {
 
 async fn fetch_root_request(
     access: &ConfigAccess,
-    root_request_id: &str,
+    root: SubagentTreeRoot<'_>,
     agent_did: Option<&str>,
 ) -> Result<Option<AgentRequestRow>> {
+    let (field, root_request_id) = match root {
+        SubagentTreeRoot::Request(id) => ("request_id", id),
+        SubagentTreeRoot::Document(doc_id) => ("_docID", doc_id),
+    };
     let escaped = escape_graphql_string(root_request_id);
     let principal = agent_did
         .map(str::trim)
@@ -347,7 +413,7 @@ async fn fetch_root_request(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }}{principal} }},
+                filter: {{ {field}: {{ _eq: "{escaped}" }}{principal} }},
                 limit: 2
             ) {{
                 _docID

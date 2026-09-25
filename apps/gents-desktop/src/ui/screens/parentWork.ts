@@ -59,30 +59,33 @@ export function useParentWork(shell: Shell): ParentWork {
     () => sessions?.find((s) => s.sessionId === sessionId) ?? null,
     [sessions, sessionId],
   );
-  const parentRequestId = summary?.provenance?.parent_request_doc_id ?? null;
-  /* the parent is the session whose latest request is the one that spawned
-     us; provenance names a request document, and the summary's latest
-     request is the nearest thing to it the list carries */
+  /* provenance names the exact request document that spawned this session;
+     the lineage owner roots the tree at that document, and the parent is the
+     session its root node belongs to */
+  const parentRequestDocId = summary?.provenance?.parent_request_doc_id ?? null;
+  const [tree, setTree] = useState<SubagentTreeView | null>(null);
+  const root = tree?.nodes.find((n) => n.requestId === tree.rootRequestId) ?? null;
+  const parentSessionId = root?.sessionId ?? null;
   const parent = useMemo(
     () =>
-      parentRequestId
-        ? (sessions?.find((s) => s.latestRequestId === parentRequestId) ?? null)
+      parentSessionId
+        ? (sessions?.find((s) => s.sessionId === parentSessionId) ?? null)
         : null,
-    [sessions, parentRequestId],
+    [sessions, parentSessionId],
   );
-  const [tree, setTree] = useState<SubagentTreeView | null>(null);
   const [parentSnapshot, setParentSnapshot] = useState<DesktopSessionSnapshot | null>(
     null,
   );
   useEffect(() => {
-    if (!parentRequestId) {
+    if (!parentRequestDocId || !agentDid) {
       setTree(null);
       return;
     }
     let live = true;
     void shell.api
       .listSubagentTree({
-        rootRequestId: parentRequestId,
+        rootRequestDocId: parentRequestDocId,
+        agentDid,
         includeTerminal: true,
       })
       .then(
@@ -92,7 +95,7 @@ export function useParentWork(shell: Shell): ParentWork {
     return () => {
       live = false;
     };
-  }, [shell.api, parentRequestId]);
+  }, [shell.api, parentRequestDocId, agentDid, summary?.updatedAt]);
   useEffect(() => {
     if (!parent || !agentDid) {
       setParentSnapshot(null);
@@ -110,7 +113,7 @@ export function useParentWork(shell: Shell): ParentWork {
     };
   }, [shell.api, parent, agentDid, parent?.updatedAt]);
   return useMemo(() => {
-    if (!summary || !parentRequestId) return NONE;
+    if (!summary || !parentRequestDocId) return NONE;
     const node = tree?.nodes.find((n) => n.sessionId === sessionId) ?? null;
     const edge = node
       ? (tree?.edges.find((e) => e.childRequestId === node.requestId) ?? null)
@@ -172,5 +175,13 @@ export function useParentWork(shell: Shell): ParentWork {
       parentBehaviorName,
       sentBy,
     };
-  }, [summary, parentRequestId, tree, parentSnapshot, sessionId, parent, deployment]);
+  }, [
+    summary,
+    parentRequestDocId,
+    tree,
+    parentSnapshot,
+    sessionId,
+    parent,
+    deployment,
+  ]);
 }

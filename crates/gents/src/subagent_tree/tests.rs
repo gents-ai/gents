@@ -642,3 +642,63 @@ async fn subagent_tree_refuses_an_access_whose_root_is_another_document() -> any
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn subagent_tree_rooted_at_a_document_is_that_exact_request() -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-amy",
+        "did:test:amy",
+        "amy-general",
+    )
+    .await;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-bob",
+        "did:test:bob",
+        "bob-general",
+    )
+    .await;
+    let rows = node
+        .execute(r#"{ AgentRequest(filter: { agent_did: { _eq: "did:test:amy" } }) { _docID } }"#)
+        .await;
+    let amy_doc = rows.data.as_ref().expect("rows")["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("amy's request document")
+        .to_string();
+    let accesses = [SubagentTreeAccess {
+        label: None,
+        access: ConfigAccess::Local(node.clone()),
+    }];
+
+    let amy = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&amy_doc),
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(amy.partial_errors.is_empty(), "{:?}", amy.partial_errors);
+    assert_eq!(amy.root_request_id, "req-root");
+    assert_eq!(amy.nodes.len(), 1);
+    assert_eq!(amy.nodes[0].session_id.as_deref(), Some("sess-amy"));
+
+    let bob = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&amy_doc),
+        Some("did:test:bob"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        bob.nodes.is_empty() && bob.edges.is_empty() && bob.root_request_id.is_empty(),
+        "another principal's document is never the root: {bob:?}"
+    );
+    Ok(())
+}

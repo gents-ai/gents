@@ -210,6 +210,11 @@ source consistency checks, not a separate runtime compatibility version.
   but a subagent the agent spawns for itself is requested by the agent, so the
   read matched nothing; the agent's operator now reads such a session under
   its own scope (#1537).
+- Desktop: a subagent session shows the parent work that spawned it, also
+  after the parent moves on or completes. Its lineage is rooted at the exact
+  request document its provenance names, through the agent-scoped lineage
+  owner, instead of comparing that document id with a logical request id
+  (#1834).
 
 ## 0.19.0 - 2026-09-24
 
