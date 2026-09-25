@@ -850,7 +850,7 @@ fn is_fatal_behavior_readiness_write(error: &anyhow::Error) -> bool {
     }
 }
 
-async fn upsert_behavior_readiness(
+pub(crate) async fn upsert_behavior_readiness(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
     snapshot: &BehaviorReadinessSnapshot,

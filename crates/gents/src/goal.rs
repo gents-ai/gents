@@ -10,9 +10,16 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows
 
 mod claimed_publication;
 mod operator_resume;
+mod readiness_gate;
 mod request_head;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
+pub use readiness_gate::{
+    gate_goal_continuation, goal_behavior_observation, goal_failure_cause, goal_reconcile_settled,
+    next_goal_infrastructure_retries, observe_goal_behavior, observe_goal_behavior_readiness,
+    GoalBehaviorObservation, GoalBehaviorReadiness, GoalContinuationFacts, GoalFailureCause,
+    GoalGatedDecision, ObservedGoalBehavior,
+};
 pub(crate) use request_head::{
     authenticated_goal_request_members, goal_session_is_idle, latest_authenticated_session_request,
     latest_goal_request, verify_goal_continuation_edge,

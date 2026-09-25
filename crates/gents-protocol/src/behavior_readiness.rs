@@ -82,6 +82,32 @@ impl BehaviorReadinessUnavailableReason {
             Self::ExecutorStartFailed => "behavior executor could not start",
         }
     }
+
+    pub const ALL: [Self; 10] = [
+        Self::BehaviorDisabled,
+        Self::RuntimeConfigurationInvalid,
+        Self::BackendNotConfigured,
+        Self::BackendDisabled,
+        Self::BackendTemporarilyUnavailable,
+        Self::CredentialsRequired,
+        Self::InferenceProfileInvalid,
+        Self::ToolConfigurationInvalid,
+        Self::ToolSurfaceUnavailable,
+        Self::ExecutorStartFailed,
+    ];
+}
+
+/// Routing's admission message for a behavior the active runtime does not assign.
+pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
+
+/// Whether `failure_reason` is exactly one of routing's pre-dispatch
+/// behavior-unavailability rejections. Routing writes these stable messages,
+/// never resolver diagnostics, so exact comparison identifies the cause.
+pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
+    failure_reason == BEHAVIOR_NOT_ASSIGNED_MESSAGE
+        || BehaviorReadinessUnavailableReason::ALL
+            .iter()
+            .any(|reason| reason.public_message() == failure_reason)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

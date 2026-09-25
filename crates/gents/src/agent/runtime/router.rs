@@ -281,7 +281,7 @@ where
                     agent_did.as_str(),
                     request,
                     resolution.behavior_id.as_str(),
-                    "behavior is not assigned to this runtime",
+                    gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE,
                 )
                 .await?;
             }

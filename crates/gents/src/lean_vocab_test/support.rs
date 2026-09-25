@@ -84,6 +84,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) discovery_scope_cases: Vec<serde_json::Value>,
     pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
+    pub(crate) goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
     pub(crate) task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
@@ -530,6 +531,27 @@ pub(crate) struct LeanGoalDecisionCase {
     pub(crate) wrapup_requested: bool,
     pub(crate) wrapup_completed: bool,
     pub(crate) expected_decision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanGoalReadinessGateCase {
+    pub(crate) name: String,
+    pub(crate) observation: String,
+    pub(crate) settled: bool,
+    pub(crate) cause: String,
+    pub(crate) status: String,
+    pub(crate) terminal: String,
+    pub(crate) session_idle: bool,
+    pub(crate) child_exists: bool,
+    pub(crate) budget_reached: bool,
+    pub(crate) has_activity: bool,
+    pub(crate) request_is_wrapup: bool,
+    pub(crate) infrastructure_retries: i64,
+    pub(crate) wrapup_requested: bool,
+    pub(crate) wrapup_completed: bool,
+    pub(crate) expected_readiness: String,
+    pub(crate) expected_gate: String,
+    pub(crate) expected_retries: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1983,6 +2005,10 @@ pub(crate) fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase
 
 pub(crate) fn lean_goal_decision_cases() -> &'static [LeanGoalDecisionCase] {
     &lean_contract_snapshot().goal_decision_cases
+}
+
+pub(crate) fn lean_goal_readiness_gate_cases() -> &'static [LeanGoalReadinessGateCase] {
+    &lean_contract_snapshot().goal_readiness_gate_cases
 }
 
 pub(crate) fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] {

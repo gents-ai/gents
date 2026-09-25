@@ -238,3 +238,37 @@ fn malformed_configured_id_preserves_all_canonical_ids_independent_of_order() {
         );
     }
 }
+
+#[test]
+fn behavior_unavailable_rejections_are_exactly_routing_messages() {
+    use BehaviorReadinessUnavailableReason as Reason;
+    // Exhaustive: a new reason fails to compile here until `ALL` lists it.
+    let ordinal = |reason: Reason| match reason {
+        Reason::BehaviorDisabled => 0,
+        Reason::RuntimeConfigurationInvalid => 1,
+        Reason::BackendNotConfigured => 2,
+        Reason::BackendDisabled => 3,
+        Reason::BackendTemporarilyUnavailable => 4,
+        Reason::CredentialsRequired => 5,
+        Reason::InferenceProfileInvalid => 6,
+        Reason::ToolConfigurationInvalid => 7,
+        Reason::ToolSurfaceUnavailable => 8,
+        Reason::ExecutorStartFailed => 9,
+    };
+    assert_eq!(Reason::ALL.map(ordinal), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    for reason in Reason::ALL {
+        assert!(is_behavior_unavailable_rejection(reason.public_message()));
+    }
+    assert!(is_behavior_unavailable_rejection(
+        BEHAVIOR_NOT_ASSIGNED_MESSAGE
+    ));
+    for other in [
+        "",
+        "request must select a behavior",
+        "request admission denied: invalid signature",
+        "runtime configuration is invalid: missing backend",
+        "Runtime configuration is invalid",
+    ] {
+        assert!(!is_behavior_unavailable_rejection(other), "{other:?}");
+    }
+}

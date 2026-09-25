@@ -176,6 +176,27 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         behavior_executor_capacities: Default::default(),
         behavior_executor_queue_capacities: Default::default(),
     });
+    let readiness = gents_protocol::row::project_behavior_readiness_source(
+        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        1,
+        1,
+        "general",
+        [gents_protocol::row::BehaviorReadinessSourceEntry {
+            behavior_id: "general".into(),
+            dispatcher_present: true,
+            unavailable_reason: None,
+            startup_demoted: false,
+        }],
+    )
+    .unwrap();
+    crate::behavior_readiness_publisher::upsert_behavior_readiness(
+        &node,
+        did,
+        &readiness,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await
+    .unwrap();
     let (_tx, rx) = tokio::sync::watch::channel(snapshot);
     let mut source = crate::GoalSource::new(
         rx.clone(),
