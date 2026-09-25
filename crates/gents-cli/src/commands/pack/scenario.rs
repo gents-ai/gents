@@ -3682,6 +3682,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pack_sidecar_reference_cannot_escape_the_pack_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join("code_review");
+        std::fs::create_dir(&pack).unwrap();
+        std::fs::write(pack.join("system_prompt.md"), "inside").unwrap();
+        std::fs::write(root.path().join("outside.md"), "outside").unwrap();
+
+        assert_eq!(
+            read_pack_sidecar(&pack, "./system_prompt.md").unwrap(),
+            "inside"
+        );
+        for reference in [
+            "./../outside.md",
+            "./code_review/../../outside.md",
+            "../outside.md",
+            "./",
+        ] {
+            assert!(read_pack_sidecar(&pack, reference).is_err(), "{reference}");
+        }
+    }
+
     fn load_manifest_defaults(pack: &Path) -> Result<ScenarioManifest> {
         let distribution = read_distribution_manifest(pack)?;
         load_manifest_with(pack, &distribution, &|_| None)
