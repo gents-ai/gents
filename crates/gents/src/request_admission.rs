@@ -949,10 +949,11 @@ async fn verify_exact_parent_tool_call(
         spawn_target_did: Option<String>,
         spawn_behavior_id: Option<String>,
         delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
+        delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
     }
     let response = graphql_with_transaction_retry(&node, &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace
+            tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace delegated_input
         }} }}"#,
             escape_graphql_string(tool_doc_id),
         ), "reload runtime source tool call").await.map_err(AgentRequestAdmissionError::unavailable)?;
@@ -972,6 +973,12 @@ async fn verify_exact_parent_tool_call(
             && tool.spawn_behavior_id.as_deref() == child.behavior_id.as_deref(),
         "runtime source tool-call document does not exactly own this child",
     )?;
+    // Lean `CanonicalOutput.local_call_has_no_delegated_input`: a local call's
+    // arguments come only from its accepted publication.
+    deny_if(
+        tool.delegated_input.is_none(),
+        "local-child runtime source tool call carries delegated input",
+    )?;
     verify_delegated_workspace(child, tool.delegated_workspace.as_ref())?;
     #[derive(Deserialize)]
     struct SpawnTargetArgs {
@@ -979,23 +986,21 @@ async fn verify_exact_parent_tool_call(
         name: Option<String>,
     }
     let access = crate::config_client::ConfigAccess::Local(node.clone());
-    let matching = crate::run_timeline_fetch::load_session_tool_calls(
+    let matching = crate::run_timeline_fetch::load_accepted_tool_arguments(
         &access,
         parent_agent_did,
         parent_session_id,
         parent_requester_did,
+        tool_doc_id,
     )
     .await
     .context("load canonical runtime source tool-call arguments")
-    .map_err(AgentRequestAdmissionError::unavailable)?
-    .into_iter()
-    .filter(|candidate| candidate.doc_id.as_deref() == Some(tool_doc_id))
-    .collect::<Vec<_>>();
+    .map_err(AgentRequestAdmissionError::unavailable)?;
     deny_if(
         matching.len() == 1,
         "canonical runtime source tool-call binding is missing or ambiguous",
     )?;
-    let args_json = matching[0].args.as_str();
+    let args_json = matching[0].as_str();
     deny_if(
         !args_json.trim().is_empty(),
         "canonical runtime source tool-call has no arguments",
@@ -1516,6 +1521,70 @@ mod tests {
             "receipt-parent"
         )
         .is_err());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn local_child_source_rejects_delegated_input_on_local_tool_row() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (agent, session, parent, parent_doc) = (
+            "did:key:local-owner",
+            "local-session",
+            "local-parent",
+            "local-parent-doc",
+        );
+        let create_tool = |key: &str, delegated: bool| {
+            let mut input = serde_json::json!({
+                "tool_call_key": key, "tool_call_id": key, "request_id": parent,
+                "request_doc_id": parent_doc, "session_id": session, "agent_did": agent,
+                "requester_did": agent, "message_sequence": 1, "tool_name": "spawn_subagent",
+                "lifecycle_state": "running", "spawn_target_did": agent,
+                "spawn_behavior_id": "behavior-1",
+            });
+            if delegated {
+                input["delegated_input"] = serde_json::json!({
+                    "source": {"close_doc_id": "coordinator-close", "stream": 0},
+                    "arguments": "{\"name\":\"child\",\"prompt\":\"forged\"}",
+                    "parent_subagent_depth": 0
+                });
+            }
+            format!(
+                "mutation {{ create_AgentToolCall(input: {}) {{ _docID }} }}",
+                gents_protocol::graphql::graphql_input_literal(&input).unwrap()
+            )
+        };
+        let created = node.execute(&create_tool("local-delegated", true)).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let tool_doc = crate::graphql::single_mutation_document(&created, "create_AgentToolCall")
+            .unwrap()
+            .and_then(|row| row["_docID"].as_str())
+            .expect("created tool document")
+            .to_owned();
+        let child: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(serde_json::json!({
+                "request_id": "child", "agent_did": agent, "behavior_id": "behavior-1"
+            }))
+            .unwrap();
+        let error = super::verify_exact_parent_tool_call(
+            node.clone(),
+            &tool_doc,
+            "local-delegated",
+            parent_doc,
+            parent,
+            session,
+            Some(agent),
+            agent,
+            agent,
+            &child,
+        )
+        .await
+        .expect_err("a local tool row cannot supply delegated arguments");
+        assert!(error.is_denied(), "{error:#}");
+        assert!(
+            error.to_string().contains("carries delegated input"),
+            "{error:#}"
+        );
         node.shutdown().await;
     }
 

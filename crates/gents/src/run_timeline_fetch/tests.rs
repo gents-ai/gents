@@ -279,3 +279,162 @@ fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
         .expect_err("half tool bridge must fail closed");
     assert!(error.to_string().contains("incomplete parent tool lineage"));
 }
+
+/// Resolving one accepted call reads only its accepted message: an unrelated,
+/// unresolvable message elsewhere in the same session fails the session-wide
+/// reader but not this exact binding.
+#[tokio::test]
+async fn accepted_tool_arguments_read_only_the_accepted_message() {
+    use crate::tool_call_lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, published_admission_with_owner,
+        PublishedAdmissionOptions,
+    };
+    use crate::tool_call_lifecycle::{AwaitMode, CancelPolicy};
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
+    };
+
+    let plan = |tool_call_id: &str, child_request_id: &str| crate::streaming::SpawnAdmissionPlan {
+        tool_call_id: tool_call_id.into(),
+        child_request_id: child_request_id.into(),
+        spawn_target_did: "overridden-by-fixture".into(),
+        spawn_behavior_id: "general".into(),
+        delegated_workspace: None,
+        await_mode: AwaitMode::Background,
+    };
+    let (admitted, mut owner) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "accepted-arguments-exact".into(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        spawn_plan: Some(plan("bridge-first", "child-first")),
+        ..Default::default()
+    })
+    .await
+    .expect("publish first accepted spawn");
+    let node = admitted.node.clone();
+    let mut second_plan = plan("bridge-second", "child-second");
+    second_plan.spawn_target_did = admitted.agent_did.clone();
+    let second_arguments =
+        serde_json::json!({"name": "child", "prompt": "second", "await_mode": "background"});
+    let second = publish_accepted_on_claimed_request(
+        node.clone(),
+        &mut owner,
+        &admitted.agent_did,
+        1,
+        crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+        "bridge-second",
+        second_arguments.clone(),
+        Some(second_plan),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        true,
+    )
+    .await
+    .expect("publish second accepted spawn");
+
+    let first_doc = admitted.tool.doc_id().expect("first bridge").to_owned();
+    let second_doc = second.doc_id().expect("second bridge").to_owned();
+    let bridge = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ agent_did session_id requester_did request_doc_id }} }}"#,
+            escape_graphql_string(&second_doc)
+        ))
+        .await;
+    let bridge = &bridge.data.expect("bridge scope")["AgentToolCall"][0];
+    let text = |field: &str| bridge[field].as_str().map(str::to_owned);
+    let (agent_did, session_id) = (text("agent_did").unwrap(), text("session_id").unwrap());
+    let requester_did = text("requester_did");
+
+    let unresolvable = TranscriptMessage {
+        message_key: "unrelated-unresolvable".into(),
+        session_id: session_id.clone(),
+        agent_did: agent_did.clone(),
+        requester_did: requester_did.clone(),
+        request_doc_id: text("request_doc_id"),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "unrelated".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 10_000,
+        role: MessageRole::Assistant,
+        native_id: None,
+        created_at: "2026-09-25T00:00:00Z".into(),
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "unrelated-tool".into(),
+            id: "unrelated-call".into(),
+            call_id: None,
+            name: "bash".into(),
+            arguments: PayloadRef {
+                close_doc_id: "missing-close".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+    };
+    let variables =
+        crate::session::canonical_rows::transcript_message_create_variables(&unresolvable).unwrap();
+    ConfigAccess::transact_local(node.as_ref(), None, "test.unrelated_message", |txn| {
+        let variables = variables.clone();
+        Box::pin(async move {
+            txn.execute_with_variables(
+                crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                &variables,
+            )
+            .await
+            .map(|_| ())
+        })
+    })
+    .await
+    .expect("persist unrelated message");
+
+    let access = ConfigAccess::Local(node.clone());
+    assert!(
+        load_session_tool_calls(&access, &agent_did, &session_id, requester_did.as_deref())
+            .await
+            .is_err(),
+        "premise: the session-wide reader resolves every message in the session"
+    );
+    let first = load_accepted_tool_arguments(
+        &access,
+        &agent_did,
+        &session_id,
+        requester_did.as_deref(),
+        &first_doc,
+    )
+    .await
+    .expect("first binding reads only its accepted message");
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&first[0]).unwrap(),
+        serde_json::json!({"name": "child", "prompt": "work", "await_mode": "background"})
+    );
+    let second = load_accepted_tool_arguments(
+        &access,
+        &agent_did,
+        &session_id,
+        requester_did.as_deref(),
+        &second_doc,
+    )
+    .await
+    .expect("second binding reads only its accepted message");
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&second[0]).unwrap(),
+        second_arguments
+    );
+    assert!(load_accepted_tool_arguments(
+        &access,
+        &agent_did,
+        "another-session",
+        requester_did.as_deref(),
+        &second_doc,
+    )
+    .await
+    .expect("an out-of-scope document is absent, not an error")
+    .is_empty());
+
+    drop(owner);
+    node.shutdown().await;
+    std::fs::remove_dir_all(admitted.path).unwrap();
+}

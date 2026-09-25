@@ -1717,3 +1717,133 @@ async fn parent_message_observation_is_coherent_across_publication() {
         .all(|message| !message.content.contains("published between reads")));
     assert_eq!(&after[..before.len()], &before[..]);
 }
+
+async fn persist_unresolvable_message(node: &EmbeddedNode, request_id: &str) {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
+    };
+    #[derive(Deserialize)]
+    struct Scope {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+        agent_did: String,
+        requester_did: Option<String>,
+        session_id: String,
+    }
+    let request = escape_graphql_string(request_id);
+    let scope: Scope = first_row(
+        &node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, limit: 1) {{ _docID agent_did requester_did session_id }} }}"#
+            ))
+            .await,
+        "AgentRequest",
+    );
+    let message = TranscriptMessage {
+        message_key: format!("unresolvable:{request_id}"),
+        session_id: scope.session_id,
+        agent_did: scope.agent_did,
+        requester_did: scope.requester_did,
+        request_doc_id: Some(scope.doc_id),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "unrelated".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 10_000,
+        role: MessageRole::Assistant,
+        native_id: None,
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "unrelated-tool".into(),
+            id: "unrelated-call".into(),
+            call_id: None,
+            name: "bash".into(),
+            arguments: PayloadRef {
+                close_doc_id: "missing-close".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+    };
+    let variables =
+        gents::session::canonical_rows::transcript_message_create_variables(&message).unwrap();
+    ConfigAccess::transact_local(node, None, "test.unresolvable_sibling_message", |txn| {
+        let variables = variables.clone();
+        Box::pin(async move {
+            txn.execute_with_variables(
+                gents::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                &variables,
+            )
+            .await
+            .map(|_| ())
+        })
+    })
+    .await
+    .expect("persist unresolvable sibling message");
+}
+
+/// A spawn is materialized and claimed from its own accepted message alone, so
+/// an unresolvable message in a sibling child's session cannot block it.
+#[tokio::test]
+async fn later_child_is_claimed_without_reading_sibling_transcripts() {
+    let (db, session_id, request_id) = setup_fixture("claim_independent_of_siblings").await;
+    let spawn = |id: &str| {
+        StreamChunk::tool_call(
+            id,
+            "spawn_subagent",
+            json!({
+                "name": CHILD_BEHAVIOR_ID,
+                "prompt": format!("prompt for {id}"),
+                "await_mode": "background",
+            })
+            .to_string(),
+        )
+    };
+    let paused = |id: &str| {
+        let prompt = format!("prompt for {id}");
+        StreamPlan::new(
+            prompt.clone(),
+            vec![StreamResponse::Stream(StreamScript::paused(
+                prompt,
+                ["done"],
+            ))],
+        )
+    };
+    let runtime = boot_accepted_turn_with_backend_capacity_and_dynamic_followups(
+        &db,
+        AcceptedTurnSpec {
+            backend_id: BACKEND_ID,
+            model: "test-model",
+            parent_behavior_id: PARENT_BEHAVIOR_ID,
+            configured_behavior_ids: &[PARENT_BEHAVIOR_ID, CHILD_BEHAVIOR_ID],
+            request_id: &request_id,
+            session_id: &session_id,
+            prompt: "parent prompt",
+            accepted_chunks: vec![spawn("spawn-sibling")],
+            child_plans: vec![paused("spawn-sibling"), paused("spawn-later")],
+            valid_until: None,
+            subagent_depth: None,
+            request_setup: None,
+        },
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+        3,
+        "parent prompt",
+    )
+    .await;
+    let (sibling, _) =
+        wait_for_child_for_tool(db.node.as_ref(), &request_id, "spawn-sibling").await;
+    wait_for_child_generation(db.node.as_ref(), &sibling).await;
+    persist_unresolvable_message(db.node.as_ref(), &sibling).await;
+
+    runtime.backend.enqueue_response(
+        "parent prompt",
+        StreamResponse::streams("parent prompt", vec![spawn("spawn-later")]),
+    );
+    let (later, _) = wait_for_child_for_tool(db.node.as_ref(), &request_id, "spawn-later").await;
+    wait_for_child_generation(db.node.as_ref(), &later).await;
+    runtime.shutdown().await;
+}

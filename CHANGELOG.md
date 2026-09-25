@@ -46,6 +46,12 @@ source consistency checks, not a separate runtime compatibility version.
   that names no subagent in scope restarts the listing and reports
   `stale_cursor`, and settling a failed spawn no longer rewrites its start
   time, so cursors handed out earlier keep resolving (#1808).
+- A spawned subagent is created and claimed within about a second on an
+  idle runtime, however long its parent's run has been. To find the spawn
+  arguments, creating a child reloaded the parent's whole run, including
+  every earlier child's transcript, one spawn at a time, and claiming it
+  reloaded the parent's whole session. A long orchestrator's children waited
+  minutes, and background spawns hit their 60 s unclaimed deadline (#1807).
 
 ## 0.19.0 - 2026-09-24
 

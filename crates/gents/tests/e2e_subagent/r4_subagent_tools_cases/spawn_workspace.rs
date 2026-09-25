@@ -268,6 +268,16 @@ async fn spawn_background_child_result(
     tool_call_id: &str,
     workspace: Option<Value>,
 ) -> Value {
+    spawn_background_child_turn(fixture, tool_call_id, workspace)
+        .await
+        .0
+}
+
+async fn spawn_background_child_turn(
+    fixture: &SpawnFixture,
+    tool_call_id: &str,
+    workspace: Option<Value>,
+) -> (Value, AcceptedTurnRuntime) {
     let mut args = json!({
         "name": CHILD_BEHAVIOR_ID,
         "prompt": "workspace child prompt",
@@ -277,9 +287,9 @@ async fn spawn_background_child_result(
         args["workspace"] = workspace;
     }
     let args = args.to_string();
-    run_canonical_spawn_turn(fixture, tool_call_id, &args).await;
+    let runtime = run_canonical_spawn_turn(fixture, tool_call_id, &args).await;
     let tool = fetch_tool_call(&fixture.db.node, &fixture.session_id, tool_call_id).await;
-    persisted_tool_result_json(&tool)
+    (persisted_tool_result_json(&tool), runtime)
 }
 
 async fn spawn_background_child(
@@ -287,7 +297,9 @@ async fn spawn_background_child(
     tool_call_id: &str,
     workspace: Option<Value>,
 ) -> ChildWorkspaceRow {
-    let result = spawn_background_child_result(fixture, tool_call_id, workspace).await;
+    // The runtime's subagent source materializes the child after the parent's
+    // background receipt; the runtime must outlive that write.
+    let (result, runtime) = spawn_background_child_turn(fixture, tool_call_id, workspace).await;
     assert_eq!(result["ok"], true, "{result}");
     let child = wait_for_child_request_for_tool(
         fixture.db.node.as_ref(),
@@ -295,6 +307,7 @@ async fn spawn_background_child(
         tool_call_id,
     )
     .await;
+    drop(runtime);
     fetch_child_workspace(fixture.db.node.as_ref(), &child.request_id).await
 }
 
