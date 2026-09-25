@@ -22,6 +22,12 @@ const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 /// `limit: 1` reads, which bound the rows returned per request, not the work
 /// to order that request's tool or inference history.
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
+/// One deadline for the whole optional activity phase, well under the
+/// `/status` probe budget, so a slow activity read never turns a healthy
+/// runtime not-ok or stalls `/healthz`. Requests not yet covered when it
+/// expires fall back to `claimed_at`.
+pub(crate) const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
+    std::time::Duration::from_millis(500);
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
@@ -1317,7 +1323,7 @@ pub(crate) async fn load_metrics_query_data(
 /// Progress is an observation layered on the processing-request read: a
 /// failed activity read drops that chunk's activity (its requests fall back
 /// to `claimed_at`) instead of failing `/healthz`, `/status`, `/metrics` or
-/// `/self`.
+/// `/self`. The phase shares one [`LIVENESS_ACTIVITY_BUDGET`] deadline.
 async fn load_liveness_activity(
     graphql: &str,
     local_agent_did: &str,
@@ -1337,15 +1343,27 @@ async fn load_liveness_activity(
             (!doc_id.is_empty() && !agent_did.is_empty()).then_some((doc_id, agent_did))
         })
         .collect::<Vec<_>>();
+    let deadline = tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET;
     let mut activity = Vec::new();
-    for chunk in request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK) {
-        match load_liveness_activity_chunk(graphql, chunk).await {
-            Ok(rows) => activity.extend(rows),
-            Err(error) => tracing::warn!(
+    let mut chunks = request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK);
+    while let Some(chunk) = chunks.next() {
+        match tokio::time::timeout_at(deadline, load_liveness_activity_chunk(graphql, chunk)).await
+        {
+            Ok(Ok(rows)) => activity.extend(rows),
+            Ok(Err(error)) => tracing::warn!(
                 request_count = chunk.len(),
                 error = format!("{error:#}"),
                 "liveness activity read failed; progress falls back to claimed_at"
             ),
+            Err(_) => {
+                let request_count = chunk.len() + chunks.map(<[_]>::len).sum::<usize>();
+                tracing::warn!(
+                    request_count,
+                    budget_ms = LIVENESS_ACTIVITY_BUDGET.as_millis() as u64,
+                    "liveness activity budget exhausted; progress falls back to claimed_at"
+                );
+                break;
+            }
         }
     }
     activity

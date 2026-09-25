@@ -382,8 +382,9 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     retry_count: 0
                 }}) {{ _docID }}
             }}"#,
-            request_id = stuck_request_id,
-            session_id = stuck_session_id,
+            request_id = escape_graphql_string(&stuck_request_id),
+            agent_did = escape_graphql_string(&agent_did),
+            session_id = escape_graphql_string(&stuck_session_id),
         ),
     )
     .await?;
@@ -406,10 +407,11 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     deadline_at: "2024-01-01T11:00:30Z"
                 }}) {{ _docID }}
             }}"#,
-            key = stuck_tool_call_key,
-            request_id = stuck_request_id,
-            session_id = stuck_session_id,
-            tool_call_id = stuck_tool_call_id,
+            key = escape_graphql_string(&stuck_tool_call_key),
+            agent_did = escape_graphql_string(&agent_did),
+            request_id = escape_graphql_string(&stuck_request_id),
+            session_id = escape_graphql_string(&stuck_session_id),
+            tool_call_id = escape_graphql_string(&stuck_tool_call_id),
         ),
     )
     .await?;
@@ -544,6 +546,10 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
         let claimed_at = at(-600);
         let deadline = at(3600);
         async move {
+            let request_id = escape_graphql_string(&request_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let claimed_at = escape_graphql_string(&claimed_at);
+            let deadline = escape_graphql_string(&deadline);
             let response = graphql_query(
                 &graphql,
                 &format!(
@@ -575,8 +581,18 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
         let graphql = graphql.clone();
         let agent_did = agent_did.clone();
         async move {
+            let request_id = escape_graphql_string(&request_id);
+            let request_doc_id = escape_graphql_string(&request_doc_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let started_at = escape_graphql_string(&started_at);
             let (state, completed) = match completed_at {
-                Some(completed_at) => ("completed", format!(r#"completed_at: "{completed_at}","#)),
+                Some(completed_at) => (
+                    "completed",
+                    format!(
+                        r#"completed_at: "{}","#,
+                        escape_graphql_string(&completed_at)
+                    ),
+                ),
                 None => ("running", String::new()),
             };
             graphql_query(
@@ -611,8 +627,15 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
         let graphql = graphql.clone();
         let agent_did = agent_did.clone();
         async move {
+            let request_id = escape_graphql_string(&request_id);
+            let request_doc_id = escape_graphql_string(&request_doc_id);
+            let agent_did = escape_graphql_string(&agent_did);
+            let started_at = escape_graphql_string(&started_at);
             let (state, ended) = match ended_at {
-                Some(ended_at) => ("completed", format!(r#"ended_at: "{ended_at}","#)),
+                Some(ended_at) => (
+                    "completed",
+                    format!(r#"ended_at: "{}","#, escape_graphql_string(&ended_at)),
+                ),
                 None => ("running", String::new()),
             };
             graphql_query(
@@ -684,8 +707,10 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                     completed_at: "{completed_at}"
                 }}) {{ _docID }}
             }}"#,
-            started_at = at(-2),
-            completed_at = at(-1),
+            batched = escape_graphql_string(&batched),
+            batched_doc = escape_graphql_string(&batched_doc),
+            started_at = escape_graphql_string(&at(-2)),
+            completed_at = escape_graphql_string(&at(-1)),
         ),
     )
     .await?;

@@ -997,6 +997,91 @@ mod tests {
         assert_eq!(lifecycle(&state).await, json!("ready"));
     }
 
+    /// A stalled optional activity read must not delay or fail core health:
+    /// `/healthz` and `/status` stay ok and on time, and progress falls back
+    /// to `claimed_at`.
+    #[tokio::test]
+    async fn stalled_liveness_activity_read_does_not_hold_health() {
+        use axum::{routing::post, Json, Router};
+
+        let claimed_at = chrono::Utc::now() - chrono::Duration::seconds(120);
+        let core = json!({
+            "data": {
+                "AgentRuntime": [serde_json::to_value(runtime()).unwrap()],
+                "AgentBehaviorReadiness": [serde_json::to_value(readiness("default")).unwrap()],
+                "InferenceBackend": [],
+                "AgentRequest": [{
+                    "_docID": "doc-req-1",
+                    "request_id": "req-1",
+                    "agent_did": "did:key:zAgent",
+                    "claimed_at": claimed_at.to_rfc3339(),
+                    "deadline": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+                }],
+                "AgentToolCall": []
+            }
+        });
+        let mock = Router::new().route(
+            "/api/v0/graphql",
+            post(move |Json(body): Json<Value>| {
+                let core = core.clone();
+                async move {
+                    let query = body["query"].as_str().unwrap_or_default().to_string();
+                    if query.contains("AgentRuntime") {
+                        return Ok(Json(core));
+                    }
+                    if query.contains("InferenceCall(") {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        return Ok(Json(json!({ "data": {} })));
+                    }
+                    Err(StatusCode::NOT_FOUND)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock graphql");
+        let addr = listener.local_addr().expect("mock addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, mock).await;
+        });
+        let mut state = state();
+        state.graphql = format!("http://{addr}/api/v0/graphql");
+
+        async fn body(response: Response) -> (StatusCode, Value) {
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("health body");
+            (status, serde_json::from_slice(&bytes).expect("health json"))
+        }
+        fn progress_age_ms(body: &Value) -> i64 {
+            body.pointer("/liveness/requests/0/last_progress_age_ms")
+                .and_then(Value::as_i64)
+                .expect("liveness request row")
+        }
+
+        let started = std::time::Instant::now();
+        let (status, healthz) = body(healthz_handler(State(state.clone())).await).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(1_500),
+            "/healthz waited {:?} on a stalled activity read",
+            started.elapsed()
+        );
+        assert_eq!(status, StatusCode::OK, "{healthz}");
+        assert_eq!(healthz["ok"], json!(true), "{healthz}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&healthz)));
+
+        let started = std::time::Instant::now();
+        let (_, status_body) = body(status_handler(State(state)).await).await;
+        assert!(
+            started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
+            "/status waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!(status_body["ok"], json!(true), "{status_body}");
+        assert!((120_000..180_000).contains(&progress_age_ms(&status_body)));
+    }
+
     #[tokio::test]
     async fn disabled_p2p_metrics_skip_live_status_fetch() {
         let mut state = state();

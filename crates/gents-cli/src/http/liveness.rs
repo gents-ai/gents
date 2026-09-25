@@ -21,8 +21,10 @@ pub(crate) struct LivenessToolCallRow {
 /// Durable activity for one processing request: a tool call (`started_at`,
 /// `completed_at`) or an inference call (`started_at`, `ended_at`), including
 /// finished ones. The newest of these timestamps and `claimed_at` is the
-/// request's progress; rows are never deleted and timestamps are written once,
-/// so that maximum cannot move back in time while the request advances.
+/// request's progress. Rows are never deleted and timestamps are written once,
+/// so while the activity reads succeed that maximum cannot move back in time.
+/// A failed activity read deliberately falls back to `claimed_at` for that
+/// sample, so monotonicity holds only across successful observations.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct LivenessActivityRow {
     #[serde(default)]
