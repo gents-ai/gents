@@ -656,9 +656,17 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             )
             .await;
             accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
+            let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
             let admitted = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
             assert_eq!(case.inputs.len(), case.expected.len());
             for (input, expected) in case.inputs.iter().zip(&case.expected) {
+                if expected.observation == "replay" {
+                    // Restore the original publication binding so replay must
+                    // reach the durable election, not the consumed-map guard.
+                    hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
+                        .await
+                        .unwrap();
+                }
                 let call = hook.on_tool_call("read", None, "receipt-call", "{}");
                 let action = if input.acknowledged {
                     call.await
@@ -675,6 +683,13 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                     "{}: {action:?}",
                     case.name
                 );
+                if expected.observation == "replay" {
+                    assert!(
+                        matches!(&action, ToolCallHookAction::Terminate { reason }
+                        if reason.contains("no longer pending")),
+                        "{action:?}"
+                    );
+                }
                 let row = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
                 assert_eq!(
                     row["lifecycle_state"].as_str() == Some("running"),
