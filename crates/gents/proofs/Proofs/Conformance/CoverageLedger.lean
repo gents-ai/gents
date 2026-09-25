@@ -740,7 +740,7 @@ def caseCoverage : List CoverageEntry :=
       "task_hook_run_cases"
       "TaskHookRunCases"
       "lean_vocab_test::task_hooks_policy::generated_task_hook_cases_fence_the_modeled_phase_vocabulary"
-      "The consumer binds the emitted phase vocabulary and resolved timeouts to the production Task configuration owner and replays admission over every trace. Phase ordering, the before-hook gate on claim-to-processing, after_success gating of successful completion and interrupted-recovery selection are unbound: no host executor consumes these traces yet (#1600).")
+      "The consumer binds the emitted phase vocabulary to the production TaskHookPhase encoding and replays admission over every trace. Native timeout resolution is deferred with sequencing: the model-resolved effective timeout is emitted for the future executor and enforced by nothing here. Phase ordering, the before-hook gate on claim-to-processing, after_success gating of successful completion and interrupted-recovery selection are equally unbound, because no host executor consumes these traces yet (#1600).")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_hook_recovery_cases"

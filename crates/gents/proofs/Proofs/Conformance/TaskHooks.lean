@@ -4,13 +4,6 @@ import Proofs.Conformance.Contracts.Json.Helpers
 namespace Conformance.TaskHooksContracts
 open TaskHooks Conformance.Contracts
 
-/-! Generated task-hook contract. Every expectation below is replayed through
-the executable owners in `Proofs.TaskHooks` (`admitHooks`, `runTask`,
-`RunResult.finalOutcome`, `recoverInterrupted`), so the emitted trace is the
-model's own execution rather than a separate fixture table. Command results are
-scripted observations: the contract fences sequencing, gating and recovery
-selection, not host execution itself. -/
-
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
 private def phaseString : HookPhase → String
@@ -51,11 +44,6 @@ private def agentResultString : AgentResult → String
   | .failure => "failure"
   | .cancelled => "cancelled"
   | .interrupted => "interrupted"
-
-/-! ## Admission
-
-`Task.validate` in the runtime is the production owner for these cases: the
-model admits a whole task before any hook or agent step runs. -/
 
 structure AdmissionCase where
   name : String
@@ -111,16 +99,12 @@ private def admissionCaseJson (c : AdmissionCase) : String :=
 
 def admissionCasesJson : String := jsonArray (admissionCases.map admissionCaseJson)
 
-/-! ## Phase ordering and gating
-
-Scripted command observations stand in for the host execution owner. A hook
-with no scripted entry is observed to have exited zero. -/
-
 structure ScriptedResult where
   hookId : String
   result : CommandResult
   deriving DecidableEq, Repr
 
+/-- An unscripted hook is observed to have exited zero; `HookExec` is total. -/
 private def scriptedExec (script : List ScriptedResult) : HookExec := fun h =>
   match script.find? (fun s => s.hookId == h.hookId) with
   | some s => s.result
@@ -260,12 +244,6 @@ private def runCaseJson (c : RunCase) : String :=
       jsonString c.expectedFinalOutcome.toRequestState.toDefraDB ++ "}"
 
 def runCasesJson : String := jsonArray (runCases.map runCaseJson)
-
-/-! ## Interrupted recovery
-
-Recovery consumes attempts observed by the existing execution owner. It never
-reschedules an observed occurrence, including one whose host outcome is
-unknown, and it runs no cleanup at all before the task started. -/
 
 structure RecoveryCase where
   name : String

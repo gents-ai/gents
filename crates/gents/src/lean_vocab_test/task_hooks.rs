@@ -1,8 +1,8 @@
 use serde::Deserialize;
 
-/// Generated from `Conformance.TaskHooksContracts`. `effective_timeout_secs`
-/// is the model's resolved timeout, not an authored field: the host executor
-/// must use it rather than re-deriving the default.
+/// `effective_timeout_secs` is resolved by the model, not authored. A host
+/// executor must consume it rather than re-deriving the default; nothing here
+/// enforces that, because no such executor exists yet (#1600).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTaskHook {
@@ -60,9 +60,6 @@ pub(crate) struct LeanTaskHookAdmissionCase {
     pub(crate) expected_admitted: bool,
 }
 
-/// One modeled task execution. The attempt lists are the model's own trace, so
-/// a host executor is checked against observed ordering rather than a restated
-/// expectation.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTaskHookRunCase {

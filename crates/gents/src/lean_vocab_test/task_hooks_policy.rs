@@ -71,8 +71,6 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
         "task hook recovery cases must not be empty"
     );
 
-    // Every emitted phase must round-trip through the production enum, so a new
-    // modeled phase cannot land without a matching runtime vocabulary.
     let emitted: std::collections::BTreeSet<&str> = run_cases
         .iter()
         .flat_map(|case| case.hooks.iter())
@@ -90,8 +88,6 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
         assert_eq!(encoded, format!("\"{name}\""));
     }
 
-    // The model's admission gate precedes every emitted trace: a run or
-    // recovery case that production validation rejects would fence nothing.
     for (name, hooks) in run_cases
         .iter()
         .map(|case| (&case.name, &case.hooks))
@@ -103,19 +99,5 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
             "{name}: generated trace uses hooks production validation rejects: {:?}",
             task.validate().err(),
         );
-    }
-
-    // The executor owes these traces a host runner (#1600). Until it exists the
-    // contract still pins the resolved timeout the runner must use, so the
-    // default cannot be re-derived divergently.
-    for case in run_cases {
-        for generated in &case.hooks {
-            let expected = generated.timeout_secs.unwrap_or(120);
-            assert_eq!(
-                i64::try_from(generated.effective_timeout_secs).expect("timeout fits i64"),
-                expected,
-                "{}: hook {}", case.name, generated.hook_id
-            );
-        }
     }
 }
