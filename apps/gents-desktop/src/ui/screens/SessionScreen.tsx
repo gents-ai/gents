@@ -175,7 +175,7 @@ function ContextRing({
   );
 }
 
-function SessionContext({
+export function SessionContext({
   context,
   compact = false,
 }: {
@@ -185,14 +185,10 @@ function SessionContext({
 }) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
-  const window = Math.max(
-    1,
-    context.lastRequest?.contextWindow ?? context.contextWindow,
-  );
-  const threshold = Math.max(
-    0,
-    context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
-  );
+  /* the configured window the next request runs with, so an edit to the
+     profile shows at once; the last request's window is history */
+  const window = Math.max(1, context.contextWindow);
+  const threshold = Math.max(0, context.compactionThresholdTokens);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {

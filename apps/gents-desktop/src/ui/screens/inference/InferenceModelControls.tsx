@@ -139,8 +139,40 @@ export function InferenceModelControls({
     key: Key,
     next: InferenceSettingsDraft[Key],
   ) => onChange({ ...value, [key]: next });
+  const effort = recommendation.reasoningEffort ? (
+    <div className="grid gap-1">
+      <label htmlFor="inference-reasoning" className="text-xs text-muted-foreground">
+        Reasoning effort
+      </label>
+      <Select
+        items={recommendation.reasoningEffort.choices.map((choice) => ({
+          value: choice,
+          label: choice,
+        }))}
+        value={value.reasoningEffort}
+        onValueChange={(next) =>
+          next && set("reasoningEffort", next as ReasoningEffort)
+        }
+      >
+        <SelectTrigger id="inference-reasoning" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {recommendation.reasoningEffort.choices.map((choice) => (
+            <SelectItem key={choice} value={choice}>
+              {choice}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <span className="text-xs text-muted-foreground">
+        Applies to new requests. You can change it at any time.
+      </span>
+    </div>
+  ) : null;
   return (
     <div className="grid gap-3">
+      {alwaysExpanded && effort}
       {recommendation.temperature ? (
         <NumericField
           id="inference-temperature"
@@ -163,32 +195,18 @@ export function InferenceModelControls({
           onChange={(next) => set("topP", next)}
         />
       ) : null}
-      {recommendation.reasoningEffort ? (
-        <label className="grid gap-1" htmlFor="inference-reasoning">
-          <span className="text-xs text-muted-foreground">Reasoning effort</span>
-          <Select
-            items={recommendation.reasoningEffort.choices.map((choice) => ({
-              value: choice,
-              label: choice,
-            }))}
-            value={value.reasoningEffort}
-            onValueChange={(next) =>
-              next && set("reasoningEffort", next as ReasoningEffort)
-            }
-          >
-            <SelectTrigger id="inference-reasoning" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {recommendation.reasoningEffort.choices.map((choice) => (
-                <SelectItem key={choice} value={choice}>
-                  {choice}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-      ) : null}
+      {!alwaysExpanded && (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="inference-settings-later"
+        >
+          {recommendation.reasoningEffort && value.reasoningEffort
+            ? `Reasoning effort ${value.reasoningEffort}. `
+            : ""}
+          You can change the model, reasoning effort and limits later under the agent’s
+          Providers settings.
+        </p>
+      )}
       {!alwaysExpanded && (
         <Button
           type="button"
@@ -200,6 +218,7 @@ export function InferenceModelControls({
           {expanded ? "Hide advanced settings" : "Advanced settings"}
         </Button>
       )}
+      {expanded && !alwaysExpanded && effort}
       {expanded || alwaysExpanded ? (
         <div className="grid grid-cols-2 gap-3" data-testid="inference-custom-controls">
           {recommendation.contextWindow ? (

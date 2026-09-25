@@ -460,19 +460,13 @@ export function ProfileEditor({
           endpoint: backend.endpoint!,
           modelName,
           displayName: advertisedModel?.display_name ?? null,
-          contextWindow:
-            advertisedModel?.context_window ??
-            (profile.model_name === d.draft.modelName &&
-            profile.backend_id === d.draft.backendId
-              ? (profile.context_window ?? null)
-              : null),
+          // Only the backend's advertised facts describe the model. The
+          // profile's own saved limits are the draft, not model facts: sent
+          // here they became the model's default and ceiling, so a saved
+          // window could only ever be lowered.
+          contextWindow: advertisedModel?.context_window ?? null,
           maxContextWindow: advertisedModel?.max_context_window ?? null,
-          maxOutputTokens:
-            advertisedModel?.max_output_tokens ??
-            (profile.model_name === d.draft.modelName &&
-            profile.backend_id === d.draft.backendId
-              ? (profile.max_output_tokens ?? null)
-              : null),
+          maxOutputTokens: advertisedModel?.max_output_tokens ?? null,
           reasoningEfforts: advertisedModel?.reasoning_efforts ?? null,
         })
         .then((next) => {
@@ -706,6 +700,30 @@ export function ProfileEditor({
               alwaysExpanded
             />
           </div>
+          {/* The backend does not advertise these limits for this model, so
+              there is no model-aware bound; the profile value still applies. */}
+          {!recommendation.contextWindow && (
+            <NumberRow
+              id={id("context-window")}
+              label="Context window"
+              description="Tokens the model accepts per request. Empty uses the runtime default."
+              value={d.draft.contextWindow}
+              onChange={(v) => d.set("contextWindow", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+          )}
+          {!recommendation.maxOutputTokens && (
+            <NumberRow
+              id={id("max-output")}
+              label="Max output tokens"
+              description="Empty uses the runtime default."
+              value={d.draft.maxOutputTokens}
+              onChange={(v) => d.set("maxOutputTokens", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+          )}
         </Group>
       ) : null}
       {recommendationError ? (

@@ -70,4 +70,38 @@ describe("model context controls", () => {
       }),
     ).not.toBeNull();
   });
+
+  it("keeps reasoning effort with the settings that can be changed later (#1618)", () => {
+    const withEffort: InferenceModelRecommendation = {
+      ...recommendation,
+      reasoningEffort: { recommended: "medium", choices: ["low", "medium", "high"] },
+    };
+    const draft = recommendedInferenceSettings(withEffort);
+    const view = render(
+      <InferenceModelControls
+        recommendation={withEffort}
+        value={draft}
+        onChange={vi.fn()}
+        expanded={false}
+        onExpandedChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+    expect(screen.getByTestId("inference-settings-later")).toHaveTextContent(
+      "Reasoning effort medium. You can change the model, reasoning effort and limits later",
+    );
+    view.rerender(
+      <InferenceModelControls
+        recommendation={withEffort}
+        value={draft}
+        onChange={vi.fn()}
+        expanded
+        onExpandedChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toBeVisible();
+    expect(
+      screen.getByText("Applies to new requests. You can change it at any time."),
+    ).toBeVisible();
+  });
 });

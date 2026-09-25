@@ -17,12 +17,16 @@ test.describe("first-run install", () => {
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: "Find models", exact: true }).click();
     await page.getByRole("option", { name: "claude-sonnet-5", exact: true }).click();
-    await expect(
-      page.getByRole("combobox", { name: "Reasoning effort" }),
-    ).toContainText("high");
+    // Effort is a recommended default, changeable later, not an up-front choice.
+    await expect(page.getByTestId("inference-settings-later")).toContainText(
+      "Reasoning effort high",
+    );
+    await expect(page.getByRole("combobox", { name: "Reasoning effort" })).toHaveCount(
+      0,
+    );
+    await page.getByRole("button", { name: "Advanced settings" }).click();
     await page.getByRole("combobox", { name: "Reasoning effort" }).click();
     await page.getByRole("option", { name: "xhigh", exact: true }).click();
-    await page.getByRole("button", { name: "Advanced settings" }).click();
     await expect(page.getByLabel("Context window", { exact: true })).toHaveValue(
       "1000000",
     );
@@ -89,7 +93,7 @@ test.describe("first-run install", () => {
     await expect(page.getByTestId("session-screen")).toBeVisible({ timeout: 10000 });
   });
 
-  test("binds the signed-in Codex model and exposes reasoning before customization", async ({
+  test("binds the signed-in Codex model and keeps reasoning with the customizable settings", async ({
     page,
   }) => {
     await gotoHarness(page, "empty-fleet");
@@ -104,6 +108,7 @@ test.describe("first-run install", () => {
     await expect(
       page.getByRole("textbox", { name: "Search advertised models" }),
     ).toHaveCount(0);
+    await page.getByRole("button", { name: "Advanced settings" }).click();
     await page.getByRole("combobox", { name: "Reasoning effort" }).click();
     await page.getByRole("option", { name: "high", exact: true }).click();
     await expect(page.getByText("Provider managed", { exact: true })).toBeVisible();

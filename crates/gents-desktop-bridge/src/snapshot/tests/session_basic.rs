@@ -152,6 +152,41 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
 }
 
 #[test]
+fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
+    let behavior = serde_json::json!({"behavior_id":"default","agent_did":"did:test:amy","inference_profile_id":"profile"});
+    let backend = serde_json::json!({"agent_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
+    let observation = serde_json::json!({"backend_id":"backend","catalogs":[{"agent_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":272000,"max_context_window":872000}]}]});
+    let snapshot_for = |context_window: Option<i64>| {
+        let mut profile = serde_json::json!({"agent_did":"did:test:amy","profile_id":"profile","backend_id":"backend","model_name":"model"});
+        if let Some(value) = context_window {
+            profile["context_window"] = value.into();
+        }
+        let rows = ClientStoreRows {
+            sessions: vec![session("session-window", "did:test:amy", None)],
+            behaviors: vec![serde_json::from_value(behavior.clone()).expect("behavior")],
+            inference_backends: vec![serde_json::from_value(backend.clone()).expect("backend")],
+            backend_observations: vec![serde_json::from_value(observation.clone()).expect("observation")],
+            backend_observation_source_agent_dids: vec![Some("did:test:amy".into())],
+            inference_profiles: vec![serde_json::from_value(profile).expect("profile")],
+            ..ClientStoreRows::default()
+        };
+        build_session_snapshot_from_store_for_agent(
+            &ClientStore::from_rows(rows),
+            Some("did:test:amy"),
+            "session-window",
+            None,
+        )
+        .expect("snapshot")
+        .context
+        .context_window
+    };
+    // An unset profile limit is the advertised model's, as the runtime runs it.
+    assert_eq!(snapshot_for(None), 272_000);
+    // An edited profile limit is the next request's window.
+    assert_eq!(snapshot_for(Some(500_000)), 500_000);
+}
+
+#[test]
 fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized() {
     let mut rows = ClientStoreRows {
         sessions: vec![session(

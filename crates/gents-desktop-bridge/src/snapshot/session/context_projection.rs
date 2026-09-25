@@ -13,6 +13,65 @@ fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
         .unwrap_or_default()
 }
 
+/// The window the session's next request runs with, resolved by the
+/// runtime's owner (`ResolvedInference::context_window`): the profile's
+/// value, else the backend's advertised model limit, else the default.
+fn configured_context_window(
+    store: &gents_desktop_core::client::ClientStore,
+    profile: Option<&gents::document_config::InferenceProfile>,
+) -> usize {
+    let Some(profile) = profile else {
+        return gents::config::DEFAULT_CONTEXT_WINDOW;
+    };
+    let Some(backend) = store
+        .inference_backends
+        .iter()
+        .find(|row| row.backend_id == profile.backend_id && row.agent_did == profile.agent_did)
+    else {
+        return profile
+            .context_window
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW);
+    };
+    let credential_scope = matches!(
+        backend.auth,
+        gents::document_config::BackendAuth::PrincipalOAuth
+    )
+    .then_some(backend.agent_did.as_str());
+    let advertised_model = store
+        .backend_observations
+        .iter()
+        .enumerate()
+        .find(|(index, observation)| {
+            observation.backend_id == backend.backend_id
+                && source_matches_agent(
+                    &store.backend_observation_source_agent_dids,
+                    *index,
+                    &backend.agent_did,
+                    true,
+                )
+        })
+        .and_then(|(_, observation)| observation.catalog_for(credential_scope).ok().flatten())
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.model_name == profile.model_name)
+        })
+        .cloned();
+    gents::config::ResolvedInference {
+        backend: backend.clone(),
+        profile: profile.clone(),
+        sampling: None,
+        execution: None,
+        retry_policy: None,
+        advertised_model,
+    }
+    .context_window()
+    .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW)
+}
+
 pub(super) fn build_session_context_view(
     store: &gents_desktop_core::client::ClientStore,
     context_store: &gents_desktop_core::client::ClientStore,
@@ -49,10 +108,7 @@ pub(super) fn build_session_context_view(
                 row.compaction_id == compaction_id && row.agent_did == context.agent_did
             })
         });
-    let context_window = inference_profile
-        .and_then(|profile| profile.context_window)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW);
+    let context_window = configured_context_window(store, inference_profile);
     let compaction_threshold = compaction
         .and_then(|compaction| compaction.threshold)
         .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD);
