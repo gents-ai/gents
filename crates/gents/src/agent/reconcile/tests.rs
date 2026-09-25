@@ -182,10 +182,6 @@ async fn operator_write_changes_snapshot_fingerprint() {
     assert_eq!(diff.removed, 0);
 }
 
-/// Covers the two fingerprint owners that gate a rebuild —
-/// `runtime_snapshot::configuration_fingerprint` and
-/// `completion_factory::behavior_slot_fingerprint` — plus `diff_counts` in both
-/// directions. It does not exercise a running daemon.
 #[tokio::test]
 async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints() {
     let node = test_node().await;
