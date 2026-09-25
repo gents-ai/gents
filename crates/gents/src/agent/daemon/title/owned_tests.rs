@@ -135,6 +135,9 @@ impl TitleFixture {
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(60),
             deadline_duration: Duration::from_secs(120),
+            provider_idle_timeout: Duration::from_secs(
+                crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
@@ -241,6 +244,56 @@ impl TitleFixture {
         assert_eq!(
             response["data"]["AgentRequest"][0]["lifecycle_state"],
             "failed"
+        );
+    }
+
+    async fn interrupt_parent(&self) {
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+            self.node.clone(),
+            &self.behavior.behavior_id,
+            &self.parent.agent_did,
+            self.parent.clone(),
+            self.behavior.deadline_duration.as_secs(),
+            crate::lifecycle::ExecutionOrigin::Interactive,
+            self.behavior.backend_id.clone().unwrap_or_default(),
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        crate::interrupt::interrupt_request_by_doc_id(
+            self.node.as_ref(),
+            &self.parent.doc_id,
+            &self.parent.agent_did,
+            self.parent.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            lifecycle
+                .terminalize_owned(
+                    crate::lifecycle::RequestTerminalOutcome::Interrupted,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
+                .await
+                .unwrap(),
+            crate::lifecycle::TerminalizeResult::Won
+        );
+        let doc = crate::graphql::escape_graphql_string(&self.parent.doc_id);
+        let response = ConfigAccess::Local(self.node.clone())
+            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state interrupt_requested_at terminal_output }} }}"))
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentRequest"][0];
+        assert_eq!(row["lifecycle_state"], "interrupted");
+        assert!(row["interrupt_requested_at"].as_str().is_some());
+        assert_eq!(
+            serde_json::from_value::<gents_protocol::output::TerminalOutput>(
+                row["terminal_output"].clone()
+            )
+            .unwrap(),
+            gents_protocol::output::TerminalOutput::NoMessage
         );
     }
 
@@ -553,27 +606,41 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
 #[tokio::test]
 async fn title_reasoning_survives_parent_terminal_under_own_request() {
     let (fields, outcome) = modeled_title_fields("title_reasoning_audit_complete_no_message");
-    let fixture = TitleFixture::new().await;
-    fixture.terminalize_parent().await;
-    let public_head_before = fixture.session_message_count().await;
-    let provider = TitleProvider::new(provider_events(&fields, true), false);
-    let calls = provider.calls.clone();
-    let (_shutdown, rx) = tokio::sync::watch::channel(false);
-    fixture
-        .task(provider, true)
-        .run(fixture.title.clone(), rx)
-        .await
-        .unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_title_audit(&fixture, &fields, outcome, 1, true).await;
-    assert_eq!(fixture.session_message_count().await, public_head_before);
-    assert_eq!(
-        fixture.terminal_row().await,
-        (
-            RequestLifecycleState::Completed,
-            Some(gents_protocol::output::TerminalOutput::NoMessage)
-        )
-    );
+    for parent_state in [
+        RequestLifecycleState::Failed,
+        RequestLifecycleState::Interrupted,
+    ] {
+        let fixture = TitleFixture::new().await;
+        match parent_state {
+            RequestLifecycleState::Failed => fixture.terminalize_parent().await,
+            RequestLifecycleState::Interrupted => fixture.interrupt_parent().await,
+            _ => unreachable!(),
+        }
+        let public_head_before = fixture.session_message_count().await;
+        let provider = TitleProvider::new(provider_events(&fields, true), false);
+        let calls = provider.calls.clone();
+        let (_shutdown, rx) = tokio::sync::watch::channel(false);
+        fixture
+            .task(provider, true)
+            .run(fixture.title.clone(), rx)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "parent: {parent_state:?}");
+        assert_title_audit(&fixture, &fields, outcome, 1, true).await;
+        assert_eq!(
+            fixture.session_message_count().await,
+            public_head_before,
+            "parent: {parent_state:?}"
+        );
+        assert_eq!(
+            fixture.terminal_row().await,
+            (
+                RequestLifecycleState::Completed,
+                Some(gents_protocol::output::TerminalOutput::NoMessage)
+            ),
+            "parent: {parent_state:?}"
+        );
+    }
 }
 
 #[tokio::test]
