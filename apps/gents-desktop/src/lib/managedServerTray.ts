@@ -1,5 +1,13 @@
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
+import {
+  awaitManagedServerSettled,
+  managedServerWaitKind,
+  observeManagedServerOperation,
+  unsettledManagedServerError,
+  type ManagedServerWait,
+} from "./managedServerStartup";
+
 type Unlisten = () => void;
 type Listen = (event: string, handler: () => void) => Promise<Unlisten>;
 
@@ -13,6 +21,7 @@ export function installManagedServerTrayListeners(
   listen: Listen,
   reportError: (message: string) => void,
   showSetup: () => Promise<void> = async () => {},
+  onWait: (wait: ManagedServerWait | null) => void = () => {},
 ): Unlisten {
   let cancelled = false;
   const cleanups: Unlisten[] = [];
@@ -44,7 +53,12 @@ export function installManagedServerTrayListeners(
     }
     if (!api.startManagedServer)
       throw new Error("Start Agent is unavailable in this build.");
-    await api.startManagedServer(current.agentName?.trim() || "Local Agent");
+    const startManagedServer = api.startManagedServer;
+    await observeManagedServerOperation(
+      api,
+      () => startManagedServer(current.agentName?.trim() || "Local Agent"),
+      onWait,
+    );
   });
   register(MANAGED_SERVER_TRAY_STOP_EVENT, async () => {
     const current = await api.managedServerStatus!();
@@ -64,6 +78,14 @@ export function installManagedServerTrayListeners(
         "This agent was started outside the managed service. Stop that gents server process directly before restarting the managed agent.",
       );
     }
+    // Restarting a runtime that is migrating its data would interrupt the
+    // migration; the command waits for it to finish instead.
+    if (managedServerWaitKind(current) === "updating") {
+      const settled = await awaitManagedServerSettled(api, current, onWait);
+      const unsettled = unsettledManagedServerError(settled);
+      if (unsettled) throw unsettled;
+      return;
+    }
     if (!current.effectiveToolCeiling) {
       throw new Error(
         "Restart is unavailable until the agent reports its confirmed host access. Open Gents and check the local agent status.",
@@ -72,10 +94,16 @@ export function installManagedServerTrayListeners(
     if (!api.restartManagedServer) {
       throw new Error("Restart Agent is unavailable in this build.");
     }
-    await api.restartManagedServer(current.agentName?.trim() || "Local Agent", {
+    const restartManagedServer = api.restartManagedServer;
+    const authority = {
       toolCeiling: current.effectiveToolCeiling,
       toolRoot: current.effectiveToolRoot,
-    });
+    };
+    await observeManagedServerOperation(
+      api,
+      () => restartManagedServer(current.agentName?.trim() || "Local Agent", authority),
+      onWait,
+    );
   });
 
   return () => {

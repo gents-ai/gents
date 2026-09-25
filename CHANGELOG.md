@@ -173,6 +173,11 @@ source consistency checks, not a separate runtime compatibility version.
   is claimed later is refused or interrupted instead of running unsupervised,
   and `list_subagents` reports such a spawn as `stopping` until its child has
   stopped (#1807).
+- Desktop: starting or restarting the local agent from Local server settings,
+  Add agent, or the menu bar no longer reports a runtime that is still
+  updating its data as a failure. It shows "Updating data…" and waits, and the
+  menu bar's Restart Agent waits for the update instead of interrupting it
+  (#1762).
 
 ## 0.19.0 - 2026-09-24
 

@@ -16,7 +16,13 @@ import {
   ManagedRuntimeAuthorityReview,
 } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
-import { LOGIN_ITEMS_PATH } from "../../../lib/managedServerStartup";
+import {
+  LOGIN_ITEMS_PATH,
+  describeManagedServerWait,
+  managedServerWaitKind,
+  observeManagedServerOperation,
+  type ManagedServerWait,
+} from "../../../lib/managedServerStartup";
 import { Fact, Group, Row } from "./rows";
 
 export function LocalServer({ shell }: { shell: Shell }) {
@@ -29,6 +35,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
     useState<ManagedServerAuthorityInput["toolCeiling"]>("readwrite");
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(null);
   const [authorityError, setAuthorityError] = useState<string | null>(null);
+  const [wait, setWait] = useState<ManagedServerWait | null>(null);
   const load = () =>
     api.managedServerStatus?.().then(
       (next) => {
@@ -64,6 +71,9 @@ export function LocalServer({ shell }: { shell: Shell }) {
     }
   };
   const running = status?.state === "running" || status?.state === "external";
+  const updating =
+    wait?.kind === "updating" ||
+    (status ? managedServerWaitKind(status) === "updating" : false);
   const name = status?.agentName ?? "gents";
   const home = status?.suggestedToolRoot ?? status?.effectiveToolRoot ?? "";
   const authority = authorityForSelection(toolCeiling, selectedDirectory);
@@ -79,7 +89,12 @@ export function LocalServer({ shell }: { shell: Shell }) {
     setBusy(true);
     setAuthorityError(null);
     try {
-      let next = await api.restartManagedServer(name, authority);
+      const restartManagedServer = api.restartManagedServer;
+      let next = await observeManagedServerOperation(
+        api,
+        () => restartManagedServer(name, authority),
+        setWait,
+      );
       setStatus(next);
       const deadline = Date.now() + 30_000;
       while (!next.pairingReady && Date.now() < deadline) {
@@ -132,7 +147,16 @@ export function LocalServer({ shell }: { shell: Shell }) {
             variant="brand"
             disabled={busy || status?.state === "starting"}
             onClick={() =>
-              void act("Agent started", () => api.startManagedServer?.(name))
+              void act("Agent started", () => {
+                const startManagedServer = api.startManagedServer;
+                return startManagedServer
+                  ? observeManagedServerOperation(
+                      api,
+                      () => startManagedServer(name),
+                      setWait,
+                    )
+                  : undefined;
+              })
             }
           >
             {busy || status?.state === "starting" ? <Spinner /> : null} Start agent
@@ -156,6 +180,11 @@ export function LocalServer({ shell }: { shell: Shell }) {
               start again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
             </span>
           )}
+          {wait && (
+            <span role="status" className="text-xs text-muted-foreground">
+              {describeManagedServerWait(wait, Date.now()).label}
+            </span>
+          )}
           <Badge
             variant={
               running
@@ -165,7 +194,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
                   : "outline"
             }
           >
-            {status?.state ?? "unknown"}
+            {updating ? "updating data" : (status?.state ?? "unknown")}
           </Badge>
         </span>
       </Row>
