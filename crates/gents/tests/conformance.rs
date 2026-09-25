@@ -235,23 +235,18 @@ fn generated_r5_cross_principal_cases_drive_production_dispatch() {
         .expect("r5 cross-deployment conformance thread panicked");
 }
 
+// Drives two full agents and two P2P nodes: a single-threaded executor lets one
+// agent's shutdown starve behind a blocking DefraDB call on the other's, which the
+// 30s shutdown bound then reports as a hang.
 #[test]
 fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
-    std::thread::Builder::new()
-        .name("native-remote-spawn-conformance".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build native remote-spawn runtime")
-                .block_on(
-                    native_remote_spawn::generated_remote_spawn_contract_drives_native_seam(),
-                );
-        })
-        .expect("spawn native remote-spawn conformance thread")
-        .join()
-        .expect("native remote-spawn conformance thread panicked");
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("build native remote-spawn runtime")
+        .block_on(native_remote_spawn::generated_remote_spawn_contract_drives_native_seam());
 }
 
 // This integration fence drives two live runtimes and two P2P nodes. Match the
