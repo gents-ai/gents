@@ -71,11 +71,10 @@ pub(crate) use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
-    workspace_write_sandbox_enforced,
 };
 pub use shared::{
-    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    WorkspaceAuthority,
+    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
 
 /// Canonical baseline for inspecting or narrowing the read-only host capability.

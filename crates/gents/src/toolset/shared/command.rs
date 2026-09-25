@@ -893,13 +893,19 @@ pub(crate) fn select_sandbox_for_policy(
     }
 }
 
+/// Whether this host can confine commands to a workspace's writable roots.
+/// When false, `workspace_write` bash and ReadWrite workspace bindings fail
+/// closed; there is no unconfined fallback.
 #[cfg(target_os = "macos")]
-pub(crate) fn workspace_write_sandbox_enforced() -> bool {
+pub fn workspace_write_sandbox_enforced() -> bool {
     Path::new(SANDBOX_EXEC).exists()
 }
 
+/// Whether this host can confine commands to a workspace's writable roots.
+/// This build has no WorkspaceWrite sandbox for this OS, so writable
+/// workspaces fail closed.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn workspace_write_sandbox_enforced() -> bool {
+pub fn workspace_write_sandbox_enforced() -> bool {
     false
 }
 

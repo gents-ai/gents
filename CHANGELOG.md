@@ -75,6 +75,15 @@ source consistency checks, not a separate runtime compatibility version.
   output captured so far, followed by the deadline, instead of only the
   deadline. A command stopped by its own timeout keeps the last part of its
   output, marked `[Showing last N of M bytes]`, instead of the first part (#1669).
+- The isolated-workspace spawn tests now pass on Linux hosts. They check
+  whether the host can enforce the WorkspaceWrite sandbox. Where it can't
+  (Linux, until #1601 adds one), they assert that the runtime refuses a
+  ReadWrite-bound request with the explicit "requires an enforceable
+  WorkspaceWrite sandbox on this host" failure before any provider turn,
+  tool call or child workspace (#1846).
+- `read_transcript_terminal_flag_tracks_child_lifecycle` no longer
+  intermittently sees a `pending` child. It now waits until the child's claim
+  (`processing`) is durable before reading the transcript (#1847).
 
 ## 0.19.0 - 2026-09-24
 
