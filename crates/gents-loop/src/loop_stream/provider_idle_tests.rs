@@ -25,7 +25,7 @@ use rig::wasm_compat::WasmCompatSend;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_retry::CompletionRetryPolicy;
 use crate::error::InferenceError;
-use crate::loop_stream::{run_loop_stream, LoopConfig, LoopStreamItem};
+use crate::loop_stream::{run_loop_stream, LoopConfig, LoopStreamItem, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::rendered_request::scope::{
@@ -278,6 +278,7 @@ impl CompletionModel for WireModel {
 
 fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
     LoopConfig {
+        replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,
             OpenAiWireApi::ChatCompletions,
@@ -357,7 +358,7 @@ async fn run(attempts: Vec<WireAttempt>, policy: CompletionRetryPolicy) -> Run {
         let stream = run_loop_stream::<_, NoopSessionHook>(
             model,
             None,
-            Message::user("hello"),
+            TaggedMessage::unassociated(Message::user("hello")),
             Vec::new(),
             Arc::new(Vec::new()),
             config(policy),
