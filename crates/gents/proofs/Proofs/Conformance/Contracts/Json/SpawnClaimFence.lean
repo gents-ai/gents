@@ -20,6 +20,7 @@ def spawnFenceStepJson (value : SpawnFenceStep) : String :=
 def spawnFenceCaseJson (value : SpawnFenceCase) : String :=
   "{\"name\":" ++ jsonString value.name
     ++ ",\"route\":" ++ jsonString value.route
+    ++ ",\"await_mode\":" ++ jsonString value.awaitMode
     ++ ",\"unclaimed_deadline_set\":" ++ boolString value.unclaimedDeadlineSet
     ++ ",\"single_node_replayable\":" ++ boolString value.singleNodeReplayable
     ++ ",\"steps\":" ++ jsonArray (value.steps.map spawnFenceStepJson)

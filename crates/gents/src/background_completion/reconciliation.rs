@@ -45,7 +45,6 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
                 filter: {{
                     _and: [
                         {{ lifecycle_state: {{ _eq: "running" }} }},
-                        {{ await_mode: {{ _eq: "background" }} }},
                         {{ child_request_id: {{ _ne: "" }} }},
                         {{ unclaimed_deadline_at: {{ _lt: "{now}" }} }}
                     ]

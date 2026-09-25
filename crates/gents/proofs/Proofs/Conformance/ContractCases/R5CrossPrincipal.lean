@@ -28,7 +28,7 @@ def r5CrossPrincipalCase
   , crossPrincipalRoutingFired := crossPrincipalRoutingFired
   , samePrincipalFallback := samePrincipalFallback
   , unclaimedDeadlineSet := SpawnClaimFence.unclaimedDeadlineApplies
-      (if crossPrincipalRoutingFired then .crossPrincipal else .samePrincipal)
+      (if crossPrincipalRoutingFired then .crossPrincipal else .samePrincipal) .background
   }
 
 def r5CrossPrincipalCases : List R5CrossPrincipalCase :=

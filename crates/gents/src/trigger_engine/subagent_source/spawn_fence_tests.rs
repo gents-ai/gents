@@ -28,6 +28,7 @@ struct Fixture {
     host: String,
     host_identity: Arc<dyn AgentIdentity>,
     cross: bool,
+    bounded: bool,
     parent_id: String,
     parent_doc_id: String,
     bridge_doc_id: String,
@@ -48,6 +49,11 @@ impl Fixture {
             KeyIdentity::load_or_create(keys.path().join("coordinator.key"), None).unwrap();
         let coordinator = coordinator_identity.did().to_owned();
         let host_key = if cross { "host.key" } else { "coordinator.key" };
+        let await_mode = match case.await_mode.as_str() {
+            "foreground" => AwaitMode::Foreground,
+            "background" => AwaitMode::Background,
+            other => panic!("{}: unknown await mode {other}", case.name),
+        };
         let host_identity: Arc<dyn AgentIdentity> =
             Arc::new(KeyIdentity::load_or_create(keys.path().join(host_key), None).unwrap());
         let host = host_identity.did().to_owned();
@@ -83,31 +89,34 @@ impl Fixture {
                 0,
                 crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
                 &tool_call_id,
-                json!({"name": BEHAVIOR_ID, "prompt": "fenced work", "await_mode": "background"}),
+                json!({"name": BEHAVIOR_ID, "prompt": "fenced work", "await_mode": case.await_mode}),
                 Some(crate::streaming::SpawnAdmissionPlan {
                     tool_call_id: tool_call_id.clone(),
                     child_request_id: child_id.clone(),
                     spawn_target_did: host.clone(),
                     spawn_behavior_id: BEHAVIOR_ID.into(),
                     delegated_workspace: None,
-                    await_mode: AwaitMode::Background,
+                    await_mode: await_mode.clone(),
                 }),
-                AwaitMode::Background,
+                await_mode.clone(),
                 CancelPolicy::Cascade,
                 true,
             )
             .await
             .unwrap();
-        bridge
-            .publish_background_receipt("child started")
-            .await
-            .unwrap();
+        if await_mode == AwaitMode::Background {
+            bridge
+                .publish_background_receipt("child started")
+                .await
+                .unwrap();
+        }
         let bridge_doc_id = bridge.doc_id().unwrap().to_owned();
         let parent_doc_id = bridge.request_doc_id().unwrap().to_owned();
-        // The spawn owner sets the unclaimed deadline only on a cross-principal
-        // route (bound by the R5 cross-principal conformance). It is due in
-        // the future until a modeled deadline fires.
-        if cross {
+        // The spawn owner sets the unclaimed deadline where Lean says it
+        // applies (bound by the R5 conformance and the spawn e2e tests). It is
+        // due in the future until a modeled deadline fires.
+        let bounded = case.unclaimed_deadline_set;
+        if bounded {
             set_bridge_datetime(&node, &bridge_doc_id, "unclaimed_deadline_at", FUTURE).await;
         }
         Self {
@@ -116,6 +125,7 @@ impl Fixture {
             host,
             host_identity,
             cross,
+            bounded,
             parent_id,
             parent_doc_id,
             bridge_doc_id,
@@ -235,6 +245,7 @@ impl Fixture {
                 assert_eq!(self.bridge().await, before, "{}: local expiry", case.name);
             }
             "expire" => {
+                assert!(self.bounded, "{}", case.name);
                 set_bridge_datetime(
                     &self.node,
                     &self.bridge_doc_id,
@@ -265,10 +276,11 @@ impl Fixture {
                 self.recover().await;
             }
             "materialize" if step.stale_host_view => self.create_child_on_stale_view().await,
-            "materialize" if !self.cross => {
+            "materialize" if !self.cross && self.bridge().await["lifecycle_state"] == "running" => {
                 // Same-principal authorization through the subagent source is
                 // bound by the R5 same-principal conformance; this drives the
-                // child creation owner it calls.
+                // child creation owner it calls. A settled bridge still goes
+                // through the source's running-bridge gate below.
                 self.create_child_on_stale_view().await
             }
             "materialize" => {
@@ -371,7 +383,9 @@ impl Fixture {
             }
             Some("timedOut") if bridge["cancel_cascade_intent_at"].is_string() => "expired",
             Some("timedOut") => "settled_observed",
-            Some("running") if self.cross && bridge["unclaimed_deadline_at"].is_null() => "linked",
+            Some("running") if self.bounded && bridge["unclaimed_deadline_at"].is_null() => {
+                "linked"
+            }
             Some("running") => "awaiting",
             other => panic!("{at}: bridge lifecycle {other:?}"),
         };
@@ -440,12 +454,12 @@ async fn set_bridge_datetime(node: &EmbeddedNode, bridge_doc_id: &str, field: &s
 #[tokio::test]
 async fn generated_spawn_fence_cases_replay_native_owners() {
     let cases = lean_spawn_fence_cases();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 12);
     let replayable = cases
         .iter()
         .filter(|case| case.single_node_replayable)
         .collect::<Vec<_>>();
-    assert_eq!(replayable.len(), 9);
+    assert_eq!(replayable.len(), 11);
     for case in replayable {
         let fixture = Fixture::new(case).await;
         assert_eq!(

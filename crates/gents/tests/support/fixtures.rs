@@ -181,6 +181,33 @@ pub async fn configure_subagent_behavior(
     background_enabled: bool,
     allow_cross_principal: Option<bool>,
 ) {
+    configure_subagent_behavior_with_spawn_timeout(
+        node,
+        agent_did,
+        behavior_id,
+        tools_id,
+        targets,
+        spawn_enabled,
+        background_enabled,
+        allow_cross_principal,
+        None,
+    )
+    .await;
+}
+
+/// As [`configure_subagent_behavior`], also setting the unclaimed-spawn bound.
+#[allow(clippy::too_many_arguments)]
+pub async fn configure_subagent_behavior_with_spawn_timeout(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    tools_id: &str,
+    targets: Vec<gents::SubagentTargetDocument>,
+    spawn_enabled: bool,
+    background_enabled: bool,
+    allow_cross_principal: Option<bool>,
+    spawn_timeout_secs: Option<i64>,
+) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -284,6 +311,7 @@ pub async fn configure_subagent_behavior(
                 steering_enabled: Some(true),
                 background_enabled: Some(background_enabled),
                 allow_cross_principal,
+                cross_principal_spawn_timeout_secs: spawn_timeout_secs,
                 ..Default::default()
             });
             behavior.context_id = Some(context_id);

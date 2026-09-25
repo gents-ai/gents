@@ -226,6 +226,11 @@ source consistency checks, not a separate runtime compatibility version.
   request document its provenance names, through the agent-scoped lineage
   owner, instead of comparing that document id with a logical request id
   (#1834).
+- A foreground `spawn_subagent` whose child is never confirmed no longer
+  blocks its parent until the parent's own deadline. It carries the same
+  unclaimed-spawn bound as a cross-principal spawn on every route; when the
+  bound passes the parent's turn receives a non-retryable `spawn_unclaimed`
+  result and the child is fenced (#1830).
 
 ## 0.19.0 - 2026-09-24
 

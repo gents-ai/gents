@@ -17,6 +17,7 @@ pub(crate) struct LeanSpawnFenceStep {
 pub(crate) struct LeanSpawnFenceCase {
     pub(crate) name: String,
     pub(crate) route: String,
+    pub(crate) await_mode: String,
     pub(crate) unclaimed_deadline_set: bool,
     pub(crate) single_node_replayable: bool,
     pub(crate) steps: Vec<LeanSpawnFenceStep>,

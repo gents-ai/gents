@@ -334,6 +334,12 @@ impl DefraSessionHook {
                     }
                     return Ok(payload);
                 }
+                if let Some(settled) = self
+                    .settle_unconfirmed_foreground_spawn(internal_call_id, now)
+                    .await?
+                {
+                    return Ok(settled);
+                }
                 let remaining = (parent_deadline_at - now)
                     .to_std()
                     .unwrap_or(Duration::from_millis(0));
@@ -843,6 +849,63 @@ impl DefraSessionHook {
         )
         .await?;
         crate::tool_call_lifecycle::query::render_tool_result(&message)
+    }
+
+    /// Lean `SpawnClaimFence.expire` for a foreground spawn whose child has not
+    /// been confirmed (#1830): once its unclaimed bound passes, the shared
+    /// settlement owner links a child that did materialize, or abandons and
+    /// fences the bridge, and the blocked turn receives the durable result
+    /// instead of waiting out the parent's own deadline.
+    async fn settle_unconfirmed_foreground_spawn(
+        &self,
+        internal_call_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<Option<String>> {
+        let bridge = {
+            let map = self.in_flight_lifecycles.lock().await;
+            map.get(internal_call_id).and_then(|lifecycle| {
+                let due = lifecycle.unclaimed_deadline_at?;
+                (now >= due).then(|| {
+                    Some((
+                        lifecycle.doc_id()?.to_owned(),
+                        lifecycle.agent_did().to_owned(),
+                        lifecycle.session_id().to_owned(),
+                        lifecycle.requester_did().map(str::to_owned),
+                    ))
+                })?
+            })
+        };
+        let Some((doc_id, agent_did, session_id, requester_did)) = bridge else {
+            return Ok(None);
+        };
+        match crate::background_completion::settle_unclaimed_spawn(&self.node, &doc_id).await? {
+            crate::background_completion::UnclaimedSpawnSettlement::Linked => {
+                if let Some(lifecycle) = self
+                    .in_flight_lifecycles
+                    .lock()
+                    .await
+                    .get_mut(internal_call_id)
+                {
+                    lifecycle.set_unclaimed_deadline_at(None);
+                }
+                Ok(None)
+            }
+            crate::background_completion::UnclaimedSpawnSettlement::Abandoned
+            | crate::background_completion::UnclaimedSpawnSettlement::AlreadySettled => {
+                self.discard_in_flight_lifecycle(internal_call_id).await;
+                let message = load_tool_call_result(
+                    &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                    &doc_id,
+                    &agent_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                )
+                .await?;
+                Ok(Some(crate::tool_call_lifecycle::query::render_tool_result(
+                    &message,
+                )?))
+            }
+        }
     }
 
     pub(super) async fn take_owned_in_flight_lifecycle(
