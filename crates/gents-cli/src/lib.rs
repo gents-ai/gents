@@ -647,34 +647,51 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Removes everything under `home_dir` except `keep` (the held store lock),
-/// so a runtime cannot take the store while it is wiped.
-pub(crate) fn dangerously_overwrite_home(home_dir: &Path, keep: &Path) -> Result<()> {
-    if !home_dir.exists() {
-        return Ok(());
-    }
-    ensure_overwritable_home(home_dir)?;
-    let home =
-        fs::canonicalize(home_dir).with_context(|| format!("resolving {}", home_dir.display()))?;
-    remove_tree_except(&home, keep)
-        .with_context(|| format!("dangerously overwriting {}", home_dir.display()))
+/// Removes everything under the resolved home `home` except `keep` (the held
+/// store lock), so a runtime cannot take the store while it is wiped. `home`
+/// must come from [`overwritable_home`]; every removal stays under it.
+pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()> {
+    remove_tree_except(home, keep)
+        .with_context(|| format!("dangerously overwriting {}", home.display()))
 }
 
-/// Refuses homes an overwrite must never wipe.
-pub(crate) fn ensure_overwritable_home(home_dir: &Path) -> Result<()> {
-    if home_dir.as_os_str().is_empty() || home_dir == Path::new("/") {
-        anyhow::bail!("refusing to dangerously overwrite {}", home_dir.display());
+/// Resolves the directory an overwrite of `home_dir` would wipe, through
+/// every symlink and `.`/`..` alias, and refuses the filesystem root, the
+/// user home and any ancestor of it. `None` when the home does not exist.
+pub(crate) fn overwritable_home(
+    home_dir: &Path,
+    user_home: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    if home_dir.as_os_str().is_empty() {
+        anyhow::bail!("refusing to dangerously overwrite an empty home path");
     }
-    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
-        if home_dir == user_home {
+    let home = match fs::canonicalize(home_dir) {
+        Ok(home) => home,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("resolving {}", home_dir.display()))
+        }
+    };
+    if home.parent().is_none() {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {} (the filesystem root)",
+            home_dir.display()
+        );
+    }
+    if let Some(user_home) = user_home {
+        let user_home = fs::canonicalize(user_home).unwrap_or_else(|_| user_home.to_path_buf());
+        if user_home.starts_with(&home) {
             anyhow::bail!(
-                "refusing to dangerously overwrite the user home directory {}; pass a dedicated gents home instead",
-                home_dir.display()
+                "refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead",
+                home_dir.display(),
+                home.display()
             );
         }
     }
-
-    Ok(())
+    if !home.is_dir() {
+        anyhow::bail!("{} is not a directory", home_dir.display());
+    }
+    Ok(Some(home))
 }
 
 fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {

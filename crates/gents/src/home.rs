@@ -80,20 +80,28 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
     let path = parent.join(format!("{}.lock", name.to_string_lossy()));
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
-    // Never follow a planted symlink: truncating below would clobber its target.
+    // Never follow a planted symlink: truncating below would clobber its
+    // target. A planted FIFO must not block the open either.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let mut file = options
         .open(&path)
         .with_context(|| format!("opening store lock {}", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("inspecting store lock {}", path.display()))?
+        .is_file()
+    {
+        anyhow::bail!("store lock {} is not a regular file", path.display());
+    }
     match file.try_lock() {
         Ok(()) => {}
         Err(fs::TryLockError::WouldBlock) => {
             let mut holder = String::new();
-            let _ = file.read_to_string(&mut holder);
+            let _ = (&mut file).take(32).read_to_string(&mut holder);
             let holder = holder
                 .trim()
                 .parse::<u32>()
@@ -208,6 +216,24 @@ mod tests {
                 .unwrap()
                 .join("real-data.lock")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_path_that_is_not_a_regular_file_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let fifo = std::ffi::CString::new(
+            temp.path()
+                .join("data.lock")
+                .into_os_string()
+                .into_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let error = lock_store(temp.path(), &data).expect_err("a FIFO is not a lock file");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
     }
 
     #[cfg(unix)]

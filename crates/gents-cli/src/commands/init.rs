@@ -73,18 +73,68 @@ fn lock_init_store(
     data_dir: &Path,
     overwrite: bool,
 ) -> Result<gents::home::StoreLock> {
-    if overwrite {
-        crate::ensure_overwritable_home(home_dir)?;
-    }
-    fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let lock = gents::home::lock_store(home_dir, data_dir)?;
-    if overwrite {
-        dangerously_overwrite_home(home_dir, lock.path())?;
+    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
+}
+
+fn lock_init_store_for_user(
+    home_dir: &Path,
+    data_dir: &Path,
+    overwrite: bool,
+    user_home: Option<&Path>,
+) -> Result<gents::home::StoreLock> {
+    let home = if overwrite {
+        crate::overwritable_home(home_dir, user_home)?
+    } else {
+        None
+    };
+    let Some(home) = home else {
         fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    }
+        return gents::home::lock_store(home_dir, data_dir);
+    };
+    let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let lock = gents::home::lock_store(home_dir, &data_dir)?;
+    dangerously_overwrite_home(&home, lock.path())?;
+    fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     Ok(lock)
+}
+
+/// The data directory an overwrite recreates, on the resolved home. A data
+/// directory reached through a symlink or `..` inside the home would be
+/// replaced by a different directory than the one locked, so it is refused;
+/// one outside the home is not wiped and keeps its lock.
+fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+
+    let refuse = || {
+        anyhow::anyhow!(
+            "refusing to dangerously overwrite {}: its data directory {} is reached through a symlink or `..`; remove the link or pass a plain --data-dir",
+            home_dir.display(),
+            data_dir.display()
+        )
+    };
+    let Ok(relative) = data_dir.strip_prefix(home_dir) else {
+        if fs::canonicalize(data_dir).is_ok_and(|resolved| resolved.starts_with(home)) {
+            return Err(refuse());
+        }
+        return Ok(data_dir.to_path_buf());
+    };
+    let mut resolved = home.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => resolved.push(name),
+            Component::CurDir => continue,
+            _ => return Err(refuse()),
+        }
+        if fs::symlink_metadata(&resolved).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(refuse());
+        }
+    }
+    Ok(resolved)
 }
 
 pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
@@ -1305,6 +1355,88 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// A fake user home, so no test ever resolves a real broad path.
+    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
+        lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_never_wipes_the_user_home_through_an_alias() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(user_home.join("Documents")).unwrap();
+        fs::write(user_home.join("Documents/precious"), "keep").unwrap();
+        let link = temp.path().join("gents-home");
+        std::os::unix::fs::symlink(&user_home, &link).unwrap();
+
+        for alias in [
+            link.clone(),
+            user_home.join("."),
+            user_home.join("Documents").join(".."),
+            temp.path().to_path_buf(),
+        ] {
+            let error = overwrite(&alias, &user_home)
+                .expect_err("the user home and its ancestors are never overwritten")
+                .to_string();
+            assert!(error.contains("user home"), "{alias:?}: {error}");
+        }
+        assert_eq!(
+            fs::read_to_string(user_home.join("Documents/precious")).unwrap(),
+            "keep"
+        );
+        assert!(
+            !user_home.join("data").exists(),
+            "nothing is created before the home is validated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_refuses_a_data_directory_linked_out_of_the_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let external = temp.path().join("real-data");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("MANIFEST"), "store").unwrap();
+        std::os::unix::fs::symlink(&external, home.join("data")).unwrap();
+
+        let error = overwrite(&home, &user_home).expect_err("a linked data directory is refused");
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert!(external.join("MANIFEST").is_file());
+        assert!(fs::symlink_metadata(home.join("data"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_overwrite_through_a_linked_home_keeps_one_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let real = temp.path().join("real-home");
+        fs::create_dir_all(real.join("data")).unwrap();
+        fs::write(real.join("init.json"), "{}").unwrap();
+        let link = temp.path().join("link-home");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let held = overwrite(&link, &user_home).expect("a dedicated linked home is overwritten");
+        assert!(!real.join("init.json").exists());
+        assert!(real.join("data").is_dir());
+        for alias in [link.join("data"), real.join("data")] {
+            assert!(
+                gents::home::lock_store(&real, &alias).is_err(),
+                "{alias:?} takes the lock init holds"
+            );
+        }
+        drop(held);
+    }
+
     #[test]
     fn init_holds_the_store_lock_until_it_finishes() {
         let temp = tempfile::tempdir().unwrap();
@@ -1329,15 +1461,17 @@ mod tests {
         fs::write(data.join("MANIFEST"), "store").unwrap();
         fs::write(home.join("init.json"), "{}").unwrap();
 
+        let user_home = temp.path().join("user");
+        fs::create_dir_all(&user_home).unwrap();
         let runtime = gents::home::lock_store(&home, &data).unwrap();
         assert!(
-            lock_init_store(&home, &data, true).is_err(),
+            overwrite(&home, &user_home).is_err(),
             "a store a runtime has open is not wiped"
         );
         assert!(data.join("MANIFEST").is_file());
         drop(runtime);
 
-        let held = lock_init_store(&home, &data, true).expect("an idle home is overwritten");
+        let held = overwrite(&home, &user_home).expect("an idle home is overwritten");
         assert!(!data.join("MANIFEST").exists());
         assert!(!home.join("init.json").exists());
         assert!(data.is_dir());
