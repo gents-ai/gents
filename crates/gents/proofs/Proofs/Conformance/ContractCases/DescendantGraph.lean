@@ -142,4 +142,59 @@ def descendantGraphCases : List DescendantGraphCase :=
       { sessionOwner with sessionId := " \t" }
   ]
 
+/-- One edge of a cursor case: its durable identity and the lifecycle it has
+    when the anchor is resolved. -/
+structure DescendantCursorEdge where
+  toolCallId : Nat
+  childRequestId : Nat
+  lifecycle : String
+  deriving Repr
+
+/-- `anchorSettled` records that the anchor was issued while its edge was
+    running and resolved after the edge settled into its listed lifecycle. -/
+structure DescendantCursorCase where
+  name : String
+  edges : List DescendantCursorEdge
+  after : Option (Nat × Nat)
+  anchorSettled : Bool
+  expectedChildRequestIds : List Nat
+  staleCursor : Bool
+  deriving Repr
+
+def cursorEdge (toolCallId childRequestId : Nat) (lifecycle : Lifecycle) : Edge :=
+  { baseEdge with
+      parentToolCallId := toolCallId
+      childRequestId := childRequestId
+      lifecycle := lifecycle }
+
+def descendantCursorCase (name : String) (edges : List Edge)
+    (after : Option Cursor) (anchorSettled : Bool := false) : DescendantCursorCase :=
+  let result := DescendantGraph.page after edges
+  { name
+  , edges := edges.map fun edge =>
+      { toolCallId := edge.parentToolCallId
+      , childRequestId := edge.childRequestId
+      , lifecycle := lifecycleString edge.lifecycle }
+  , after
+  , anchorSettled
+  , expectedChildRequestIds := result.edges.map (·.childRequestId)
+  , staleCursor := result.staleCursor }
+
+def cursorFanOut : List Edge :=
+  [cursorEdge 21 2 .running, cursorEdge 22 3 .running, cursorEdge 23 4 .running]
+
+def descendantCursorCases : List DescendantCursorCase :=
+  [ descendantCursorCase "no_anchor_lists_scope" cursorFanOut none
+  , descendantCursorCase "anchor_resumes_after_edge" cursorFanOut (some (21, 2))
+  , descendantCursorCase "anchor_at_last_edge_ends_scope" cursorFanOut (some (23, 4))
+  , descendantCursorCase "unclaimed_failure_keeps_anchor"
+      [cursorEdge 21 2 .running, cursorEdge 22 3 .failed, cursorEdge 23 4 .running]
+      (some (22, 3)) true
+  , descendantCursorCase "every_child_unclaimed_keeps_anchor"
+      [cursorEdge 21 2 .failed, cursorEdge 22 3 .failed, cursorEdge 23 4 .failed]
+      (some (21, 2)) true
+  , descendantCursorCase "stale_anchor_restarts_scope" cursorFanOut (some (29, 9))
+  , descendantCursorCase "stale_anchor_same_tool_other_child" cursorFanOut (some (21, 9))
+  ]
+
 end Conformance.ContractCases

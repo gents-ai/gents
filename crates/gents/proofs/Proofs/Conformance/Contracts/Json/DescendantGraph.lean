@@ -34,4 +34,29 @@ def descendantGraphCaseJson (value : DescendantGraphCase) : String :=
 def descendantGraphCasesJson : String :=
   jsonArray (descendantGraphCases.map descendantGraphCaseJson)
 
+def descendantCursorEdgeJson (value : DescendantCursorEdge) : String :=
+  "{"
+    ++ "\"tool_call_id\":" ++ toString value.toolCallId ++ ","
+    ++ "\"child_request_id\":" ++ toString value.childRequestId ++ ","
+    ++ "\"lifecycle\":" ++ jsonString value.lifecycle
+    ++ "}"
+
+def descendantCursorCaseJson (value : DescendantCursorCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString value.name ++ ","
+    ++ "\"edges\":" ++ jsonArray (value.edges.map descendantCursorEdgeJson) ++ ","
+    ++ "\"after\":" ++ (match value.after with
+        | none => "null"
+        | some (tool, child) =>
+            "{\"tool_call_id\":" ++ toString tool
+              ++ ",\"child_request_id\":" ++ toString child ++ "}") ++ ","
+    ++ "\"anchor_settled\":" ++ boolString value.anchorSettled ++ ","
+    ++ "\"expected_child_request_ids\":"
+      ++ jsonArray (value.expectedChildRequestIds.map toString) ++ ","
+    ++ "\"stale_cursor\":" ++ boolString value.staleCursor
+    ++ "}"
+
+def descendantCursorCasesJson : String :=
+  jsonArray (descendantCursorCases.map descendantCursorCaseJson)
+
 end Conformance.Contracts

@@ -221,6 +221,9 @@ async fn load_timeline_descendant_edges(
             },
         )
         .await?;
+        // This loop only follows cursors it was just handed; an anchor that
+        // vanished between pages would restart the scope and duplicate edges.
+        anyhow::ensure!(!page.stale_cursor, "descendant graph changed while paging");
         edges.extend(page.edges);
         if !page.has_more {
             break;

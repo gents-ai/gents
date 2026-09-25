@@ -22,3 +22,26 @@ pub(crate) struct LeanDescendantGraphCase {
     pub(crate) session_authorized: bool,
     pub(crate) session_controllable: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanDescendantCursorEdge {
+    pub(crate) tool_call_id: usize,
+    pub(crate) child_request_id: usize,
+    pub(crate) lifecycle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanDescendantCursorAnchor {
+    pub(crate) tool_call_id: usize,
+    pub(crate) child_request_id: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanDescendantCursorCase {
+    pub(crate) name: String,
+    pub(crate) edges: Vec<LeanDescendantCursorEdge>,
+    pub(crate) after: Option<LeanDescendantCursorAnchor>,
+    pub(crate) anchor_settled: bool,
+    pub(crate) expected_child_request_ids: Vec<usize>,
+    pub(crate) stale_cursor: bool,
+}

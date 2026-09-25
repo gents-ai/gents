@@ -183,6 +183,10 @@ pub struct DescendantPage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     pub has_more: bool,
+    /// The caller's `after` anchor named no edge in this scope, so the page
+    /// restarted at the head of the scope (Lean `DescendantGraph.page`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale_cursor: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -463,17 +467,27 @@ fn page_descendant_edges(
     // Resolve the cursor against the stable scoped edge set before applying
     // lifecycle filters. Otherwise an edge that becomes terminal between
     // pages disappears along with the client's valid pagination anchor.
-    let start = match query
+    let (start, stale_cursor) = match query
         .after
         .as_deref()
         .and_then(|value| nonempty(Some(value)))
     {
-        None => 0,
-        Some(after) => edges
-            .iter()
-            .position(|edge| edge.cursor == after)
-            .map(|index| index + 1)
-            .with_context(|| format!("descendant cursor {after:?} is not in this graph scope"))?,
+        None => (0, false),
+        Some(after) => match cursor_edge_identity(after).and_then(|identity| {
+            edges
+                .iter()
+                .position(|edge| edge_identity(edge) == identity)
+        }) {
+            Some(index) => (index + 1, false),
+            None => {
+                tracing::warn!(
+                    root_request_id = %query.root_request_id,
+                    cursor = ?after,
+                    "descendant cursor names no edge in this graph scope; restarting the page"
+                );
+                (0, true)
+            }
+        },
     };
     let limit = query.validated_limit();
     let eligible_edges = edges
@@ -493,7 +507,28 @@ fn page_descendant_edges(
         edges: page_edges,
         next_cursor,
         has_more,
+        stale_cursor,
     })
+}
+
+/// The durable edge identity a cursor names (Lean `DescendantGraph.cursor`).
+/// Depth and creation time only order the scope; an anchor resolves by the
+/// immutable parent/tool/child receipt so a rewritten timestamp cannot strand it.
+fn cursor_edge_identity(cursor: &str) -> Option<(&str, &str, &str)> {
+    let mut fields = cursor.rsplitn(4, '\u{1f}');
+    let child = fields.next()?;
+    let tool = fields.next()?;
+    let parent = fields.next()?;
+    fields.next()?;
+    Some((parent, tool, child))
+}
+
+fn edge_identity(edge: &DescendantEdge) -> (&str, &str, &str) {
+    (
+        edge.immediate_parent_request_id.as_str(),
+        edge.immediate_parent_tool_call_id.as_str(),
+        edge.child_request_id.as_str(),
+    )
 }
 
 /// The session is an authority boundary, not merely a label for convenient
@@ -1451,7 +1486,123 @@ fn clean(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::lean_descendant_graph_cases;
+    use crate::lean_vocab_test::{lean_descendant_cursor_cases, lean_descendant_graph_cases};
+
+    const ISSUED_AT: &str = "2026-09-25T14:47:11.196551Z";
+    // The pre-#1808 settlement writers re-supplied `started_at` at second
+    // precision; rows already rewritten that way must still resolve.
+    const SETTLED_AT: &str = "2026-09-25T14:47:11Z";
+
+    fn native_edge(
+        tool_call_id: usize,
+        child_request_id: usize,
+        created_at: &str,
+        lifecycle: &str,
+    ) -> DescendantEdge {
+        let tool_call_id = format!("tool-{tool_call_id}");
+        let child_request_id = format!("child-{child_request_id}");
+        DescendantEdge {
+            cursor: edge_cursor(
+                1,
+                Some(created_at),
+                "parent",
+                &tool_call_id,
+                &child_request_id,
+            ),
+            root_request_id: "parent".into(),
+            immediate_parent_request_id: "parent".into(),
+            immediate_parent_request_doc_id: "parent-doc".into(),
+            immediate_parent_agent_did: "did:owner".into(),
+            immediate_parent_requester_did: None,
+            immediate_parent_tool_call_doc_id: format!("{tool_call_id}-doc"),
+            immediate_parent_session_id: "conversation".into(),
+            immediate_parent_tool_call_id: tool_call_id,
+            child_request_id,
+            child_request_doc_id: None,
+            child_requester_did: None,
+            child_session_id: None,
+            principal_did: None,
+            behavior_id: None,
+            target: None,
+            await_mode: "background".into(),
+            cancel_policy: Some("cascade".into()),
+            lifecycle_state: lifecycle.into(),
+            child_lifecycle_state: None,
+            materialization_state: DescendantMaterializationState::AwaitingChild,
+            terminal_result_ref: None,
+            transcript_cursor: 0,
+            authorization_state: DescendantAuthorizationState::PendingMaterialization,
+            control_authority: DescendantControlAuthority::PendingMaterialization,
+            diagnostic: None,
+            depth: 1,
+            created_at: Some(created_at.into()),
+            updated_at: Some(created_at.into()),
+        }
+    }
+
+    #[test]
+    fn generated_descendant_cursor_cases_page_native_edges() {
+        let cases = lean_descendant_cursor_cases();
+        assert_eq!(cases.len(), 7);
+        for case in cases {
+            let settled_at = if case.anchor_settled {
+                SETTLED_AT
+            } else {
+                ISSUED_AT
+            };
+            let edges = case
+                .edges
+                .iter()
+                .map(|edge| {
+                    native_edge(
+                        edge.tool_call_id,
+                        edge.child_request_id,
+                        settled_at,
+                        &edge.lifecycle,
+                    )
+                })
+                .collect::<Vec<_>>();
+            // The anchor is what the caller was handed earlier: the edge as it
+            // was listed while still running, before any settlement write.
+            let after = case.after.as_ref().map(|anchor| {
+                native_edge(
+                    anchor.tool_call_id,
+                    anchor.child_request_id,
+                    ISSUED_AT,
+                    "running",
+                )
+                .cursor
+            });
+            let page = page_descendant_edges(
+                &DescendantQuery {
+                    root_request_id: "parent".into(),
+                    scope: DescendantScope::DirectChildren,
+                    after,
+                    limit: MAX_DESCENDANT_PAGE_LIMIT,
+                    include_terminal: true,
+                },
+                edges,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{}: a cursor must never fail the page: {error:#}",
+                    case.name
+                )
+            });
+            let children = page
+                .edges
+                .iter()
+                .map(|edge| edge.child_request_id.clone())
+                .collect::<Vec<_>>();
+            let expected = case
+                .expected_child_request_ids
+                .iter()
+                .map(|id| format!("child-{id}"))
+                .collect::<Vec<_>>();
+            assert_eq!(children, expected, "{}", case.name);
+            assert_eq!(page.stale_cursor, case.stale_cursor, "{}", case.name);
+        }
+    }
 
     #[test]
     fn cursor_order_is_total_and_depth_first() {

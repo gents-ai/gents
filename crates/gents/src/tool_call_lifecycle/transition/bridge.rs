@@ -249,10 +249,10 @@ impl ToolCallLifecycle {
         let started_at = self.started_at.ok_or_else(|| {
             anyhow!("bridge_cancel_cascade_dispatch called without started_at set")
         })?;
-        let started_at = started_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let started_at = started_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
         let deadline_at = self
             .deadline_at
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
         let mutation = format!(
             r#"mutation {{

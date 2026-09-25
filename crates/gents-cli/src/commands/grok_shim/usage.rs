@@ -260,6 +260,8 @@ pub(super) async fn session_usage(
             let page =
                 gents::resolve_descendant_graph(gents::DescendantGraphAccess::Local(node), &query)
                     .await?;
+            // A restarted page would count edges twice.
+            anyhow::ensure!(!page.stale_cursor, "descendant graph changed while paging");
             let owners = descendant_owners(
                 node,
                 page.edges

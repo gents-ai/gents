@@ -1292,6 +1292,11 @@ def caseCoverage : List CoverageEntry :=
       "DescendantGraphCases"
       "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control")
       "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
+      "descendant_cursor_cases"
+      "DescendantCursorCases"
+      "descendant_graph::tests::generated_descendant_cursor_cases_page_native_edges")
+      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
