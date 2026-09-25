@@ -175,14 +175,9 @@ impl LiveToolOutputRegistry {
         &self,
         tool_call_id: &str,
         expected_text: &str,
-        metadata_json: &str,
-        stdout_raw: &str,
-        stdout_rendered: &str,
-        stdout_returned_bytes: usize,
-        stderr_raw: &str,
-        stderr_rendered: &str,
-        stderr_returned_bytes: usize,
-        raw_json: bool,
+        layout: CommandPresentationLayout<'_>,
+        stdout: CapturedChannel<'_>,
+        stderr: CapturedChannel<'_>,
     ) -> anyhow::Result<()> {
         let mut live = self.inner.lock().await;
         let state = live.get_mut(tool_call_id).ok_or_else(|| {
@@ -190,43 +185,50 @@ impl LiveToolOutputRegistry {
         })?;
         anyhow::ensure!(
             channel_len(&state.receipts[LiveOutputStream::Stdout.index()])
-                == stdout_raw.len() as u64
+                == stdout.raw.len() as u64
                 && channel_len(&state.receipts[LiveOutputStream::Stderr.index()])
-                    == stderr_raw.len() as u64,
+                    == stderr.raw.len() as u64,
             "command capture receipts do not cover the complete raw stdout/stderr"
         );
-        let stdout = channel_plan(
-            stdout_raw,
-            stdout_rendered,
-            stdout_returned_bytes,
-            !raw_json,
-        )?;
-        let stderr = channel_plan(
-            stderr_raw,
-            stderr_rendered,
-            stderr_returned_bytes,
-            !raw_json,
-        )?;
+        let json_object = matches!(layout, CommandPresentationLayout::JsonObject { .. });
+        let stdout_plan = channel_plan(&stdout, !json_object)?;
+        let stderr_plan = channel_plan(&stderr, !json_object)?;
         let mut parts = Vec::new();
-        if raw_json {
-            anyhow::ensure!(
-                metadata_json.starts_with('{') && metadata_json.ends_with('}'),
-                "command metadata did not serialize as a JSON object"
-            );
-            let metadata_fields = &metadata_json[1..metadata_json.len() - 1];
-            push_literal(&mut parts, format!(r#"{{{metadata_fields},"stdout":"#));
-            append_json_channel(&mut parts, stdout_raw, &stdout, &state.receipts[0])?;
-            push_literal(&mut parts, r#"","stderr":"#.to_owned());
-            append_json_channel(&mut parts, stderr_raw, &stderr, &state.receipts[1])?;
-            push_literal(&mut parts, "\"}".to_owned());
-        } else {
-            push_literal(
-                &mut parts,
-                format!("{COMMAND_OUTPUT_META_PREFIX}{metadata_json}\nstdout:\n"),
-            );
-            append_plain_channel(&mut parts, &stdout, &state.receipts[0])?;
-            push_literal(&mut parts, "\nstderr:\n".to_owned());
-            append_plain_channel(&mut parts, &stderr, &state.receipts[1])?;
+        match layout {
+            CommandPresentationLayout::JsonObject { metadata_json } => {
+                anyhow::ensure!(
+                    metadata_json.starts_with('{') && metadata_json.ends_with('}'),
+                    "command metadata did not serialize as a JSON object"
+                );
+                let metadata_fields = &metadata_json[1..metadata_json.len() - 1];
+                push_literal(&mut parts, format!(r#"{{{metadata_fields},"stdout":""#));
+                append_json_channel(&mut parts, stdout.raw, &stdout_plan, &state.receipts[0])?;
+                push_literal(&mut parts, r#"","stderr":""#.to_owned());
+                append_json_channel(&mut parts, stderr.raw, &stderr_plan, &state.receipts[1])?;
+                push_literal(&mut parts, "\"}".to_owned());
+            }
+            CommandPresentationLayout::Labeled {
+                head,
+                json_string: false,
+            } => {
+                push_literal(&mut parts, format!("{head}stdout:\n"));
+                append_plain_channel(&mut parts, &stdout_plan, &state.receipts[0])?;
+                push_literal(&mut parts, "\nstderr:\n".to_owned());
+                append_plain_channel(&mut parts, &stderr_plan, &state.receipts[1])?;
+            }
+            CommandPresentationLayout::Labeled {
+                head,
+                json_string: true,
+            } => {
+                push_literal(
+                    &mut parts,
+                    format!("\"{}", json_fragment(&format!("{head}stdout:\n"))?),
+                );
+                append_json_channel(&mut parts, stdout.raw, &stdout_plan, &state.receipts[0])?;
+                push_literal(&mut parts, json_fragment("\nstderr:\n")?);
+                append_json_channel(&mut parts, stderr.raw, &stderr_plan, &state.receipts[1])?;
+                push_literal(&mut parts, "\"".to_owned());
+            }
         }
         let presentation = PayloadPresentation::Composed { parts };
         state.prepared = Some(PreparedToolPresentation {
@@ -235,6 +237,28 @@ impl LiveToolOutputRegistry {
         });
         Ok(())
     }
+}
+
+/// How a finished command's text frames its two captured channels.
+#[derive(Debug, Clone, Copy)]
+pub enum CommandPresentationLayout<'a> {
+    /// One JSON object: the metadata object's fields, then `stdout` and
+    /// `stderr` string fields.
+    JsonObject { metadata_json: &'a str },
+    /// `{head}stdout:\n{stdout}\nstderr:\n{stderr}`, with `(empty)` for an
+    /// empty channel; `json_string` encodes the whole text as one JSON string.
+    Labeled { head: &'a str, json_string: bool },
+}
+
+/// One captured command channel: its complete raw text, the text shown for
+/// it, and the byte range of `raw` shown verbatim. The range is a prefix or a
+/// suffix of `raw`; anything else in `rendered` is a literal notice before a
+/// suffix or after a prefix.
+#[derive(Debug, Clone)]
+pub struct CapturedChannel<'a> {
+    pub raw: &'a str,
+    pub rendered: &'a str,
+    pub shown: std::ops::Range<usize>,
 }
 
 #[derive(Clone)]
@@ -251,28 +275,48 @@ fn channel_len(receipts: &[OutputReceipt]) -> u64 {
 }
 
 fn channel_plan(
-    raw: &str,
-    rendered: &str,
-    returned_bytes: usize,
+    channel: &CapturedChannel<'_>,
     empty_marker: bool,
 ) -> anyhow::Result<Vec<ChannelPart>> {
+    let CapturedChannel {
+        raw,
+        rendered,
+        shown,
+    } = channel;
     anyhow::ensure!(
-        returned_bytes <= raw.len() && raw.is_char_boundary(returned_bytes),
+        shown.start <= shown.end
+            && shown.end <= raw.len()
+            && raw.is_char_boundary(shown.start)
+            && raw.is_char_boundary(shown.end)
+            && (shown.start == 0 || shown.end == raw.len()),
         "command truncation returned an invalid UTF-8 range"
     );
-    anyhow::ensure!(
-        rendered.starts_with(&raw[..returned_bytes]),
-        "command truncation did not preserve its declared raw prefix"
-    );
+    let kept = &raw[shown.clone()];
+    let (before, after) = if shown.start == 0 {
+        anyhow::ensure!(
+            rendered.starts_with(kept),
+            "command truncation did not preserve its declared raw prefix"
+        );
+        ("", &rendered[kept.len()..])
+    } else {
+        anyhow::ensure!(
+            rendered.ends_with(kept),
+            "command truncation did not preserve its declared raw suffix"
+        );
+        (&rendered[..rendered.len() - kept.len()], "")
+    };
     let mut parts = Vec::new();
-    if returned_bytes > 0 {
+    if !before.is_empty() {
+        parts.push(ChannelPart::Literal(before.to_owned()));
+    }
+    if !kept.is_empty() {
         parts.push(ChannelPart::Range {
-            start: 0,
-            end: returned_bytes as u64,
+            start: shown.start as u64,
+            end: shown.end as u64,
         });
     }
-    if rendered.len() > returned_bytes {
-        parts.push(ChannelPart::Literal(rendered[returned_bytes..].to_owned()));
+    if !after.is_empty() {
+        parts.push(ChannelPart::Literal(after.to_owned()));
     }
     if parts.is_empty() && empty_marker {
         parts.push(ChannelPart::Literal("(empty)".to_owned()));
@@ -397,32 +441,17 @@ impl LiveToolOutputWriter {
     pub async fn prepare_command_presentation(
         &self,
         expected_text: &str,
-        metadata_json: &str,
-        stdout_raw: &str,
-        stdout_rendered: &str,
-        stdout_returned_bytes: usize,
-        stderr_raw: &str,
-        stderr_rendered: &str,
-        stderr_returned_bytes: usize,
-        raw_json: bool,
+        layout: CommandPresentationLayout<'_>,
+        stdout: CapturedChannel<'_>,
+        stderr: CapturedChannel<'_>,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.canonical.is_some(),
             "command presentation requires a canonical live-output writer"
         );
+        self.flush_pending().await;
         self.registry
-            .prepare_command_presentation(
-                &self.tool_call_id,
-                expected_text,
-                metadata_json,
-                stdout_raw,
-                stdout_rendered,
-                stdout_returned_bytes,
-                stderr_raw,
-                stderr_rendered,
-                stderr_returned_bytes,
-                raw_json,
-            )
+            .prepare_command_presentation(&self.tool_call_id, expected_text, layout, stdout, stderr)
             .await
     }
 
@@ -431,59 +460,95 @@ impl LiveToolOutputWriter {
             let _serial = self.append_gate.lock().await;
             let text = {
                 let mut pending = self.pending_utf8.lock().await;
-                let pending = &mut pending[match stream {
-                    LiveOutputStream::Stdout => 0,
-                    LiveOutputStream::Stderr => 1,
-                }];
+                let pending = &mut pending[stream.index()];
                 pending.extend_from_slice(bytes);
-                match std::str::from_utf8(&pending) {
-                    Ok(text) => {
-                        let text = text.to_owned();
-                        pending.clear();
-                        text
-                    }
-                    Err(error) if error.error_len().is_none() => {
-                        // Preserve only the incomplete tail for the next
-                        // callback; the valid prefix is already a complete
-                        // immutable output fact.
-                        let valid = error.valid_up_to();
-                        let text = std::str::from_utf8(&pending[..valid])
-                            .expect("valid_up_to is valid UTF-8")
-                            .to_owned();
-                        pending.drain(..valid);
-                        text
-                    }
-                    Err(_) => {
-                        // Process output is modeled as text.  Invalid bytes
-                        // have no lossless representation in this stream, but
-                        // convert the *one combined buffer* once so a split
-                        // scalar can never produce two replacement characters.
-                        let text = String::from_utf8_lossy(&pending).into_owned();
-                        pending.clear();
-                        text
-                    }
-                }
+                drain_utf8(pending, false)
             };
-            match binding.append(&text).await {
-                Ok(source) => {
-                    if let Err(error) = self
-                        .registry
-                        .record_receipt(&self.tool_call_id, stream, source)
-                        .await
-                    {
-                        tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
-                            "canonical tool receipt recording failed");
-                    }
-                }
-                Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
-                    "canonical tool output append failed"),
-            }
+            self.commit(binding.as_ref(), stream, &text).await;
             return;
         }
         self.registry
             .append(&self.tool_call_id, stream, bytes)
             .await;
     }
+
+    /// Commits any incomplete trailing sequence as the replacement character
+    /// whole-stream lossy decoding gives it, so receipts cover the raw text.
+    async fn flush_pending(&self) {
+        let Some(binding) = &self.canonical else {
+            return;
+        };
+        let _serial = self.append_gate.lock().await;
+        for stream in [LiveOutputStream::Stdout, LiveOutputStream::Stderr] {
+            let text = {
+                let mut pending = self.pending_utf8.lock().await;
+                drain_utf8(&mut pending[stream.index()], true)
+            };
+            self.commit(binding.as_ref(), stream, &text).await;
+        }
+    }
+
+    async fn commit(
+        &self,
+        binding: &dyn CanonicalOutputAppender,
+        stream: LiveOutputStream,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        match binding.append(text).await {
+            Ok(source) => {
+                if let Err(error) = self
+                    .registry
+                    .record_receipt(&self.tool_call_id, stream, source)
+                    .await
+                {
+                    tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+                        "canonical tool receipt recording failed");
+                }
+            }
+            Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+                "canonical tool output append failed"),
+        }
+    }
+}
+
+/// Decodes `pending` exactly as `String::from_utf8_lossy` decodes the whole
+/// stream: each invalid sequence becomes one U+FFFD, and an incomplete tail
+/// stays pending for the next read unless the stream has ended.
+fn drain_utf8(pending: &mut Vec<u8>, end_of_stream: bool) -> String {
+    let mut text = String::new();
+    let mut consumed = 0;
+    while consumed < pending.len() {
+        match std::str::from_utf8(&pending[consumed..]) {
+            Ok(valid) => {
+                text.push_str(valid);
+                consumed = pending.len();
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                text.push_str(
+                    std::str::from_utf8(&pending[consumed..consumed + valid])
+                        .expect("valid_up_to is valid UTF-8"),
+                );
+                consumed += valid;
+                match error.error_len() {
+                    Some(invalid) => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        consumed += invalid;
+                    }
+                    None if end_of_stream => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        consumed = pending.len();
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+    pending.drain(..consumed);
+    text
 }
 
 #[derive(Debug, Clone)]
@@ -531,6 +596,160 @@ mod tests {
             .collect()
     }
 
+    fn whole(raw: &str) -> CapturedChannel<'_> {
+        CapturedChannel {
+            raw,
+            rendered: raw,
+            shown: 0..raw.len(),
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryAppender(std::sync::Mutex<String>);
+
+    impl CanonicalOutputAppender for MemoryAppender {
+        fn append<'a>(
+            &'a self,
+            text: &'a str,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<std::ops::Range<u64>>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                let mut source = self.0.lock().unwrap();
+                let start = source.len() as u64;
+                source.push_str(text);
+                Ok(start..source.len() as u64)
+            })
+        }
+    }
+
+    async fn prepared(
+        layout: CommandPresentationLayout<'_>,
+        expected: &str,
+        stdout: CapturedChannel<'_>,
+        stderr: CapturedChannel<'_>,
+    ) -> String {
+        let registry = LiveToolOutputRegistry::default();
+        let appender = Arc::new(MemoryAppender::default());
+        let writer = registry
+            .canonical_writer_for("tool".into(), appender.clone())
+            .await;
+        // Interleave the channels so ranges must follow receipts, not order.
+        let (out_a, out_b) = stdout.raw.split_at(stdout.raw.len() / 2);
+        writer
+            .append(LiveOutputStream::Stdout, out_a.as_bytes())
+            .await;
+        writer
+            .append(LiveOutputStream::Stderr, stderr.raw.as_bytes())
+            .await;
+        writer
+            .append(LiveOutputStream::Stdout, out_b.as_bytes())
+            .await;
+        writer
+            .prepare_command_presentation(expected, layout, stdout, stderr)
+            .await
+            .unwrap();
+        let PayloadPresentation::Composed { parts } = registry
+            .take_prepared_presentation("tool", expected)
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("command presentation is composed")
+        };
+        let source = appender.0.lock().unwrap().clone();
+        render(&source, &parts)
+    }
+
+    #[tokio::test]
+    async fn command_layouts_reconstruct_their_exact_text() {
+        let stdout = "line \"one\"\nline two\n";
+        let stderr = "warn\tthree";
+        let metadata = r#"{"ok":true}"#;
+
+        let object = format!(
+            r#"{{"ok":true,"stdout":{},"stderr":{}}}"#,
+            serde_json::to_string(stdout).unwrap(),
+            serde_json::to_string(stderr).unwrap(),
+        );
+        let rendered = prepared(
+            CommandPresentationLayout::JsonObject {
+                metadata_json: metadata,
+            },
+            &object,
+            whole(stdout),
+            whole(stderr),
+        )
+        .await;
+        assert_eq!(rendered, object);
+
+        let labeled = format!("gents_exec: {metadata}\nstdout:\n{stdout}\nstderr:\n(empty)");
+        let rendered = prepared(
+            CommandPresentationLayout::Labeled {
+                head: &format!("gents_exec: {metadata}\n"),
+                json_string: false,
+            },
+            &labeled,
+            whole(stdout),
+            CapturedChannel {
+                raw: "",
+                rendered: "",
+                shown: 0..0,
+            },
+        )
+        .await;
+        assert_eq!(rendered, labeled);
+
+        let text = format!("exit_code: 0\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        let encoded = serde_json::to_string(&text).unwrap();
+        let rendered = prepared(
+            CommandPresentationLayout::Labeled {
+                head: "exit_code: 0\n",
+                json_string: true,
+            },
+            &encoded,
+            whole(stdout),
+            whole(stderr),
+        )
+        .await;
+        assert_eq!(rendered, encoded);
+    }
+
+    #[tokio::test]
+    async fn suffix_channels_select_only_the_retained_tail() {
+        let stdout = "head that scrolled away\ntail é kept";
+        let start = stdout.find("tail").unwrap();
+        let shown = format!("[notice]\n\n{}", &stdout[start..]);
+        let text = format!("timed out\nstdout:\n{shown}\nstderr:\n(empty)");
+        let rendered = prepared(
+            CommandPresentationLayout::Labeled {
+                head: "timed out\n",
+                json_string: false,
+            },
+            &text,
+            CapturedChannel {
+                raw: stdout,
+                rendered: &shown,
+                shown: start..stdout.len(),
+            },
+            whole(""),
+        )
+        .await;
+        assert_eq!(rendered, text);
+
+        let mismatched = CapturedChannel {
+            raw: stdout,
+            rendered: "unrelated",
+            shown: start..stdout.len(),
+        };
+        assert!(channel_plan(&mismatched, true).is_err());
+        let interior = CapturedChannel {
+            raw: stdout,
+            rendered: "that",
+            shown: 5..9,
+        };
+        assert!(channel_plan(&interior, true).is_err());
+    }
+
     #[test]
     fn composed_command_presentation_keeps_interleaved_unicode_raw_bytes_once() {
         // Source order is capture order: stdout `é`, stderr `!`, stdout `x`.
@@ -560,14 +779,14 @@ mod tests {
         let mut parts = Vec::new();
         append_plain_channel(
             &mut parts,
-            &channel_plan("éx", "éx", 3, true).unwrap(),
+            &channel_plan(&whole("éx"), true).unwrap(),
             &stdout,
         )
         .unwrap();
         push_literal(&mut parts, "|".into());
         append_plain_channel(
             &mut parts,
-            &channel_plan("!", "!", 1, true).unwrap(),
+            &channel_plan(&whole("!"), true).unwrap(),
             &stderr,
         )
         .unwrap();
@@ -577,11 +796,59 @@ mod tests {
         append_json_channel(
             &mut json,
             "éx",
-            &channel_plan("éx", "éx", 3, false).unwrap(),
+            &channel_plan(&whole("éx"), false).unwrap(),
             &stdout,
         )
         .unwrap();
         assert_eq!(render(source, &json), "éx");
+    }
+
+    #[test]
+    fn drained_reads_decode_as_the_whole_stream_does() {
+        let stream: &[u8] = b"a\xff\xc3\xa9\xc3\xe2\x82\xacz\xe2\x82";
+        for split in 0..=stream.len() {
+            for second in split..=stream.len() {
+                let mut pending = Vec::new();
+                let mut text = String::new();
+                for read in [&stream[..split], &stream[split..second], &stream[second..]] {
+                    pending.extend_from_slice(read);
+                    text.push_str(&drain_utf8(&mut pending, false));
+                }
+                text.push_str(&drain_utf8(&mut pending, true));
+                assert!(pending.is_empty());
+                assert_eq!(text, String::from_utf8_lossy(stream), "{split}/{second}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_and_split_bytes_cover_the_lossy_channel() {
+        let registry = LiveToolOutputRegistry::default();
+        let appender = Arc::new(MemoryAppender::default());
+        let writer = registry
+            .canonical_writer_for("tool".into(), appender.clone())
+            .await;
+        // An invalid byte beside a scalar split across reads, then a
+        // truncated trailing sequence the process never completes.
+        for read in [&b"\xff\xc3"[..], b"\xa9\xe2"] {
+            writer.append(LiveOutputStream::Stdout, read).await;
+        }
+        let raw = String::from_utf8_lossy(b"\xff\xc3\xa9\xe2").into_owned();
+        assert_eq!(raw, "\u{FFFD}é\u{FFFD}");
+        let text = format!("x\nstdout:\n{raw}\nstderr:\n");
+        writer
+            .prepare_command_presentation(
+                &text,
+                CommandPresentationLayout::Labeled {
+                    head: "x\n",
+                    json_string: false,
+                },
+                whole(&raw),
+                whole(""),
+            )
+            .await
+            .unwrap();
+        assert_eq!(*appender.0.lock().unwrap(), raw);
     }
 
     #[tokio::test]

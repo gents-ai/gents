@@ -67,6 +67,10 @@ source consistency checks, not a separate runtime compatibility version.
   every earlier child's transcript, one spawn at a time, and claiming it
   reloaded the parent's whole session. A long orchestrator's children waited
   minutes, and background spawns hit their 60 s unclaimed deadline (#1807).
+- When the request deadline stops a configured CLI tool, its result shows the
+  output captured so far, followed by the deadline, instead of only the
+  deadline. A command stopped by its own timeout keeps the last part of its
+  output, marked `[Showing last N of M bytes]`, instead of the first part (#1669).
 
 ## 0.19.0 - 2026-09-24
 

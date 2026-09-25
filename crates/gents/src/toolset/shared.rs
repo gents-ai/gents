@@ -16,6 +16,7 @@ pub(crate) use command::{
 };
 #[cfg(test)]
 pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};
+pub(super) use command::{captured_channel, stopped_stream, truncate_stream};
 pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
     WorkspaceAuthority,

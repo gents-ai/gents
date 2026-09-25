@@ -12,6 +12,11 @@ pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
     "[Output omitted: ",
 ];
 
+/// The notice heading a byte-exact tail of `total` bytes.
+pub fn tail_bytes_notice(shown: usize, total: usize) -> String {
+    format!("[Showing last {shown} of {total} bytes]\n\n")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncationMode {
     Head,
@@ -211,10 +216,8 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
                 let result = &text[start..];
                 return TextTruncation {
                     text: format!(
-                        "[Showing last {} of {} bytes]\n\n{}",
-                        original_bytes - start,
-                        original_bytes,
-                        result,
+                        "{}{result}",
+                        tail_bytes_notice(original_bytes - start, original_bytes)
                     ),
                     truncated: true,
                     trigger: Some(trigger),
