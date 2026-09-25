@@ -45,6 +45,9 @@ ts-rs = { version = "10.1", default-features = false, features = [
 ] }
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }
 

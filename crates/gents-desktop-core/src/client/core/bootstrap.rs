@@ -38,15 +38,36 @@ impl ClientCore {
         paths: DesktopPaths,
         options: ClientCoreOptions,
     ) -> Result<Self> {
+        Self::start_reporting_stages(paths, options, None).await
+    }
+
+    /// Starts the client and publishes the name of each startup stage as it
+    /// completes, so a caller bounding the start can say where it stalled.
+    pub async fn start_with_paths_reporting_stages(
+        paths: DesktopPaths,
+        completed_stage: watch::Sender<&'static str>,
+    ) -> Result<Self> {
+        Self::start_reporting_stages(paths, ClientCoreOptions::default(), Some(completed_stage))
+            .await
+    }
+
+    async fn start_reporting_stages(
+        paths: DesktopPaths,
+        options: ClientCoreOptions,
+        completed_stage: Option<watch::Sender<&'static str>>,
+    ) -> Result<Self> {
         let started = Instant::now();
         let mut previous = started;
         let mut checkpoint = |stage: &'static str| {
             let now = Instant::now();
-            tracing::debug!(target: "gents_desktop_core::startup", stage,
+            tracing::info!(target: "gents_desktop_core::startup", stage,
                 stage_ms = now.duration_since(previous).as_millis(),
                 elapsed_ms = now.duration_since(started).as_millis(),
                 "client startup stage completed");
             previous = now;
+            if let Some(completed_stage) = completed_stage.as_ref() {
+                completed_stage.send_replace(stage);
+            }
         };
         paths.ensure_root_dirs().await?;
         gents::storage_backend::reject_legacy_store(paths.node_data_dir())?;
@@ -105,9 +126,18 @@ impl ClientCore {
             Arc::new(principal.clone()),
         ));
 
-        let (peer_statuses, bootstrap_errors) = {
-            bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
-        };
+        // Each saved peer can take a full dial timeout, so each one settled
+        // counts as startup progress.
+        let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
+            &node,
+            &p2p,
+            &records,
+            &options,
+            &principal,
+            &route_manager,
+            &mut || checkpoint("saved_peer"),
+        )
+        .await;
         let (initial_health, initial_database_sync, initial_database_sync_error) =
             super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
         checkpoint("bootstrap_and_health");
@@ -196,6 +226,7 @@ pub(super) async fn bootstrap_saved_peers(
     options: &ClientCoreOptions,
     _actor: &PrincipalIdentity,
     route_manager: &Arc<ClientRouteManager>,
+    peer_settled: &mut (dyn FnMut() + Send),
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -217,6 +248,7 @@ pub(super) async fn bootstrap_saved_peers(
         // projects that authority after schemas and subscriptions are live.
         if bootstrap_deferred_to_enrollment_authority(record) {
             statuses.push(status);
+            peer_settled();
             continue;
         }
 
@@ -246,6 +278,7 @@ pub(super) async fn bootstrap_saved_peers(
         }
 
         statuses.push(status);
+        peer_settled();
     }
 
     (statuses, errors)

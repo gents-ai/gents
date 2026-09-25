@@ -46,6 +46,82 @@ pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join("data")
 }
 
+/// The exclusive lock a process holds on a data directory while it has the
+/// store open. The OS releases it when the holder exits, however it exits.
+#[derive(Debug)]
+pub struct StoreLock {
+    _file: fs::File,
+    path: PathBuf,
+}
+
+impl StoreLock {
+    /// The lock file. Keep it in place while held: a renamed or removed lock
+    /// file no longer excludes a new holder.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Takes the exclusive lock on `data_dir`'s store, so two runtimes never
+/// open one store. The lock file sits beside the canonical data directory,
+/// so every path that aliases the store (symlinks, `.`) takes the same lock.
+/// It records the holder's process id. `data_dir` must exist.
+pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
+    use std::io::{Read as _, Seek as _, Write as _};
+
+    let canonical = fs::canonicalize(data_dir)
+        .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
+    let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
+        anyhow::bail!(
+            "data directory {} cannot be the filesystem root",
+            canonical.display()
+        );
+    };
+    let path = parent.join(format!("{}.lock", name.to_string_lossy()));
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    // Never follow a planted symlink: truncating below would clobber its
+    // target. A planted FIFO must not block the open either.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("opening store lock {}", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("inspecting store lock {}", path.display()))?
+        .is_file()
+    {
+        anyhow::bail!("store lock {} is not a regular file", path.display());
+    }
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            let mut holder = String::new();
+            let _ = (&mut file).take(32).read_to_string(&mut holder);
+            let holder = holder
+                .trim()
+                .parse::<u32>()
+                .map(|pid| format!(" (process {pid})"))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "another Gents runtime{holder} is already using {home}. Stop it first: `gents service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents server`",
+                home = home_dir.display()
+            );
+        }
+        Err(fs::TryLockError::Error(error)) => {
+            return Err(error).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+    file.set_len(0)?;
+    file.rewind()?;
+    writeln!(file, "{}", std::process::id())?;
+    Ok(StoreLock { _file: file, path })
+}
+
 /// The default identity key path under a gents home, for the named agent.
 pub fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
     home_dir.join("keys").join(format!("{agent_name}.key"))
@@ -89,6 +165,91 @@ pub fn read_init_config<ToolPackage: DeserializeOwned, ToolCeiling: DeserializeO
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_second_holder_cannot_lock_a_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+        fs::create_dir_all(&data).unwrap();
+
+        let held = lock_store(&home, &data).expect("the first holder locks the store");
+        let error = lock_store(&home, &data)
+            .expect_err("a second holder must not open the same store")
+            .to_string();
+        assert!(error.contains("already using"), "{error}");
+        assert!(
+            error.contains(&format!("process {}", std::process::id())),
+            "{error}"
+        );
+        assert!(error.contains("gents service stop --home"), "{error}");
+
+        drop(held);
+        lock_store(&home, &data).expect("the lock is released with its holder");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_alias_of_a_store_takes_the_same_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real-data");
+        fs::create_dir_all(&real).unwrap();
+        let link = temp.path().join("link-data");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let held = lock_store(temp.path(), &real).unwrap();
+        assert!(
+            lock_store(temp.path(), &link).is_err(),
+            "a symlinked data directory is the same store"
+        );
+        assert!(
+            lock_store(temp.path(), &real.join("..").join("real-data")).is_err(),
+            "a non-canonical path is the same store"
+        );
+        drop(held);
+
+        // `--data-dir .` names the current directory, which has a name once
+        // resolved.
+        let current = lock_store(temp.path(), &real.join(".")).unwrap();
+        assert_eq!(
+            current.path(),
+            fs::canonicalize(temp.path())
+                .unwrap()
+                .join("real-data.lock")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_path_that_is_not_a_regular_file_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let fifo = std::ffi::CString::new(
+            temp.path()
+                .join("data.lock")
+                .into_os_string()
+                .into_encoded_bytes(),
+        )
+        .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let error = lock_store(temp.path(), &data).expect_err("a FIFO is not a lock file");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_lock_file_is_refused_without_touching_its_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let victim = temp.path().join("victim");
+        fs::write(&victim, "precious").unwrap();
+        std::os::unix::fs::symlink(&victim, temp.path().join("data.lock")).unwrap();
+
+        assert!(lock_store(temp.path(), &data).is_err());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+    }
+
     use super::*;
 
     fn sample() -> StoredInitConfig<String, String> {

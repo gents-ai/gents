@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use ts_rs::TS;
 
 use crate::client::{initialize_local_standard_peer, DesktopPaths};
+use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 
 use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
@@ -22,6 +23,9 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long discovery waits for a bound runtime to report it finished starting.
+const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
+const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct DesktopInitOptions {
@@ -367,6 +371,7 @@ pub(crate) async fn discover_standard_runtime(
         .timeout(HTTP_TIMEOUT)
         .build()
         .context("building local runtime HTTP client")?;
+    await_serving_runtime(&client, &runtime).await?;
     let api_base = p2p_api_base(&runtime.graphql)?;
     let shareable_address: ShareableAddressResponse =
         http_get_json(&client, &format!("{api_base}/p2p/shareable-address")).await?;
@@ -392,6 +397,76 @@ pub(crate) async fn discover_standard_runtime(
         p2p_peer_id,
         p2p_listen_address,
     })
+}
+
+/// A runtime.json left by an earlier process names a runtime that may still be
+/// migrating or not listening yet. Discovery proceeds only once the live
+/// `/status` reports this identity ready. This is the one place discovery
+/// binds the saved route to the live DID.
+async fn await_serving_runtime(
+    client: &reqwest::Client,
+    runtime: &StoredRuntimeState,
+) -> Result<()> {
+    await_serving_runtime_within(client, runtime, SERVE_READY_TIMEOUT).await
+}
+
+async fn await_serving_runtime_within(
+    client: &reqwest::Client,
+    runtime: &StoredRuntimeState,
+    timeout: Duration,
+) -> Result<()> {
+    let status_url = runtime_status_url(&runtime.graphql)?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let waiting = match http_get_json::<Value>(client, &status_url).await {
+            Ok(status) => match serving_runtime(&status, &runtime.agent_did)? {
+                ObservedServeLifecycle::Ready => return Ok(()),
+                ObservedServeLifecycle::Outdated { version } => {
+                    anyhow::bail!(
+                        "{}",
+                        gents_protocol::serve_lifecycle::outdated_runtime_message(
+                            version.as_deref()
+                        )
+                    )
+                }
+                ObservedServeLifecycle::Starting => anyhow::anyhow!(
+                    "the local Gents runtime at {status_url} did not finish starting within {} seconds",
+                    timeout.as_secs()
+                ),
+            },
+            Err(error) => error.context(format!(
+                "no local Gents runtime answered at {status_url} within {} seconds",
+                timeout.as_secs()
+            )),
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(waiting);
+        }
+        tokio::time::sleep(SERVE_READY_POLL).await;
+    }
+}
+
+/// Rejects a live identity other than the initialized one before readiness
+/// is considered, so a stale route is never saved for another runtime.
+fn serving_runtime(status: &Value, expected_did: &str) -> Result<ObservedServeLifecycle> {
+    if !well_formed_did(expected_did) {
+        anyhow::bail!("this home has no usable initialized agent DID ({expected_did:?})");
+    }
+    let live_did = status
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !well_formed_did(live_did) || live_did != expected_did {
+        anyhow::bail!(
+            "the runtime answering for this home serves {live_did:?}, not {expected_did}"
+        );
+    }
+    Ok(ObservedServeLifecycle::observe(status))
+}
+
+fn well_formed_did(did: &str) -> bool {
+    did.strip_prefix("did:")
+        .is_some_and(|rest| !rest.is_empty() && !did.chars().any(char::is_whitespace))
 }
 
 pub fn render_human_summary(summary: &DesktopInitSummary) -> String {
@@ -581,9 +656,9 @@ fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConf
             }
         );
     }
-    if runtime.agent_did != init.agent_did {
+    if !well_formed_did(&init.agent_did) || runtime.agent_did != init.agent_did {
         anyhow::bail!(
-            "runtime agent DID {} does not match initialized agent DID {}",
+            "runtime agent DID {:?} does not match initialized agent DID {:?}",
             runtime.agent_did,
             init.agent_did
         );

@@ -1,7 +1,10 @@
 //! Thin adapters from our existing tracing events to OS-owned log storage.
 //!
 //! No files, rotation, collector processes, or retention policy live here.
-//! A foreground CLI keeps stderr; installed services opt into the native sink.
+//! A foreground CLI keeps stderr; installed services opt into the native sink,
+//! and their service definition sends what reaches stderr anyway (errors
+//! before tracing starts, the exit error, panics) to a file the service
+//! manager appends to.
 
 use tracing::Subscriber;
 use tracing_subscriber::{registry::LookupSpan, Layer};

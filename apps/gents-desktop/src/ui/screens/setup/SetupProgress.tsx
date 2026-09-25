@@ -40,6 +40,7 @@ export function SetupProgress({
   onRetry,
   onContinue,
   onOpenLoginItems,
+  diagnosticsHint = null,
 }: {
   title: string;
   label: string;
@@ -51,6 +52,7 @@ export function SetupProgress({
   onRetry: () => void;
   onContinue: () => void;
   onOpenLoginItems?: () => Promise<void>;
+  diagnosticsHint?: string | null;
 }) {
   const waiting = useManagedServerWaitDescription(wait);
 
@@ -98,6 +100,7 @@ export function SetupProgress({
       {error ? (
         <div className="mt-4 grid gap-3">
           <p className="text-sm text-destructive">{error}</p>
+          <DiagnosticsHint hint={diagnosticsHint} />
           <Button variant="brand" onClick={onRetry}>
             Try again
           </Button>
@@ -111,6 +114,18 @@ export function SetupProgress({
         </div>
       ) : null}
     </>
+  );
+}
+
+export function DiagnosticsHint({ hint }: { hint: string | null | undefined }) {
+  if (!hint) return null;
+  return (
+    <p
+      className="text-xs break-words text-muted-foreground"
+      data-testid="diagnostics-hint"
+    >
+      Logs: <span className="font-mono">{hint}</span>
+    </p>
   );
 }
 

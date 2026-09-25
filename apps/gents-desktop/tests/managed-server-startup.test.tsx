@@ -10,9 +10,14 @@ import type {
 
 import { StartupScreen } from "../src/components/StartupScreen";
 import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
+import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import {
   awaitManagedServerSettled,
+  MANAGED_SERVER_BOOT_TIMEOUT_MS,
   ManagedServerStartupError,
+  managedServerWaitKind,
+  nextManagedServerWait,
+  observeManagedServerOperation,
   unsettledManagedServerError,
   type ManagedServerWait,
 } from "../src/lib/managedServerStartup";
@@ -34,12 +39,119 @@ function managedStatus(
     suggestedToolRoot: "/Users/test",
     pairingReady: false,
     approvalRequired: false,
+    runtimeBooting: false,
     error: null,
     ...overrides,
   };
 }
 
 describe("managed server startup waits", () => {
+  it("waits out a data update longer than the boot bound at launch", async () => {
+    vi.useFakeTimers();
+    try {
+      const updatingUntil = Date.now() + MANAGED_SERVER_BOOT_TIMEOUT_MS + 60_000;
+      const api = {
+        managedServerStatus: vi.fn(async () =>
+          Date.now() < updatingUntil
+            ? managedStatus({ state: "starting", runtimeBooting: true })
+            : managedStatus({ state: "running", agentDid: "did:key:migrated" }),
+        ),
+      } as unknown as DesktopApiAdapter;
+      const waits: (ManagedServerWait | null)[] = [];
+      const restored = restoreManagedServer(api, {
+        onWait: (wait) => waits.push(wait),
+      });
+      await vi.advanceTimersByTimeAsync(MANAGED_SERVER_BOOT_TIMEOUT_MS + 2 * 60_000);
+      await expect(restored).resolves.toBe(true);
+      expect(waits.some((wait) => wait?.kind === "updating")).toBe(true);
+      expect(
+        unsettledManagedServerError(
+          managedStatus({ state: "starting", runtimeBooting: true }),
+        ),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps observing after an explicit command reports the runtime still booting", async () => {
+    let calls = 0;
+    const api = {
+      managedServerStatus: vi.fn(async () =>
+        ++calls < 3
+          ? managedStatus({ state: "starting", runtimeBooting: true })
+          : managedStatus({ state: "running", agentDid: "did:key:migrated" }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    const restart = vi.fn(async (): Promise<ManagedServerStatus> => {
+      throw new BridgeInvokeError({
+        code: "runtimeStillBooting",
+        message: "the Gents runtime is still starting after 300 seconds",
+        retryable: false,
+        endpoint: null,
+      });
+    });
+    const waits: (ManagedServerWait | null)[] = [];
+    const status = await observeManagedServerOperation(
+      api,
+      restart,
+      (wait) => waits.push(wait),
+      1,
+    );
+    expect(status.state).toBe("running");
+    expect(restart).toHaveBeenCalledOnce();
+    expect(waits.some((wait) => wait?.kind === "updating")).toBe(true);
+
+    const failing = vi.fn(async (): Promise<ManagedServerStatus> => {
+      throw new BridgeInvokeError({
+        code: "backend",
+        message: "launchctl failed",
+        retryable: true,
+        endpoint: null,
+      });
+    });
+    await expect(
+      observeManagedServerOperation(api, failing, () => {}, 1),
+    ).rejects.toThrow("launchctl failed");
+  });
+
+  it("counts an interrupted update toward the booting bound", () => {
+    const updating = nextManagedServerWait(
+      null,
+      managedStatus({ state: "starting", runtimeBooting: true }),
+      1_000,
+    );
+    const booting = nextManagedServerWait(
+      updating,
+      managedStatus({ state: "starting" }),
+      9_000,
+    );
+    expect(booting).toEqual({ kind: "booting", since: 1_000 });
+    const approval = nextManagedServerWait(
+      booting,
+      managedStatus({ state: "starting", approvalRequired: true }),
+      12_000,
+    );
+    expect(approval).toEqual({ kind: "approval", since: 12_000 });
+  });
+
+  it("names a data update without offering a restart", () => {
+    render(
+      <StartupScreen
+        error={null}
+        managedServerSupported
+        managedServerWait={{ kind: "updating", since: Date.now() - 400_000 }}
+        onRestartManagedServer={vi.fn(async () => undefined)}
+        onRetry={vi.fn(async () => undefined)}
+        phase="checking-managed-server"
+      />,
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent("Updating data…");
+    expect(
+      screen.queryByTestId("startup-restart-managed-server"),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps waiting while a slow runtime boots, then reports it running", async () => {
     const statuses = [
       managedStatus({ state: "starting" }),
@@ -136,6 +248,31 @@ describe("managed server startup waits", () => {
     expect(skip).toHaveBeenCalledOnce();
   });
 
+  it("names where the logs are when launch startup fails", () => {
+    const { rerender } = render(
+      <StartupScreen
+        diagnosticsHint="Console.app: subsystem ai.gents. Runtime startup errors: /desk/logs/runtime-errors.log"
+        error="the native Gents service exited normally before it published runtime readiness"
+        managedServerSupported
+        onRetry={vi.fn(async () => undefined)}
+        phase="managed-server-error"
+      />,
+    );
+    expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
+      "/desk/logs/runtime-errors.log",
+    );
+    rerender(
+      <StartupScreen
+        diagnosticsHint="Console.app: subsystem ai.gents"
+        error={null}
+        managedServerSupported
+        onRetry={vi.fn(async () => undefined)}
+        phase="checking-managed-server"
+      />,
+    );
+    expect(screen.queryByTestId("diagnostics-hint")).not.toBeInTheDocument();
+  });
+
   it("lets launch continue without the local agent while approval is pending", async () => {
     const api = {
       managedServerStatus: vi.fn(async () =>
@@ -150,6 +287,76 @@ describe("managed server startup waits", () => {
       signal: abort.signal,
     });
     await expect(pending).resolves.toBe(false);
+  });
+
+  it("starts the configured agent with its stored authority once macOS allows it", async () => {
+    const statuses = [
+      managedStatus({
+        state: "stopped",
+        approvalRequired: true,
+        autoStart: true,
+        agentName: "Workshop Agent",
+      }),
+      managedStatus({ state: "stopped", autoStart: true, agentName: "Workshop Agent" }),
+    ];
+    const api = {
+      managedServerStatus: vi.fn(async () => statuses.shift() ?? managedStatus()),
+      startManagedServer: vi.fn(async () =>
+        managedStatus({ state: "running", agentName: "Workshop Agent" }),
+      ),
+    } as unknown as DesktopApiAdapter;
+
+    await expect(restoreManagedServer(api)).resolves.toBe(true);
+    expect(api.startManagedServer).toHaveBeenCalledExactlyOnceWith("Workshop Agent");
+  });
+
+  it("leaves a deliberately stopped agent stopped after macOS allows it", async () => {
+    const statuses = [
+      managedStatus({
+        state: "stopped",
+        approvalRequired: true,
+        autoStart: false,
+        agentName: "Workshop Agent",
+      }),
+      managedStatus({
+        state: "stopped",
+        autoStart: false,
+        agentName: "Workshop Agent",
+      }),
+    ];
+    const api = {
+      managedServerStatus: vi.fn(async () => statuses.shift() ?? managedStatus()),
+      startManagedServer: vi.fn(),
+    } as unknown as DesktopApiAdapter;
+
+    await expect(restoreManagedServer(api)).resolves.toBe(false);
+    expect(api.startManagedServer).not.toHaveBeenCalled();
+  });
+
+  it("reports a runtime that keeps dying during migrations instead of waiting on the update", () => {
+    const status = managedStatus({
+      state: "failed",
+      runtimeBooting: true,
+      error:
+        "The background agent keeps exiting before it becomes ready: it exited with code 78 and was restarted 2 times in a row.",
+    });
+    expect(managedServerWaitKind(status)).toBeNull();
+    expect(unsettledManagedServerError(status)?.message).toContain(
+      "exited with code 78",
+    );
+  });
+
+  it("does not wait on approval for a runtime that still serves", () => {
+    expect(
+      managedServerWaitKind(
+        managedStatus({ state: "running", approvalRequired: true }),
+      ),
+    ).toBeNull();
+    expect(
+      managedServerWaitKind(
+        managedStatus({ state: "starting", approvalRequired: true }),
+      ),
+    ).toBe("approval");
   });
 
   it("shows macOS approval guidance with a settings shortcut on the launch screen", async () => {
@@ -202,14 +409,16 @@ describe("first-run local agent startup", () => {
   function firstRun() {
     let observed = managedStatus();
     let resolveStart!: (status: ManagedServerStatus) => void;
+    let rejectStart!: (cause: unknown) => void;
     let reviewed: ManagedServerAuthorityInput | undefined;
     const api = {
       managedServerStatus: vi.fn(async () => observed),
       startManagedServer: vi.fn(
         (_name: string, authority?: ManagedServerAuthorityInput) => {
           reviewed = authority;
-          return new Promise<ManagedServerStatus>((resolve) => {
+          return new Promise<ManagedServerStatus>((resolve, reject) => {
             resolveStart = resolve;
+            rejectStart = reject;
           });
         },
       ),
@@ -243,6 +452,16 @@ describe("first-run local agent startup", () => {
       observe: (next: Partial<ManagedServerStatus>) => {
         observed = managedStatus(next);
       },
+      rejectStart: (cause: unknown) => rejectStart(cause),
+      readyStatus: () =>
+        managedStatus({
+          state: "running",
+          agentName: "Forge",
+          agentDid: "did:key:z6MkForgeIdentity0123456789",
+          effectiveToolCeiling: reviewed!.toolCeiling,
+          effectiveToolRoot: reviewed!.toolRoot ?? null,
+          pairingReady: true,
+        }),
       finishStart: () => {
         const ready = managedStatus({
           state: "running",
@@ -302,6 +521,39 @@ describe("first-run local agent startup", () => {
     await screen.findByRole("heading", { name: "Choose an inference provider" });
   }, 15_000);
 
+  it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
+    const run = firstRun();
+    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    const next = screen.getByTestId("setup-next");
+    await waitFor(() => expect(next).toBeEnabled());
+    await userEvent.click(next);
+    await waitFor(() => expect(run.api.startManagedServer).toHaveBeenCalled());
+
+    run.observe({ state: "starting", runtimeBooting: true, agentName: "Forge" });
+    run.rejectStart(
+      new BridgeInvokeError({
+        code: "runtimeStillBooting",
+        message:
+          "the Gents runtime is still starting after 300 seconds, possibly migrating its data; it keeps starting in the background",
+        retryable: false,
+        endpoint: null,
+      }),
+    );
+
+    await screen.findByText("Updating data…", undefined, { timeout: 5_000 });
+    expect(screen.queryByText("Try again")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/keeps starting in the background/),
+    ).not.toBeInTheDocument();
+
+    run.observe(run.readyStatus());
+    await waitFor(() => expect(run.shell.onInitLocalRuntime).toHaveBeenCalled(), {
+      timeout: 5_000,
+    });
+    expect(run.api.startManagedServer).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Try again")).not.toBeInTheDocument();
+  }, 15_000);
+
   it("keeps earlier steps and their results visible when a later step fails", async () => {
     const run = firstRun();
     (run.shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
@@ -321,6 +573,9 @@ describe("first-run local agent startup", () => {
     expect(steps[0]).toHaveTextContent("Forge is running as did:key:z6MkFo");
     expect(log).toHaveTextContent("Load configuration");
     expect(screen.getByText("Try again")).toBeInTheDocument();
+    expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
+      `Logs: ${bootstrap.diagnosticsHint}`,
+    );
     expect(screen.queryByTestId("setup-continue")).not.toBeInTheDocument();
   });
 

@@ -1085,6 +1085,9 @@ export function SetupScreen({
             setStep("inference");
           }}
           onOpenLoginItems={api.openManagedServerLoginItems}
+          diagnosticsHint={
+            shell.diagnosticsHint ?? shell.snapshot?.bootstrap.diagnosticsHint
+          }
         />
       </Frame>
     );

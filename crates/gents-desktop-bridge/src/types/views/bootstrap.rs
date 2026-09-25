@@ -58,6 +58,10 @@ pub struct ManagedServerStatus {
     pub suggested_tool_root: Option<String>,
     pub pairing_ready: bool,
     pub approval_required: bool,
+    /// This home's runtime answers but has not reported ready, typically while
+    /// it migrates its data after an update. Not a failure: it is waited on
+    /// without a bound and is never restarted for taking long.
+    pub runtime_booting: bool,
     pub error: Option<String>,
 }
 

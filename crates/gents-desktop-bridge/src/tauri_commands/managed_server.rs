@@ -5,16 +5,19 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::local_runtime::{
     fetch_runtime_connection_payload, init_standard_local_runtime, DesktopInitOptions,
 };
+use gents_protocol::serve_lifecycle::{outdated_runtime_message, ObservedServeLifecycle};
 
 use crate::config::ManagedServerPolicy;
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
-use crate::tauri_commands::service_executable::resolve_service_executable;
+use crate::tauri_commands::service_executable::{
+    ensure_installable_location, resolve_service_executable,
+};
 use crate::types::{
     ManagedServerResetRequest, ManagedServerResetResult, ManagedServerRestartRequest,
     ManagedServerRootValidation, ManagedServerRootValidationRequest, ManagedServerStartRequest,
@@ -162,7 +165,10 @@ async fn observe_managed_server_status<R: Runtime>(
 ) -> Result<ManagedServerStatus, BridgeError> {
     let stored = load_preference(state).await?;
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
-    let last_exit = if native.job_loaded && !native.running && !native.requires_approval {
+    let last_exit = if (native.job_loaded || native.failed)
+        && !native.running
+        && !native.requires_approval
+    {
         match run_native(native_service(&app, &state)?, |service| service.last_exit()).await {
             Ok(reason) => reason,
             Err(error) => {
@@ -173,25 +179,60 @@ async fn observe_managed_server_status<R: Runtime>(
     } else {
         None
     };
+    // Native process state is not runtime readiness. Probe the status endpoint
+    // on every read so the frontend gets the live DID and route.
+    let port = match state.policy.agent_home.as_deref() {
+        Some(agent_home) => observe_port_readiness(agent_home).await?,
+        None => PortReadiness::NotListening,
+    };
     let mut managed = state.managed_server.lock().await;
-    let crash_loop = observe_crash_loop(&mut managed.exit_baseline, last_exit.as_ref());
+    if native.job_loaded
+        || native.background_item == gents_server::native_service::BackgroundItemStatus::Enabled
+    {
+        managed.approval_refused = false;
+    }
+    let crash_loop =
+        managed
+            .crash_loop
+            .observe(job_sample(&port, native.job_loaded, last_exit.as_ref()));
     let mut status = status_from(
         &managed,
         stored.as_ref(),
         Some(&native),
         last_exit.as_ref(),
-        crash_loop,
+        crash_loop
+            .as_ref()
+            .map(|(exit, restarts)| (exit, *restarts)),
     );
+    let starting = managed.starting;
     drop(managed);
 
-    // Native process state is not runtime readiness. Probe the status endpoint
-    // on every idle/starting read so the frontend gets the live DID and route.
-    if should_probe_external_status(&status) {
-        if let Some(agent_home) = state.policy.agent_home.as_deref() {
-            if let Some(external) = matching_external_server(agent_home).await? {
-                status = project_external_status(external, &native);
+    match port {
+        PortReadiness::Ready(external) => status = project_external_status(external, &native),
+        // Our own job is restarted at launch and reports starting meanwhile.
+        // An external one never becomes ready: say so now.
+        PortReadiness::Outdated { version } if !native.job_loaded && !starting => {
+            status.state = ManagedServerState::Failed;
+            status.error = Some(outdated_runtime_message(version.as_deref()));
+        }
+        PortReadiness::Booting => {
+            status.runtime_booting = true;
+            if matches!(
+                status.state,
+                ManagedServerState::Stopped | ManagedServerState::Disabled
+            ) {
+                status.state = ManagedServerState::Starting;
             }
         }
+        PortReadiness::Foreign(foreign) => {
+            project_foreign_port(&mut status, &foreign.message(), starting)
+        }
+        PortReadiness::Occupied(port) if status.state != ManagedServerState::Starting => {
+            project_foreign_port(&mut status, &occupied_port_message(port), starting)
+        }
+        PortReadiness::Occupied(_)
+        | PortReadiness::Outdated { .. }
+        | PortReadiness::NotListening => {}
     }
     status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
     Ok(status)
@@ -207,22 +248,34 @@ pub(crate) async fn managed_server_status_for<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
-fn should_probe_external_status(_status: &ManagedServerStatus) -> bool {
-    // Endpoint readiness is authoritative over stale bridge-local errors and
-    // native process state. The probe is a bounded single HTTP observation.
-    true
-}
-
 fn project_external_status(
     mut external: ManagedServerStatus,
     native: &gents_server::native_service::NativeServiceStatus,
 ) -> ManagedServerStatus {
     external.auto_start = native.enabled;
-    external.approval_required = false;
+    // Approval revoked while the runtime still serves stays visible: the
+    // next launch of the job will be blocked.
+    external.approval_required = native.requires_approval;
     if native.job_loaded {
         external.state = ManagedServerState::Running;
     }
     external
+}
+
+/// Another runtime serves the managed port. Its message replaces generic
+/// errors, and a loaded job that cannot bind the port is failed rather than
+/// waited on. A start in progress reports the conflict itself.
+fn project_foreign_port(status: &mut ManagedServerStatus, message: &str, starting: bool) {
+    if starting {
+        return;
+    }
+    status.error = Some(match status.error.take() {
+        Some(failure) if failure != message => format!("{failure} {message}"),
+        _ => message.to_string(),
+    });
+    if status.state == ManagedServerState::Starting {
+        status.state = ManagedServerState::Failed;
+    }
 }
 
 async fn pairing_is_ready(state: &DesktopAppState, agent_did: Option<&str>) -> bool {
@@ -289,6 +342,7 @@ async fn begin_start_wait(state: &DesktopAppState) -> StartWait {
     }
     managed.starting = true;
     managed.last_error = None;
+    managed.approval_refused = false;
     token
 }
 
@@ -365,8 +419,16 @@ fn ensure_not_cancelled(token: &StartWait) -> anyhow::Result<()> {
 trait ManagedLaunch {
     async fn requires_approval(&self) -> Result<bool, BridgeError>;
     async fn await_approval(&self) -> anyhow::Result<()>;
-    async fn start(&self) -> Result<(), BridgeError>;
+    async fn start(&self) -> Result<Launched, BridgeError>;
     async fn await_ready(&self) -> anyhow::Result<Readiness>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Launched {
+    Started,
+    /// macOS refused the start until the user approves the background item.
+    /// Carries launchctl's refusal.
+    ApprovalPending(String),
 }
 
 struct NativeLaunch<'a, R: Runtime> {
@@ -385,13 +447,26 @@ impl<R: Runtime> ManagedLaunch for NativeLaunch<'_, R> {
         await_managed_server_approval(self.app, self.state).await
     }
 
-    async fn start(&self) -> Result<(), BridgeError> {
+    async fn start(&self) -> Result<Launched, BridgeError> {
         let enable_at_login = self.enable_at_login;
-        run_native(
+        let launched = run_native(
             launchable_native_service(self.app, self.state)?,
-            move |service| service.start(enable_at_login),
+            move |service| match service.start(enable_at_login) {
+                Ok(()) => Ok(Launched::Started),
+                Err(error) => {
+                    match error
+                        .downcast::<gents_server::native_service::BackgroundApprovalPending>()
+                    {
+                        Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
+                        Err(error) => Err(error),
+                    }
+                }
+            },
         )
-        .await
+        .await?;
+        self.state.managed_server.lock().await.approval_refused =
+            matches!(launched, Launched::ApprovalPending(_));
+        Ok(launched)
     }
 
     async fn await_ready(&self) -> anyhow::Result<Readiness> {
@@ -423,16 +498,7 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
         // Roll back the owned attempt even when that final native step fails.
         ensure_not_cancelled(token)?;
         attempted_start = true;
-        if let Err(error) = launch.start().await {
-            if !launch.requires_approval().await.unwrap_or(false) {
-                return Err(error.into());
-            }
-            lifecycle = None;
-            wait_unlocked(token, launch.await_approval()).await?;
-            lifecycle = Some(relock_start(state, token).await?);
-            ensure_not_cancelled(token)?;
-            launch.start().await?;
-        }
+        start_when_approved(state, token, &mut lifecycle, launch).await?;
         let mut resumed_after_approval = false;
         loop {
             lifecycle = None;
@@ -446,7 +512,7 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
                     wait_unlocked(token, launch.await_approval()).await?;
                     lifecycle = Some(relock_start(state, token).await?);
                     ensure_not_cancelled(token)?;
-                    launch.start().await?;
+                    start_when_approved(state, token, &mut lifecycle, launch).await?;
                 }
                 Readiness::ApprovalRequired => {
                     anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED)
@@ -459,10 +525,54 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
         (Ok(ready), Some(lifecycle)) => Ok((ready, lifecycle)),
         (Ok(_), None) => unreachable!("readiness relocks before it returns"),
         (Err(error), lifecycle) => Err(LaunchFailure {
+            attempted_start: attempted_start && !error.is::<RuntimeStillBooting>(),
             error,
-            attempted_start,
             lifecycle,
         }),
+    }
+}
+
+/// Starts the job, waiting for approval whenever macOS refuses it. Each wait
+/// polls approval and is bounded by the approval timeout, so a start that
+/// macOS keeps refusing fails with the approval message.
+async fn start_when_approved<'a, L: ManagedLaunch>(
+    state: &'a DesktopAppState,
+    token: &StartWait,
+    lifecycle: &mut Option<LifecycleGuard<'a>>,
+    launch: &L,
+) -> anyhow::Result<()> {
+    let started = tokio::time::Instant::now();
+    loop {
+        let refusal = match launch.start().await {
+            Ok(Launched::Started) => return Ok(()),
+            Ok(Launched::ApprovalPending(detail)) => {
+                // A refusal that approval polling cannot observe would
+                // return from the wait at once; report it instead.
+                if !launch.requires_approval().await.unwrap_or(false) {
+                    anyhow::bail!("launchctl could not start Gents: {detail}");
+                }
+                Some(detail)
+            }
+            Err(error) => {
+                if !launch.requires_approval().await.unwrap_or(false) {
+                    return Err(error.into());
+                }
+                None
+            }
+        };
+        if started.elapsed() >= BACKGROUND_APPROVAL_TIMEOUT {
+            match refusal {
+                Some(detail) => anyhow::bail!(
+                    "{} (launchctl: {detail})",
+                    gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED
+                ),
+                None => anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED),
+            }
+        }
+        *lifecycle = None;
+        wait_unlocked(token, launch.await_approval()).await?;
+        *lifecycle = Some(relock_start(state, token).await?);
+        ensure_not_cancelled(token)?;
     }
 }
 
@@ -506,21 +616,36 @@ async fn start_managed_server<'a, R: Runtime>(
     };
 
     let mut carried_wait = None;
-    let mut exited_while_loaded = false;
+    let mut replace_loaded_job = false;
     let (ready, initial_enabled, _lifecycle) = match matching_external_server(&agent_home).await? {
         Some(external) => (Some(external), false, lifecycle),
         None => {
+            // Before anything below unloads a job this launch could not replace.
+            ensure_launchable_here(app, state)?;
+            let outdated = match observe_port_readiness(&agent_home).await? {
+                PortReadiness::Outdated { version } => Some(version),
+                _ => None,
+            };
             let initial_native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
+            if let (Some(version), false) = (&outdated, initial_native.job_loaded) {
+                return Err(BridgeError::untyped(outdated_runtime_message(
+                    version.as_deref(),
+                )));
+            }
             let enabled = initial_native.enabled;
-            exited_while_loaded = initial_native.job_loaded
-                && !initial_native.running
-                && run_native(native_service(app, state)?, |service| service.last_exit())
+            replace_loaded_job = outdated.is_some()
+                || (initial_native.job_loaded
+                    && !initial_native.running
+                    && run_native(native_service(app, state)?, |service| {
+                        Ok(service.last_exit()?.is_some()
+                            || service.installed_executable_differs()?)
+                    })
                     .await
-                    .is_ok_and(|exit| exit.is_some());
+                    .unwrap_or(false));
             if initial_native.is_active_or_transitioning()
                 && !initial_native.requires_approval
-                && !exited_while_loaded
+                && !replace_loaded_job
             {
                 match wait_for_booting_managed_server(app, state, &agent_home, lifecycle).await? {
                     BootOutcome::Ready(ready, lifecycle) => (Some(ready), enabled, lifecycle),
@@ -568,13 +693,18 @@ async fn start_managed_server<'a, R: Runtime>(
     emit_status(app, state).await;
 
     let provisioned: anyhow::Result<()> = async {
-        if exited_while_loaded {
-            // The loaded job will not run again by itself (a clean exit) or
-            // is crash looping. Unload it so an updated definition can be
+        if replace_loaded_job {
+            // The loaded job runs a runtime older than this app, will not run
+            // again by itself (a clean exit or a runtime that moved) or is
+            // crash looping. Unload it so the current definition can be
             // installed and the launch below starts it fresh.
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
-        ensure_default_port_identity(&agent_home).await?;
+        // A fresh home has no identity to compare yet. Provisioning is safe
+        // either way, and the check below names any other runtime on the port.
+        if gents_server::server_host::initialized_home(&agent_home) {
+            ensure_default_port_identity(&agent_home).await?;
+        }
         gents_server::server_host::ensure_standard_home(
             gents_server::server_host::ProvisionOptions {
                 home: agent_home.clone(),
@@ -700,7 +830,15 @@ where
     if token.is_cancelled() {
         return Err(cancelled());
     }
-    let typed_error = error.downcast_ref::<BridgeError>().cloned();
+    let still_booting = error.is::<RuntimeStillBooting>();
+    let typed_error = if still_booting {
+        Some(BridgeError::new(
+            BridgeErrorCode::RuntimeStillBooting,
+            error.to_string(),
+        ))
+    } else {
+        error.downcast_ref::<BridgeError>().cloned()
+    };
     let mut message = format!("{error:#}");
     let _lifecycle = match lifecycle {
         Some(lifecycle) => lifecycle,
@@ -713,7 +851,10 @@ where
         }
     }
     finish_start_wait(state, token).await;
-    state.managed_server.lock().await.last_error = Some(message.clone());
+    // A runtime still booting is observed as starting, not as a failure.
+    if !still_booting {
+        state.managed_server.lock().await.last_error = Some(message.clone());
+    }
     Ok((message, typed_error))
 }
 
@@ -757,6 +898,7 @@ async fn fail_managed_start<R: Runtime>(
         }
     };
     tracing::warn!(error = %message, "managed Gents server start failed");
+    state.managed_server.lock().await.approval_refused = false;
     emit_status(app, state).await;
     if matches!(
         gents::storage_backend::incompatible_store_kind(&agent_home.join("data")),
@@ -1039,6 +1181,8 @@ enum NativeProgress {
     Stopped,
     AwaitingApproval,
     Exited(gents_server::native_service::ServiceExit),
+    /// The supervisor gave up on the job and will not restart it.
+    Failed(gents_server::native_service::ServiceExit),
 }
 
 async fn observe_native_progress<R: Runtime>(
@@ -1051,7 +1195,10 @@ async fn observe_native_progress<R: Runtime>(
             return Ok(NativeProgress::AwaitingApproval);
         }
         if !status.job_loaded {
-            return Ok(NativeProgress::Stopped);
+            return Ok(match service.last_exit()?.filter(|_| status.failed) {
+                Some(exit) => NativeProgress::Failed(exit),
+                None => NativeProgress::Stopped,
+            });
         }
         if status.running {
             return Ok(NativeProgress::Loaded);
@@ -1091,27 +1238,44 @@ where
     NF: Future<Output = Result<NativeProgress, BridgeError>>,
 {
     let started = tokio::time::Instant::now();
+    // Binding is the only progress a runtime reports before it is ready, so
+    // the bound restarts then. Migrations after an upgrade can take longer.
+    let mut progress_at = started;
+    let mut booting = false;
     let mut first_exit_restarts = None;
     loop {
-        match probe().await? {
+        let (observed_booting, occupied) = match probe().await? {
             PortReadiness::Ready(status) => return Ok(Readiness::Ready(status)),
-            PortReadiness::Foreign { port, live_did } => {
-                let who = if live_did.trim().is_empty() {
-                    "a listener that did not advertise an identity".to_string()
-                } else {
-                    format!("a different Gents identity ({live_did})")
-                };
-                anyhow::bail!(
-                    "port {port} is already in use by {who}. Stop that server before starting the managed agent."
-                );
+            PortReadiness::Outdated { version } => {
+                anyhow::bail!("{}", outdated_runtime_message(version.as_deref()))
             }
-            PortReadiness::NotListening => {}
+            PortReadiness::Foreign(foreign) => anyhow::bail!(foreign.message()),
+            // A listener without /status may be this runtime before it
+            // answers; it only explains a later failure.
+            PortReadiness::Occupied(port) => (false, Some(port)),
+            PortReadiness::Booting => (true, None),
+            PortReadiness::NotListening => (false, None),
+        };
+        if observed_booting && !booting {
+            booting = true;
+            progress_at = tokio::time::Instant::now();
         }
+        let explain = |failure: String| match occupied {
+            Some(port) => anyhow::anyhow!("{failure}. {}", occupied_port_message(port)),
+            None => anyhow::anyhow!(failure),
+        };
         match native().await? {
             NativeProgress::AwaitingApproval => return Ok(Readiness::ApprovalRequired),
-            NativeProgress::Stopped => anyhow::bail!(
-                "the native Gents service stopped after {} seconds, before it published runtime readiness",
-                started.elapsed().as_secs()
+            NativeProgress::Stopped => {
+                return Err(explain(format!(
+                    "the native Gents service stopped after {} seconds, before it published runtime readiness",
+                    started.elapsed().as_secs()
+                )))
+            }
+            NativeProgress::Failed(exit) => anyhow::bail!(
+                "the native Gents service failed before it published runtime readiness and will not be restarted: it {} after {} restarts",
+                exit.reason,
+                exit.restarts
             ),
             NativeProgress::Exited(exit) if exit.clean => anyhow::bail!(
                 "the native Gents service exited normally before it published runtime readiness, so it will not be restarted"
@@ -1119,15 +1283,21 @@ where
             NativeProgress::Exited(exit) => {
                 let restarts = restarts_since(&mut first_exit_restarts, exit.restarts);
                 if restarts >= CRASH_LOOP_RESTARTS {
-                    anyhow::bail!(
+                    return Err(explain(format!(
                         "the native Gents service keeps exiting before it publishes runtime readiness: it {} and was restarted {restarts} times in a row",
                         exit.reason
-                    );
+                    )));
                 }
             }
             NativeProgress::Loaded => {}
         }
-        if started.elapsed() >= timeout {
+        if progress_at.elapsed() >= timeout {
+            if observed_booting {
+                return Err(RuntimeStillBooting {
+                    waited: started.elapsed(),
+                }
+                .into());
+            }
             anyhow::bail!(
                 "the native Gents service is running but did not publish runtime readiness within {} seconds",
                 timeout.as_secs()
@@ -1136,6 +1306,25 @@ where
         tokio::time::sleep(interval).await;
     }
 }
+
+/// A running job whose runtime is bound but not ready when the wait ends. It
+/// is left running rather than rolled back: it may be migrating its data.
+#[derive(Debug)]
+struct RuntimeStillBooting {
+    waited: Duration,
+}
+
+impl std::fmt::Display for RuntimeStillBooting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the Gents runtime is still starting after {} seconds, possibly migrating its data; it keeps starting in the background",
+            self.waited.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for RuntimeStillBooting {}
 
 enum BootOutcome<'a> {
     Ready(ManagedServerStatus, LifecycleGuard<'a>),
@@ -1182,27 +1371,47 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
         return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
     }
-    finish_start_wait(state, &token).await;
-    let result = adopted.map_err(|error| {
-        let message = format!("{error:#}");
-        tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
-        BridgeError::new(BridgeErrorCode::EndpointUnreachable, message)
-    });
-    if let Err(error) = &result {
-        state.managed_server.lock().await.last_error = Some(error.message.clone());
-    }
+    let result = settle_adoption(state, &token, adopted).await;
     emit_status(app, state).await;
     result
+}
+
+/// Ends the wait on a job that was already running. A job still booting at
+/// the bound is reported as such, not as a failure, like a launched one.
+async fn settle_adoption<'a>(
+    state: &'a DesktopAppState,
+    token: &StartWait,
+    adopted: anyhow::Result<BootOutcome<'a>>,
+) -> Result<BootOutcome<'a>, BridgeError> {
+    finish_start_wait(state, token).await;
+    let error = match adopted {
+        Ok(outcome) => return Ok(outcome),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    if error.is::<RuntimeStillBooting>() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::RuntimeStillBooting,
+            message,
+        ));
+    }
+    tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
+    state.managed_server.lock().await.last_error = Some(message.clone());
+    Err(BridgeError::new(
+        BridgeErrorCode::EndpointUnreachable,
+        message,
+    ))
 }
 
 async fn native_requires_approval<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<bool, BridgeError> {
+    let refused = state.managed_server.lock().await.approval_refused;
     Ok(
         run_native(native_service(app, state)?, |service| service.status())
             .await?
-            .requires_approval,
+            .approval_pending(refused),
     )
 }
 
@@ -1273,35 +1482,118 @@ pub async fn desktop_managed_server_open_login_items<R: Runtime>(
 
 enum PortReadiness {
     Ready(ManagedServerStatus),
-    Foreign { port: u16, live_did: String },
+    Foreign(ForeignRuntime),
+    /// This home's runtime is bound but has not reported it finished starting.
+    Booting,
+    /// This home's runtime predates the lifecycle field and never reports ready.
+    Outdated {
+        version: Option<String>,
+    },
+    /// A program that is not a Gents runtime accepts connections on the port.
+    Occupied(u16),
     NotListening,
 }
 
+/// A runtime other than this home's that answers on the managed port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ForeignRuntime {
+    port: u16,
+    agent_did: Option<String>,
+    home: Option<String>,
+}
+
+impl ForeignRuntime {
+    fn from_payload(port: u16, payload: &serde_json::Value) -> Self {
+        let field = |name: &str| {
+            payload
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        Self {
+            port,
+            agent_did: field("agent_did"),
+            home: field("home"),
+        }
+    }
+
+    fn message(&self) -> String {
+        let port = self.port;
+        let Some(did) = self.agent_did.as_deref() else {
+            return format!(
+                "Port {port} is in use by a program that does not advertise a Gents identity, and the local agent needs that port. Quit that program, then start the agent again."
+            );
+        };
+        let (located, home) = match self.home.as_deref() {
+            Some(home) => (format!(" from home {home}"), home),
+            None => (String::new(), "<its home>"),
+        };
+        format!(
+            "Port {port} is already served by a different Gents agent ({did}){located}, and the local agent needs that port. Stop the other agent with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
+        )
+    }
+}
+
+fn occupied_port_message(port: u16) -> String {
+    format!(
+        "Port {port} is in use by another program that is not a Gents agent, and the local agent needs that port. Quit that program, then start the agent again."
+    )
+}
+
+/// Who answers on the managed port. Any answer on a fresh home, or one that
+/// does not carry the initialized identity, belongs to another runtime.
 async fn observe_port_readiness(
     agent_home: &std::path::Path,
 ) -> Result<PortReadiness, BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
     let Some(payload) = default_port_payload(Some(agent_home)).await? else {
-        return Ok(PortReadiness::NotListening);
+        let address = std::net::SocketAddr::new(config.http_addr, config.http_port);
+        let accepts = tokio::time::timeout(
+            Duration::from_millis(250),
+            tokio::net::TcpStream::connect(address),
+        )
+        .await
+        .is_ok_and(|connected| connected.is_ok());
+        return Ok(if accepts {
+            PortReadiness::Occupied(config.http_port)
+        } else {
+            PortReadiness::NotListening
+        });
     };
+    let initialized_did = if gents_server::server_host::initialized_home(agent_home) {
+        read_initialized_did(agent_home).await
+    } else {
+        None
+    };
+    Ok(classify_port_payload(
+        config.http_port,
+        initialized_did.as_deref(),
+        payload,
+    ))
+}
+
+fn classify_port_payload(
+    port: u16,
+    initialized_did: Option<&str>,
+    payload: serde_json::Value,
+) -> PortReadiness {
     let live_did = payload
         .get("agent_did")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if !gents_server::server_host::initialized_home(agent_home) {
-        return Ok(PortReadiness::NotListening);
+    if ensure_matching_identity(initialized_did, &live_did, port).is_err() {
+        return PortReadiness::Foreign(ForeignRuntime::from_payload(port, &payload));
     }
-    let initialized_did = read_initialized_did(agent_home).await;
-    if ensure_matching_identity(initialized_did.as_deref(), &live_did, config.http_port).is_err() {
-        return Ok(PortReadiness::Foreign {
-            port: config.http_port,
-            live_did,
-        });
+    match ObservedServeLifecycle::observe(&payload) {
+        ObservedServeLifecycle::Ready => {
+            PortReadiness::Ready(managed_status_from_payload(payload, &live_did))
+        }
+        ObservedServeLifecycle::Starting => PortReadiness::Booting,
+        ObservedServeLifecycle::Outdated { version } => PortReadiness::Outdated { version },
     }
-    Ok(PortReadiness::Ready(managed_status_from_payload(
-        payload, &live_did,
-    )))
 }
 
 fn validate_ready_runtime(
@@ -1339,6 +1631,15 @@ fn validate_ready_runtime(
         );
     }
     Ok(())
+}
+
+/// Refuses a launch from a location the service could not keep running from.
+fn ensure_launchable_here<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    ensure_installable_location(executable.service_path())
 }
 
 fn native_service<R: Runtime>(
@@ -1384,12 +1685,35 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
             "refreshed the Gents runtime from the application package"
         );
     }
+    if let Err(error) = ensure_installable_location(executable.service_path()) {
+        tracing::warn!(
+            target: "gents_desktop::managed_server",
+            error = %error.message,
+            "leaving the installed service definition unchanged"
+        );
+        return Ok(());
+    }
     let service = native_service(app, state)?;
     let status = service.status().map_err(native_error)?;
     if !status.installed {
         return Ok(());
     }
     if status.is_active_or_transitioning() {
+        // A loaded job that is not running and names a runtime that moved
+        // cannot launch again. Unload it so its definition can be replaced.
+        if !status.running
+            && service
+                .installed_executable_differs()
+                .map_err(native_error)?
+        {
+            tracing::info!(
+                target: "gents_desktop::managed_server",
+                runtime = %executable.service_path().display(),
+                "reinstalling the stopped agent service, whose definition names a runtime that moved"
+            );
+            service.stop(false).map_err(native_error)?;
+            return service.install().map_err(native_error);
+        }
         // `install` refuses a live Linux job, and on macOS it bootouts a
         // loaded job whose definition differs. Leave that job alone.
         tracing::info!(
@@ -1399,6 +1723,55 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
         return Ok(());
     }
     service.install().map_err(native_error)
+}
+
+/// Our own running job still runs a runtime older than this app, which never
+/// reports ready. Restart it on the refreshed definition and executable at
+/// launch; status reads report it starting meanwhile rather than stopped.
+pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let Some(agent_home) = state.policy.agent_home.clone() else {
+        return Ok(());
+    };
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let PortReadiness::Outdated { version } = observe_port_readiness(&agent_home).await? else {
+        return Ok(());
+    };
+    if !run_native(native_service(app, state)?, |service| service.status())
+        .await?
+        .running
+    {
+        return Ok(());
+    }
+    ensure_launchable_here(app, state)?;
+    tracing::info!(
+        target: "gents_desktop::managed_server",
+        version = version.as_deref().unwrap_or("unknown"),
+        "restarting the agent service, whose runtime predates this app"
+    );
+    state.managed_server.lock().await.starting = true;
+    emit_status(app, state).await;
+    let restarted = run_native(launchable_native_service(app, state)?, |service| {
+        service.stop(false)?;
+        service.install()?;
+        service.start(false)
+    })
+    .await;
+    {
+        let mut managed = state.managed_server.lock().await;
+        managed.starting = false;
+        if let Err(error) = &restarted {
+            managed.last_error = Some(format!(
+                "{} Restarting it failed: {}",
+                outdated_runtime_message(version.as_deref()),
+                error.message
+            ));
+        }
+    }
+    emit_status(app, state).await;
+    restarted
 }
 
 fn build_native_service<R: Runtime>(
@@ -1414,6 +1787,7 @@ fn build_native_service<R: Runtime>(
     })?;
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
     if install_runtime {
+        ensure_installable_location(executable.service_path())?;
         executable.install()?;
     }
     let mut config = gents_server::native_service::NativeServiceConfig::new(
@@ -1421,6 +1795,9 @@ fn build_native_service<R: Runtime>(
         executable.service_path().to_path_buf(),
     )
     .map_err(native_error)?;
+    config.stderr_path = Some(crate::logging::runtime_error_log(
+        state.policy.desktop_paths.root(),
+    ));
     // Login Items shows the code-signing personal name unless the agent
     // names the desktop bundle that installed it.
     let bundle_id = app.config().identifier.clone();
@@ -1540,26 +1917,175 @@ async fn start_managed_runtime_pairing(
     let cancel = tokio_util::sync::CancellationToken::new();
     managed.pairing_cancel = Some(cancel.clone());
     managed.pairing_task = Some(tauri::async_runtime::spawn(async move {
-        if let Err(error) =
-            ensure_managed_runtime_pairing(core, &agent_home, &target, &cancel).await
-        {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                agent_did = %target.agent_did,
-                error = %error,
-                "background managed runtime pairing failed"
-            );
+        let paired = retry_managed_pairing(
+            &cancel,
+            MANAGED_PAIRING_ATTEMPTS,
+            MANAGED_PAIRING_RETRY_DELAY,
+            || ensure_managed_runtime_pairing(Arc::clone(&core), &agent_home, &target, &cancel),
+        )
+        .await;
+        match paired {
+            Ok(()) => {}
+            Err(PairingFailure::Cancelled) => {
+                tracing::info!(
+                    target: "gents_desktop::managed_server",
+                    agent_did = %target.agent_did,
+                    "background managed runtime pairing was cancelled"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    agent_did = %target.agent_did,
+                    error = %error,
+                    "background managed runtime pairing failed"
+                );
+            }
         }
     }));
 }
 
-/// How long a just-started runtime may take to publish its replicated schema,
-/// which it does only after its migrations finish.
+/// Background pairing retries a failed attempt this many times in total.
+const MANAGED_PAIRING_ATTEMPTS: u32 = 4;
+/// The wait before retry `n` is `n` times this.
+const MANAGED_PAIRING_RETRY_DELAY: Duration = Duration::from_secs(2);
+/// How long one attempt waits for its approved enrollment to become chat-ready.
+const MANAGED_PAIRING_APPROVAL_WINDOW: Duration = Duration::from_secs(30);
+const MANAGED_PAIRING_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const MANAGED_PAIRING_CANCELLED: &str = "managed runtime pairing was cancelled";
+
+/// Why a pairing attempt ended without a chat-ready route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PairingFailure {
+    Cancelled,
+    /// Retrying cannot help: the runtime is incompatible, outdated, or is
+    /// not the identity this home pairs with.
+    Permanent(String),
+    Transient(String),
+}
+
+/// Failures no retry of the same runtime can resolve.
+const PERMANENT_PAIRING_ERRORS: &[&str] = &["incompatible", "does not match", "predates this app"];
+
+impl PairingFailure {
+    fn classify(message: String) -> Self {
+        if PERMANENT_PAIRING_ERRORS
+            .iter()
+            .any(|permanent| message.contains(permanent))
+        {
+            Self::Permanent(message)
+        } else {
+            Self::Transient(message)
+        }
+    }
+}
+
+impl std::fmt::Display for PairingFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str(MANAGED_PAIRING_CANCELLED),
+            Self::Permanent(message) | Self::Transient(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Runs pairing attempts until one succeeds, fails permanently, the attempts
+/// run out, or the pairing is cancelled.
+async fn retry_managed_pairing<A, AF>(
+    cancel: &tokio_util::sync::CancellationToken,
+    attempts: u32,
+    delay: Duration,
+    mut attempt: A,
+) -> Result<(), PairingFailure>
+where
+    A: FnMut() -> AF,
+    AF: Future<Output = Result<(), PairingFailure>>,
+{
+    let mut failure = String::new();
+    for number in 1..=attempts {
+        match attempt().await {
+            Ok(()) => return Ok(()),
+            Err(_) if cancel.is_cancelled() => return Err(PairingFailure::Cancelled),
+            Err(PairingFailure::Transient(error)) => failure = error,
+            Err(terminal) => return Err(terminal),
+        }
+        if number == attempts {
+            break;
+        }
+        tracing::info!(
+            target: "gents_desktop::managed_server",
+            attempt = number,
+            attempts,
+            error = %failure,
+            "managed runtime pairing attempt failed; retrying"
+        );
+        tokio::select! {
+            () = tokio::time::sleep(delay * number) => {}
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
+        }
+    }
+    Err(PairingFailure::Transient(format!(
+        "{failure} (after {attempts} attempts)"
+    )))
+}
+
+enum PairingApproval {
+    Committed,
+    NotVisibleYet,
+}
+
+/// Approves an authored enrollment and waits for it to become chat-ready.
+/// Cancellation is observed between steps; each step is left to finish.
+async fn await_managed_pairing_approval<P, PF, A, AF, R, RF>(
+    cancel: &tokio_util::sync::CancellationToken,
+    window: Duration,
+    interval: Duration,
+    mut paired: P,
+    mut approve: A,
+    mut repair: R,
+) -> Result<(), PairingFailure>
+where
+    P: FnMut() -> PF,
+    PF: Future<Output = bool>,
+    A: FnMut() -> AF,
+    AF: Future<Output = Result<PairingApproval, String>>,
+    R: FnMut() -> RF,
+    RF: Future<Output = Result<(), String>>,
+{
+    let deadline = tokio::time::Instant::now() + window;
+    let mut approval_committed = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(PairingFailure::Cancelled);
+        }
+        if paired().await {
+            return Ok(());
+        }
+        if !approval_committed {
+            match approve().await.map_err(PairingFailure::classify)? {
+                PairingApproval::Committed => approval_committed = true,
+                PairingApproval::NotVisibleYet => {}
+            }
+        }
+        repair().await.map_err(PairingFailure::Transient)?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(PairingFailure::Transient(
+                "timed out waiting for managed runtime pairing".to_string(),
+            ));
+        }
+        tokio::select! {
+            () = tokio::time::sleep(interval) => {}
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
+        }
+    }
+}
+
+/// How long a just-started runtime may take to report it finished starting.
+/// Its replicated schema and enrollment offer are published by then.
 const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
 
 /// Fetch the managed runtime's `/status`, retrying within
-/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or has not yet
-/// published its replicated schema.
+/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or still starting.
 async fn fetch_managed_runtime_status(
     graphql: &str,
     cancel: &tokio_util::sync::CancellationToken,
@@ -1577,12 +2103,13 @@ async fn fetch_managed_runtime_status(
             }
             () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
         };
-        let published = fetched.as_ref().is_ok_and(|status| {
-            !status
-                .get(gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD)
-                .is_some_and(serde_json::Value::is_null)
-        });
-        if published || tokio::time::Instant::now() >= deadline {
+        let observed = fetched.as_ref().ok().map(ObservedServeLifecycle::observe);
+        if let Some(ObservedServeLifecycle::Outdated { version }) = observed {
+            return Err(outdated_runtime_message(version.as_deref()));
+        }
+        if observed.is_some_and(|observed| observed.is_ready())
+            || tokio::time::Instant::now() >= deadline
+        {
             return fetched;
         }
         tokio::select! {
@@ -1619,7 +2146,7 @@ async fn ensure_managed_runtime_pairing(
     agent_home: &std::path::Path,
     target: &ManagedPairingTarget,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), PairingFailure> {
     if core.peer_records().await.iter().any(|peer| {
         peer.agent_did == target.agent_did
             && peer.is_enrollment()
@@ -1631,57 +2158,179 @@ async fn ensure_managed_runtime_pairing(
 
     let status = fetch_managed_runtime_status(&target.graphql, cancel)
         .await
-        .map_err(|error| format!("loading managed runtime enrollment offer: {error}"))?;
-    let enrollment = core
-        .request_status_enrollment_with_label(&status, Some(&target.agent_name))
-        .await
-        .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
+        .map_err(|error| {
+            if cancel.is_cancelled() {
+                PairingFailure::Cancelled
+            } else {
+                PairingFailure::classify(format!(
+                    "loading managed runtime enrollment offer: {error}"
+                ))
+            }
+        })?;
+    if cancel.is_cancelled() {
+        return Err(PairingFailure::Cancelled);
+    }
+    let live_peer = live_server_peer(&status);
+    // Each /status mints a fresh offer, so authoring again would leave the
+    // earlier request pending where it could still be approved. A request
+    // stays in use until it expires or is denied.
+    let request_id = resolve_managed_request(
+        cancel,
+        || async {
+            core.active_status_enrollment_requests()
+                .await
+                .map(|requests| {
+                    select_managed_request(requests, &target.agent_did, live_peer.as_deref())
+                })
+                .map_err(|error| format!("{error:#}"))
+        },
+        |request_id| {
+            let core = Arc::clone(&core);
+            async move {
+                core.resend_status_enrollment(&request_id)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
+            }
+        },
+        // Authoring installs and unwinds bootstrap replication state, so it
+        // is not interrupted; cancellation is observed once it returns.
+        || async {
+            core.request_status_enrollment_with_label(&status, Some(&target.agent_name))
+                .await
+                .map(|request| request.request_id)
+                .map_err(|error| {
+                    PairingFailure::classify(format!(
+                        "requesting managed runtime enrollment: {error:#}"
+                    ))
+                })
+        },
+    )
+    .await?;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut approval_committed = false;
-    loop {
-        if core.peer_records().await.iter().any(|peer| {
-            peer.agent_did == target.agent_did
-                && peer.is_enrollment()
-                && peer.is_managed_runtime()
-                && peer.is_chat_ready_at(chrono::Utc::now())
-        }) {
-            tracing::info!(
-                target: "gents_desktop::managed_server",
-                agent_did = %target.agent_did,
-                "managed runtime desktop pairing is ready"
-            );
-            return Ok(());
-        }
-        if !approval_committed {
+    await_managed_pairing_approval(
+        cancel,
+        MANAGED_PAIRING_APPROVAL_WINDOW,
+        MANAGED_PAIRING_POLL_INTERVAL,
+        || async {
+            core.peer_records().await.iter().any(|peer| {
+                peer.agent_did == target.agent_did
+                    && peer.is_enrollment()
+                    && peer.is_managed_runtime()
+                    && peer.is_chat_ready_at(chrono::Utc::now())
+            })
+        },
+        || async {
             match gents_server::server_host::approve_managed_client_enrollment(
                 agent_home,
                 &target.graphql,
-                &enrollment.request_id,
+                &request_id,
             )
             .await
             {
-                Ok(()) => approval_committed = true,
+                Ok(()) => Ok(PairingApproval::Committed),
                 Err(error) => {
                     let message = format!("{error:#}");
                     if enrollment_request_is_not_visible_yet(&message) {
                         tracing::debug!(
-                            request_id = %enrollment.request_id,
+                            request_id = %request_id,
                             "managed enrollment request is not yet visible to operator approval"
                         );
+                        Ok(PairingApproval::NotVisibleYet)
                     } else {
-                        return Err(format!("approving managed runtime enrollment: {message}"));
+                        Err(format!("approving managed runtime enrollment: {message}"))
                     }
                 }
             }
+        },
+        || async {
+            core.request_p2p_repair()
+                .await
+                .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))
+        },
+    )
+    .await?;
+    tracing::info!(
+        target: "gents_desktop::managed_server",
+        agent_did = %target.agent_did,
+        "managed runtime desktop pairing is ready"
+    );
+    Ok(())
+}
+
+/// The peer serving the live runtime's enrollment offer, falling back to the
+/// peer its status reports. Used only to select among this desktop's own
+/// requests; each was authenticated against its server when authored.
+fn live_server_peer(status: &serde_json::Value) -> Option<String> {
+    status
+        .pointer("/enrollment/token")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|token| gents_protocol::enrollment::decode_offer(token).ok())
+        .map(|offer| offer.server_peer)
+        .or_else(|| {
+            status
+                .get("p2p_peer_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|peer| !peer.trim().is_empty())
+}
+
+/// This desktop's newest unexpired, undenied request to pair with the runtime
+/// serving from `live_peer`.
+fn select_managed_request(
+    requests: Vec<EnrollmentRequestResult>,
+    agent_did: &str,
+    live_peer: Option<&str>,
+) -> Option<EnrollmentRequestResult> {
+    let live_peer = live_peer?;
+    requests
+        .into_iter()
+        .filter(|request| request.owner_agent == agent_did && request.server_peer == live_peer)
+        .max_by(|left, right| {
+            left.expires_at
+                .cmp(&right.expires_at)
+                .then_with(|| left.request_id.cmp(&right.request_id))
+        })
+}
+
+/// Reuses a live request, pushing a pending one to the server again since its
+/// earlier push may have failed. Authors a new one only after a lookup that
+/// succeeded and found none.
+async fn resolve_managed_request<L, LF, R, RF, A, AF>(
+    cancel: &tokio_util::sync::CancellationToken,
+    lookup: L,
+    resend: R,
+    author: A,
+) -> Result<String, PairingFailure>
+where
+    L: FnOnce() -> LF,
+    LF: Future<Output = Result<Option<EnrollmentRequestResult>, String>>,
+    R: FnOnce(String) -> RF,
+    RF: Future<Output = Result<(), String>>,
+    A: FnOnce() -> AF,
+    AF: Future<Output = Result<String, PairingFailure>>,
+{
+    let found = lookup().await;
+    // A stop during the lookup must not author or push. Once begun, those
+    // steps run to completion so authoring can unwind its replication state.
+    if cancel.is_cancelled() {
+        return Err(PairingFailure::Cancelled);
+    }
+    match found {
+        Err(error) => Err(PairingFailure::Transient(format!(
+            "reading this desktop's enrollment requests: {error}"
+        ))),
+        Ok(None) => author().await,
+        Ok(Some(request)) => {
+            if request.state == "pending_approval" {
+                resend(request.request_id.clone()).await.map_err(|error| {
+                    PairingFailure::classify(format!(
+                        "resending managed runtime enrollment: {error}"
+                    ))
+                })?;
+            }
+            Ok(request.request_id)
         }
-        core.request_p2p_repair()
-            .await
-            .map_err(|error| format!("requesting managed route reconciliation: {error:#}"))?;
-        if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for managed runtime pairing".to_string());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -1726,30 +2375,21 @@ pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
     }
 }
 
+/// The runtime on the default port when it is this home's. A fresh first-run
+/// home never adopts a neighbor's `gents server`.
 async fn matching_external_server(
     agent_home: &std::path::Path,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
-    let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
-    let Some(payload) = default_port_payload(Some(agent_home)).await? else {
-        return Ok(None);
-    };
-    let live_did = payload
-        .get("agent_did")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    // A process on the default port is only *our* managed server when this
-    // home is already initialized as that identity. A fresh first-run home
-    // must not adopt a neighbor's `gents server` and then fail reading
-    // init.json. Start separately rejects a foreign identity on the fixed port.
-    if !gents_server::server_host::initialized_home(agent_home) {
-        return Ok(None);
-    }
-    let initialized_did = read_initialized_did(agent_home).await;
-    if ensure_matching_identity(initialized_did.as_deref(), &live_did, config.http_port).is_err() {
-        return Ok(None);
-    }
-    Ok(Some(managed_status_from_payload(payload, &live_did)))
+    // A booting runtime is observed through its native service until it
+    // reports ready; discovery and pairing need its runtime.json.
+    Ok(match observe_port_readiness(agent_home).await? {
+        PortReadiness::Ready(status) => Some(status),
+        PortReadiness::Foreign(_)
+        | PortReadiness::Booting
+        | PortReadiness::Outdated { .. }
+        | PortReadiness::Occupied(_)
+        | PortReadiness::NotListening => None,
+    })
 }
 
 fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> ManagedServerStatus {
@@ -1777,6 +2417,7 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
         approval_required: false,
+        runtime_booting: false,
         error: None,
     }
 }
@@ -1797,26 +2438,34 @@ async fn default_port_payload(
 }
 
 async fn ensure_default_port_identity(agent_home: &Path) -> Result<(), BridgeError> {
-    let Some(payload) = default_port_payload(Some(agent_home)).await? else {
-        return Ok(());
-    };
-    let live_did = payload
-        .get("agent_did")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let initialized_did = read_initialized_did(agent_home).await;
-    ensure_matching_identity(
-        initialized_did.as_deref(),
-        live_did,
-        gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf()).http_port,
-    )
+    match observe_port_readiness(agent_home).await? {
+        PortReadiness::Foreign(foreign) => Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            foreign.message(),
+        )),
+        PortReadiness::Occupied(port) => Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            occupied_port_message(port),
+        )),
+        PortReadiness::Ready(_)
+        | PortReadiness::Booting
+        | PortReadiness::Outdated { .. }
+        | PortReadiness::NotListening => Ok(()),
+    }
 }
 
+/// Stop and Restart control only this home's job. This home's runtime
+/// serving outside that job blocks them; another home's runtime on the port
+/// never does.
 fn ensure_native_owns_running_endpoint(
-    endpoint_running: bool,
+    port: &PortReadiness,
     native_job_loaded: bool,
 ) -> Result<(), BridgeError> {
-    if endpoint_running && !native_job_loaded {
+    if matches!(
+        port,
+        PortReadiness::Ready(_) | PortReadiness::Booting | PortReadiness::Outdated { .. }
+    ) && !native_job_loaded
+    {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "The running local agent is not owned by the native Gents service. Stop it explicitly before using managed controls.",
@@ -1871,15 +2520,15 @@ async fn stop_managed_server_locked<R: Runtime>(
         let mut managed = state.managed_server.lock().await;
         managed.starting = false;
         managed.last_error = None;
+        managed.approval_refused = false;
     }
-    let endpoint_running = default_port_payload(state.policy.agent_home.as_deref())
-        .await?
-        .is_some();
+    // The returned status names another home's runtime on the port.
+    let port = match state.policy.agent_home.as_deref() {
+        Some(agent_home) => observe_port_readiness(agent_home).await?,
+        None => PortReadiness::NotListening,
+    };
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    if let Some(agent_home) = state.policy.agent_home.as_deref() {
-        ensure_default_port_identity(agent_home).await?;
-    }
-    ensure_native_owns_running_endpoint(endpoint_running, native.job_loaded)?;
+    ensure_native_owns_running_endpoint(&port, native.job_loaded)?;
     drain_managed_runtime_pairing(&state).await;
     if let Err(error) = run_native(native_service(app, state)?, move |service| {
         service.stop(disable_auto_start)
@@ -1912,10 +2561,16 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
-    let endpoint_running = default_port_payload(Some(&agent_home)).await?.is_some();
-    let previous_did = matching_external_server(&agent_home)
-        .await?
-        .and_then(|status| status.agent_did);
+    ensure_launchable_here(&app, &state)?;
+    let port = observe_port_readiness(&agent_home).await?;
+    let previous_did = match &port {
+        PortReadiness::Ready(status) => status.agent_did.clone(),
+        PortReadiness::Foreign(_)
+        | PortReadiness::Booting
+        | PortReadiness::Outdated { .. }
+        | PortReadiness::Occupied(_)
+        | PortReadiness::NotListening => None,
+    };
     let (tool_ceiling, tool_root) = authority.stored();
     let service_status =
         match run_native(native_service(&app, &state)?, |service| service.status()).await {
@@ -1926,8 +2581,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
                 return Err(error);
             }
         };
-    ensure_default_port_identity(&agent_home).await?;
-    ensure_native_owns_running_endpoint(endpoint_running, service_status.job_loaded)?;
+    ensure_native_owns_running_endpoint(&port, service_status.job_loaded)?;
     drain_managed_runtime_pairing(&state).await;
     let was_enabled = service_status.enabled;
     let provision = gents_server::server_host::ProvisionOptions {
@@ -1979,7 +2633,15 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         agent_home: &agent_home,
         enable_at_login: was_enabled,
     };
+    // Another runtime on the port does not keep this job from stopping, but
+    // a job launched into it could only crash loop.
     let install = async {
+        ensure_default_port_identity(&agent_home)
+            .await
+            .map_err(|mut error| {
+                error.message = format!("Your agent was stopped; {}", error.message);
+                error
+            })?;
         run_native(launchable_native_service(&app, &state)?, |service| {
             service.install()
         })
@@ -2048,9 +2710,22 @@ fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-/// Tracks a crash loop across status reads: the supervisor's restart count
-/// when a failed exit was first seen, and how far it has advanced since.
-/// Returns the restarts since then once they reach the crash-loop threshold.
+/// The crash-loop sample for one status read. Only a runtime that reports
+/// its lifecycle `ready` counts as ready: one still migrating is bound but can
+/// still die, so it samples as running and keeps the evidence.
+fn job_sample<'a>(
+    port: &PortReadiness,
+    job_loaded: bool,
+    last_exit: Option<&'a gents_server::native_service::ServiceExit>,
+) -> JobSample<'a> {
+    match (port, last_exit) {
+        (PortReadiness::Ready(_), _) => JobSample::Ready,
+        _ if !job_loaded => JobSample::Unloaded,
+        (_, Some(exit)) => JobSample::Exited(exit),
+        (_, None) => JobSample::Running,
+    }
+}
+
 /// Restarts since `baseline`. A counter below the baseline means the job was
 /// reloaded or its counter reset, so the baseline restarts from it.
 fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
@@ -2061,19 +2736,39 @@ fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
     counter - first
 }
 
-fn observe_crash_loop(
-    baseline: &mut Option<u64>,
-    last_exit: Option<&gents_server::native_service::ServiceExit>,
-) -> Option<u64> {
-    match last_exit.filter(|exit| !exit.clean) {
-        Some(exit) => {
-            let restarts = restarts_since(baseline, exit.restarts);
-            (restarts >= CRASH_LOOP_RESTARTS).then_some(restarts)
+/// Tracks a crash loop across status reads: the supervisor's restart count
+/// when a failed exit was first seen, and the loop once restarts since then
+/// reach the threshold. A job that dies seconds into boot is sampled running
+/// between respawns, so running samples keep the evidence. Only an unload,
+/// runtime readiness, a clean exit or a dropped restart counter clear it.
+#[derive(Debug, Default)]
+pub struct CrashLoopWatch {
+    baseline: Option<u64>,
+    looping: Option<(gents_server::native_service::ServiceExit, u64)>,
+}
+
+enum JobSample<'a> {
+    Unloaded,
+    Ready,
+    Running,
+    Exited(&'a gents_server::native_service::ServiceExit),
+}
+
+impl CrashLoopWatch {
+    fn observe(
+        &mut self,
+        sample: JobSample<'_>,
+    ) -> Option<(gents_server::native_service::ServiceExit, u64)> {
+        match sample {
+            JobSample::Unloaded | JobSample::Ready => *self = Self::default(),
+            JobSample::Exited(exit) if exit.clean => *self = Self::default(),
+            JobSample::Exited(exit) => {
+                let restarts = restarts_since(&mut self.baseline, exit.restarts);
+                self.looping = (restarts >= CRASH_LOOP_RESTARTS).then(|| (exit.clone(), restarts));
+            }
+            JobSample::Running => {}
         }
-        None => {
-            *baseline = None;
-            None
-        }
+        self.looping.clone()
     }
 }
 
@@ -2082,18 +2777,30 @@ fn status_from(
     stored: Option<&StoredManagedServer>,
     native: Option<&gents_server::native_service::NativeServiceStatus>,
     last_exit: Option<&gents_server::native_service::ServiceExit>,
-    crash_loop_restarts: Option<u64>,
+    crash_loop: Option<(&gents_server::native_service::ServiceExit, u64)>,
 ) -> ManagedServerStatus {
-    let approval_required = native.is_some_and(|status| status.requires_approval);
+    let approval_required =
+        native.is_some_and(|status| status.approval_pending(managed.approval_refused));
     let exited_cleanly = last_exit.is_some_and(|exit| exit.clean);
-    let crashed = last_exit
-        .zip(crash_loop_restarts)
+    let crashed = crash_loop
         .filter(|_| !managed.starting && !approval_required)
         .map(|(exit, restarts)| {
             format!(
                 "The background agent keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the agent, or check its log.",
                 exit.reason
             )
+        })
+        .or_else(|| {
+            last_exit
+                .filter(|exit| {
+                    !exit.clean && !managed.starting && native.is_some_and(|status| status.failed)
+                })
+                .map(|exit| {
+                    format!(
+                        "The background agent failed and will not be restarted: it {} after {} restarts. Start the agent again, or check its log.",
+                        exit.reason, exit.restarts
+                    )
+                })
         });
     ManagedServerStatus {
         state: if crashed.is_some() {
@@ -2120,6 +2827,7 @@ fn status_from(
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
         approval_required,
+        runtime_booting: false,
         error: crashed.or_else(|| managed.last_error.clone()),
     }
 }
@@ -2379,6 +3087,8 @@ mod tests {
             job_loaded: false,
             enabled: true,
             requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         assert_eq!(
@@ -2393,20 +3103,6 @@ mod tests {
 
     #[test]
     fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
-        let stored = StoredManagedServer {
-            agent_name: "local".to_string(),
-            tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
-            tool_root: Some("/Users/test".to_string()),
-        };
-        let idle = status_from(
-            &ManagedServerRuntimeState::default(),
-            Some(&stored),
-            None,
-            None,
-            None,
-        );
-        assert!(should_probe_external_status(&idle));
-
         let external = project_external_status(
             ManagedServerStatus {
                 state: ManagedServerState::External,
@@ -2419,6 +3115,7 @@ mod tests {
                 suggested_tool_root: Some("/Users/test".to_string()),
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &gents_server::native_service::NativeServiceStatus {
@@ -2427,6 +3124,8 @@ mod tests {
                 job_loaded: false,
                 enabled: true,
                 requires_approval: false,
+                background_item: Default::default(),
+                failed: false,
                 detail: None,
             },
         );
@@ -2434,7 +3133,6 @@ mod tests {
         assert_eq!(external.state, ManagedServerState::External);
         assert_eq!(external.agent_did.as_deref(), Some("did:key:preserved"));
         assert!(external.auto_start);
-        assert!(should_probe_external_status(&external));
     }
 
     #[test]
@@ -2445,6 +3143,8 @@ mod tests {
             job_loaded: true,
             enabled: true,
             requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         let status = status_from(
@@ -2455,7 +3155,6 @@ mod tests {
             None,
         );
         assert_eq!(status.state, ManagedServerState::Starting);
-        assert!(should_probe_external_status(&status));
 
         let observed = project_external_status(
             ManagedServerStatus {
@@ -2469,6 +3168,7 @@ mod tests {
                 suggested_tool_root: None,
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &native,
@@ -2484,6 +3184,8 @@ mod tests {
             job_loaded: true,
             enabled: false,
             requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         let observed = project_external_status(
@@ -2498,6 +3200,7 @@ mod tests {
                 suggested_tool_root: None,
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &native,
@@ -2514,7 +3217,6 @@ mod tests {
         };
         let status = status_from(&runtime, None, None, None, None);
         assert_eq!(status.state, ManagedServerState::Failed);
-        assert!(should_probe_external_status(&status));
     }
 
     #[tokio::test]
@@ -2593,9 +3295,10 @@ mod tests {
 
     #[test]
     fn managed_stop_rejects_a_manually_owned_endpoint() {
-        assert!(ensure_native_owns_running_endpoint(true, false).is_err());
-        assert!(ensure_native_owns_running_endpoint(true, true).is_ok());
-        assert!(ensure_native_owns_running_endpoint(false, false).is_ok());
+        let ours = || PortReadiness::Ready(ready_status("did:key:local"));
+        assert!(ensure_native_owns_running_endpoint(&ours(), false).is_err());
+        assert!(ensure_native_owns_running_endpoint(&ours(), true).is_ok());
+        assert!(ensure_native_owns_running_endpoint(&PortReadiness::NotListening, false).is_ok());
     }
 
     #[test]
@@ -2653,6 +3356,7 @@ mod tests {
             suggested_tool_root: None,
             pairing_ready: false,
             approval_required: false,
+            runtime_booting: false,
             error: None,
         };
         let error = validate_ready_runtime(&missing_authority, &authority, temp.path())
@@ -2802,6 +3506,7 @@ mod tests {
             suggested_tool_root: None,
             pairing_ready: false,
             approval_required: false,
+            runtime_booting: false,
             error: None,
         }
     }
@@ -2834,6 +3539,455 @@ mod tests {
         };
         assert_eq!(ready.agent_did.as_deref(), Some("did:key:slow"));
         assert_eq!(probes.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn this_homes_runtime_is_ready_only_once_it_reports_ready() {
+        let did = "did:key:managed";
+        let payload = |lifecycle: serde_json::Value| {
+            serde_json::json!({
+                "agent_did": did,
+                "agent_name": "Managed",
+                "graphql": "http://127.0.0.1:9191/api/v0/graphql",
+                gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: lifecycle,
+            })
+        };
+        for booting in [serde_json::Value::Null, serde_json::json!("starting")] {
+            assert!(matches!(
+                classify_port_payload(9191, Some(did), payload(booting)),
+                PortReadiness::Booting
+            ));
+        }
+        let PortReadiness::Ready(status) =
+            classify_port_payload(9191, Some(did), payload(serde_json::json!("ready")))
+        else {
+            panic!("a runtime that reports ready is ready");
+        };
+        assert_eq!(status.agent_did.as_deref(), Some(did));
+        assert!(matches!(
+            classify_port_payload(
+                9191,
+                Some("did:key:other"),
+                payload(serde_json::json!("ready"))
+            ),
+            PortReadiness::Foreign(ForeignRuntime { port: 9191, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_booting_runtime_is_waited_on_until_it_reports_ready() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let probes = AtomicUsize::new(0);
+        let ready = await_runtime_readiness(
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            || {
+                let attempt = probes.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(if attempt < 3 {
+                        PortReadiness::Booting
+                    } else {
+                        PortReadiness::Ready(ready_status("did:key:booted"))
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect("a bound runtime that is still starting is waited on");
+        assert!(matches!(ready, Readiness::Ready(_)));
+        assert_eq!(probes.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn a_runtime_that_predates_readiness_fails_the_wait_at_once() {
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            await_runtime_readiness(
+                Duration::from_secs(300),
+                Duration::from_millis(5),
+                || async {
+                    Ok(PortReadiness::Outdated {
+                        version: Some("0.18.2".to_string()),
+                    })
+                },
+                || async { Ok(NativeProgress::Loaded) },
+            ),
+        )
+        .await
+        .expect("an outdated runtime is not waited on")
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("(v0.18.2) predates this app"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_older_runtime_without_the_lifecycle_field_is_outdated() {
+        let did = "did:key:managed";
+        let observed = classify_port_payload(
+            9191,
+            Some(did),
+            serde_json::json!({ "agent_did": did, "version": "0.18.2", "status": "ok" }),
+        );
+        let PortReadiness::Outdated { version } = observed else {
+            panic!("an older runtime is outdated, not booting");
+        };
+        assert_eq!(version.as_deref(), Some("0.18.2"));
+    }
+
+    #[tokio::test]
+    async fn a_booting_runtime_past_the_bound_is_left_running() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let probes = AtomicUsize::new(0);
+        let error = await_runtime_readiness(
+            Duration::from_millis(60),
+            Duration::from_millis(5),
+            || {
+                let attempt = probes.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(if attempt < 4 {
+                        PortReadiness::NotListening
+                    } else {
+                        PortReadiness::Booting
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect_err("the wait is bounded");
+        assert!(error.is::<RuntimeStillBooting>(), "{error}");
+
+        // The bound restarts at bind: time spent before it does not count.
+        let started = std::time::Instant::now();
+        await_runtime_readiness(
+            Duration::from_millis(200),
+            Duration::from_millis(5),
+            || {
+                let elapsed = started.elapsed();
+                async move {
+                    Ok(if elapsed < Duration::from_millis(150) {
+                        PortReadiness::NotListening
+                    } else if elapsed < Duration::from_millis(300) {
+                        PortReadiness::Booting
+                    } else {
+                        PortReadiness::Ready(ready_status("did:key:migrated"))
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect("binding restarts the bound");
+    }
+
+    #[tokio::test]
+    async fn pairing_retries_a_failed_attempt_within_its_bounds() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let calls = AtomicU32::new(0);
+        retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || async {
+            if calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(PairingFailure::Transient("runtime_not_ready".to_string()))
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .expect("a later attempt pairs");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        let calls = AtomicU32::new(0);
+        let error = retry_managed_pairing(&cancel, 3, Duration::from_millis(1), || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err::<(), _>(PairingFailure::Transient("offer_mint_failed".to_string()))
+        })
+        .await
+        .expect_err("attempts are bounded");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        let error = error.to_string();
+        assert!(
+            error.contains("offer_mint_failed") && error.contains("3 attempts"),
+            "{error}"
+        );
+    }
+
+    fn managed_request(
+        request_id: &str,
+        server_peer: &str,
+        state: &str,
+        expires_at: &str,
+    ) -> EnrollmentRequestResult {
+        EnrollmentRequestResult {
+            request_id: request_id.to_string(),
+            network_id: "network".to_string(),
+            admin_did: "did:key:admin".to_string(),
+            server_peer: server_peer.to_string(),
+            owner_agent: "did:key:managed".to_string(),
+            state: state.to_string(),
+            expires_at: expires_at.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_request_lookup_never_authors_another_request() {
+        let authored = std::sync::atomic::AtomicU32::new(0);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let failure = resolve_managed_request(
+            &cancel,
+            || async { Err("decoding persisted enrollment request".to_string()) },
+            |_| async { Ok(()) },
+            || async {
+                authored.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok("enroll-new".to_string())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(failure, PairingFailure::Transient(_)), "{failure}");
+        assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stop_during_the_request_lookup_authors_and_pushes_nothing() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        for existing in [
+            None,
+            Some(managed_request(
+                "enroll-1",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T12:00:00Z",
+            )),
+        ] {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let (authored, resent) = (AtomicU32::new(0), AtomicU32::new(0));
+            let resolving = resolve_managed_request(
+                &cancel,
+                || async move {
+                    entered_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    Ok(existing)
+                },
+                |_| {
+                    resent.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                },
+                || async {
+                    authored.fetch_add(1, Ordering::SeqCst);
+                    Ok("enroll-new".to_string())
+                },
+            );
+            let stop = async {
+                entered_rx.await.unwrap();
+                cancel.cancel();
+                release_tx.send(()).unwrap();
+            };
+            let (result, ()) = tokio::join!(resolving, stop);
+            assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
+            assert_eq!(authored.load(Ordering::SeqCst), 0);
+            assert_eq!(resent.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_whose_push_failed_is_pushed_again_when_reused() {
+        let store = std::sync::Mutex::new(None::<EnrollmentRequestResult>);
+        let (resent, authored) = (
+            std::sync::Mutex::new(Vec::<String>::new()),
+            std::sync::atomic::AtomicU32::new(0),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let attempt = || {
+            resolve_managed_request(
+                &cancel,
+                || async { Ok(store.lock().unwrap().clone()) },
+                |request_id| {
+                    resent.lock().unwrap().push(request_id);
+                    async { Ok(()) }
+                },
+                || async {
+                    authored.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // Written locally, then the push to the server fails.
+                    *store.lock().unwrap() = Some(managed_request(
+                        "enroll-1",
+                        "peer-a",
+                        "pending_approval",
+                        "2026-09-24T12:00:00Z",
+                    ));
+                    Err(PairingFailure::Transient(
+                        "pushing enrollment request".to_string(),
+                    ))
+                },
+            )
+        };
+        assert!(attempt().await.is_err());
+        assert_eq!(attempt().await.unwrap(), "enroll-1");
+        assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*resent.lock().unwrap(), vec!["enroll-1".to_string()]);
+
+        // An approved request needs no push.
+        *store.lock().unwrap() = Some(managed_request(
+            "enroll-1",
+            "peer-a",
+            "approved",
+            "2026-09-24T12:00:00Z",
+        ));
+        assert_eq!(attempt().await.unwrap(), "enroll-1");
+        assert_eq!(resent.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_newest_request_for_the_live_server_peer_is_reused() {
+        let requests = vec![
+            managed_request(
+                "enroll-old",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T10:00:00Z",
+            ),
+            managed_request(
+                "enroll-new",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T11:00:00Z",
+            ),
+            managed_request(
+                "enroll-other",
+                "peer-b",
+                "pending_approval",
+                "2026-09-24T12:00:00Z",
+            ),
+        ];
+        let selected = select_managed_request(requests.clone(), "did:key:managed", Some("peer-a"));
+        assert_eq!(selected.unwrap().request_id, "enroll-new");
+        assert!(
+            select_managed_request(requests.clone(), "did:key:managed", Some("peer-c")).is_none()
+        );
+        assert!(
+            select_managed_request(requests.clone(), "did:key:other", Some("peer-a")).is_none()
+        );
+        assert!(
+            select_managed_request(requests, "did:key:managed", None).is_none(),
+            "without the live peer no request is reused"
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_is_not_retried_after_a_permanent_failure() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        for message in [
+            "requesting managed runtime enrollment: refusing to enroll with an incompatible runtime",
+            "loading managed runtime enrollment offer: the running agent (v0.18.2) predates this app; restart it so it runs this version",
+            "requesting managed runtime enrollment: enrollment server DID does not match the offer",
+        ] {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let calls = AtomicU32::new(0);
+            let failure = PairingFailure::classify(message.to_string());
+            assert!(matches!(failure, PairingFailure::Permanent(_)), "{message}");
+            let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let failure = failure.clone();
+                async move { Err::<(), _>(failure) }
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{message}");
+            assert_eq!(error.to_string(), message);
+        }
+        assert!(matches!(
+            PairingFailure::classify(
+                "approving managed runtime enrollment: connection refused".to_string()
+            ),
+            PairingFailure::Transient(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn pairing_retry_ends_when_cancelled_during_its_backoff() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let retry = retry_managed_pairing(&cancel, 4, Duration::from_secs(60), || async {
+            Err::<(), _>(PairingFailure::Transient("runtime_not_ready".to_string()))
+        });
+        let cancelled = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(retry, cancelled)
+        })
+        .await
+        .expect("cancellation ends the backoff");
+        assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_approval_wait_returns_without_waiting_out_its_window() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let approvals = AtomicU32::new(0);
+        let wait = await_managed_pairing_approval(
+            &cancel,
+            Duration::from_secs(600),
+            Duration::from_millis(5),
+            || async { false },
+            || async {
+                approvals.fetch_add(1, Ordering::SeqCst);
+                Ok(PairingApproval::NotVisibleYet)
+            },
+            || async { Ok(()) },
+        );
+        let cancelled = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(wait, cancelled)
+        })
+        .await
+        .expect("a drain is not held for the approval window");
+        assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
+        assert!(
+            approvals.load(Ordering::SeqCst) > 1,
+            "approval was retried while waiting"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approval_is_committed_once_then_waits_for_chat_readiness() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (checks, approvals, repairs) =
+            (AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0));
+        await_managed_pairing_approval(
+            &cancel,
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            || async { checks.fetch_add(1, Ordering::SeqCst) >= 3 },
+            || async {
+                approvals.fetch_add(1, Ordering::SeqCst);
+                Ok(PairingApproval::Committed)
+            },
+            || async {
+                repairs.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .expect("paired");
+        assert_eq!(approvals.load(Ordering::SeqCst), 1);
+        assert_eq!(repairs.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -2977,11 +4131,12 @@ mod tests {
         approval_blocks: bool,
         approval_gated: bool,
         approval_release: tokio::sync::Notify,
-        starts: std::sync::Mutex<std::collections::VecDeque<Result<(), BridgeError>>>,
+        starts: std::sync::Mutex<std::collections::VecDeque<Result<Launched, BridgeError>>>,
         readiness: std::sync::Mutex<std::collections::VecDeque<Readiness>>,
         start_calls: std::sync::atomic::AtomicUsize,
         approval_waits: std::sync::atomic::AtomicUsize,
         waiting: tokio::sync::Notify,
+        still_booting: bool,
     }
 
     impl ManagedLaunch for FakeLaunch {
@@ -3006,16 +4161,24 @@ mod tests {
             Ok(())
         }
 
-        async fn start(&self) -> Result<(), BridgeError> {
+        async fn start(&self) -> Result<Launched, BridgeError> {
             self.start_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.starts.lock().unwrap().pop_front().unwrap_or(Ok(()))
+            self.starts
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Ok(Launched::Started))
         }
 
         async fn await_ready(&self) -> anyhow::Result<Readiness> {
             let next = self.readiness.lock().unwrap().pop_front();
             match next {
                 Some(readiness) => Ok(readiness),
+                None if self.still_booting => Err(RuntimeStillBooting {
+                    waited: Duration::from_secs(300),
+                }
+                .into()),
                 None => {
                     self.waiting.notify_one();
                     std::future::pending().await
@@ -3055,12 +4218,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adopting_a_job_still_booting_at_the_bound_reports_it_booting() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let adopted = adopt_booting_runtime(&state, &token, lifecycle, async {
+            Err(RuntimeStillBooting {
+                waited: Duration::from_secs(300),
+            }
+            .into())
+        })
+        .await;
+        let Err(error) = settle_adoption(&state, &token, adopted).await else {
+            panic!("a job still booting does not adopt as ready");
+        };
+        assert_eq!(error.code, BridgeErrorCode::RuntimeStillBooting);
+        let managed = state.managed_server.lock().await;
+        assert!(
+            managed.last_error.is_none(),
+            "status keeps reporting it starting"
+        );
+        assert!(!managed.starting);
+    }
+
+    #[tokio::test]
+    async fn a_start_still_booting_is_reported_as_booting_not_failed() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let (_, typed) = settle_launch_failure(
+            &state,
+            &token,
+            LaunchFailure {
+                error: RuntimeStillBooting {
+                    waited: Duration::from_secs(300),
+                }
+                .into(),
+                attempted_start: false,
+                lifecycle: Some(lifecycle),
+            },
+            || async { panic!("a booting runtime is not rolled back") },
+        )
+        .await
+        .expect("settled");
+        assert_eq!(
+            typed.expect("typed").code,
+            BridgeErrorCode::RuntimeStillBooting
+        );
+        let managed = state.managed_server.lock().await;
+        assert!(
+            managed.last_error.is_none(),
+            "status keeps reporting it starting"
+        );
+        assert!(!managed.starting);
+    }
+
+    #[tokio::test]
+    async fn a_start_still_booting_at_the_bound_is_not_rolled_back() {
+        let (_temp, state) = orchestration_state();
+        let launch = FakeLaunch {
+            still_booting: true,
+            ..Default::default()
+        };
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let Err(failure) = launch_managed_server(&state, &token, lifecycle, &launch).await else {
+            panic!("a runtime still booting at the bound fails the start");
+        };
+        assert_eq!(launch.starts(), 1);
+        assert!(
+            !failure.attempted_start,
+            "a job that may be migrating is left running"
+        );
+        assert!(failure.error.is::<RuntimeStillBooting>());
+    }
+
+    #[tokio::test]
     async fn a_start_refused_for_approval_is_retried_once_after_approval() {
         let (_temp, state) = orchestration_state();
         let launch = FakeLaunch {
             approval: std::sync::Mutex::new([Ok(false), Ok(true)].into()),
             starts: std::sync::Mutex::new(
-                [Err(BridgeError::untyped("blocked by Login Items")), Ok(())].into(),
+                [
+                    Err(BridgeError::untyped("blocked by Login Items")),
+                    Ok(Launched::Started),
+                ]
+                .into(),
             ),
             readiness: std::sync::Mutex::new([Readiness::Ready(ready_status("did:key:b"))].into()),
             ..Default::default()
@@ -3077,6 +4320,131 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn a_start_macos_keeps_refusing_is_retried_after_each_approval_wait() {
+        let (_temp, state) = orchestration_state();
+        let refused = || Ok(Launched::ApprovalPending("Bootstrap failed: 5".to_string()));
+        let launch = FakeLaunch {
+            approval: std::sync::Mutex::new([Ok(false), Ok(true), Ok(true), Ok(true)].into()),
+            starts: std::sync::Mutex::new(
+                [refused(), refused(), refused(), Ok(Launched::Started)].into(),
+            ),
+            readiness: std::sync::Mutex::new([Readiness::Ready(ready_status("d:k:x"))].into()),
+            ..Default::default()
+        };
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        assert!(launch_managed_server(&state, &token, lifecycle, &launch)
+            .await
+            .is_ok());
+        assert_eq!(launch.starts(), 4);
+        assert_eq!(
+            launch
+                .approval_waits
+                .load(std::sync::atomic::Ordering::SeqCst),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_approval_polling_cannot_observe_fails_with_its_detail() {
+        let (_temp, state) = orchestration_state();
+        let launch = FakeLaunch {
+            starts: std::sync::Mutex::new(
+                [Ok(Launched::ApprovalPending(
+                    "Bootstrap failed: 5: Input/output error".to_string(),
+                ))]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let failure = tokio::time::timeout(
+            Duration::from_secs(1),
+            launch_managed_server(&state, &token, lifecycle, &launch),
+        )
+        .await
+        .expect("an unobservable refusal is not retried in a loop")
+        .err()
+        .expect("the start fails");
+        assert!(
+            failure.error.to_string().contains("Input/output error"),
+            "{}",
+            failure.error
+        );
+        assert_eq!(launch.starts(), 1);
+        assert_eq!(
+            launch
+                .approval_waits
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test]
+    fn a_runtime_still_migrating_keeps_the_crash_loop_evidence() {
+        let mut watch = CrashLoopWatch::default();
+        for restarts in [1, 2, 3] {
+            watch.observe(job_sample(
+                &PortReadiness::NotListening,
+                true,
+                Some(&service_exit(restarts)),
+            ));
+            // Bound with its identity but not `ready`: migrations can still fail.
+            assert!(
+                matches!(
+                    job_sample(&PortReadiness::Booting, true, None),
+                    JobSample::Running
+                ),
+                "a booting runtime samples as running"
+            );
+            watch.observe(job_sample(&PortReadiness::Booting, true, None));
+        }
+        assert_eq!(
+            watch
+                .observe(job_sample(&PortReadiness::Booting, true, None))
+                .map(|(_, restarts)| restarts),
+            Some(2)
+        );
+        assert!(watch
+            .observe(job_sample(
+                &PortReadiness::Ready(ready_status("did:key:ready")),
+                true,
+                None
+            ))
+            .is_none());
+    }
+
+    #[test]
+    fn a_refused_start_of_an_unregistered_item_is_reported_as_awaiting_approval() {
+        let native = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: false,
+            requires_approval: false,
+            background_item: gents_server::native_service::BackgroundItemStatus::NotRegistered,
+            failed: false,
+            detail: None,
+        };
+        let fresh = ManagedServerRuntimeState::default();
+        assert!(!status_from(&fresh, None, Some(&native), None, None).approval_required);
+        let refused = ManagedServerRuntimeState {
+            approval_refused: true,
+            ..Default::default()
+        };
+        assert!(status_from(&refused, None, Some(&native), None, None).approval_required);
+    }
+
+    #[tokio::test]
+    async fn a_new_start_forgets_an_earlier_refusal() {
+        let (_temp, state) = orchestration_state();
+        state.managed_server.lock().await.approval_refused = true;
+        let _token = begin_start_wait(&state).await;
+        assert!(!state.managed_server.lock().await.approval_refused);
     }
 
     #[tokio::test]
@@ -3240,6 +4608,8 @@ mod tests {
             job_loaded: true,
             enabled: true,
             requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         let idle = ManagedServerRuntimeState::default();
@@ -3249,7 +4619,8 @@ mod tests {
             ManagedServerState::Starting,
             "a high restart count from earlier failures is not a crash loop by itself"
         );
-        let status = status_from(&idle, None, Some(&native), Some(&service_exit(9)), Some(2));
+        let exit = service_exit(9);
+        let status = status_from(&idle, None, Some(&native), Some(&exit), Some((&exit, 2)));
         assert_eq!(status.state, ManagedServerState::Failed);
         let error = status.error.unwrap();
         assert!(error.contains("exited with code 78"));
@@ -3310,6 +4681,8 @@ mod tests {
             job_loaded: false,
             enabled: true,
             requires_approval: true,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         let status = status_from(
@@ -3321,7 +4694,10 @@ mod tests {
         );
         assert!(status.approval_required);
         let observed = project_external_status(ready_status("did:key:ready"), &native);
-        assert!(!observed.approval_required);
+        assert!(
+            observed.approval_required,
+            "approval revoked while the runtime serves stays visible"
+        );
     }
 
     #[tokio::test]
@@ -3515,27 +4891,185 @@ mod tests {
         );
     }
 
+    fn looping_restarts(watch: &mut CrashLoopWatch, sample: JobSample<'_>) -> Option<u64> {
+        watch.observe(sample).map(|(_, restarts)| restarts)
+    }
+
     #[test]
     fn status_reports_a_crash_loop_only_relative_to_its_first_observation() {
-        let mut baseline = None;
+        let mut watch = CrashLoopWatch::default();
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(7))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(7))),
             None
         );
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(8))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(8))),
             None
         );
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(9))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(9))),
             Some(2)
         );
-        assert_eq!(observe_crash_loop(&mut baseline, None), None);
-        assert_eq!(baseline, None, "a running job resets the baseline");
+        assert_eq!(looping_restarts(&mut watch, JobSample::Unloaded), None);
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(9))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(9))),
+            None,
+            "an unloaded job starts a new baseline"
+        );
+    }
+
+    #[test]
+    fn a_job_that_dies_seconds_into_boot_is_a_crash_loop_across_running_samples() {
+        // With a 1s status poll and launchd's respawn throttle, most samples
+        // see the respawned process running for its few seconds of boot.
+        let mut watch = CrashLoopWatch::default();
+        let samples = [
+            (JobSample::Running, None),
+            (JobSample::Exited(&service_exit(3)), None),
+            (JobSample::Running, None),
+            (JobSample::Running, None),
+            (JobSample::Exited(&service_exit(4)), None),
+            (JobSample::Running, None),
+            (JobSample::Exited(&service_exit(5)), Some(2)),
+            (JobSample::Running, Some(2)),
+            (JobSample::Running, Some(2)),
+        ];
+        for (index, (sample, expected)) in samples.into_iter().enumerate() {
+            assert_eq!(
+                looping_restarts(&mut watch, sample),
+                expected,
+                "sample {index}"
+            );
+        }
+        let (exit, _) = watch.observe(JobSample::Running).expect("still looping");
+        assert_eq!(exit.reason, "exited with code 78");
+
+        assert_eq!(looping_restarts(&mut watch, JobSample::Ready), None);
+        assert_eq!(
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(6))),
+            None,
+            "readiness starts a new baseline"
+        );
+        assert_eq!(
+            looping_restarts(
+                &mut watch,
+                JobSample::Exited(&gents_server::native_service::ServiceExit {
+                    reason: "exited normally".to_string(),
+                    restarts: 9,
+                    clean: true,
+                })
+            ),
             None
         );
+    }
+
+    #[test]
+    fn a_crash_loop_seen_between_respawns_is_reported_failed_with_its_reason() {
+        let native = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: true,
+            job_loaded: true,
+            enabled: true,
+            requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
+            detail: None,
+        };
+        let mut watch = CrashLoopWatch::default();
+        for restarts in [1, 2, 3] {
+            watch.observe(JobSample::Exited(&service_exit(restarts)));
+            watch.observe(JobSample::Running);
+        }
+        let looping = watch.observe(JobSample::Running);
+        let status = status_from(
+            &ManagedServerRuntimeState::default(),
+            None,
+            Some(&native),
+            None,
+            looping.as_ref().map(|(exit, restarts)| (exit, *restarts)),
+        );
+        assert_eq!(status.state, ManagedServerState::Failed);
+        assert!(status.error.unwrap().contains("exited with code 78"));
+    }
+
+    #[test]
+    fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
+        let failed = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: false,
+            requires_approval: false,
+            background_item: Default::default(),
+            failed: true,
+            detail: Some("failed".to_string()),
+        };
+        let exit = gents_server::native_service::ServiceExit {
+            reason: "exit-code (exit status 1)".to_string(),
+            restarts: 5,
+            clean: false,
+        };
+        let idle = ManagedServerRuntimeState::default();
+        let status = status_from(&idle, None, Some(&failed), Some(&exit), None);
+        assert_eq!(status.state, ManagedServerState::Failed);
+        let error = status.error.unwrap();
+        assert!(error.contains("exit-code (exit status 1)"), "{error}");
+        assert!(error.contains("will not be restarted"), "{error}");
+
+        let starting = ManagedServerRuntimeState {
+            starting: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            status_from(&starting, None, Some(&failed), Some(&exit), None).state,
+            ManagedServerState::Starting,
+            "a new start owns its own outcome"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_crash_loop_behind_a_non_gents_listener_names_the_port() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let observations = AtomicUsize::new(0);
+        let error = await_runtime_readiness(
+            Duration::from_secs(60),
+            Duration::from_millis(1),
+            || async { Ok(PortReadiness::Occupied(9191)) },
+            || {
+                let seen = observations.fetch_add(1, Ordering::SeqCst) as u64;
+                async move { Ok(NativeProgress::Exited(service_exit(seen))) }
+            },
+        )
+        .await
+        .expect_err("a crash loop fails");
+        let error = error.to_string();
+        assert!(error.contains("exited with code 78"), "{error}");
+        assert!(
+            error.contains("another program that is not a Gents agent"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_with_the_cause_when_the_supervisor_gives_up() {
+        let error = await_runtime_readiness(
+            Duration::from_secs(60),
+            Duration::from_millis(5),
+            || async { Ok(PortReadiness::NotListening) },
+            || async {
+                Ok(NativeProgress::Failed(
+                    gents_server::native_service::ServiceExit {
+                        reason: "start-limit-hit (exit status 1)".to_string(),
+                        restarts: 5,
+                        clean: false,
+                    },
+                ))
+            },
+        )
+        .await
+        .expect_err("a unit the supervisor gave up on is not waited on");
+        assert!(error.to_string().contains("start-limit-hit"), "{error}");
     }
 
     #[tokio::test]
@@ -3593,6 +5127,8 @@ mod tests {
             job_loaded: true,
             enabled: true,
             requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
             detail: None,
         };
         let clean = gents_server::native_service::ServiceExit {
@@ -3654,24 +5190,126 @@ mod tests {
 
     #[test]
     fn a_reset_restart_counter_restarts_the_crash_loop_baseline() {
-        let mut baseline = None;
+        let mut watch = CrashLoopWatch::default();
+        for restarts in [7, 8, 9] {
+            watch.observe(JobSample::Exited(&service_exit(restarts)));
+        }
+        assert_eq!(looping_restarts(&mut watch, JobSample::Running), Some(2));
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(7))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(1))),
+            None,
+            "a lower counter is a reloaded job"
+        );
+        assert_eq!(watch.baseline, Some(1));
+        assert_eq!(
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(2))),
             None
         );
         assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(1))),
-            None
-        );
-        assert_eq!(baseline, Some(1), "a lower counter resets the baseline");
-        assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(2))),
-            None
-        );
-        assert_eq!(
-            observe_crash_loop(&mut baseline, Some(&service_exit(3))),
+            looping_restarts(&mut watch, JobSample::Exited(&service_exit(3))),
             Some(2)
         );
+    }
+
+    #[test]
+    fn any_runtime_on_the_port_of_a_fresh_home_is_foreign_and_named() {
+        let payload = serde_json::json!({
+            "agent_did": "did:key:other",
+            "agent_name": "other",
+            "home": "/Users/test/other-home",
+            gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
+        });
+        let PortReadiness::Foreign(foreign) = classify_port_payload(9191, None, payload.clone())
+        else {
+            panic!("a fresh home adopts no runtime");
+        };
+        let message = foreign.message();
+        assert!(message.contains("did:key:other"), "{message}");
+        assert!(message.contains("/Users/test/other-home"), "{message}");
+        assert!(
+            message.contains("gents service stop --home /Users/test/other-home"),
+            "{message}"
+        );
+        assert!(message.contains("--http-port"), "{message}");
+
+        assert!(matches!(
+            classify_port_payload(9191, Some("did:key:mine"), payload.clone()),
+            PortReadiness::Foreign(_)
+        ));
+        assert!(matches!(
+            classify_port_payload(9191, Some("did:key:other"), payload),
+            PortReadiness::Ready(_)
+        ));
+
+        let PortReadiness::Foreign(anonymous) =
+            classify_port_payload(9191, Some("did:key:mine"), serde_json::json!({}))
+        else {
+            panic!("a listener without an identity is not this home's");
+        };
+        assert!(anonymous
+            .message()
+            .contains("does not advertise a Gents identity"));
+    }
+
+    #[test]
+    fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
+        let foreign = ForeignRuntime {
+            port: 9191,
+            agent_did: Some("did:key:other".to_string()),
+            home: None,
+        };
+        let loaded = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: true,
+            job_loaded: true,
+            enabled: true,
+            requires_approval: false,
+            background_item: Default::default(),
+            failed: false,
+            detail: None,
+        };
+        let idle = ManagedServerRuntimeState::default();
+        let mut status = status_from(&idle, None, Some(&loaded), None, None);
+        project_foreign_port(&mut status, &foreign.message(), false);
+        assert_eq!(
+            status.state,
+            ManagedServerState::Failed,
+            "a job that cannot bind its port is not waited on"
+        );
+        assert!(status.error.as_deref().unwrap().contains("did:key:other"));
+
+        let stopped = gents_server::native_service::NativeServiceStatus {
+            running: false,
+            job_loaded: false,
+            ..loaded
+        };
+        let mut status = status_from(&idle, None, Some(&stopped), None, None);
+        project_foreign_port(&mut status, &foreign.message(), false);
+        assert_eq!(status.state, ManagedServerState::Stopped);
+        assert!(status.error.as_deref().unwrap().contains("<its home>"));
+
+        let mut status = status_from(&idle, None, Some(&stopped), None, None);
+        project_foreign_port(&mut status, &foreign.message(), true);
+        assert!(
+            status.error.is_none(),
+            "a start in progress reports it itself"
+        );
+    }
+
+    #[test]
+    fn another_homes_runtime_never_blocks_stop_or_restart() {
+        for initialized_did in [None, Some("did:key:mine")] {
+            let port = classify_port_payload(
+                9191,
+                initialized_did,
+                serde_json::json!({ "agent_did": "did:key:other" }),
+            );
+            assert!(matches!(port, PortReadiness::Foreign(_)));
+            for job_loaded in [false, true] {
+                ensure_native_owns_running_endpoint(&port, job_loaded)
+                    .expect("stopping this home's job is never refused for another runtime");
+            }
+        }
     }
 
     #[tokio::test]
@@ -3794,6 +5432,7 @@ mod tests {
             serde_json::json!({
                 "agent_did": agent_did,
                 gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: next_release,
+                gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
             })
             .to_string(),
         )

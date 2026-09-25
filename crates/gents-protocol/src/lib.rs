@@ -16,6 +16,7 @@ pub mod request_input;
 pub mod request_lifecycle;
 pub mod row;
 pub mod schemas;
+pub mod serve_lifecycle;
 pub mod session;
 pub mod session_hydration;
 pub mod timeline;

@@ -28,7 +28,7 @@ describe("native command async invariants", () => {
     // Large-stack OS thread still runs block_on; the async command awaits a
     // oneshot instead of thread::join so Tokio workers stay unblocked.
     expect(source).toContain(
-      "tauri::async_runtime::block_on(ClientCore::start_with_paths(paths))",
+      "ClientCore::start_with_paths_reporting_stages(paths, stage_tx).await",
     );
     expect(source).toContain("start_client_core_async");
     expect(source).toContain("single-flight");

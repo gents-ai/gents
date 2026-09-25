@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::commands::codex_shim::{bind_codex_shim, CodexShimBindArgs};
 use crate::commands::grok_shim::{bind_grok_shim, GrokShimBindArgs};
-use crate::http::router::RuntimeActivationObservation;
+use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
@@ -481,9 +481,11 @@ async fn wait_for_shutdown_signal() {
 }
 
 async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("embedded HTTP listener cannot bind to {addr}"))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| {
+        format!(
+            "embedded HTTP listener cannot bind to {addr}; if another Gents runtime is serving there, stop it or pass --http-port"
+        )
+    })?;
     drop(listener);
     Ok(())
 }
@@ -576,8 +578,17 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let http_addr = SocketAddr::new(args.http_addr, args.http_port);
-    if args.http_port == 0 {
+    let _store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
+    if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
+        tracing::warn!(
+            home = %home_dir.display(),
+            port = http_port,
+            "serving a non-default home on port {http_port}, which the desktop agent and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
+        );
+    }
+    let http_addr = SocketAddr::new(args.http_addr, http_port);
+    if http_port == 0 {
         anyhow::bail!(
             "--http-port 0 is not supported: the embedded HTTP server does not expose its \
              ephemeral bound port; choose an explicit non-zero port"
@@ -586,7 +597,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
         display_host(args.http_addr),
-        args.http_port
+        http_port
     );
     let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.agent_name.as_deref(), init_config.as_ref()) {
@@ -697,6 +708,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
+    let serve_lifecycle = ServeLifecycleHandle::default();
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -705,6 +717,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         effective_tool_root
             .as_ref()
             .map(|path| path.to_string_lossy().into_owned()),
+        Some(home_dir.to_string_lossy().into_owned()),
         mcp_query_scope,
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
@@ -714,6 +727,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         activation_runtime.clone(),
         activation_rx,
         replicated_schema.clone(),
+        serve_lifecycle.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -1125,6 +1139,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             p2p_admission: p2p_admission_state,
         },
     )?;
+    // Local discovery reads runtime.json, so /status reports ready only after
+    // it names this process.
+    serve_lifecycle.mark_ready();
 
     // The Grok TUI leader socket is opt-in: stock Grok attaches to it as the
     // pager client. Binding follows pack apply and readiness fencing so a
