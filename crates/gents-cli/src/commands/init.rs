@@ -1014,6 +1014,7 @@ fn tools_for_package(
                         ToolPackageArg::Readonly => FileToolMode::ReadOnly,
                         _ => FileToolMode::ReadWrite,
                     },
+                    ..Default::default()
                 }),
                 bash: Some(BashTools {
                     mode: match tool_package {

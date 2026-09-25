@@ -25,8 +25,16 @@ use crate::descendant_graph::{
 };
 use crate::graphql::escape_graphql_string;
 
-pub const DEFAULT_SUBAGENT_TREE_MAX_DEPTH: usize = 8;
-pub const HARD_SUBAGENT_TREE_MAX_DEPTH: usize = 32;
+/// Levels shown below the requested root when a caller omits `max_depth`.
+/// Spawn admission caps a child's absolute depth at `MAX_SUBAGENT_DEPTH`
+/// (Lean `Subagent.maxSubagentDepth`), so no legitimate tree is deeper than
+/// that below any root; the default shows every such tree whole. This is a
+/// read-side view bound, not a second delegation limit.
+pub const DEFAULT_SUBAGENT_TREE_MAX_DEPTH: usize =
+    crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH as usize;
+/// Explicit `max_depth` requests are clamped to the descendant walk's own
+/// bound, which exists only to stop on corrupted or cyclic lineage.
+pub const HARD_SUBAGENT_TREE_MAX_DEPTH: usize = crate::descendant_graph::MAX_DESCENDANT_DEPTH;
 
 /// Clamp a caller-supplied max depth to the hard ceiling, defaulting when
 /// none was supplied.

@@ -28,6 +28,15 @@ source consistency checks, not a separate runtime compatibility version.
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
 
+### Added
+
+- Tools documents can set file tool limits: `host.files.max_read_chars`
+  (default 32,000 bytes, allowed 1 to 1,000,000) for `read_file`, and
+  `host.files.max_list_entries` and `host.files.max_matches` (default 200,
+  allowed 1 to 5,000) for `list_files`, `glob` and `grep`. Each is both the
+  per-call default and the most a call can request. The desktop Tools editor
+  shows them (#1764).
+
 ### Changed
 
 - `write_file` no longer replaces an existing file blindly: pass the
@@ -38,6 +47,14 @@ source consistency checks, not a separate runtime compatibility version.
   notice summarizes (at most 4,000 bytes) (#1770). The value is read from the
   behavior's current Tools document when the output is presented, including
   after a restart; a behavior that no longer resolves uses the default.
+- `list_files`, `glob` and `grep` return a truncated result when their output
+  would exceed the filesystem runner's response budget (1.5 MiB), instead of
+  failing the call. Glob and grep patterns longer than 4,096 bytes are refused
+  with an error instead of crashing the runner (#1764).
+- The subagent tree view shows three levels below its root when no depth is
+  requested, the delegation depth limit, instead of eight. Explicit depths
+  and the desktop cascade-cancel preview use the descendant walk's 32-level
+  bound, matching what cancellation reaches (#1764).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 

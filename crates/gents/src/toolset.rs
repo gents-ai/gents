@@ -83,11 +83,24 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
 }
 
-const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
+/// `read_file` bytes per call (cut on a character boundary) when
+/// `host.files.max_read_chars` is unset.
+pub(crate) const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 pub(crate) const MAX_CONFIGURED_COMMAND_CHARS: usize = 1_000_000;
-const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
-const DEFAULT_MAX_MATCHES: usize = 200;
+/// `list_files` entries per call when `host.files.max_list_entries` is unset.
+pub(crate) const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
+/// `glob`/`grep` matches per call when `host.files.max_matches` is unset.
+pub(crate) const DEFAULT_MAX_MATCHES: usize = 200;
+/// Ceiling on a configured `host.files.max_read_chars`, matching the command
+/// output ceiling: one tool result should not dominate a context window.
+pub(crate) const MAX_CONFIGURED_FILE_CHARS: usize = 1_000_000;
+/// Ceiling on configured `host.files` entry and match counts. Independently,
+/// the filesystem runner cuts a result that would exceed its response budget
+/// (`gents_fs_runner::MAX_RESPONSE_BYTES`) and reports it as truncated, so a
+/// large count over long paths or previews degrades to a shorter result
+/// rather than an error.
+pub(crate) const MAX_CONFIGURED_FILE_RESULTS: usize = 5_000;
 // Foreground default aligned with other agent frameworks (Claude Code and
 // grok-build both default to 120s); deployments raise or lower it with
 // `--command-timeout-secs`. Explicit model requests may exceed it up to the
@@ -369,6 +382,24 @@ pub enum NativeTool {
     Cli(CliToolConfig),
 }
 
+/// Per-call default and maximum of the read-side file tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileToolLimits {
+    pub max_read_chars: usize,
+    pub max_list_entries: usize,
+    pub max_matches: usize,
+}
+
+impl Default for FileToolLimits {
+    fn default() -> Self {
+        Self {
+            max_read_chars: DEFAULT_MAX_FILE_CHARS,
+            max_list_entries: DEFAULT_MAX_LIST_ENTRIES,
+            max_matches: DEFAULT_MAX_MATCHES,
+        }
+    }
+}
+
 /// Whether `name` is a native bash tool, the only native host tool that can
 /// run in the background.
 pub(crate) fn is_bash_tool_name(name: &str) -> bool {
@@ -461,6 +492,25 @@ impl ToolSetBuilder {
         self.tools.push(NativeTool::Grep {
             max_matches: DEFAULT_MAX_MATCHES,
         });
+        self
+    }
+
+    /// The four read-side file tools with explicit per-call limits.
+    pub fn read_file_tools_with_limits(mut self, limits: FileToolLimits) -> Self {
+        self.tools.extend([
+            NativeTool::ListFiles {
+                max_entries: limits.max_list_entries,
+            },
+            NativeTool::ReadFile {
+                max_chars: limits.max_read_chars,
+            },
+            NativeTool::Glob {
+                max_matches: limits.max_matches,
+            },
+            NativeTool::Grep {
+                max_matches: limits.max_matches,
+            },
+        ]);
         self
     }
 

@@ -11,6 +11,7 @@ mod output;
 mod tools;
 mod traversal;
 
+pub use output::{error_response_line, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
 pub use tools::{execute_request, execute_request_with_base};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
@@ -44,9 +45,7 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
         Some(root) => root,
         None => std::env::current_dir()?,
     };
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
-    let request: NativeFsRunnerRequest = serde_json::from_str(&input)?;
+    let request = read_request(std::io::stdin())?;
     let output = execute_request_with_base(root, base, request)?;
     serde_json::to_writer(
         std::io::stdout(),
@@ -60,17 +59,22 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
     Ok(())
 }
 
+/// Read one request, refusing more than `MAX_REQUEST_BYTES` of input.
+fn read_request(reader: impl Read) -> Result<NativeFsRunnerRequest> {
+    let mut input = String::new();
+    reader
+        .take(MAX_REQUEST_BYTES as u64 + 1)
+        .read_to_string(&mut input)?;
+    anyhow::ensure!(
+        input.len() <= MAX_REQUEST_BYTES,
+        "runner request exceeds {MAX_REQUEST_BYTES} bytes"
+    );
+    Ok(serde_json::from_str(&input)?)
+}
+
 /// Write a protocol-shaped failure for a runner invocation.
 pub fn write_stdio_error(error: &anyhow::Error) {
-    let _ = serde_json::to_writer(
-        std::io::stdout(),
-        &NativeFsRunnerResponse {
-            ok: false,
-            output: None,
-            error: Some(format!("{error:#}")),
-        },
-    );
-    let _ = writeln!(std::io::stdout());
+    let _ = std::io::stdout().write_all(error_response_line(error).as_bytes());
 }
 
 pub fn self_test() -> Result<()> {
@@ -103,6 +107,23 @@ pub fn self_test() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_request_is_refused_before_decoding() {
+        let oversized = vec![b' '; MAX_REQUEST_BYTES + 1];
+        let error = read_request(oversized.as_slice()).unwrap_err();
+        assert!(error.to_string().contains("exceeds"), "{error}");
+        let request = serde_json::to_vec(&NativeFsRunnerRequest::Glob(GlobArgs {
+            pattern: "*.rs".into(),
+            path: None,
+            max_matches: 1,
+            raw_json: false,
+            max_entries_visited: None,
+            max_wall_ms: None,
+        }))
+        .unwrap();
+        assert!(read_request(request.as_slice()).is_ok());
+    }
     use protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
     #[test]

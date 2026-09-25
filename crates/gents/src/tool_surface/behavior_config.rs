@@ -205,6 +205,7 @@ impl BehaviorToolConfig {
             cli_tool_names,
             command_output_limits,
             timeouts,
+            file_limits,
             enable_meta_tools: _,
             enable_goal_tools: _,
             enable_graph_tools,
@@ -245,6 +246,7 @@ impl BehaviorToolConfig {
             &cli_tool_names,
             &command_output_limits,
             &timeouts,
+            file_limits,
             static_policy.lsp,
             ceiling,
         )?;

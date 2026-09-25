@@ -427,6 +427,8 @@ impl ChildEdge {
     }
 }
 
+/// Time a peer has to claim a cross-principal spawn when
+/// `subagents.cross_principal_spawn_timeout_secs` is unset.
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize)]

@@ -10,6 +10,10 @@ use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use crate::tool_call_lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+// The runner cuts its own results to fit; its budget must leave headroom
+// below what the host reads, or an oversized response fails to decode.
+const _: () =
+    assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -155,6 +159,15 @@ impl NativeFsRunner {
         };
         let stdin = serde_json::to_vec(&request)
             .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
+        if stdin.len() > gents_fs_runner::MAX_REQUEST_BYTES {
+            return Err(ToolError::reported_failure(
+                FailureClass::ArgumentInvalid,
+                format!(
+                    "{tool_name} arguments exceed the filesystem runner's {}-byte request limit",
+                    gents_fs_runner::MAX_REQUEST_BYTES
+                ),
+            ));
+        }
 
         match run_managed_exec(ManagedExecRequest {
             argv,

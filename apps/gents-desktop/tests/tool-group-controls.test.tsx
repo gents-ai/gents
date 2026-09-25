@@ -52,6 +52,52 @@ describe("canonical tool selections", () => {
     );
   });
 
+  it("persists file tool limits", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "File read byte limit" }), {
+      target: { value: "5000" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "File search match limit" }), {
+      target: { value: "50" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const files = api.saveToolsConfig.mock.calls[0][0].document.host.files;
+    expect(files.max_read_chars).toBe(5000);
+    expect(files.max_matches).toBe(50);
+  });
+
+  it("rejects file tool limits above their server ceilings before saving", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const matches = screen.getByRole("textbox", { name: "File search match limit" });
+    fireEvent.change(matches, { target: { value: "5001" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("at most 5,000");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    fireEvent.change(matches, { target: { value: "5000" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.max_matches).toBe(
+      5000,
+    );
+  });
+
+  it("names the row when canonical JSON sets a file limit above its ceiling", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
+      target: { value: JSON.stringify({ host: { files: { max_matches: 6000 } } }) },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "File search match limit must be at most 5,000",
+    );
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+  });
+
   it("cancels invalid guided limits without changing canonical settings", async () => {
     const { api, shell } = harness();
     const user = userEvent.setup();

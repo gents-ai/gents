@@ -24,18 +24,6 @@ pub(crate) use context::ToolContext;
 pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};
 
-pub(super) fn default_max_list_entries() -> usize {
-    super::DEFAULT_MAX_LIST_ENTRIES
-}
-
-pub(super) fn default_max_file_chars() -> usize {
-    super::DEFAULT_MAX_FILE_CHARS
-}
-
-pub(super) fn default_max_matches() -> usize {
-    super::DEFAULT_MAX_MATCHES
-}
-
 /// Resolves the effective command timeout for a bash tool call (#985, #1018).
 ///
 /// Foreground: an omitted `timeout_secs` applies the tool's configured

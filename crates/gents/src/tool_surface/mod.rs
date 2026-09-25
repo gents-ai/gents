@@ -52,6 +52,8 @@ use crate::toolset::{
 #[cfg(feature = "agent-memory")]
 use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 
+/// Timeout of a `--cli-tool` host registration. A document overrides it per
+/// tool with `host.cli[].timeout_secs`, within the host foreground maximum.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]

@@ -68,6 +68,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -148,6 +149,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -211,6 +213,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -264,6 +267,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -316,6 +320,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -367,6 +372,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -418,6 +424,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -467,6 +474,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -514,6 +522,7 @@ fn selection_without_root_inherits_operator_root() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -574,6 +583,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             cli_tool_names: vec!["rg".to_string()],
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -631,6 +641,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             cli_tool_names: vec!["rg".to_string(), "cargo".to_string()],
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -687,6 +698,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -823,6 +835,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -874,6 +887,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -930,6 +944,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             cli_tool_names: Vec::new(),
             command_output_limits: Default::default(),
             timeouts: Default::default(),
+            file_limits: Default::default(),
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -2771,4 +2786,86 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
             "{description}"
         );
     }
+}
+
+#[tokio::test]
+async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
+    let root = temp_root("gents-file-limits");
+    std::fs::write(root.join("big.txt"), "y".repeat(100)).unwrap();
+    for index in 0..5 {
+        std::fs::write(root.join(format!("f{index}.rs")), "fn main() {}\n").unwrap();
+    }
+    let ceiling = ToolCeiling::readwrite(root);
+    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "files", "agent_did": "did:key:example",
+        "host": {"files": {"mode": "ReadOnly", "max_read_chars": 10,
+            "max_list_entries": 3, "max_matches": 2}}
+    }))
+    .unwrap();
+    let config =
+        BehaviorToolConfig::from_tools_documents("files", &tools, &[], &[], &[], &ceiling, vec![])
+            .unwrap();
+    let limits = config
+        .host_tools()
+        .native_tools()
+        .iter()
+        .map(|tool| match tool {
+            crate::toolset::NativeTool::ListFiles { max_entries } => ("list_files", *max_entries),
+            crate::toolset::NativeTool::ReadFile { max_chars } => ("read_file", *max_chars),
+            crate::toolset::NativeTool::Glob { max_matches } => ("glob", *max_matches),
+            crate::toolset::NativeTool::Grep { max_matches } => ("grep", *max_matches),
+            other => panic!("unexpected tool {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        limits,
+        vec![
+            ("list_files", 3),
+            ("read_file", 10),
+            ("glob", 2),
+            ("grep", 2)
+        ]
+    );
+    let built = config.host_tools().build_native_tools().unwrap();
+    let tool = |name: &str| built.iter().find(|tool| tool.name() == name).unwrap();
+    let schema = tool("read_file").definition(String::new()).await.parameters;
+    assert_eq!(schema["properties"]["max_chars"]["default"], 10);
+    assert_eq!(schema["properties"]["max_chars"]["maximum"], 10);
+    for args in [
+        serde_json::json!({"path": "big.txt", "raw_json": true}),
+        serde_json::json!({"path": "big.txt", "max_chars": 1000, "raw_json": true}),
+    ] {
+        let raw = tool("read_file").call(args.to_string()).await.unwrap();
+        let raw = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+        let output: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(
+            output["content"]
+                .as_str()
+                .unwrap()
+                .contains("[Showing first 10 of 104 bytes]"),
+            "{output}"
+        );
+    }
+
+    let unconfigured: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "files", "agent_did": "did:key:example",
+        "host": {"files": {"mode": "ReadOnly"}}
+    }))
+    .unwrap();
+    let config = BehaviorToolConfig::from_tools_documents(
+        "files",
+        &unconfigured,
+        &[],
+        &[],
+        &[],
+        &ceiling,
+        vec![],
+    )
+    .unwrap();
+    assert!(config
+        .host_tools()
+        .native_tools()
+        .contains(&crate::toolset::NativeTool::ReadFile {
+            max_chars: crate::toolset::DEFAULT_MAX_FILE_CHARS
+        }));
 }

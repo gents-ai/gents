@@ -62,6 +62,7 @@ pub(super) fn build_host_tools(
     cli_tool_names: &[String],
     output_limits: &CommandOutputLimits,
     timeouts: &ToolTimeouts,
+    file_limits: crate::toolset::FileToolLimits,
     enable_lsp: bool,
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
@@ -83,7 +84,7 @@ pub(super) fn build_host_tools(
     }
 
     if !matches!(file_tools, FileToolMode::Off) {
-        builder = builder.list_files().read_file().glob().grep();
+        builder = builder.read_file_tools_with_limits(file_limits);
     }
 
     if matches!(file_tools, FileToolMode::ReadWrite) {

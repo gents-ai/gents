@@ -105,6 +105,23 @@ pub struct FileTools {
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<FileToolMode>", optional = nullable))]
     pub mode: FileToolMode,
+    /// UTF-8 bytes of content `read_file` returns (cut on a character
+    /// boundary) when a call omits `max_chars`, and the most a call can
+    /// request. Unset uses 32,000. Must be between 1 and 1,000,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_read_chars: Option<i64>,
+    /// Entries `list_files` returns when a call omits `max_entries`, and the
+    /// most a call can request. Unset uses 200. Must be between 1 and 5,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_list_entries: Option<i64>,
+    /// Matches `glob` and `grep` return when a call omits `max_matches`, and
+    /// the most a call can request. Unset uses 200. Must be between 1 and
+    /// 5,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_matches: Option<i64>,
 }
 
 /// Bash capability and command execution constraints.
@@ -512,12 +529,19 @@ impl Tools {
                 errors.push(format!("{field} must be positive"));
             }
         }
-        fn output_chars(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
+        fn at_most(errors: &mut Vec<String>, field: &str, value: Option<i64>, limit: usize) {
             positive(errors, field, value);
-            let limit = crate::toolset::MAX_CONFIGURED_COMMAND_CHARS;
             if value.is_some_and(|value| value > limit as i64) {
                 errors.push(format!("{field} must be at most {limit}"));
             }
+        }
+        fn output_chars(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
+            at_most(
+                errors,
+                field,
+                value,
+                crate::toolset::MAX_CONFIGURED_COMMAND_CHARS,
+            );
         }
         fn bounded(
             errors: &mut Vec<String>,
@@ -560,6 +584,25 @@ impl Tools {
         }
         let mut errors = Vec::new();
         if let Some(host) = &self.host {
+            if let Some(files) = &host.files {
+                at_most(
+                    &mut errors,
+                    "host.files.max_read_chars",
+                    files.max_read_chars,
+                    crate::toolset::MAX_CONFIGURED_FILE_CHARS,
+                );
+                for (field, value) in [
+                    ("host.files.max_list_entries", files.max_list_entries),
+                    ("host.files.max_matches", files.max_matches),
+                ] {
+                    at_most(
+                        &mut errors,
+                        field,
+                        value,
+                        crate::toolset::MAX_CONFIGURED_FILE_RESULTS,
+                    );
+                }
+            }
             if let Some(bash) = &host.bash {
                 bounded(
                     &mut errors,
@@ -979,6 +1022,34 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn file_limits_reject_zero_negative_and_oversized_values() {
+        for (field, limit) in [
+            ("max_read_chars", crate::toolset::MAX_CONFIGURED_FILE_CHARS),
+            (
+                "max_list_entries",
+                crate::toolset::MAX_CONFIGURED_FILE_RESULTS,
+            ),
+            ("max_matches", crate::toolset::MAX_CONFIGURED_FILE_RESULTS),
+        ] {
+            for (invalid, message) in [
+                (0, "must be positive".to_owned()),
+                (-1, "must be positive".to_owned()),
+                (limit as i64 + 1, format!("must be at most {limit}")),
+            ] {
+                let error = document(json!({"host":{"files":{field: invalid}}}))
+                    .validate()
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(&format!("host.files.{field}")), "{error}");
+                assert!(error.contains(&message), "{error}");
+            }
+            assert!(document(json!({"host":{"files":{field: limit}}}))
+                .validate()
+                .is_ok());
+        }
     }
 
     #[test]

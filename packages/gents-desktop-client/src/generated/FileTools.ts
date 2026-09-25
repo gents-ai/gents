@@ -7,4 +7,21 @@ import type { FileToolMode } from "./FileToolMode.js";
  * per-operation timer: a write cannot be abandoned mid-flight without
  * misreporting whether it landed.
  */
-export type FileTools = { mode?: FileToolMode | null, };
+export type FileTools = { mode?: FileToolMode | null,
+/**
+ * UTF-8 bytes of content `read_file` returns (cut on a character
+ * boundary) when a call omits `max_chars`, and the most a call can
+ * request. Unset uses 32,000. Must be between 1 and 1,000,000.
+ */
+max_read_chars?: number | null,
+/**
+ * Entries `list_files` returns when a call omits `max_entries`, and the
+ * most a call can request. Unset uses 200. Must be between 1 and 5,000.
+ */
+max_list_entries?: number | null,
+/**
+ * Matches `glob` and `grep` return when a call omits `max_matches`, and
+ * the most a call can request. Unset uses 200. Must be between 1 and
+ * 5,000.
+ */
+max_matches?: number | null, };
