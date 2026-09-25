@@ -725,17 +725,24 @@ pub struct ProvenanceManifest {
     /// Mirrors the `capture_scope` column. Duplicated here so a manifest read
     /// in isolation still identifies which completion loop it describes.
     pub capture_scope: String,
-    /// Scheme and authority the body was actually posted to, observed at the
-    /// seam. `None` only when the URI carried no authority.
+    /// Scheme and host authority the body was actually posted to, observed at
+    /// the seam; URL userinfo is excluded. `None` only when the URI carried no
+    /// authority.
     ///
-    /// This is the one routing fact that is otherwise lost in time. `model_name`
-    /// alone cannot distinguish OpenAI from OpenRouter from a local vLLM from
-    /// Grok, and for daemon requests the answer is recoverable only by joining
-    /// to `InferenceCall.backend_id` — a join that does not exist for one-shot
-    /// runs, which never enter an admission scope. Configuration says where the
-    /// bytes were meant to go; this says where they went.
+    /// This is transport evidence otherwise lost in time. A configured
+    /// endpoint or backend ID is not proof of the route used for this send;
+    /// the observed authority and route-path digest carry that distinction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_endpoint: Option<String>,
+    /// Canonical family of the already-built completion client, not a later
+    /// configuration lookup. Missing on historical captures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_family: Option<String>,
+    /// SHA-256 of the transport-observed URI path. Absent when the URI has a
+    /// query, since query-based routing cannot be established without keeping
+    /// potentially secret values. Missing on historical captures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_route_path_sha256: Option<String>,
     /// The admitted call this capture preceded. Present exactly when an
     /// admission scope was live at the seam; a one-shot capture legitimately
     /// carries none, and its absence there is a documented fact, not an error.
@@ -767,6 +774,8 @@ impl LegacyProvenanceManifest {
             capture_seam: self.capture_seam,
             capture_scope: self.capture_scope,
             provider_endpoint: self.provider_endpoint,
+            provider_family: None,
+            provider_route_path_sha256: None,
             admission: self.admission,
             assembly_trace: (&self.assembly_trace).into(),
         }
@@ -791,9 +800,21 @@ impl ProvenanceManifest {
             capture_seam: CaptureSeam::TransportBody,
             capture_scope,
             provider_endpoint,
+            provider_family: None,
+            provider_route_path_sha256: None,
             admission,
             assembly_trace: (&assembly_trace).into(),
         }
+    }
+
+    pub fn with_provider_route(
+        mut self,
+        family: Option<String>,
+        path_sha256: Option<String>,
+    ) -> Self {
+        self.provider_family = family;
+        self.provider_route_path_sha256 = path_sha256;
+        self
     }
 }
 

@@ -482,10 +482,6 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             index: 1,
             fragment: "partial-".into(),
         },
-        ClaudeAuditEvent::Signature {
-            index: 1,
-            fragment: "signature".into(),
-        },
     ] {
         processor
             .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
@@ -501,10 +497,55 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     }
 
     assert!(processor.has_observable_activity());
-    assert!(processor
-        .persist_partial_turn("persist errored assistant turn")
-        .await
-        .unwrap());
+    use crate::rendered_request::scope::{
+        arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
+    };
+    use crate::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    };
+    let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = Arc::new(RequestCaptureScope::new(
+        RenderedRequestContext {
+            request_doc_id: response_doc_id.clone(),
+            request_commit_cid: "bafy-test-capture".into(),
+            request_id: request_id.clone(),
+            agent_did: "did:test:test".into(),
+            requester_did: String::new(),
+            behavior_id: "general".into(),
+            session_id: session_id.clone(),
+            model_name: "claude".into(),
+            provider_family: None,
+        },
+        capture_sink,
+    ));
+    scope_request(scope, async {
+        let label = arm(
+            crate::rendered_request::CaptureScopeKind::Inference,
+            0,
+            0,
+            AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+        )
+        .expect("arm exact inference capture");
+        assert_eq!(label, "inference.1");
+        claim_pending().expect("claim exact inference capture");
+        let sender = current_audit_sender().expect("claimed audit sender");
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 1,
+                fragment: "signature".into(),
+            })
+            .unwrap();
+        drop(reservation);
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(5);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(chrono::Utc::now() >= deadline);
+        assert!(processor
+            .persist_received_partial_turn("persist deadline-expired assistant turn")
+            .await
+            .unwrap());
+    })
+    .await;
 
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await

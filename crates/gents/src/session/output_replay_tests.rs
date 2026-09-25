@@ -8,19 +8,20 @@ use gents_protocol::output::{
     SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
 };
 use gents_protocol::rendered_request::RenderedRequestSource;
+use sha2::{Digest, Sha256};
 
 use super::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use super::output::{load_current_request_assistant_candidates, CanonicalReplayScope};
+use super::output::{load_canonical_assistant_candidates, CanonicalReplayScope};
 use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
-    prepare_replay_checkpoint, restore_and_narrow_replay, NarrowedAssistantRow,
-    ReplayCheckpointError, ReplayTag, TaggedAssistantRow,
+    restore_historical_reasoning_suffix, ReplayCheckpoint, ReplayIssuer, ReplayTag, ReplayWire,
+    TaggedAssistantRow,
 };
-use gents_loop::loop_stream::TaggedMessage;
+use gents_loop::loop_stream::ReplayProjectionContext;
 
 const AGENT_DID: &str = "did:test:replay-agent";
 const SESSION_ID: &str = "replay-session";
@@ -50,45 +51,84 @@ impl ReplayFixture {
     }
 
     async fn candidates(&self) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
-        load_current_request_assistant_candidates(&self.node, self.scope(), &self.boundary).await
+        load_canonical_assistant_candidates(&self.node, self.scope(), &self.boundary).await
     }
 
-    async fn insert_capture(&self, source: RenderedRequestSource) {
+    async fn insert_capture(
+        &self,
+        source: RenderedRequestSource,
+    ) -> Option<ReplayProjectionContext> {
+        use crate::rendered_request::{
+            build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
+            DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
+        };
+
         let capture_scope = format!("{}.1", self.scope_kind);
-        let capture_key = gents_loop::rendered_request::capture_key(
-            AGENT_DID,
-            SESSION_ID,
-            &self.request_doc_id,
-            &capture_scope,
-            0,
-            0,
-        )
-        .unwrap();
-        let source = serde_json::to_value(source).unwrap();
-        let source = source.as_str().unwrap();
-        let quote = |value: &str| format!("\"{}\"", crate::graphql::escape_graphql_string(value));
-        let mutation = format!(
-            r#"mutation {{ create_RenderedRequest(input: {{
-                capture_key: {}, request_doc_id: {}, request_commit_cid: {},
-                request_id: {}, session_id: {}, agent_did: {}, requester_did: "",
-                behavior_id: "general", capture_scope: {},
-                turn_index: 0, attempt: 0, capture_version: {},
-                model_name: "test-model", source: {}, request_json: "{{}}",
-                provenance_json: "{{}}", created_at: {}
-            }}) {{ _docID }} }}"#,
-            quote(&capture_key),
-            quote(&self.request_doc_id),
-            quote(&self.request_commit_cid),
-            quote(REQUEST_ID),
-            quote(SESSION_ID),
-            quote(AGENT_DID),
-            quote(&capture_scope),
-            gents_protocol::rendered_request::CAPTURE_VERSION,
-            quote(source),
-            quote(&chrono::Utc::now().to_rfc3339()),
+        let (uri, family, body, wire) = match source {
+            RenderedRequestSource::ClaudeCliSubscription => (
+                crate::claude_messages::MESSAGES_URI,
+                gents_loop::backend_provider::BackendProviderKind::ClaudeCliSubscription.as_str(),
+                serde_json::json!({
+                    "model": "claude-test", "system": [{"type":"text","text":"system"}],
+                    "messages": [{"role":"user","content":[{"type":"text","text":"prompt"}]}],
+                    "tools": [], "stream": true,
+                }),
+                Some(ReplayWire::ClaudeMessages),
+            ),
+            RenderedRequestSource::OpenAiChatCompletions => (
+                "https://api.openai.com/v1/chat/completions",
+                gents_loop::backend_provider::BackendProviderKind::OpenAiCompatible.as_str(),
+                serde_json::json!({"model":"test-model","messages":[{"role":"user","content":"prompt"}]}),
+                None,
+            ),
+            RenderedRequestSource::OpenAiResponses => (
+                "https://api.openai.com/v1/responses",
+                gents_loop::backend_provider::BackendProviderKind::OpenAiCompatible.as_str(),
+                serde_json::json!({"model":"test-model","input":[{"role":"user","content":"prompt"}]}),
+                Some(ReplayWire::Responses),
+            ),
+        };
+        let destination: rig::http_client::Uri = uri.parse().expect("fixture destination");
+        let endpoint = format!(
+            "{}://{}",
+            destination.scheme_str().expect("scheme"),
+            destination.authority().expect("authority")
         );
-        let response = self.node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let route_path_sha256 = format!("{:x}", Sha256::digest(destination.path().as_bytes()));
+        let issuer = gents_loop::rendered_request::transport::replay_issuer_for_destination(
+            family,
+            &destination,
+        )
+        .expect("fixture route has no query");
+        let trace = AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
+        let rendered = build_rendered_completion_request(
+            &RenderedRequestContext {
+                request_doc_id: self.request_doc_id.clone(),
+                request_commit_cid: self.request_commit_cid.clone(),
+                request_id: REQUEST_ID.into(),
+                agent_did: AGENT_DID.into(),
+                requester_did: String::new(),
+                behavior_id: "general".into(),
+                session_id: SESSION_ID.into(),
+                model_name: "test-model".into(),
+                provider_family: Some(family.into()),
+            },
+            &capture_scope,
+            source,
+            Some(endpoint),
+            Some(route_path_sha256),
+            0,
+            0,
+            trace,
+            RenderedRequestComponents::from_provider_body(body.clone(), source),
+            None,
+        )
+        .expect("canonical capture fixture");
+        DefraRenderedRequestSink::new(self.node.clone())
+            .capture(rendered)
+            .await
+            .expect("durable capture owner");
+        wire.map(|wire| ReplayProjectionContext { issuer, wire, body })
     }
 
     async fn insert_authored_assistant(&mut self) {
@@ -201,9 +241,10 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
     use gents_protocol::rendered_request::CaptureScopeKind;
 
     let fixture = fixture_with_provider_payload_and_scope(true, CaptureScopeKind::OneShot).await;
-    fixture
+    let projection = fixture
         .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await;
+        .await
+        .unwrap();
     let candidate = fixture.candidates().await.unwrap().pop().unwrap();
     assert_eq!(candidate.coordinate.scope.kind, CaptureScopeKind::OneShot);
     let tag = ReplayTag {
@@ -214,18 +255,19 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let evidence = super::output::resolve_current_replay_tag(
+    let evidence = super::output::resolve_canonical_replay_tag(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
         &tag,
+        &projection,
     )
     .await
     .unwrap();
     assert_eq!(evidence.len(), 1);
     assert_eq!(
         evidence[0].origin,
-        gents_loop::claude_messages_body::ReplayOrigin::ClaudeSubscription
+        gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider
     );
     assert_eq!(evidence[0].reasoning.len(), 2);
 
@@ -234,11 +276,12 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         unreachable!("fixture tag is provider-owned")
     };
     *attempt += 1;
-    let batched = super::output::resolve_current_replay_tags(
+    let batched = super::output::resolve_canonical_replay_tags(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
         &[tag.clone(), absent.clone(), tag.clone()],
+        &projection,
     )
     .await
     .unwrap();
@@ -256,17 +299,16 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         expected_scope_kind: CaptureScopeKind::Inference,
         ..fixture.scope()
     };
-    let failure = super::output::resolve_current_replay_tag(
+    let without_scope = super::output::resolve_canonical_replay_tag(
         &fixture.node,
         wrong_scope,
         &fixture.boundary,
         &tag,
+        &projection,
     )
     .await
-    .unwrap_err();
-    assert!(failure
-        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-        .is_some());
+    .unwrap();
+    assert!(without_scope.is_empty());
 }
 
 async fn fixture_with_provider_payload(signed: bool) -> ReplayFixture {
@@ -552,225 +594,165 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     }
 }
 
-/// The checkpoint stores only the native projection and physical source tags;
-/// expected reasoning comes back from the canonical header/segment reader.
-async fn persist_and_restore_signed(
-    fixture: &ReplayFixture,
-) -> (
-    Vec<Message>,
-    Result<NarrowedAssistantRow, ReplayCheckpointError>,
-) {
-    use crate::provider_context_reduction::{
-        load_for_request, persist, NewProviderContextReduction, ReplayAssociations,
-    };
-    use gents_protocol::message::{Text, ToolResult, ToolResultContent, UserContent};
+#[tokio::test]
+async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritten_prefix() {
+    use gents_protocol::message::AssistantContent;
 
-    let original = fixture.candidates().await.unwrap().remove(0).message;
+    let fixture = signed_fixture().await;
+    let projection = fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let candidate = fixture.candidates().await.unwrap().remove(0);
     let tag = ReplayTag {
         request_doc_id: fixture.request_doc_id.clone(),
         source: OutputSource::ProviderTurn {
-            scope: "inference.1".parse().unwrap(),
-            turn_index: 0,
-            attempt: 0,
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
         },
     };
-    let prefix = vec![Message::user("earlier")];
-    let suffix = vec![
-        original.clone(),
-        Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: "toolu-1".into(),
-                call_id: None,
-                content: vec![ToolResultContent::Text(Text {
-                    text: "tool result".into(),
-                })],
-            })],
-        },
-        Message::user("next prompt"),
-    ];
-    let tagged_prefix = vec![TaggedMessage::unassociated(prefix[0].clone())];
-    let tagged_suffix = vec![
-        TaggedMessage {
-            message: suffix[0].clone(),
+    let Message::Assistant { id, content } = candidate.message.clone() else {
+        panic!("canonical fixture must reconstruct an assistant");
+    };
+    assert_eq!(content.len(), 4);
+    let checkpoint = ReplayCheckpoint {
+        required: vec![],
+        prefix_rows: vec![],
+        retained: vec![TaggedAssistantRow {
             source: Some(tag.clone()),
-        },
-        TaggedMessage::unassociated(suffix[1].clone()),
-        TaggedMessage::unassociated(suffix[2].clone()),
-    ];
-    let associations =
-        ReplayAssociations::from_tagged_split(vec![tag.clone()], &tagged_prefix, &tagged_suffix);
-    persist(
-        &fixture.node,
-        NewProviderContextReduction {
-            agent_did: AGENT_DID,
-            requester_did: None,
-            session_id: SESSION_ID,
-            request_id: REQUEST_ID,
-            request_doc_id: &fixture.request_doc_id,
-            request_commit_cid: &fixture.request_commit_cid,
-            reduction_index: 1,
-            turn_index: 0,
-            parent_reduction_key: None,
-            producer_call: None,
-            source_boundary: &fixture.boundary,
-            compacted_prefix: &prefix,
-            retained_suffix: &suffix,
-            checkpoint_messages: &suffix,
-            replay_associations: &associations,
-            summary: "",
-            original_tokens: 100,
-            compacted_tokens: 50,
-        },
-    )
-    .await
-    .unwrap();
-
-    let row = load_for_request(&fixture.node, &fixture.request_doc_id)
-        .await
-        .unwrap()
-        .pop()
-        .unwrap();
-    let associations = row.replay_associations().unwrap();
-    assert_eq!(associations.required, vec![tag.clone()]);
-    let persisted_native = row.checkpoint_messages().unwrap();
-    assert_eq!(persisted_native, suffix);
-    let tagged = row.checkpoint_tagged_messages().unwrap();
-    assert_eq!(tagged[0].message, original);
-    assert_eq!(tagged[0].source, Some(tag.clone()));
-    let evidence = super::output::resolve_current_replay_tag(
+            physical_header: Some(candidate.header_doc_id.clone()),
+            block_indices: (0..content.len()).collect(),
+            id: id.clone(),
+            content: content.clone(),
+        }],
+        retired: vec![],
+    };
+    let evidence = super::output::resolve_canonical_replay_tag(
         &fixture.node,
         fixture.scope(),
-        &row.source_boundary().unwrap(),
+        &fixture.boundary,
         &tag,
+        &projection,
     )
     .await
     .unwrap();
     assert_eq!(evidence.len(), 1);
-    let assistant_rows = tagged
-        .iter()
-        .filter_map(|row| match &row.message {
-            Message::Assistant { id, content } => Some(TaggedAssistantRow {
-                source: row.source.clone(),
-                id: id.clone(),
-                content: content.clone(),
-            }),
-            _ => None,
-        })
-        .collect();
-    let checkpoint = prepare_replay_checkpoint(associations.required, assistant_rows, 0).unwrap();
-    let result =
-        restore_and_narrow_replay(&checkpoint, |_| evidence.clone()).map(|mut rows| rows.remove(0));
-    (persisted_native, result)
-}
+    assert!(evidence[0].prefix_compatible);
+    assert_eq!(evidence[0].reasoning.len(), 2);
+    let restored = restore_historical_reasoning_suffix(
+        &checkpoint,
+        &projection.issuer,
+        projection.wire,
+        |_| evidence.clone(),
+    );
+    assert_eq!(restored[0].content, content);
+    assert_eq!(restored[0].block_indices, vec![0, 1, 2, 3]);
 
-#[tokio::test]
-async fn signed_claude_checkpoint_reloads_canonical_reasoning_and_body_order() {
-    use gents_protocol::message::{AssistantContent, ReasoningContent};
-
-    let fixture = signed_fixture().await;
-    fixture
-        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await;
-    let (persisted_native, narrowed) = persist_and_restore_signed(&fixture).await;
-    let narrowed = narrowed.unwrap();
-    let Message::Assistant {
-        id: original_id,
-        content: original_content,
-    } = persisted_native[0].clone()
-    else {
-        panic!("canonical fixture must reconstruct an assistant")
-    };
-    assert!(matches!(
-        original_content.as_slice(),
-        [AssistantContent::Reasoning(first), AssistantContent::Text(_),
-         AssistantContent::Reasoning(second), AssistantContent::ToolCall(_)]
-        if matches!(first.content.as_slice(),
-            [ReasoningContent::Text { text, signature: Some(signature) }]
-            if text == "思考" && signature == "sig-α")
-        && matches!(second.content.as_slice(),
-            [ReasoningContent::Text { text, signature: Some(signature) }]
-            if text.is_empty() && signature == "sig-empty")
-    ));
-    assert_eq!(narrowed.id, original_id);
-    assert_eq!(narrowed.content, original_content);
-    let body = gents_loop::claude_messages_body::build_messages_body_native(
-        "claude-test",
-        None,
-        None,
-        &[
-            Message::Assistant {
-                id: narrowed.id,
-                content: narrowed.content,
-            },
-            persisted_native[1].clone(),
-            persisted_native[2].clone(),
-        ],
-        &[],
+    let mut changed = projection.clone();
+    changed.body["system"] = serde_json::json!([{"type":"text","text":"changed system"}]);
+    let rejected = super::output::resolve_canonical_replay_tag(
+        &fixture.node,
+        fixture.scope(),
+        &fixture.boundary,
+        &tag,
+        &changed,
     )
+    .await
     .unwrap();
-    assert_eq!(
-        body["messages"][0]["content"],
-        serde_json::Value::Array(narrowed.wire_blocks)
+    assert_eq!(rejected.len(), 1);
+    assert!(!rejected[0].prefix_compatible);
+    let stripped = restore_historical_reasoning_suffix(
+        &checkpoint,
+        &projection.issuer,
+        projection.wire,
+        |_| rejected.clone(),
     );
-    assert_eq!(body["messages"][1]["content"][0]["type"], "tool_result");
-    assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "toolu-1");
+    assert!(stripped[0]
+        .content
+        .iter()
+        .all(|block| !matches!(block, AssistantContent::Reasoning(_))));
+    assert_eq!(stripped[0].block_indices, vec![1, 3]);
     assert_eq!(
-        body["messages"][0]["content"],
-        serde_json::json!([
-            {"type": "thinking", "thinking": "思考", "signature": "sig-α"},
-            {"type": "text", "text": "answer"},
-            {"type": "thinking", "thinking": "", "signature": "sig-empty"},
-            {"type": "tool_use", "id": "toolu-1", "name": "echo", "input": {"x": 1}},
-        ])
+        stripped[0].content,
+        vec![content[1].clone(), content[3].clone()]
     );
 }
 
 #[tokio::test]
-async fn signed_checkpoint_rejects_missing_and_foreign_capture_on_reload() {
-    use gents_loop::claude_messages_body::ReplayEvidenceError;
-
+async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
     let missing = signed_fixture().await;
-    let (_, result) = persist_and_restore_signed(&missing).await;
-    assert!(matches!(
-        result,
-        Err(ReplayCheckpointError::Evidence(
-            ReplayEvidenceError::MissingOrigin
-        ))
-    ));
+    let candidate = missing.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: missing.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let projection = ReplayProjectionContext {
+        issuer: ReplayIssuer {
+            family: gents_loop::backend_provider::BackendProviderKind::ClaudeCliSubscription
+                .as_str()
+                .into(),
+            endpoint: "not-a-captured-route".into(),
+        },
+        wire: ReplayWire::ClaudeMessages,
+        body: serde_json::json!({"messages":[]}),
+    };
+    assert!(super::output::resolve_canonical_replay_tag(
+        &missing.node,
+        missing.scope(),
+        &missing.boundary,
+        &tag,
+        &projection,
+    )
+    .await
+    .unwrap()
+    .is_empty());
 
     let foreign = signed_fixture().await;
     foreign
         .insert_capture(RenderedRequestSource::OpenAiChatCompletions)
         .await;
-    let (_, result) = persist_and_restore_signed(&foreign).await;
-    assert!(matches!(
-        result,
-        Err(ReplayCheckpointError::Evidence(
-            ReplayEvidenceError::ForeignOrigin
-        ))
-    ));
+    let foreign_candidate = foreign.candidates().await.unwrap().remove(0);
+    let foreign_tag = ReplayTag {
+        request_doc_id: foreign.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: foreign_candidate.coordinate.scope,
+            turn_index: foreign_candidate.coordinate.turn_index,
+            attempt: foreign_candidate.coordinate.attempt,
+        },
+    };
+    let foreign_evidence = super::output::resolve_canonical_replay_tag(
+        &foreign.node,
+        foreign.scope(),
+        &foreign.boundary,
+        &foreign_tag,
+        &projection,
+    )
+    .await
+    .unwrap();
+    assert!(foreign_evidence.is_empty());
 }
 
 #[tokio::test]
-async fn exact_capture_source_classifies_canonical_assistant() {
-    use gents_loop::claude_messages_body::ReplayOrigin;
+async fn exact_capture_source_binds_canonical_assistant_across_request_versions() {
     let observed = fixture().await;
     let candidates = observed.candidates().await.unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].header_doc_id, observed.header_doc_id);
     assert_eq!(candidates[0].sequence, 1);
     assert_eq!(candidates[0].message, Message::assistant("answer"));
-    assert_eq!(candidates[0].origin, ReplayOrigin::Missing);
     assert_eq!(candidates[0].coordinate.scope.to_string(), "inference.1");
     assert_eq!(candidates[0].coordinate.turn_index, 0);
     assert_eq!(candidates[0].coordinate.attempt, 0);
-    observed
+    let projection = observed
         .insert_capture(RenderedRequestSource::OpenAiChatCompletions)
         .await;
-    assert_eq!(
-        observed.candidates().await.unwrap()[0].origin,
-        ReplayOrigin::Foreign
-    );
+    assert!(projection.is_none());
+    assert_eq!(observed.candidates().await.unwrap().len(), 1);
     // A later mutable lease-field version must not invalidate the capture's
     // historical physical request CID. This fixture only tests version
     // membership, not RenewalTask authorization or scheduling.
@@ -794,19 +776,33 @@ async fn exact_capture_source_classifies_canonical_assistant() {
     .unwrap()
     .unwrap();
     assert_ne!(newest.cid, observed.request_commit_cid);
-    assert_eq!(
-        observed.candidates().await.unwrap()[0].origin,
-        ReplayOrigin::Foreign
-    );
+    assert_eq!(observed.candidates().await.unwrap().len(), 1);
 
     let claude = fixture().await;
-    claude
+    let projection = claude
         .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await;
-    assert_eq!(
-        claude.candidates().await.unwrap()[0].origin,
-        ReplayOrigin::ClaudeSubscription
-    );
+        .await
+        .unwrap();
+    let candidate = claude.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: claude.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let evidence = super::output::resolve_canonical_replay_tag(
+        &claude.node,
+        claude.scope(),
+        &claude.boundary,
+        &tag,
+        &projection,
+    )
+    .await
+    .unwrap();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].issuer, projection.issuer);
 }
 
 #[tokio::test]
@@ -828,7 +824,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
 
     // This is a complete, physically published provider assistant, not a
     // body-only lookalike. Its OneShot close is invalid for the Inference
-    // resolver, but it has no tool call and therefore needs no current replay.
+    // resolver, so historical reasoning cannot acquire that provenance.
     let fixture =
         fixture_with_provider_payload_and_scope_and_tool(true, CaptureScopeKind::OneShot, false)
             .await;
@@ -837,14 +833,12 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         expected_scope_kind: CaptureScopeKind::Inference,
         ..fixture.scope()
     };
-    assert!(load_current_request_assistant_candidates(
-        &fixture.node,
-        inference_scope,
-        &fixture.boundary,
-    )
-    .await
-    .unwrap()
-    .is_empty());
+    assert!(
+        load_canonical_assistant_candidates(&fixture.node, inference_scope, &fixture.boundary,)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let history = super::output::load_sequenced_messages(
         &fixture.node,
@@ -874,12 +868,12 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         &mut replay,
         ProviderInputProfile::ClaudeMessages,
     );
-    assert!(replay.required.is_empty());
     let mut projected = provider_view_tagged(ProviderInputProfile::ClaudeMessages, tagged).unwrap();
     narrow_tagged_history(
         ProviderInputProfile::ClaudeMessages,
         &mut projected,
         &mut replay,
+        None,
     )
     .await
     .unwrap();
@@ -897,7 +891,7 @@ async fn replay_high_water_and_header_twins_fail_closed() {
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
     let bad_high_water =
-        load_current_request_assistant_candidates(&observed.node, observed.scope(), &forged)
+        load_canonical_assistant_candidates(&observed.node, observed.scope(), &forged)
             .await
             .err()
             .expect("forged high-water must fail");
@@ -910,13 +904,11 @@ async fn replay_high_water_and_header_twins_fail_closed() {
         request_commit_cid: &forged_request.request_commit_cid,
         ..observed.scope()
     };
-    assert!(load_current_request_assistant_candidates(
-        &observed.node,
-        forged_scope,
-        &forged_request
-    )
-    .await
-    .is_err());
+    assert!(
+        load_canonical_assistant_candidates(&observed.node, forged_scope, &forged_request)
+            .await
+            .is_err()
+    );
 
     let mut twin = observed.header.clone();
     twin.message_key.push_str(":twin");

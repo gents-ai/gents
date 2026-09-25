@@ -1309,13 +1309,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_replay_cases_drive_native_messages_body",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::prompt_assembly::generated_claude_narrowing_cases_bind_native_evidence_and_replay",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
-            module_path: "conformance::prompt_assembly",
-            function: "generated_claude_narrowing_cases_bind_native_evidence_and_replay",
-        },
-        ConformanceConsumer::RustTest {
             id: "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection",
             package: "gents",
             source_path: "crates/gents/tests/conformance/prompt_assembly.rs",

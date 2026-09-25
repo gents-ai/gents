@@ -420,7 +420,11 @@ async fn load_thread_request_rows(
     requester_did: Option<&str>,
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    let scope = gents::session::session_scope_filter(agent_did, thread_id, requester_did);
+    let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
+        agent_did,
+        thread_id,
+        requester_did,
+    ));
     gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
@@ -598,6 +602,64 @@ fn row_is_effectively_active(row: &AgentRequestRow) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn active_turn_ignores_newer_title_audit_request() {
+        let temp = tempfile::tempdir().expect("active turn directory");
+        let state =
+            super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
+        let node = state.node.clone();
+        let agent_did = gents::graphql::escape_graphql_string(state.agent_did.as_ref());
+        let behavior_id = gents::graphql::escape_graphql_string(state.behavior_id.as_ref());
+        for (id, purpose, created_at) in [
+            ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
+            ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
+        ] {
+            let id = gents::graphql::escape_graphql_string(id);
+            let purpose = gents::graphql::escape_graphql_string(purpose);
+            let created_at = gents::graphql::escape_graphql_string(created_at);
+            let mutation = format!(
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "{behavior_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
+            );
+            gents::config_client::ConfigAccess::write_local(
+                &node,
+                "codex.active.test_request",
+                &mutation,
+            )
+            .await
+            .expect("create request");
+        }
+
+        let active = super::load_active_codex_turn(&state, "thread")
+            .await
+            .expect("active query")
+            .expect("normal active turn");
+        assert_eq!(active.turn_id, "normal-turn");
+        assert_eq!(active.interrupt_request_id, "normal-turn");
+        assert_eq!(active.current_request_id, "normal-turn");
+        gents::interrupt_request_by_doc_id(
+            &node,
+            &active.interrupt_request_doc_id,
+            state.agent_did.as_ref(),
+            Some(state.agent_did.as_ref()),
+        )
+        .await
+        .expect("interrupt selected normal turn");
+        let response = super::super::super::store::query_node_json(
+            &node,
+            r#"{ AgentRequest(filter: { session_id: {_eq: "thread"} }) {request_id interrupt_requested_at} }"#,
+        )
+        .await
+        .expect("read interrupt latches");
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .expect("request rows");
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            let latched = row["interrupt_requested_at"].as_str().is_some();
+            assert_eq!(latched, row["request_id"] == "normal-turn");
+        }
+    }
+
     use super::*;
 
     fn row(request_id: &str, lifecycle_state: &str, queued_after: Option<&str>) -> AgentRequestRow {

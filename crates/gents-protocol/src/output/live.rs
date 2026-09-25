@@ -301,19 +301,6 @@ pub fn reconstruct_dense_prefix(
     })
 }
 
-/// Read every field in the validated contiguous prefix of a source. This is
-/// the exact prefix used by live output before presentation removes hidden
-/// reasoning; closure does not expand a missing or malformed prefix.
-pub fn reconstruct_audit_prefix(
-    records: &[ObservedSegment<'_>],
-    request_doc_id: &str,
-    source: &OutputSource,
-    expected_writer: &OutputWriter,
-    limit: Option<u32>,
-) -> Result<DensePrefix, DensePrefixError> {
-    reconstruct_dense_prefix(records, request_doc_id, source, expected_writer, limit)
-}
-
 /// The full live eligibility classifier: the Rust projection of Lean's
 /// `StreamingResponse.project` (`Proofs/StreamingResponse/State.lean`) over the
 /// protocol `LiveOutput`/`LiveStreamState` owner types.
@@ -1504,7 +1491,7 @@ mod tests {
             stamp(0),
         )];
         let audit =
-            reconstruct_audit_prefix(&observed(&records), "request-1", &source(), &writer(), None)
+            reconstruct_dense_prefix(&observed(&records), "request-1", &source(), &writer(), None)
                 .unwrap();
         assert_eq!(audit.streams.len(), 4);
         assert_eq!(audit.streams[1].text, "S");

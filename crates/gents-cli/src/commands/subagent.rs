@@ -1211,9 +1211,10 @@ async fn load_request_by_id(
 }
 
 async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestRow>> {
+    let scope = gents::session::public_request_filter("");
     let query = format!(
         r#"{{
-            AgentRequest(order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
+            AgentRequest(filter: {{ {scope} }}, order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
                 {AGENT_REQUEST_FIELDS}
             }}
         }}"#

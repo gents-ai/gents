@@ -1131,12 +1131,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.prompt_assembly_mode_sanitize_cases.is_empty(),
         ),
         (
-            "PromptAssemblyClaudeNarrowingCases",
-            !snapshot.prompt_assembly_claude_narrowing_cases.is_empty(),
-        ),
-        (
             "PromptAssemblyClaudeCheckpointCases",
             !snapshot.prompt_assembly_claude_checkpoint_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyReasoningSuffixCases",
+            !snapshot.prompt_assembly_reasoning_suffix_cases.is_empty(),
         ),
     ] {
         assert!(present, "{domain} must emit cases");

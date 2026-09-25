@@ -733,14 +733,16 @@ mod tests {
             Ok(())
         );
 
-        let mut skewed = local.clone();
-        skewed.insert("AgentSession".into(), identity("bafy-other-release"));
-        assert_eq!(
-            compare_client_replicated_schema(&local, Some(&skewed))
-                .unwrap_err()
-                .collections,
-            vec!["AgentSession".to_string()]
-        );
+        for name in CLIENT_COLLECTIONS {
+            let mut skewed = local.clone();
+            skewed.insert((*name).into(), identity("bafy-other-release"));
+            assert_eq!(
+                compare_client_replicated_schema(&local, Some(&skewed))
+                    .unwrap_err()
+                    .collections,
+                vec![(*name).to_string()]
+            );
+        }
 
         let mut missing = local.clone();
         missing.remove("Task");

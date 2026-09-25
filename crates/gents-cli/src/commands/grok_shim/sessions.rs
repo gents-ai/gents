@@ -136,18 +136,18 @@ async fn scan_requests(
         .unwrap_or_default();
     let mut after = String::new();
     loop {
+        let scope = gents::session::public_request_filter(&format!(
+            r#"agent_did: {{_eq: "{agent}"}}, requester_did: {{_eq: "{agent}"}}, {session_filter} request_id: {{_gt: "{}"}}"#,
+            escape_graphql_string(&after)
+        ));
         let response = graphql_with_transaction_retry(
             node,
             &format!(
-                r#"{{ AgentRequest(filter: {{
-            agent_did: {{_eq: "{agent}"}}, requester_did: {{_eq: "{agent}"}},
-            {session_filter} request_id: {{_gt: "{}"}}
-        }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
+                r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
             _docID request_id session_id agent_did requester_did behavior_id
             content created_at terminalized_at lifecycle_state runtime_source_kind
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }} }}"#,
-                escape_graphql_string(&after)
             ),
             "Grok session request history",
         )

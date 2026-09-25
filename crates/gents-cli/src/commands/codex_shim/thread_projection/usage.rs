@@ -166,6 +166,7 @@ async fn session_request_ids(
 ) -> Result<Vec<String>> {
     let session_scope =
         gents::session::session_scope_filter(scope.agent_did, session_id, scope.requester_did);
+    let session_scope = gents::session::public_request_filter(&session_scope);
     let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
     let query = format!(
         r#"{{
@@ -209,7 +210,14 @@ async fn scoped_request_doc_ids(
         .requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = query_node_json(&state.node,&format!(r#"{{AgentRequest(filter:{{request_id:{{_in:[{logical}]}},agent_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}},requester_did:{{_eq:{requester}}}}}){{_docID request_id}}}}"#)).await?;
+    let scope = gents::session::public_request_filter(&format!(
+        r#"request_id:{{_in:[{logical}]}},agent_did:{{_eq:"{owner}"}},behavior_id:{{_eq:"{behavior}"}},requester_did:{{_eq:{requester}}}"#
+    ));
+    let response = query_node_json(
+        &state.node,
+        &format!(r#"{{AgentRequest(filter:{{{scope}}}){{_docID request_id}}}}"#),
+    )
+    .await?;
     let mut resolved = BTreeMap::new();
     for row in rows::<Value>(&response, "AgentRequest")? {
         let id = row["request_id"]

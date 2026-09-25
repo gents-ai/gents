@@ -90,6 +90,7 @@ where
     let mut daemon = daemon::BehaviorDaemon::new(
         node.clone(),
         behavior,
+        None,
         Arc::new(model),
         preamble,
         loop_tools,

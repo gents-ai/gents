@@ -1156,6 +1156,31 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         admin_sig: vec![0; 64],
     })
     .expect("encode offer");
+    let mut changed_request = local.clone();
+    changed_request
+        .get_mut("AgentRequest")
+        .expect("client route replicates AgentRequest")
+        .version_id = "bafy-other-request-schema".to_string();
+    assert_eq!(
+        changed_request.get("AgentOutputSegment"),
+        local.get("AgentOutputSegment")
+    );
+    let request_skew = serde_json::json!({
+        "agent_did": runtime_did,
+        "enrollment": { "token": &offer },
+        STATUS_REPLICATED_SCHEMA_FIELD: changed_request,
+    });
+    let error = format!(
+        "{:#}",
+        core.request_status_enrollment(&request_skew)
+            .await
+            .unwrap_err()
+    );
+    assert!(
+        error.contains("refusing to enroll with an incompatible runtime")
+            && error.contains("AgentRequest"),
+        "{error}"
+    );
     let skewed = serde_json::json!({
         "agent_did": runtime_did,
         "enrollment": { "token": offer },

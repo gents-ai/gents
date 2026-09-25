@@ -7,7 +7,7 @@ use crate::compaction;
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
-use gents_loop::loop_stream::{narrow_tagged_history, provider_view_tagged, TaggedMessage};
+use gents_loop::loop_stream::{provider_view_tagged, TaggedMessage};
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -119,22 +119,26 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             &request,
             &request_commit_cid,
             self.behavior.model_name.clone(),
+            self.provider_family.clone(),
         );
         let mut capture_scope = crate::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
         if let Some(scope) = capture_scope.as_mut() {
-            std::sync::Arc::get_mut(scope)
-                .context("fresh request capture scope unexpectedly shared")?
-                .set_auxiliary_output_sink(stream_writer.auxiliary_output_sink(
-                    request.clone(),
-                    lifecycle.execution_generation()?.to_owned(),
-                    crate::provider_input::ProviderInputProfile::resolve(
-                        self.behavior.backend_provider_kind,
-                        self.behavior.openai_wire_api,
-                    ),
-                ));
+            let scope = std::sync::Arc::get_mut(scope)
+                .context("fresh request capture scope unexpectedly shared")?;
+            if let Some(family) = &self.compaction_provider_family {
+                scope.set_compaction_provider_family(family.clone());
+            }
+            scope.set_auxiliary_output_sink(stream_writer.auxiliary_output_sink(
+                request.clone(),
+                lifecycle.execution_generation()?.to_owned(),
+                crate::provider_input::ProviderInputProfile::resolve(
+                    self.behavior.backend_provider_kind,
+                    self.behavior.openai_wire_api,
+                ),
+            ));
         }
         let handled = admission::scope_request(admission_context, async {
             // Prompt preparation may call a compaction provider; its output
@@ -265,11 +269,27 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         self.node.clone(), request.clone(), request_commit_cid.clone(),
                         gents_protocol::rendered_request::CaptureScopeKind::Inference,
                     );
+                    if provider_profile
+                        == crate::provider_input::ProviderInputProfile::ClaudeMessages
+                    {
+                        let reductions = crate::provider_context_reduction::load_for_request(
+                            self.node.as_ref(),
+                            &request.doc_id,
+                        )
+                        .await?;
+                        replay.retired = crate::provider_context_reduction::retired_replay_tags_for_scope(
+                            &reductions,
+                            &request.agent_did,
+                            request.requester_did.as_deref(),
+                            &request.session_id,
+                            &request.request_id,
+                            &request.doc_id,
+                        )?;
+                    }
                     let tagged = crate::provider_input::replay::tag_canonical_history(
                         &sequenced_history, &mut replay, provider_profile,
                     );
-                    let mut provider_history = provider_view_tagged(provider_profile, tagged)?;
-                    narrow_tagged_history(provider_profile, &mut provider_history, &mut replay).await?;
+                    let provider_history = provider_view_tagged(provider_profile, tagged)?;
 
                     // The database query already excludes the exact raw prefix
                     // named by the required compaction cursor.
@@ -332,6 +352,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             effective_seed,
                         );
                         let projected = provider_view_tagged(provider_profile, history)?;
+                        let pre_rewrite_tags = projected
+                            .iter()
+                            .filter_map(|row| row.source.clone())
+                            .collect::<Vec<_>>();
                         options.max_compacted_prefix_messages =
                             crate::agent::loop_stream::replay_compaction_prefix_bound(
                                 &projected, &replay.required,
@@ -460,6 +484,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 );
                                 summaries.push(compaction::bounded_summary(summary.to_string()));
                             }
+                        }
+
+                        if result.exact_reduction().is_some()
+                            && provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages
+                        {
+                            for tag in pre_rewrite_tags {
+                                if !replay.retired.contains(&tag) {
+                                    replay.retired.push(tag);
+                                }
+                            }
+                            replay.required.clear();
                         }
 
                         built = self

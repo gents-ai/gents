@@ -1154,8 +1154,10 @@ struct SessionRequest {
 
 async fn session_requests(node: &EmbeddedNode, session_id: &str) -> Result<Vec<SessionRequest>> {
     let session_id = escape_graphql_string(session_id);
+    let scope =
+        crate::session::public_request_filter(&format!(r#"session_id: {{ _eq: "{session_id}" }}"#));
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ created_at: ASC }}) {{ request_id lifecycle_state }} }}"#
+        r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{ created_at: ASC }}) {{ request_id lifecycle_state }} }}"#
     );
     let response = graphql_with_transaction_retry(node, &query, "eval trial session").await?;
     Ok(response

@@ -42,15 +42,40 @@ pub struct ProducerCallRef {
     pub call_seq: i64,
 }
 
-/// Tag-only source association for the exact stored native split. Required
-/// current tags are supplied independently of the surviving rows; neither
-/// reasoning witnesses nor message bytes are copied into this sidecar.
+/// Physical associations contain no copied payload or reconstructed witness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplayRowAssociation {
+    pub source: Option<ReplayTag>,
+    pub physical_header: Option<String>,
+    pub block_indices: Vec<usize>,
+}
+
+impl ReplayRowAssociation {
+    fn from_tagged(row: &TaggedMessage) -> Self {
+        Self {
+            source: row.source.clone(),
+            physical_header: row.physical_header.clone(),
+            block_indices: row.block_indices.clone(),
+        }
+    }
+
+    fn attach(self, message: Message) -> TaggedMessage {
+        TaggedMessage {
+            message,
+            source: self.source,
+            physical_header: self.physical_header,
+            block_indices: self.block_indices,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReplayAssociations {
     pub required: Vec<ReplayTag>,
-    pub prefix_sources: Vec<Option<ReplayTag>>,
-    pub retained_sources: Vec<Option<ReplayTag>>,
+    pub prefix_rows: Vec<ReplayRowAssociation>,
+    pub retained_rows: Vec<ReplayRowAssociation>,
 }
 
 impl ReplayAssociations {
@@ -61,10 +86,64 @@ impl ReplayAssociations {
     ) -> Self {
         Self {
             required,
-            prefix_sources: prefix.iter().map(|row| row.source.clone()).collect(),
-            retained_sources: suffix.iter().map(|row| row.source.clone()).collect(),
+            prefix_rows: prefix
+                .iter()
+                .map(ReplayRowAssociation::from_tagged)
+                .collect(),
+            retained_rows: suffix
+                .iter()
+                .map(ReplayRowAssociation::from_tagged)
+                .collect(),
         }
     }
+
+    /// The immutable pre-summary split identifies every old current-request
+    /// source whose signed reasoning must stay out of the rewritten provider
+    /// prefix, including sources in the retained suffix.
+    pub(crate) fn retired_for_prefix_rewrite(&self) -> Vec<ReplayTag> {
+        let mut retired = Vec::new();
+        for tag in self
+            .prefix_rows
+            .iter()
+            .chain(&self.retained_rows)
+            .filter_map(|row| row.source.as_ref())
+        {
+            if !retired.contains(tag) {
+                retired.push(tag.clone());
+            }
+        }
+        retired
+    }
+}
+
+pub(crate) fn retired_replay_tags_for_scope(
+    rows: &[ProviderContextReduction],
+    agent_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    request_id: &str,
+    request_doc_id: &str,
+) -> Result<Vec<ReplayTag>> {
+    let mut retired = Vec::new();
+    for row in rows {
+        anyhow::ensure!(
+            row.agent_did == agent_did
+                && row.requester_did.as_deref() == requester_did
+                && row.session_id == session_id
+                && row.request_id == request_id
+                && row.request_doc_id == request_doc_id,
+            "provider-context retirement crossed its request scope"
+        );
+        if row.summary.trim().is_empty() {
+            continue;
+        }
+        for tag in row.replay_associations()?.retired_for_prefix_rewrite() {
+            if !retired.contains(&tag) {
+                retired.push(tag);
+            }
+        }
+    }
+    Ok(retired)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,8 +211,8 @@ impl ProviderContextReduction {
         tagged.extend(
             suffix
                 .into_iter()
-                .zip(associations.retained_sources)
-                .map(|(message, source)| TaggedMessage { message, source }),
+                .zip(associations.retained_rows)
+                .map(|(message, association)| association.attach(message)),
         );
         Ok(tagged)
     }
@@ -281,6 +360,23 @@ pub(crate) async fn persist(
     node: &EmbeddedNode,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
+    let input = &input;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "provider_context.create_reduction",
+        move |txn| Box::pin(persist_in_transaction(txn, input)),
+    )
+    .await
+}
+
+/// The caller may compose the immutable reduction and its session cursor in
+/// this transaction; neither fact may become visible without the other.
+pub(crate) async fn persist_in_transaction(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    input: &NewProviderContextReduction<'_>,
+) -> Result<ProviderContextReduction> {
     if input.checkpoint_messages.is_empty() {
         anyhow::bail!("provider-context reduction checkpoint cannot be empty");
     }
@@ -322,9 +418,12 @@ pub(crate) async fn persist(
         input.turn_index,
         input.reduction_index,
     )?;
-    let intended = IntendedReduction::from_input(&input, reduction_key.clone())?;
+    let intended = IntendedReduction::from_input(input, reduction_key.clone())?;
 
-    match load_by_key(node, &reduction_key).await?.as_slice() {
+    match load_by_key_in_transaction(txn, &reduction_key)
+        .await?
+        .as_slice()
+    {
         [] => {}
         [existing] => {
             intended.ensure_matches(existing)?;
@@ -394,15 +493,11 @@ pub(crate) async fn persist(
         original_tokens = input.original_tokens,
         compacted_tokens = input.compacted_tokens,
     );
-    crate::config_client::ConfigAccess::write_local_response(
-        node,
-        "provider_context.create_reduction",
-        &mutation,
-    )
-    .await
-    .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
+    txn.execute(&mutation)
+        .await
+        .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
 
-    let rows = load_by_key(node, &reduction_key).await?;
+    let rows = load_by_key_in_transaction(txn, &reduction_key).await?;
     if rows.len() != 1 {
         anyhow::bail!(
             "provider-context reduction key {reduction_key} has {} visible logical twins after create",
@@ -597,8 +692,8 @@ pub fn rendered_capture_cites_reduction(
 
 const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
-async fn load_by_key(
-    node: &EmbeddedNode,
+async fn load_by_key_in_transaction(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     reduction_key: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
@@ -606,14 +701,13 @@ async fn load_by_key(
         escape_graphql_string(reduction_key),
         REDUCTION_FIELDS
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
-            .await
-            .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
+    let response = txn
+        .execute(&query)
+        .await
+        .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
     serde_json::from_value(
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("ProviderContextReduction"))
             .cloned()
             .unwrap_or_else(|| json!([])),
@@ -841,30 +935,30 @@ pub(crate) fn validate_replay_associations(
     request_doc_id: &str,
 ) -> Result<()> {
     anyhow::ensure!(
-        associations.prefix_sources.len() == prefix.len()
-            && associations.retained_sources.len() == suffix.len(),
+        associations.prefix_rows.len() == prefix.len()
+            && associations.retained_rows.len() == suffix.len(),
         "ProviderContextReduction replay association lengths disagree with the exact native split"
     );
     anyhow::ensure!(
         associations
             .required
             .iter()
-            .chain(associations.prefix_sources.iter().flatten())
-            .chain(associations.retained_sources.iter().flatten())
             .all(|tag| tag.request_doc_id == request_doc_id),
         "ProviderContextReduction replay association crosses its physical request"
     );
     let mut assistant_rows = Vec::new();
     let mut assistant_split = 0;
     for (messages, sources, in_prefix) in [
-        (prefix, associations.prefix_sources.as_slice(), true),
-        (suffix, associations.retained_sources.as_slice(), false),
+        (prefix, associations.prefix_rows.as_slice(), true),
+        (suffix, associations.retained_rows.as_slice(), false),
     ] {
-        for (message, source) in messages.iter().zip(sources) {
+        for (message, association) in messages.iter().zip(sources) {
             match message {
                 Message::Assistant { id, content } => {
                     assistant_rows.push(TaggedAssistantRow {
-                        source: source.clone(),
+                        source: association.source.clone(),
+                        physical_header: association.physical_header.clone(),
+                        block_indices: association.block_indices.clone(),
                         id: id.clone(),
                         content: content.clone(),
                     });
@@ -873,7 +967,7 @@ pub(crate) fn validate_replay_associations(
                     }
                 }
                 _ => anyhow::ensure!(
-                    source.is_none(),
+                    association.source.is_none(),
                     "ProviderContextReduction associates a non-assistant native row"
                 ),
             }
@@ -988,8 +1082,8 @@ mod tests {
             checkpoint_messages_json: "[]".to_string(),
             replay_associations_json: serde_json::to_string(&ReplayAssociations {
                 required: Vec::new(),
-                prefix_sources: Vec::new(),
-                retained_sources: Vec::new(),
+                prefix_rows: Vec::new(),
+                retained_rows: Vec::new(),
             })
             .unwrap(),
             summary: String::new(),
@@ -1018,6 +1112,22 @@ mod tests {
         }
     }
 
+    fn unassociated_row() -> ReplayRowAssociation {
+        ReplayRowAssociation {
+            source: None,
+            physical_header: None,
+            block_indices: Vec::new(),
+        }
+    }
+
+    fn one_block_row(source: ReplayTag) -> ReplayRowAssociation {
+        ReplayRowAssociation {
+            source: Some(source),
+            physical_header: Some("fixture-header".into()),
+            block_indices: vec![0],
+        }
+    }
+
     #[test]
     fn replay_associations_bind_exact_native_split_and_assistant_rows() {
         let tag = ReplayTag {
@@ -1032,24 +1142,28 @@ mod tests {
         let suffix = vec![Message::assistant("current")];
         let associations = ReplayAssociations {
             required: vec![tag.clone()],
-            prefix_sources: vec![None],
-            retained_sources: vec![Some(tag.clone())],
+            prefix_rows: vec![unassociated_row()],
+            retained_rows: vec![one_block_row(tag.clone())],
         };
         assert!(
             validate_replay_associations(&associations, &prefix, &suffix, "request-doc").is_ok()
         );
 
         let mut changed = associations.clone();
-        changed.retained_sources.clear();
+        changed.retained_rows.clear();
         assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
         changed = associations.clone();
-        changed.prefix_sources[0] = Some(tag.clone());
+        changed.prefix_rows[0].source = Some(tag.clone());
         assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
         changed = associations.clone();
-        changed.retained_sources[0] = None;
+        changed.retained_rows[0].source = None;
         assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
         changed = associations;
-        changed.retained_sources[0].as_mut().unwrap().request_doc_id = "foreign-doc".into();
+        changed.retained_rows[0]
+            .source
+            .as_mut()
+            .unwrap()
+            .request_doc_id = "foreign-doc".into();
         assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
     }
 
@@ -1058,12 +1172,20 @@ mod tests {
         let node = EmbeddedNode::builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let prefix = vec![Message::user("old")];
-        let suffix = vec![Message::user("current")];
+        let suffix = vec![Message::assistant("current")];
         let checkpoint = checkpoint_from_suffix(&suffix, "summary");
+        let source_tag = ReplayTag {
+            request_doc_id: "request-doc".into(),
+            source: gents_protocol::output::OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
         let associations = ReplayAssociations {
-            required: vec![],
-            prefix_sources: vec![None; prefix.len()],
-            retained_sources: vec![None; suffix.len()],
+            required: vec![source_tag.clone()],
+            prefix_rows: vec![unassociated_row(); prefix.len()],
+            retained_rows: vec![one_block_row(source_tag.clone())],
         };
         let source = boundary("request-doc");
         let boundary_compaction = node
@@ -1174,7 +1296,8 @@ mod tests {
         assert_eq!(restored.0.checkpoint_messages().unwrap(), checkpoint);
         let tagged = restored.0.checkpoint_tagged_messages().unwrap();
         assert_eq!(tagged.len(), checkpoint.len());
-        assert!(tagged.iter().all(|row| row.source.is_none()));
+        assert_eq!(tagged[0].source, None);
+        assert_eq!(tagged[1].source, Some(source_tag.clone()));
         assert_eq!(
             tagged
                 .into_iter()
@@ -1404,6 +1527,35 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        let durable_lineage = load_for_request(&node, "request-doc").await.unwrap();
+        assert_eq!(durable_lineage.len(), 2);
+        let retired = retired_replay_tags_for_scope(
+            &durable_lineage,
+            "did:key:agent",
+            Some("did:key:user"),
+            "session",
+            "request",
+            "request-doc",
+        )
+        .unwrap();
+        assert_eq!(retired, vec![source_tag.clone()]);
+        assert!(retired_replay_tags_for_scope(
+            &durable_lineage,
+            "did:key:other",
+            Some("did:key:user"),
+            "session",
+            "request",
+            "request-doc",
+        )
+        .is_err());
+        let mut later_tag = source_tag;
+        let gents_protocol::output::OutputSource::ProviderTurn { turn_index, .. } =
+            &mut later_tag.source
+        else {
+            unreachable!("fixture source is a provider turn")
+        };
+        *turn_index = 1;
+        assert!(!retired.contains(&later_tag));
 
         assert!(load_for_request(&node, "fork-request-doc")
             .await
@@ -1465,8 +1617,8 @@ mod tests {
                 checkpoint_messages: &[result],
                 replay_associations: &ReplayAssociations {
                     required: vec![],
-                    prefix_sources: vec![None],
-                    retained_sources: vec![None],
+                    prefix_rows: vec![unassociated_row()],
+                    retained_rows: vec![unassociated_row()],
                 },
                 summary: "summary",
                 original_tokens: 10,

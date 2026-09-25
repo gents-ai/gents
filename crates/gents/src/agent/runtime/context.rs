@@ -163,10 +163,14 @@ impl RuntimeContext {
             self.startup_readiness.build_timeout,
         )
         .await?;
+        let provider_family = Some(client.provider_family().to_owned());
+        let replay_issuer = client.replay_issuer()?;
 
         crate::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_behavior_with_client(
                 behavior,
+                provider_family,
+                replay_issuer,
                 request_rx,
                 slot_generation,
                 shutdown,
@@ -187,6 +191,8 @@ impl RuntimeContext {
     pub(super) async fn run_behavior_with_client<C>(
         &self,
         behavior: Arc<crate::config::ResolvedBehavior>,
+        provider_family: Option<String>,
+        replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
@@ -223,6 +229,7 @@ impl RuntimeContext {
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
+            provider_family,
             model,
             preamble,
             loop_tools,
@@ -236,11 +243,12 @@ impl RuntimeContext {
             slot_generation,
             request_admission,
         )?
+        .with_replay_issuer(replay_issuer)
         .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
         .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());
-        if let Some(compactor) = summary_compactor {
-            daemon = daemon.with_compactor(compactor);
+        if let Some((compactor, provider_family)) = summary_compactor {
+            daemon = daemon.with_compactor(compactor, provider_family);
         }
         daemon.run(request_rx, shutdown).await
     }

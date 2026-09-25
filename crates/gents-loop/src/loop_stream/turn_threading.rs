@@ -32,6 +32,8 @@ pub(super) fn close_streaming_turn<R>(
         new_messages.push(TaggedMessage {
             message: assistant_message,
             source: assistant_source,
+            physical_header: None,
+            block_indices: Vec::new(),
         });
     }
 

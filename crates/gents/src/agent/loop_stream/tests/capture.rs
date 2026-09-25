@@ -526,6 +526,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             behavior_id: "general".to_string(),
             session_id: session_id.to_string(),
             model_name: "model".to_string(),
+            provider_family: None,
         };
         let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
         let scope = test_scope(context, sink);

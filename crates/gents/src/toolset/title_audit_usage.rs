@@ -24,8 +24,9 @@ pub struct ParentAuditUsage {
     pub parent_inclusive_audit: AuditUsageTokens,
 }
 
-/// Failed authentication or incomplete usage makes audit totals unavailable,
-/// not zero; other session observations remain independently readable.
+/// Failed authentication or malformed usage makes this projection unavailable.
+/// Totals contain observed usage only; an absent provider usage report is not
+/// evidence that the call consumed no tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ParentAuditUsageObservation {

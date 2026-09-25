@@ -27,6 +27,10 @@ source consistency checks, not a separate runtime compatibility version.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
+- Reasoning audit and detached title requests require a fresh home. Output
+  segments retain typed reasoning and signatures; `AgentRequest` and
+  `ProviderContextReduction` have new collection baselines. Update desktop and
+  paired runtimes together. Existing stores are not migrated.
 
 ### Added
 
