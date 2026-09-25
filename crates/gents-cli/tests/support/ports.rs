@@ -69,8 +69,7 @@ pub fn allocate_port() -> Result<u16> {
 /// socket: it stops other Gents test processes from handing out the same
 /// number, and does nothing to stop an unrelated process from binding it.
 /// A true answer therefore means "this process asked for that port", not
-/// "that port is ours". Fixtures that bind a port themselves are never
-/// registered here, so recovery cannot reach them.
+/// "that port is ours".
 pub fn is_reserved(port: u16) -> bool {
     PORT_RESERVATIONS
         .get()

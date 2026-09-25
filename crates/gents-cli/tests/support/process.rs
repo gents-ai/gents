@@ -244,7 +244,11 @@ fn spawn_server_with_ready_json_inner(
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
                 let addr = format!("127.0.0.1:{port}");
-                let recoverable = attempts_left > 0
+                // A replacement spawned past the deadline cannot reach
+                // readiness before the caller gives up, so recovery is only
+                // worth attempting while budget remains.
+                let recoverable = !timed_out
+                    && attempts_left > 0
                     && ports::is_reserved(port)
                     && (is_address_in_use(&stdout, &addr) || is_address_in_use(&stderr, &addr));
                 if recoverable {
