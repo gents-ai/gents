@@ -85,6 +85,7 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
 
 const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
+pub(crate) const MAX_CONFIGURED_COMMAND_CHARS: usize = 1_000_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 const DEFAULT_MAX_MATCHES: usize = 200;
 // Foreground default aligned with other agent frameworks (Claude Code and
@@ -119,6 +120,8 @@ pub struct CliToolConfig {
     pub env_vars: HashMap<String, String>,
     pub working_dir: Option<PathBuf>,
     pub timeout_secs: u64,
+    /// UTF-8 byte budget for stdout and for stderr, each, returned per call.
+    pub max_output_chars: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +149,7 @@ impl ToolSet {
                 NativeTool::BashReadOnly {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     timeout_max: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+                    max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
                     allowlist: default_read_only_commands(),
                     policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
                 },
@@ -173,6 +177,7 @@ impl ToolSet {
                 NativeTool::BashReadOnly {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     timeout_max: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+                    max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
                     allowlist: default_read_only_commands(),
                     policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
                 },
@@ -181,6 +186,7 @@ impl ToolSet {
                 NativeTool::BashUnrestricted {
                     timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
                     timeout_max: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+                    max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
                     root: root.clone(),
                     policy: CommandExecutionPolicy::write_capable(),
                 },
@@ -273,23 +279,27 @@ impl ToolSet {
                 NativeTool::BashReadOnly {
                     timeout,
                     timeout_max,
+                    max_output_chars,
                     policy,
                     ..
                 } => built.push(Box::new(ReadOnlyBashTool::with_policy(
                     read_context.clone(),
                     *timeout,
                     *timeout_max,
+                    *max_output_chars,
                     policy.clone(),
                 ))),
                 NativeTool::BashUnrestricted {
                     timeout,
                     timeout_max,
+                    max_output_chars,
                     root,
                     policy,
                 } => built.push(Box::new(UnrestrictedBashTool::with_policy(
                     ToolContext::new(root.clone(), true)?,
                     *timeout,
                     *timeout_max,
+                    *max_output_chars,
                     policy.clone(),
                 ))),
                 NativeTool::Cli(tool) => built.push(Box::new(CliTool::new(tool.clone()))),
@@ -333,12 +343,14 @@ pub enum NativeTool {
     BashReadOnly {
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
         allowlist: Vec<String>,
         policy: CommandExecutionPolicy,
     },
     BashUnrestricted {
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
         root: PathBuf,
         policy: CommandExecutionPolicy,
     },
@@ -445,37 +457,44 @@ impl ToolSetBuilder {
 
     pub fn bash_read_only(self) -> Self {
         let timeout = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS);
-        self.bash_read_only_with_timeouts(timeout, timeout)
+        self.bash_read_only_with_limits(timeout, timeout, DEFAULT_MAX_COMMAND_CHARS)
     }
 
-    pub fn bash_read_only_with_timeouts(
-        mut self,
+    pub fn bash_read_only_with_limits(
+        self,
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
     ) -> Self {
-        self.tools.push(NativeTool::BashReadOnly {
+        self.bash_read_only_with_policy_and_limits(
+            CommandExecutionPolicy::read_only(default_read_only_commands()),
             timeout,
-            timeout_max: timeout_max.max(timeout),
-            allowlist: default_read_only_commands(),
-            policy: CommandExecutionPolicy::read_only(default_read_only_commands()),
-        });
-        self
+            timeout_max,
+            max_output_chars,
+        )
     }
 
     pub fn bash_read_only_with_policy(self, policy: CommandExecutionPolicy) -> Self {
         let timeout = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS);
-        self.bash_read_only_with_policy_and_timeouts(policy, timeout, timeout)
+        self.bash_read_only_with_policy_and_limits(
+            policy,
+            timeout,
+            timeout,
+            DEFAULT_MAX_COMMAND_CHARS,
+        )
     }
 
-    pub fn bash_read_only_with_policy_and_timeouts(
+    pub fn bash_read_only_with_policy_and_limits(
         mut self,
         policy: CommandExecutionPolicy,
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
     ) -> Self {
         self.tools.push(NativeTool::BashReadOnly {
             timeout,
             timeout_max: timeout_max.max(timeout),
+            max_output_chars,
             allowlist: default_read_only_commands(),
             policy,
         });
@@ -484,22 +503,23 @@ impl ToolSetBuilder {
 
     pub fn bash_unrestricted(self, root: impl Into<PathBuf>) -> Self {
         let timeout = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS);
-        self.bash_unrestricted_with_timeouts(root, timeout, timeout)
+        self.bash_unrestricted_with_limits(root, timeout, timeout, DEFAULT_MAX_COMMAND_CHARS)
     }
 
-    pub fn bash_unrestricted_with_timeouts(
-        mut self,
+    pub fn bash_unrestricted_with_limits(
+        self,
         root: impl Into<PathBuf>,
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
     ) -> Self {
-        self.tools.push(NativeTool::BashUnrestricted {
+        self.bash_unrestricted_with_policy_and_limits(
+            root,
+            CommandExecutionPolicy::write_capable(),
             timeout,
-            timeout_max: timeout_max.max(timeout),
-            root: root.into(),
-            policy: CommandExecutionPolicy::write_capable(),
-        });
-        self
+            timeout_max,
+            max_output_chars,
+        )
     }
 
     pub fn bash_unrestricted_with_policy(
@@ -508,19 +528,27 @@ impl ToolSetBuilder {
         policy: CommandExecutionPolicy,
     ) -> Self {
         let timeout = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS);
-        self.bash_unrestricted_with_policy_and_timeouts(root, policy, timeout, timeout)
+        self.bash_unrestricted_with_policy_and_limits(
+            root,
+            policy,
+            timeout,
+            timeout,
+            DEFAULT_MAX_COMMAND_CHARS,
+        )
     }
 
-    pub fn bash_unrestricted_with_policy_and_timeouts(
+    pub fn bash_unrestricted_with_policy_and_limits(
         mut self,
         root: impl Into<PathBuf>,
         policy: CommandExecutionPolicy,
         timeout: Duration,
         timeout_max: Duration,
+        max_output_chars: usize,
     ) -> Self {
         self.tools.push(NativeTool::BashUnrestricted {
             timeout,
             timeout_max: timeout_max.max(timeout),
+            max_output_chars,
             root: root.into(),
             policy,
         });

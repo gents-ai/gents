@@ -172,6 +172,12 @@ pub struct BashTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_wait_timeout_secs: Option<i64>,
+    /// Output budget for stdout and for stderr, each, returned per command;
+    /// the rest is truncated. Counted in UTF-8 bytes, cut on a character
+    /// boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_output_chars: Option<i64>,
 }
 
 /// Select one existing host-registered CLI tool. CLI tools currently do not
@@ -188,6 +194,12 @@ pub struct CliTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
+    /// Output budget for stdout and for stderr, each, returned per call; the
+    /// rest is truncated. Counted in UTF-8 bytes, cut on a character boundary.
+    /// Unset uses 16,000. Must be between 1 and 1,000,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_output_chars: Option<i64>,
 }
 
 /// How selected MCP tools are presented to the model.
@@ -500,6 +512,13 @@ impl Tools {
                 errors.push(format!("{field} must be positive"));
             }
         }
+        fn output_chars(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
+            positive(errors, field, value);
+            let limit = crate::toolset::MAX_CONFIGURED_COMMAND_CHARS;
+            if value.is_some_and(|value| value > limit as i64) {
+                errors.push(format!("{field} must be at most {limit}"));
+            }
+        }
         fn bounded(
             errors: &mut Vec<String>,
             field: &str,
@@ -566,6 +585,11 @@ impl Tools {
                     "host.bash.background_timeout_secs",
                     bash.background_timeout_secs,
                 );
+                output_chars(
+                    &mut errors,
+                    "host.bash.max_output_chars",
+                    bash.max_output_chars,
+                );
                 for (field, prefixes) in [
                     (
                         "host.bash.allowed_argv_prefixes",
@@ -605,6 +629,11 @@ impl Tools {
                     &mut errors,
                     &format!("host.cli[{}].timeout_secs", cli.name),
                     cli.timeout_secs,
+                );
+                output_chars(
+                    &mut errors,
+                    &format!("host.cli[{}].max_output_chars", cli.name),
+                    cli.max_output_chars,
                 );
             }
         }
@@ -895,6 +924,60 @@ mod tests {
                 vec!["search".into()];
             assert!(tools.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn command_output_caps_round_trip_and_reach_the_selection() {
+        let authored = json!({
+            "tools_id": "coding", "agent_did": "did:key:example",
+            "host": {
+                "bash": {"mode": "ReadOnly", "max_output_chars": 64000},
+                "cli": [{"name": "git", "max_output_chars": 2000}, {"name": "jq"}]
+            }
+        });
+        let tools: Tools = serde_json::from_value(authored.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&tools).unwrap(), authored);
+        let host = tools.host.as_ref().unwrap();
+        assert_eq!(host.bash.as_ref().unwrap().max_output_chars, Some(64_000));
+        assert_eq!(host.cli[0].max_output_chars, Some(2_000));
+        assert_eq!(host.cli[1].max_output_chars, None);
+        let limits = crate::tool_surface::ResolvedToolSelection::from_document(&tools)
+            .unwrap()
+            .command_output_limits;
+        assert_eq!(limits.bash, Some(64_000));
+        assert_eq!(
+            limits.cli.into_iter().collect::<Vec<_>>(),
+            vec![("git".to_owned(), 2_000)]
+        );
+    }
+
+    #[test]
+    fn command_output_caps_reject_zero_negative_and_oversized_values() {
+        let limit = crate::toolset::MAX_CONFIGURED_COMMAND_CHARS as i64;
+        for (invalid, message) in [
+            (0, "must be positive"),
+            (-1, "must be positive"),
+            (limit + 1, "must be at most 1000000"),
+        ] {
+            let bash = document(json!({"host":{"bash":{"max_output_chars": invalid}}}))
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(bash.contains("host.bash.max_output_chars"), "{bash}");
+            assert!(bash.contains(message), "{bash}");
+            let cli =
+                document(json!({"host":{"cli":[{"name":"git","max_output_chars": invalid}]}}))
+                    .validate()
+                    .unwrap_err()
+                    .to_string();
+            assert!(cli.contains("host.cli[git].max_output_chars"), "{cli}");
+            assert!(cli.contains(message), "{cli}");
+        }
+        assert!(
+            document(json!({"host":{"bash":{"max_output_chars": limit}, "cli":[{"name":"git","max_output_chars": 1}]}}))
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]

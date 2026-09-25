@@ -54,4 +54,10 @@ wait_timeout_secs?: number | null,
 /**
  * Maximum requested wait duration; current default 600s. Does not kill work.
  */
-max_wait_timeout_secs?: number | null, };
+max_wait_timeout_secs?: number | null,
+/**
+ * Output budget for stdout and for stderr, each, returned per command;
+ * the rest is truncated. Counted in UTF-8 bytes, cut on a character
+ * boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+ */
+max_output_chars?: number | null, };

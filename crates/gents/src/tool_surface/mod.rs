@@ -492,6 +492,7 @@ pub fn cli_tool(
         env_vars: HashMap::new(),
         working_dir: None,
         timeout_secs: DEFAULT_CLI_TIMEOUT_SECS,
+        max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
     }
 }
 
