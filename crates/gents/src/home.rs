@@ -41,6 +41,18 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub tool_root: Option<String>,
 }
 
+/// The home gents uses when none is named: `GENTS_HOME` when set, otherwise
+/// `.gents` in the user's home directory. The CLI and the desktop app both
+/// resolve it here, so what one installs the other sees.
+pub fn default_home_dir() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("GENTS_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+    Ok(dirs::home_dir()
+        .context("unable to resolve the user's home directory; set GENTS_HOME")?
+        .join(".gents"))
+}
+
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 /// The runtime's persisted serving state (`gents server`).
