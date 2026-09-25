@@ -24,8 +24,7 @@ use crate::support::accepted_turn::{
 };
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{
-    bind_behavior_backend, bind_default_behavior_backend, configure_subagent_behavior,
-    subagent_target,
+    bind_behavior_backend, configure_subagent_behavior, subagent_target,
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::native_remote_spawn::{wait_for_bridge, wait_for_child};
@@ -167,6 +166,7 @@ impl Harness {
     /// the modeled collections' live P2P topics: their arrival is controlled
     /// by the explicit exact-document push actions below.
     pub async fn start_two_p2p_nodes() -> Result<Self> {
+        super::init_tracing();
         let a = HarnessNode {
             id: "A".to_string(),
             db: test_p2p_db("r5-generated-a").await,
@@ -271,15 +271,47 @@ impl Harness {
             })
             .collect::<Result<Vec<_>>>()?;
         let backend = MockStreamingBackend::start_with_plans("r5-generated-child-model", plans)?;
-        bind_default_behavior_backend(
+        bind_behavior_backend(
             harness.b.db.node.as_ref(),
             harness.b.did(),
+            &gents::default_behavior_id_for_agent(harness.b.did()),
             "r5-generated-default-backend",
             backend.endpoint(),
+            "r5-generated-child-model",
         )
         .await;
         harness.generated_child_backend = Some(backend);
         Ok(harness)
+    }
+
+    pub async fn assert_generated_provider_configuration_ready(&self) -> Result<()> {
+        gents::backend_registry::probe_and_promote_enabled_backends(self.b.db.node.as_ref()).await;
+        let observation = gents::backend_registry::lookup_backend_observation(
+            self.b.db.node.as_ref(),
+            self.b.did(),
+            "r5-generated-default-backend",
+        )
+        .await?
+        .context("R5 default backend discovery must publish an observation")?;
+        anyhow::ensure!(
+            observation.catalog_for(None)?.is_some(),
+            "R5 default backend discovery must publish its model catalog"
+        );
+        let agent = Gents::from_default_behavior_documents(
+            self.b.db.node.clone(),
+            self.b.db.node_identity.clone(),
+            DocumentRuntimeOptions {
+                tool_ceiling: ToolCeiling::meta_only(),
+                ..Default::default()
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            !agent.behaviors().is_empty() && agent.unavailable_behaviors().is_empty(),
+            "R5 generated provider configuration must remain ready after discovery: {:?}",
+            agent.unavailable_behaviors()
+        );
+        Ok(())
     }
 
     /// Transfer an exact persisted document ID through DefraDB's real P2P

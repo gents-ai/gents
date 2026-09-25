@@ -48,6 +48,22 @@ async fn generated_r5_happy_path_uses_native_owners_and_physical_p2p_docs() {
 }
 
 #[tokio::test]
+async fn generated_r5_provider_discovery_preserves_fixture_readiness() {
+    let raw = lean_r5_scenario_cases()
+        .iter()
+        .find(|case| case["name"] == "happy_path")
+        .expect("Lean exports the R5 happy path");
+    let case: ModeledScenario = serde_json::from_value(raw.clone()).expect("decode modeled R5");
+    let harness = Harness::start_generated(&case)
+        .await
+        .expect("start generated R5 peers");
+    harness
+        .assert_generated_provider_configuration_ready()
+        .await
+        .expect("generated fixture remains ready after native model discovery");
+}
+
+#[tokio::test]
 async fn generated_r5_b_crash_mid_execution_uses_native_recovery() {
     let history = run_generated_case("b_crash_mid_execution").await;
     invariants::assert_crash_boundary(&history);
