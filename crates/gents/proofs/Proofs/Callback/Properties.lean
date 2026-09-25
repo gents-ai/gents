@@ -78,6 +78,8 @@ theorem denied_or_failed_do_not_emit
       simp [hpost]
   | deny_running _ _ hpost =>
       simp [hpost]
+  | retry _ _ hpost =>
+      simp [hpost] at hterm
 
 theorem denied_keeps_empty_journal
     {pre post : CallbackInvocation}
@@ -97,6 +99,8 @@ theorem denied_keeps_empty_journal
       simp [hpost, hjournal]
   | deny_running _ hjournal hpost =>
       simp [hpost, hjournal]
+  | retry _ _ hpost =>
+      simp [hpost] at hden
 
 theorem fail_preserves_journal
     {pre post : CallbackInvocation}
@@ -115,6 +119,8 @@ theorem fail_preserves_journal
   | deny_claimed _ _ hpost =>
       simp [hpost] at hfail
   | deny_running _ _ hpost =>
+      simp [hpost] at hfail
+  | retry _ _ hpost =>
       simp [hpost] at hfail
 
 theorem result_emitted_only_on_success
@@ -136,6 +142,38 @@ theorem journal_prefix_allows_written_then_executing :
       [{ index := 0, state := .resultDocsWritten }, { index := 1, state := .executing }] =
       true := by
   native_decide
+
+/-- A retry starts over from pending with nothing recorded and no result. -/
+theorem retry_starts_clean {pre post : CallbackInvocation}
+    (h : Transition pre post) (hpre : pre.state = .failed) (_hpost : post.state = .pending) :
+    post.journal = [] ∧ post.resultEmitted = false := by
+  cases h with
+  | claim hp _ => simp [hpre] at hp
+  | run hp _ => simp [hpre] at hp
+  | succeed hp _ _ => simp [hpre] at hp
+  | fail hp _ => simp [hpre] at hp
+  | deny_claimed hp _ _ => simp [hpre] at hp
+  | deny_running hp _ _ => simp [hpre] at hp
+  | retry _ _ heq => simp [heq]
+
+/-- Nothing that observed an effect or wrote results is ever run again. -/
+theorem retry_never_repeats_an_effect (inv : CallbackInvocation) (maxAttempts : Nat)
+    (h : retryAllowed inv maxAttempts = true) :
+    ∀ e ∈ inv.journal, ActionJournalState.effectful e.state = false := by
+  simp [retryAllowed] at h
+  exact h.2
+
+/-- Retries are bounded by the attempt budget. -/
+theorem retry_is_bounded (inv : CallbackInvocation) (maxAttempts : Nat)
+    (h : retryAllowed inv maxAttempts = true) : inv.attempts < maxAttempts := by
+  simp [retryAllowed] at h
+  exact h.1.2
+
+/-- Only a failed invocation is retried; a success or a denial is final. -/
+theorem retry_only_after_failure (inv : CallbackInvocation) (maxAttempts : Nat)
+    (h : retryAllowed inv maxAttempts = true) : inv.state = .failed := by
+  simp [retryAllowed] at h
+  exact h.1.1
 
 theorem claim_unique_nil : ClaimUnique [] := by
   simp [ClaimUnique]

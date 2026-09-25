@@ -98,13 +98,15 @@ def groupedInvocation (state : InvocationState) : CallbackInvocation :=
     state := state, journal := [], resultEmitted := false }
 
 def transitionCases : List TransitionCase :=
+  let interrupted := { groupedInvocation .failed with
+    journal := [{ index := 0, state := .executing }], attempts := 1 }
   let recovering := { groupedInvocation .running with
     journal := [{ index := 0, state := .executing }] }
   let completed := { groupedInvocation .running with
     journal := [{ index := 0, state := .resultDocsWritten }] }
   [ { name := "claim_preserves_captured_group",
       pre := groupedInvocation .pending,
-      post := { groupedInvocation .pending with state := .claimed },
+      post := { groupedInvocation .pending with state := .claimed, attempts := 1 },
       step := .claim rfl rfl }
   , { name := "run_preserves_captured_group",
       pre := groupedInvocation .claimed,
@@ -126,7 +128,43 @@ def transitionCases : List TransitionCase :=
       pre := groupedInvocation .running,
       post := { groupedInvocation .running with state := .denied, resultEmitted := false },
       step := .deny_running rfl rfl rfl }
+  , { name := "retry_after_interrupted_attempt_starts_clean",
+      pre := interrupted,
+      post := { interrupted with state := .pending, journal := [], resultEmitted := false },
+      step := .retry 3 (by decide) rfl }
   ]
+
+/-- Every retry decision over a matrix of states, journals and budgets. The
+expected answer is the model's own `retryAllowed`. -/
+structure RetryCase where
+  name : String
+  state : InvocationState
+  journal : List ActionJournalState
+  attempts : Nat
+  maxAttempts : Nat
+  allowed : Bool
+  deriving Repr
+
+def retryCases : List RetryCase :=
+  let states := [InvocationState.failed, .succeeded, .denied, .running]
+  let journals : List (List ActionJournalState) :=
+    [[], [.executing], [.validated], [.effectObserved], [.resultDocsWritten],
+     [.resultDocsWritten, .executing]]
+  states.flatMap fun state =>
+    journals.flatMap fun journal =>
+      [0, 1, 2, 3].flatMap fun attempts =>
+        [1, 3].map fun maxAttempts =>
+          let inv : CallbackInvocation :=
+            { invocationId := "inv-1", ownerAgentDid := "dep-1", state := state,
+              journal := numberedJournal journal, resultEmitted := false,
+              attempts := attempts }
+          { name := state.toDefraDB ++ ":" ++ String.intercalate ","
+                (journal.map ActionJournalState.toDefraDB) ++ ":" ++ toString attempts
+                ++ "/" ++ toString maxAttempts
+            state := state, journal := journal, attempts := attempts,
+            maxAttempts := maxAttempts, allowed := retryAllowed inv maxAttempts }
+
+theorem retryCases_count : retryCases.length = 192 := by native_decide
 
 end Conformance
 end Callback

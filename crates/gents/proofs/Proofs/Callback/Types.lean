@@ -97,6 +97,12 @@ def laterThanValidated : ActionJournalState → Bool
   | .validated => false
   | .executing | .effectObserved | .resultDocsWritten => true
 
+/-- The action's effect happened, or its results were written. Running the
+invocation again could repeat that effect. -/
+def effectful : ActionJournalState → Bool
+  | .effectObserved | .resultDocsWritten => true
+  | .validated | .executing => false
+
 end ActionJournalState
 
 structure ActionJournalEntry where
@@ -115,4 +121,6 @@ structure CallbackInvocation where
   state : InvocationState
   journal : List ActionJournalEntry
   resultEmitted : Bool
+  /-- Claims so far; each claim starts one attempt. -/
+  attempts : Nat := 0
   deriving DecidableEq, Repr
