@@ -94,6 +94,11 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         .as_str()
         .unwrap()
         .contains("Existing file contents are replaced"));
+    assert!(write_def.parameters["properties"]["expected_content_hash"].is_object());
+    assert_eq!(
+        write_def.parameters["properties"]["overwrite"]["default"],
+        false
+    );
 
     let bash_tool = UnrestrictedBashTool::new(
         ToolContext::new(root, false).unwrap(),
@@ -620,6 +625,8 @@ async fn write_and_edit_file_work_under_root() {
             path: "nested/file.txt".to_string(),
             content: "hello world".to_string(),
             raw_json: false,
+            expected_content_hash: None,
+            overwrite: false,
         },
     )
     .await
@@ -685,6 +692,8 @@ async fn read_only_workspace_authority_denies_file_writes() {
                         path: "file.txt".to_string(),
                         content: "nope".to_string(),
                         raw_json: false,
+                        expected_content_hash: None,
+                        overwrite: true,
                     },
                 )
                 .await
@@ -2047,6 +2056,112 @@ fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {
     }
 }
 
+fn write_args(path: &str, content: &str) -> WriteFileArgs {
+    WriteFileArgs {
+        path: path.to_string(),
+        content: content.to_string(),
+        raw_json: true,
+        expected_content_hash: None,
+        overwrite: false,
+    }
+}
+
+#[tokio::test]
+async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
+    let root = temp_root("gents-write-guard");
+    let file = root.join("notes.txt");
+    let context = ToolContext::new(root, false).unwrap();
+    let writer = WriteFileTool::new(context.clone());
+    let reader = ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS);
+
+    let created = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "one\n"))
+        .await
+        .expect("creating a new file is unguarded");
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["created"], true);
+    let written_hash = created["content_hash"].as_str().unwrap().to_string();
+
+    let refused = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "blind\n"))
+        .await
+        .expect_err("blind overwrite must be refused");
+    let refused = refused.to_string();
+    assert!(refused.contains("already exists"), "{refused}");
+    assert!(
+        !refused.contains(&written_hash),
+        "the refusal must not disclose the current hash: {refused}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "one\n");
+
+    let read = crate::llm::tool::Tool::call(
+        &reader,
+        ReadFileArgs {
+            path: "notes.txt".to_string(),
+            start_line: None,
+            end_line: None,
+            max_chars: DEFAULT_MAX_FILE_CHARS,
+            raw_json: true,
+        },
+    )
+    .await
+    .unwrap();
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap();
+    let read_hash = read["content_hash"].as_str().unwrap().to_string();
+    assert_eq!(read_hash, written_hash);
+
+    std::fs::write(&file, "changed by operator\n").unwrap();
+    let mut stale = write_args("notes.txt", "two\n");
+    stale.expected_content_hash = Some(read_hash.clone());
+    let stale = crate::llm::tool::Tool::call(&writer, stale)
+        .await
+        .expect_err("a stale hash must be refused");
+    let stale = stale.to_string();
+    assert!(stale.contains("has changed since it was read"), "{stale}");
+    assert!(
+        !stale.contains(&super::file_tools::content_hash(b"changed by operator\n")),
+        "the stale refusal must not disclose the current hash: {stale}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "changed by operator\n"
+    );
+
+    let mut current = write_args("notes.txt", "two\n");
+    current.expected_content_hash = Some(super::file_tools::content_hash(b"changed by operator\n"));
+    let current = crate::llm::tool::Tool::call(&writer, current)
+        .await
+        .expect("the current hash authorizes the replacement");
+    let current: serde_json::Value = serde_json::from_str(&current).unwrap();
+    assert_eq!(current["created"], false);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
+
+    let mut forced = write_args("notes.txt", "three\n");
+    forced.overwrite = true;
+    crate::llm::tool::Tool::call(&writer, forced)
+        .await
+        .expect("explicit overwrite replaces regardless of current content");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+
+    let mut both = write_args("notes.txt", "four\n");
+    both.expected_content_hash = Some(super::file_tools::content_hash(b"three\n"));
+    both.overwrite = true;
+    let both = crate::llm::tool::Tool::call(&writer, both)
+        .await
+        .expect_err("a hash with overwrite=true is ambiguous");
+    assert!(both.to_string().contains("conflict"), "{both}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
+
+    let mut vanished = write_args("gone.txt", "x");
+    vanished.expected_content_hash = Some(read_hash);
+    let vanished = crate::llm::tool::Tool::call(&writer, vanished)
+        .await
+        .expect_err("a hash for a missing file must be refused");
+    assert!(
+        vanished.to_string().contains("no longer exists"),
+        "{vanished}"
+    );
+    assert!(!file.with_file_name("gone.txt").exists());
+}
+
 #[tokio::test]
 async fn read_file_reports_raw_content_hash() {
     let root = temp_root("gents-read-hash");
@@ -2096,7 +2211,7 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
 }
 
 #[tokio::test]
-async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
+async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current() {
     let root = temp_root("gents-edit-stale");
     let file = root.join("a.txt");
     // Pattern is ambiguous — but the stale gate must fire FIRST (Lean E6).
@@ -2110,7 +2225,10 @@ async fn edit_file_stale_hash_rejects_before_matching_and_reports_current() {
         .expect_err("stale hash must reject");
     let text = err.to_string();
     assert!(text.contains("changed since"), "{text}");
-    assert!(text.contains("sha256:"), "{text}");
+    assert!(
+        !text.contains(&super::file_tools::content_hash(b"dup\ndup\n")),
+        "the stale refusal must not disclose the current hash: {text}"
+    );
     assert!(
         text.contains("re-read") || text.contains("Re-read"),
         "{text}"
@@ -2278,6 +2396,8 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
                 path: "both.txt".to_string(),
                 content: "alpha: 0\nbeta: 1\n".to_string(),
                 raw_json: false,
+                expected_content_hash: None,
+                overwrite: true,
             },
         );
         let (re, rw) = tokio::join!(edit, write);

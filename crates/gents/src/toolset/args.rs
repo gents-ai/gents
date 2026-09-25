@@ -57,6 +57,10 @@ pub(super) struct WriteFileArgs {
     pub content: String,
     #[serde(default)]
     pub raw_json: bool,
+    #[serde(default)]
+    pub expected_content_hash: Option<String>,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Deserialize)]

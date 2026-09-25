@@ -14,6 +14,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- `write_file` no longer replaces an existing file blindly: pass the
+  `content_hash` from your latest read (rejected if the file changed since) or
+  `overwrite: true`. Creating new files is unchanged (#1605).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
