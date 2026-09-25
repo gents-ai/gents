@@ -44,7 +44,7 @@ pub struct TrialSpec {
     pub stages: Vec<StageSpec>,
     pub captures: Vec<Capture>,
     /// `<run dir>/trials/<trial_id>`.
-    pub home_dir: PathBuf,
+    pub trial_dir: PathBuf,
     /// Populated only when [`TrialExecutor::wants_script_key`]; the one field
     /// that carries a `case_id`.
     pub script_key: Option<ScriptKey>,
@@ -69,7 +69,7 @@ impl TrialSpec {
             fixtures: TrialFixtures::default(),
             stages: Vec::new(),
             captures: Vec::new(),
-            home_dir: PathBuf::new(),
+            trial_dir: PathBuf::new(),
             script_key: None,
         }
     }

@@ -373,7 +373,7 @@ async fn execute_trial(
     recorder
         .complete_trial(owner, &planned.trial_id, &completion)
         .await?;
-    write_evidence_sidecar(&spec.home_dir, &evidence);
+    write_evidence_sidecar(&spec.trial_dir, &evidence);
     Ok(Slot::Completed {
         attempt: planned.attempt,
         not_evidence,
@@ -389,24 +389,24 @@ async fn execute_trial(
 /// It is a record, not an input: nothing the loop decides reads it back, so a
 /// write that fails is reported and the trial still counts. A spec with no
 /// home directory (the scripted executor's) has nowhere to put it.
-fn write_evidence_sidecar(home_dir: &Path, evidence: &TrialEvidence) {
+fn write_evidence_sidecar(trial_dir: &Path, evidence: &TrialEvidence) {
     #[derive(serde::Serialize)]
     struct EvidenceSidecar<'a> {
         evidence_digest: &'a str,
         anchor: &'a Anchor,
     }
 
-    if home_dir.as_os_str().is_empty() {
+    if trial_dir.as_os_str().is_empty() {
         return;
     }
-    let path = home_dir.join("evidence.json");
+    let path = trial_dir.join("evidence.json");
     let written = serde_json::to_vec_pretty(&EvidenceSidecar {
         evidence_digest: &evidence.evidence_digest,
         anchor: &evidence.anchor,
     })
     .context("encoding the trial evidence record")
     .and_then(|bytes| {
-        std::fs::create_dir_all(home_dir)
+        std::fs::create_dir_all(trial_dir)
             .and_then(|()| std::fs::write(&path, bytes))
             .with_context(|| format!("writing {}", path.display()))
     });
@@ -451,7 +451,7 @@ fn trial_spec(
             })
             .collect(),
         captures: frozen.captures.clone(),
-        home_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
+        trial_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
         script_key: wants_script_key.then(|| ScriptKey {
             cell_label: planned.cell_label.clone(),
             case_id: planned.case_id.clone(),

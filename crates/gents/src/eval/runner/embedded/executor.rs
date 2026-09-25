@@ -84,9 +84,9 @@ impl EmbeddedExecutor {
     }
 
     async fn provision_home(&self, spec: &TrialSpec) -> Result<TrialLocator> {
-        let dir = spec.home_dir.join("home");
+        let dir = spec.trial_dir.join("home");
         let home = opened(move || async move { EmbeddedHome::create_retained(&dir).await }).await?;
-        let workspace = workspace_dir(&spec.home_dir);
+        let workspace = workspace_dir(&spec.trial_dir);
         if let Err(error) = std::fs::create_dir_all(&workspace) {
             close(home).await;
             return Err(error).with_context(|| format!("creating {}", workspace.display()));
@@ -95,7 +95,7 @@ impl EmbeddedExecutor {
             trial_agent_did: home.did().to_string(),
             session_id: uuid::Uuid::new_v4().to_string(),
             home_hint: spec
-                .home_dir
+                .trial_dir
                 .strip_prefix(&self.runs_dir)
                 .ok()
                 .and_then(Path::to_str)
@@ -160,7 +160,7 @@ impl EmbeddedExecutor {
         home: EmbeddedHome,
         locator: TrialLocator,
     ) -> TrialEvidence {
-        let workspace = workspace_dir(&spec.home_dir);
+        let workspace = workspace_dir(&spec.trial_dir);
         if let Err(error) = install(spec, &home, &workspace).await {
             close(home).await;
             return infrastructure(&spec.trial_id, locator, &error);
@@ -241,15 +241,15 @@ impl TrialExecutor for EmbeddedExecutor {
     /// whether a request was interrupted on its stage's deadline, so nothing
     /// read back here is classified as a deadline.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
-        let home_dir = self.runs_dir.join(at.home_hint.as_deref()?);
-        let dir = home_dir.join("home");
+        let trial_dir = self.runs_dir.join(at.home_hint.as_deref()?);
+        let dir = trial_dir.join("home");
         let home =
             match opened(move || async move { EmbeddedHome::open_retained(&dir).await }).await {
                 Ok(home) => home,
                 Err(error) => {
                     tracing::warn!(
                         error = %format!("{error:#}"),
-                        home = %home_dir.display(),
+                        home = %trial_dir.display(),
                         "eval trial home is no longer readable"
                     );
                     return None;
@@ -268,7 +268,7 @@ impl TrialExecutor for EmbeddedExecutor {
             }
         };
 
-        let workspace = workspace_dir(&home_dir);
+        let workspace = workspace_dir(&trial_dir);
         let mut stages = Vec::new();
         for (index, request) in requests.into_iter().enumerate() {
             let evidence = collect_request_evidence(&home.node, &request.request_id)
@@ -384,8 +384,8 @@ async fn close(home: EmbeddedHome) {
 }
 
 /// A trial's files live beside its home, not inside the database directory.
-fn workspace_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join("workspace")
+fn workspace_dir(trial_dir: &Path) -> PathBuf {
+    trial_dir.join("workspace")
 }
 
 fn unprovisioned() -> TrialLocator {
@@ -1460,7 +1460,7 @@ mod tests {
             // A profile document with no `profile_id`: the declared slot has
             // nothing to bind to.
             inference: frozen_binding(Value::Null),
-            home_dir: runs_dir.join("run-1").join("trials").join("t1"),
+            trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
             ..TrialSpec::empty_for_tests("t1")
         };
 
@@ -1572,7 +1572,7 @@ mod tests {
         let spec = TrialSpec {
             pack_dir,
             pack_digest: "sha256:wrong".to_string(),
-            home_dir: runs_dir.join("run-1").join("trials").join("t1"),
+            trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
             ..TrialSpec::empty_for_tests("t1")
         };
 
@@ -1588,7 +1588,7 @@ mod tests {
         let locator = executor.provision(&spec).await;
         assert!(locator.trial_agent_did.starts_with("did:"));
         assert_eq!(locator.home_hint.as_deref(), Some("run-1/trials/t1"));
-        assert!(spec.home_dir.join("workspace").is_dir());
+        assert!(spec.trial_dir.join("workspace").is_dir());
 
         let evidence = executor.execute(&spec, CancellationToken::new()).await;
         assert_eq!(evidence.locator.trial_agent_did, locator.trial_agent_did);
@@ -1598,7 +1598,7 @@ mod tests {
         // A trial that produced no evidence still leaves its home behind, and
         // closing it leaves the directory usable. (This does not prove the node
         // was shut down rather than dropped: the assertion passes either way.)
-        let reopened = EmbeddedHome::open_retained(&spec.home_dir.join("home"))
+        let reopened = EmbeddedHome::open_retained(&spec.trial_dir.join("home"))
             .await
             .expect("the trial home survives the close");
         assert_eq!(reopened.did(), locator.trial_agent_did);
@@ -1623,7 +1623,7 @@ mod tests {
         let runs_dir = dir.path().join("runs");
         let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
         let spec = TrialSpec {
-            home_dir: runs_dir.join("run-1").join("trials").join("t1"),
+            trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
             ..TrialSpec::empty_for_tests("t1")
         };
 

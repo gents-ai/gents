@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::EvalSplit;
+use gents::document_config::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents::eval::runner::{
@@ -350,7 +350,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
 /// why sampling runs at `temperature: 0.7`: at 0.0 the arms would agree
 /// whatever the provider did with the seed, and the run would report nothing.
 #[tokio::test]
-#[ignore = "needs GENTS_LIVE_CONFIG_PROVIDER and a real backend"]
+#[ignore = "needs GENTS_EVAL_TARGET and a real backend"]
 async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
     // A test binary installs no subscriber, so an unreported finding is a
     // dropped one, even under `--nocapture`.
@@ -362,13 +362,17 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
         ))
         .try_init();
 
-    let (endpoint, auth, model) = live_provider_from_env();
-    let (canary, mut request) = canary_request(&endpoint, "run-live").await;
+    let target = support::live_inference::live_target();
+    let (canary, mut request) = canary_request(target.endpoint(), "run-live").await;
     canary
         .install(vec![
             (
                 Collection::InferenceBackend,
-                backend_document(&canary.owner, "canary-backend", &endpoint, auth),
+                serde_json::to_value(InferenceBackend {
+                    backend_id: "canary-backend".into(),
+                    ..target.backend(&canary.owner)
+                })
+                .unwrap(),
             ),
             (
                 Collection::InferenceSampling,
@@ -380,7 +384,14 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
             ),
             (
                 Collection::InferenceProfile,
-                profile_document(&canary.owner, "canary", "canary-backend", &model),
+                serde_json::to_value(InferenceProfile {
+                    profile_id: "canary".into(),
+                    backend_id: "canary-backend".into(),
+                    sampling_id: Some("canary-sampling".into()),
+                    execution_id: None,
+                    ..target.profile(&canary.owner)
+                })
+                .unwrap(),
             ),
         ])
         .await;
@@ -770,31 +781,6 @@ fn copy_tree(source: &Path, destination: &Path) {
             copy_tree(&entry.path(), &target);
         } else {
             std::fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
-/// The live backend the smoke test runs against, chosen the way the
-/// configurator evals choose theirs.
-fn live_provider_from_env() -> (String, Value, String) {
-    let model = std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "GLM-5.3-Flash-NVFP4".into());
-    match std::env::var("GENTS_LIVE_CONFIG_PROVIDER")
-        .unwrap_or_else(|_| "d4f".into())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "d4f" => (
-            support::live_inference::d4f_endpoint(),
-            json!({"kind": "unauthenticated"}),
-            model,
-        ),
-        "openrouter" => (
-            gents::inference_setup::OPENROUTER_ENDPOINT.to_string(),
-            json!({"kind": "environment", "variable": "OPENROUTER_API_KEY"}),
-            model,
-        ),
-        other => {
-            panic!("unsupported GENTS_LIVE_CONFIG_PROVIDER {other:?}; expected d4f or openrouter")
         }
     }
 }
