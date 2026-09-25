@@ -1527,6 +1527,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "AggregateTokenBudgetCases".into(),
         ));
     }
+    if !snapshot.task_hook_admission_cases.is_empty() {
+        emitted.insert((
+            "task_hook_admission_cases".into(),
+            "TaskHookAdmissionCases".into(),
+        ));
+    }
+    if !snapshot.task_hook_run_cases.is_empty() {
+        emitted.insert(("task_hook_run_cases".into(), "TaskHookRunCases".into()));
+    }
+    if !snapshot.task_hook_recovery_cases.is_empty() {
+        emitted.insert((
+            "task_hook_recovery_cases".into(),
+            "TaskHookRecoveryCases".into(),
+        ));
+    }
     if !snapshot.request_progress_cases.is_empty() {
         emitted.insert((
             "request_progress_cases".into(),

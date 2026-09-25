@@ -229,6 +229,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub(crate) capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub(crate) aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
+    pub(crate) task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
+    pub(crate) task_hook_run_cases: Vec<LeanTaskHookRunCase>,
+    pub(crate) task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -1044,6 +1047,8 @@ mod session_documents;
 mod slot_persistence_health;
 #[path = "spawn_claim_fence.rs"]
 mod spawn_claim_fence;
+#[path = "task_hooks.rs"]
+mod task_hooks;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -1074,6 +1079,7 @@ pub(crate) use self_config::*;
 pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use spawn_claim_fence::*;
+pub(crate) use task_hooks::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -1145,6 +1151,18 @@ pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransiti
 
 pub(crate) fn lean_provider_eof_cases() -> &'static [LeanProviderEofCase] {
     &lean_contract_snapshot().provider_eof_cases
+}
+
+pub(crate) fn lean_task_hook_admission_cases() -> &'static [LeanTaskHookAdmissionCase] {
+    &lean_contract_snapshot().task_hook_admission_cases
+}
+
+pub(crate) fn lean_task_hook_run_cases() -> &'static [LeanTaskHookRunCase] {
+    &lean_contract_snapshot().task_hook_run_cases
+}
+
+pub(crate) fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryCase] {
+    &lean_contract_snapshot().task_hook_recovery_cases
 }
 
 pub(crate) fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

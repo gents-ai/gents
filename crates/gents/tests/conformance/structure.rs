@@ -137,8 +137,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         (
             "TaskHooks",
             Gap(
-                "#1436 Lean contracts: hook phase/recovery theorems have no generated \
-                 contract output; admission/phase/recovery need the shared runtime hook owner",
+                "#1600: admission is fenced against Task::validate by \
+                 lean_vocab_test/task_hooks_policy.rs; the generated phase and \
+                 recovery traces still have no host executor to drive, so \
+                 ordering and gating remain unbound",
             ),
         ),
         (
