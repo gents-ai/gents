@@ -1,5 +1,6 @@
 import Proofs.Basic
 import Proofs.AgentSession
+import Proofs.Scheduling
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
@@ -77,6 +78,7 @@ structure QueueEntry where
   policy : QueuePolicy
   queueKey : Option QueueKey
   queuedAfter : Option RequestId
+  origin : ExecutionOrigin := .interactive
   deriving DecidableEq, Repr
 
 namespace QueueEntry
@@ -103,7 +105,7 @@ def matchesAutomatedWakeup
   match queueKey with
   | none => false
   | some key =>
-      if source.automatedWakeup ∧
+      if entry.origin = .scheduled ∧ source.automatedWakeup ∧
           entry.source = source ∧
           entry.coalesceWellFormed key then
         true
@@ -162,27 +164,56 @@ instance (s : SessionQueueState) (entry : QueueEntry) :
   unfold RequestIdFresh
   infer_instance
 
-def pendingAfterDrain
-    (source : QueueSource)
-    (queueKey : Option QueueKey) : List QueueEntry → List QueueEntry
+def pendingAfterDrainMatching
+    (source : QueueSource) (queueKey : Option QueueKey)
+    (allowed : QueueEntry → Bool) : List QueueEntry → List QueueEntry
   | [] => []
   | entry :: rest =>
-      let drainedRest := pendingAfterDrain source queueKey rest
-      if entry.matchesAutomatedWakeup source queueKey then
+      let drainedRest := pendingAfterDrainMatching source queueKey allowed rest
+      if entry.matchesAutomatedWakeup source queueKey && allowed entry then
         drainedRest
       else
         entry :: drainedRest
 
-def drainedRequestIds
-    (source : QueueSource)
-    (queueKey : Option QueueKey) : List QueueEntry → Finset RequestId
+def drainedRequestIdsMatching
+    (source : QueueSource) (queueKey : Option QueueKey)
+    (allowed : QueueEntry → Bool) : List QueueEntry → Finset RequestId
   | [] => ∅
   | entry :: rest =>
-      let restIds := drainedRequestIds source queueKey rest
-      if entry.matchesAutomatedWakeup source queueKey then
+      let restIds := drainedRequestIdsMatching source queueKey allowed rest
+      if entry.matchesAutomatedWakeup source queueKey && allowed entry then
         insert entry.requestId restIds
       else
         restIds
+
+def pendingAfterDrain (source : QueueSource) (queueKey : Option QueueKey)
+    (entries : List QueueEntry) : List QueueEntry :=
+  pendingAfterDrainMatching source queueKey (fun _ => true) entries
+
+def drainedRequestIds (source : QueueSource) (queueKey : Option QueueKey)
+    (entries : List QueueEntry) : Finset RequestId :=
+  drainedRequestIdsMatching source queueKey (fun _ => true) entries
+
+@[simp] theorem pendingAfterDrain_nil (source : QueueSource) (key : Option QueueKey) :
+    pendingAfterDrain source key [] = [] := rfl
+
+@[simp] theorem pendingAfterDrain_cons (source : QueueSource) (key : Option QueueKey)
+    (entry : QueueEntry) (rest : List QueueEntry) :
+    pendingAfterDrain source key (entry :: rest) =
+      if entry.matchesAutomatedWakeup source key then pendingAfterDrain source key rest
+      else entry :: pendingAfterDrain source key rest := by
+  simp [pendingAfterDrain, pendingAfterDrainMatching]
+
+@[simp] theorem drainedRequestIds_nil (source : QueueSource) (key : Option QueueKey) :
+    drainedRequestIds source key [] = ∅ := rfl
+
+@[simp] theorem drainedRequestIds_cons (source : QueueSource) (key : Option QueueKey)
+    (entry : QueueEntry) (rest : List QueueEntry) :
+    drainedRequestIds source key (entry :: rest) =
+      if entry.matchesAutomatedWakeup source key then
+        insert entry.requestId (drainedRequestIds source key rest)
+      else drainedRequestIds source key rest := by
+  simp [drainedRequestIds, drainedRequestIdsMatching]
 
 def CreatedOrdered : List QueueEntry → Prop
   | [] => True
@@ -220,6 +251,18 @@ def drainAutomatedWakeups
   { s with
     pending := pendingAfterDrain source queueKey s.pending
     terminal := s.terminal ∪ drainedRequestIds source queueKey s.pending
+  }
+
+/-- The observed IDs are physical row identities abstracted as queue-local request IDs.
+Only rows read by the latch transaction are eligible; an overlapping insertion
+with the same coalescing key remains pending. -/
+def drainObservedAutomatedWakeups
+    (s : SessionQueueState) (source : QueueSource)
+    (queueKey : Option QueueKey) (observed : List RequestId) : SessionQueueState :=
+  let allowed := fun entry : QueueEntry => decide (entry.requestId ∈ observed)
+  { s with
+    pending := pendingAfterDrainMatching source queueKey allowed s.pending
+    terminal := s.terminal ∪ drainedRequestIdsMatching source queueKey allowed s.pending
   }
 
 end SessionQueueState

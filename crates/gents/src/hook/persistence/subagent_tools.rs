@@ -486,13 +486,6 @@ impl DefraSessionHook {
         let mut interrupted_active_request_id = None;
         let mut drained_wake_up_request_ids = Vec::new();
         if parsed.interrupt {
-            drained_wake_up_request_ids = pending_automated_wakeup_request_ids(
-                &self.node,
-                &edge.child_session_id,
-                &edge.child_agent_did,
-                edge.child_requester_did.as_deref(),
-            )
-            .await?;
             if let Some(active_request) = crate::interrupt::active_session_request(
                 &self.node,
                 &edge.child_session_id,
@@ -501,16 +494,17 @@ impl DefraSessionHook {
             )
             .await?
             {
-                crate::interrupt::interrupt_request_by_doc_id(
-                    &self.node,
-                    active_request
-                        .doc_id
-                        .as_deref()
-                        .context("active request missing physical identity")?,
-                    &edge.child_agent_did,
-                    edge.child_requester_did.as_deref(),
-                )
-                .await?;
+                drained_wake_up_request_ids =
+                    crate::interrupt::interrupt_request_by_doc_id_returning_drained_wake_ids(
+                        &self.node,
+                        active_request
+                            .doc_id
+                            .as_deref()
+                            .context("active request missing physical identity")?,
+                        &edge.child_agent_did,
+                        edge.child_requester_did.as_deref(),
+                    )
+                    .await?;
                 let _descendants_cancelled = self
                     .cancel_live_subagent_descendants(
                         &edge.child_session_id,
@@ -520,22 +514,15 @@ impl DefraSessionHook {
                     )
                     .await?;
                 interrupted_active_request_id = Some(active_request.request_id);
-            }
-            let post_interrupt_drained = drain_automated_wakeups_returning_ids(
-                &self.node,
-                &edge.child_session_id,
-                &edge.child_agent_did,
-                edge.child_requester_did.as_deref(),
-                "automated wake-up drained because subagent was steered with interrupt=true",
-            )
-            .await?;
-            for request_id in post_interrupt_drained {
-                if !drained_wake_up_request_ids
-                    .iter()
-                    .any(|existing| existing == &request_id)
-                {
-                    drained_wake_up_request_ids.push(request_id);
-                }
+            } else {
+                drained_wake_up_request_ids = drain_automated_wakeups_returning_ids(
+                    &self.node,
+                    &edge.child_session_id,
+                    &edge.child_agent_did,
+                    edge.child_requester_did.as_deref(),
+                    "automated wake-up drained because subagent was steered with interrupt=true",
+                )
+                .await?;
             }
         }
 

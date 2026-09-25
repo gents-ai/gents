@@ -44,6 +44,7 @@ def backgroundCompletionEntry
   , policy := .coalesce
   , queueKey := some sessionId
   , queuedAfter := none
+  , origin := .scheduled
   }
 
 def queueState

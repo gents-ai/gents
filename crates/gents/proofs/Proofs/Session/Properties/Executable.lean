@@ -65,6 +65,12 @@ theorem step?_sound
         cases h_step
         exact Transition.drain_automated h_source rfl
       · simp [step?, h_source] at h_step
+  | drainObservedAutomated source queueKey observed =>
+      by_cases h_source : source.automatedWakeup
+      · simp [step?, h_source] at h_step
+        cases h_step
+        exact Transition.drain_observed_automated h_source rfl
+      · simp [step?, h_source] at h_step
 
 theorem transition_complete
     {pre post : SessionQueueState}
@@ -88,6 +94,10 @@ theorem transition_complete
       exact ⟨.finishActive, by simp [step?, h_active, h_post]⟩
   | Transition.drain_automated (source := source) (queueKey := queueKey) h_source h_post =>
       exact ⟨.drainAutomated source queueKey, by simp [step?, h_source, h_post]⟩
+  | Transition.drain_observed_automated (source := source) (queueKey := queueKey)
+      (observed := observed) h_source h_post =>
+      exact ⟨.drainObservedAutomated source queueKey observed,
+        by simp [step?, h_source, h_post]⟩
 
 theorem replay?_sound
     {start finish : SessionQueueState}

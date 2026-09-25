@@ -14,6 +14,8 @@ import Proofs.SessionFork
 import Proofs.SessionRecovery
 import Proofs.SessionHydration
 import Proofs.Session.Properties
+import Proofs.Session.Interrupt
+import Proofs.Session.InterruptCases
 import Proofs.Transcript
 import Proofs.CanonicalOutput
 import Proofs.Compaction

@@ -977,6 +977,18 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases"
       "conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "interrupt_queue_cases"
+      "InterruptQueueCases"
+      "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows"
+      "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "interrupt_queue_cases"
+      "InterruptQueueHttpOverlapCases"
+      "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff"
+      "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   -- Inference cases include periodic cadence: startup may defer a live execution
   -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage

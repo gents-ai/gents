@@ -560,14 +560,71 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
     .await;
 
     let drained = result["drained_wake_up_request_ids"].as_array().unwrap();
-    assert!(drained
-        .iter()
-        .any(|id| id.as_str() == Some(wake_request_id)));
+    assert_eq!(drained, &vec![json!(wake_request_id)]);
     let wake = fetch_request(db.node.as_ref(), wake_request_id).await;
     assert_eq!(
         wake.lifecycle_state,
         Some(RequestLifecycleState::Interrupted)
     );
+}
+
+#[tokio::test]
+async fn steer_subagent_interrupt_replay_preserves_later_automated_wakeup() {
+    let (db, source) = setup_db("r4c-steer-late-wake").await;
+    let hook = create_parent_hook(&db, "parent-late-wake", "session-late-wake").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-late-wake", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    drop(source);
+    update_request_state(db.node.as_ref(), child_request_id, "claimed").await;
+    let child_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), child_request_id).await;
+    gents::interrupt_request_by_doc_id(
+        db.node.as_ref(),
+        &child_doc_id,
+        db.node_identity.did(),
+        Some(db.node_identity.did()),
+    )
+    .await
+    .unwrap();
+
+    let wake_request_id = "r4c-steer-late-wake-request";
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        wake_request_id,
+        child_session_id,
+        "scheduled",
+        &queue_metadata(
+            "background_completion",
+            "coalesce",
+            Some(&format!("background_completion:{child_session_id}")),
+            Some(child_request_id),
+        ),
+    )
+    .await;
+
+    let result = steer_subagent(
+        &hook,
+        "steer-late-wake",
+        json!({
+            "child_request_id": child_request_id,
+            "message": "redirect",
+            "interrupt": true
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        result["interrupted_active_request_id"].as_str(),
+        Some(child_request_id)
+    );
+    assert!(result["drained_wake_up_request_ids"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let wake = fetch_request(db.node.as_ref(), wake_request_id).await;
+    assert_eq!(wake.lifecycle_state, Some(RequestLifecycleState::Pending));
 }
 
 #[tokio::test]

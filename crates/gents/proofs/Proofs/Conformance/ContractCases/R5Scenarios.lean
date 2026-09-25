@@ -119,7 +119,7 @@ def enqueueR5Wake (s : R5ScenarioState) (session : String) : R5ScenarioState :=
   let wake : SessionQueue.QueueEntry :=
     { requestId := s.notifications.length, createdAt := s.aNow,
       source := .backgroundCompletion, policy := .coalesce,
-      queueKey := some queue.sessionId, queuedAfter := none }
+      queueKey := some queue.sessionId, queuedAfter := none, origin := .scheduled }
   match SessionQueue.step? queue (.coalescePending wake) with
   | none => { s with observationsValid := false }
   | some post =>

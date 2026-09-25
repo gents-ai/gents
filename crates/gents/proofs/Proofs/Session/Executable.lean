@@ -8,6 +8,8 @@ inductive Action where
   | claimNext
   | finishActive
   | drainAutomated (source : QueueSource) (queueKey : Option QueueKey)
+  | drainObservedAutomated (source : QueueSource) (queueKey : Option QueueKey)
+      (observed : List RequestId)
   deriving DecidableEq, Repr
 
 def step? (pre : SessionQueueState) : Action → Option SessionQueueState
@@ -43,6 +45,11 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
   | .drainAutomated source queueKey =>
       if source.automatedWakeup then
         some (pre.drainAutomatedWakeups source queueKey)
+      else
+        none
+  | .drainObservedAutomated source queueKey observed =>
+      if source.automatedWakeup then
+        some (pre.drainObservedAutomatedWakeups source queueKey observed)
       else
         none
 

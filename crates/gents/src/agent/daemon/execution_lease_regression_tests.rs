@@ -1,4 +1,6 @@
 // Included in inference.rs's test module to reuse its real daemon harness.
+use std::sync::atomic::AtomicBool;
+
 #[derive(Clone)]
 struct NonTerminalProvider {
     empty_forever: bool,
@@ -46,7 +48,9 @@ impl CompletionModel for LeaseLossProvider {
 }
 
 #[derive(Clone)]
-struct LeaseBlockingTool;
+struct LeaseBlockingTool {
+    entered: Option<Arc<AtomicBool>>,
+}
 
 impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
     fn name(&self) -> String {
@@ -68,7 +72,13 @@ impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
         &'a self,
         _: String,
     ) -> crate::llm::tool::BoxFuture<'a, Result<String, crate::llm::tool::ToolError>> {
-        Box::pin(std::future::pending())
+        let entered = self.entered.clone();
+        Box::pin(async move {
+            if let Some(entered) = entered {
+                entered.store(true, Ordering::SeqCst);
+            }
+            std::future::pending().await
+        })
     }
 }
 
@@ -92,7 +102,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         Arc::new(LeaseLossProvider),
         prompt.preamble().to_owned(),
         Arc::new(vec![
-            Box::new(LeaseBlockingTool) as Box<dyn crate::llm::tool::ToolDyn>
+            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::llm::tool::ToolDyn>
         ]),
         prompt,
         FailurePolicy::default(),
@@ -485,6 +495,185 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 }
 
 #[tokio::test]
+async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let behavior = test_behavior();
+    let agent_did = behavior.agent_did().to_owned();
+    let identity = behavior.principal_identity().clone();
+    let tool_entered = Arc::new(AtomicBool::new(false));
+    let prompt = LayeredPromptBuilder::for_behavior(
+        &behavior.system_prompt,
+        &behavior.behavior_id,
+        &[],
+        false,
+        &[],
+    );
+    let mut daemon = BehaviorDaemon::new(
+        node.clone(),
+        behavior.clone(),
+        Arc::new(LeaseLossProvider),
+        prompt.preamble().to_owned(),
+        Arc::new(vec![Box::new(LeaseBlockingTool {
+            entered: Some(tool_entered.clone()),
+        }) as Box<dyn crate::llm::tool::ToolDyn>]),
+        prompt,
+        FailurePolicy::default(),
+        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+        Arc::new(StartupBarrier::ready_for_test()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        1,
+        crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    )
+    .unwrap();
+    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request_doc_id = request.doc_id.clone();
+    let session_id = request.session_id.clone();
+    let requester_did = request.requester_did.clone();
+    let session = gents_protocol::session::AgentSession {
+        session_id: session_id.clone(),
+        agent_did: agent_did.clone(),
+        requester_did: requester_did.clone(),
+        behavior_id: behavior.behavior_id.clone(),
+        created_at: request.created_at.clone(),
+        closed_at: None,
+        title: Some(gents_protocol::session::SessionTitle {
+            text: "late wake interrupt regression".into(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        }),
+        tags: vec![],
+        provenance: None,
+        observation: None,
+    };
+    let session_input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    access
+        .transact("test.daemon_post_latch_session", |txn| {
+            let session_input = &session_input;
+            Box::pin(async move {
+                txn.execute(&format!(
+                    "mutation {{ create_AgentSession(input: {session_input}) {{_docID}} }}"
+                ))
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let process = daemon.process_request(request, shutdown_rx);
+    tokio::pin!(process);
+    let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let wait_for_blocked_tool = async {
+            loop {
+                let response = access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state }} AgentToolCall(filter: {{ tool_name: {{ _eq: "lease_block" }} }}) {{ lifecycle_state request_doc_id }} }}"#
+                    ))
+                    .await
+                    .unwrap();
+                if response["data"]["AgentRequest"][0]["lifecycle_state"]
+                    == "processing"
+                    && tool_entered.load(Ordering::SeqCst)
+                    && response["data"]["AgentToolCall"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| {
+                            row["lifecycle_state"] == "running"
+                                && row["request_doc_id"] == request_doc_id
+                        })
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::pin!(wait_for_blocked_tool);
+        tokio::select! {
+            _ = &mut wait_for_blocked_tool => {}
+            _ = &mut process => panic!("daemon exited before the accepted tool reached running"),
+        }
+    })
+    .await
+    .expect("accepted tool should block after its running state commits");
+
+    crate::interrupt::interrupt_request_by_doc_id(
+        &node,
+        &request_doc_id,
+        &agent_did,
+        requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    let wake_id = "daemon-post-latch-wake";
+    let wake_input = serde_json::json!({
+        "request_id": wake_id,
+        "agent_did": agent_did.clone(),
+        "requester_did": requester_did.clone(),
+        "session_id": session_id.clone(),
+        "behavior_id": behavior.behavior_id.clone(),
+        "lifecycle_state": "pending",
+        "execution_origin": "scheduled",
+        "input": {"queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": format!("background_completion:{session_id}"),
+        }},
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.daemon_post_latch_wake",
+        |txn| {
+            let wake_input = wake_input.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                    &serde_json::json!({"input": wake_input}),
+                )
+                .await?;
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(10), &mut process)
+        .await
+        .expect("interrupted daemon request should terminalize");
+    let wake_id = crate::graphql::escape_graphql_string(wake_id);
+    let result = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{wake_id}" }} }}) {{ lifecycle_state }} AgentRequestParent: AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state terminal_output }} }}"#
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        result["data"]["AgentRequest"][0]["lifecycle_state"],
+        "pending"
+    );
+    assert_eq!(
+        result["data"]["AgentRequestParent"][0]["lifecycle_state"],
+        "interrupted"
+    );
+    assert!(!result["data"]["AgentRequestParent"][0]["terminal_output"].is_null());
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() {
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
@@ -591,10 +780,21 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         panic!("completed streaming request must select its canonical message: {data}");
     };
     let (header, message) = crate::session::load_canonical_message_from_node(
-        &node, &message_doc_id, &agent_did, requester_did.as_deref(),
-    ).await.unwrap();
-    assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
-    assert_eq!(header.outcome, gents_protocol::output::OutputOutcome::Complete);
+        &node,
+        &message_doc_id,
+        &agent_did,
+        requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        header.request_doc_id.as_deref(),
+        Some(request_doc_id.as_str())
+    );
+    assert_eq!(
+        header.outcome,
+        gents_protocol::output::OutputOutcome::Complete
+    );
     let content = gents_protocol::transcript::present_message(&message).body_markdown;
     assert!(
         content.contains("chunk-8"),

@@ -9,16 +9,18 @@ use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queue};
+use crate::lifecycle::queue::{drain_automated_wakeups_in_txn, drain_subagent_owned_queue};
 
 /// Request a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: if the field is already set, the
 /// current timestamp is preserved and this call is a no-op.
+/// The first latch drains automated wakes visible as pending in the same
+/// transaction and exact session scope. A replay does not scan the queue.
 ///
 /// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
 /// watches this field and signals the daemon to cancel in-flight inference and
-/// transition the request to `interrupted`. Writing this field on a terminal
-/// request is harmless — the lifecycle state machine filters terminal statuses.
+/// transition the request to `interrupted`. A terminal target keeps its
+/// lifecycle state, though its first latch still drains pending automated wakes.
 ///
 /// # Concurrent callers
 ///
@@ -32,7 +34,9 @@ use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queu
 /// preserved; microsecond-exact ordering is not.
 pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
     let logical = escape_graphql_string(request_id);
-    interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}")).await
+    interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
+        .await
+        .map(|_| ())
 }
 
 /// Interrupt the exact request already selected within a principal/requester scope.
@@ -43,6 +47,22 @@ pub async fn interrupt_request_by_doc_id(
     agent_did: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
+    interrupt_request_by_doc_id_returning_drained_wake_ids(
+        node,
+        request_doc_id,
+        agent_did,
+        requester_did,
+    )
+    .await
+    .map(|_| ())
+}
+
+pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<String>> {
     interrupt_request_matching(
         node,
         exact_request_filter(request_doc_id, agent_did, requester_did)?,
@@ -97,27 +117,17 @@ pub async fn interrupt_request_by_doc_id_with_access(
     requester_did: Option<&str>,
 ) -> Result<()> {
     let filter = exact_request_filter(request_doc_id, agent_did, requester_did)?;
-    let row = access
+    access
         .transact("interrupt.latch_request", |txn| {
             let filter = &filter;
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         })
-        .await?;
-    if let crate::config_client::ConfigAccess::Local(node) = access {
-        drain_request_queue_after_interrupt(
-            node,
-            row["request_id"]
-                .as_str()
-                .expect("validated logical identity"),
-            &row,
-        )
-        .await;
-    }
-    Ok(())
+        .await
+        .map(|_| ())
 }
 
-async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Result<()> {
-    let row = crate::config_client::ConfigAccess::transact_local(
+async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Result<Vec<String>> {
+    crate::config_client::ConfigAccess::transact_local(
         node,
         None,
         "interrupt.latch_request",
@@ -126,22 +136,13 @@ async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Resu
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         },
     )
-    .await?;
-    drain_request_queue_after_interrupt(
-        node,
-        row["request_id"]
-            .as_str()
-            .expect("validated logical identity"),
-        &row,
-    )
-    .await;
-    Ok(())
+    .await
 }
 
 async fn interrupt_request_matching_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     filter: &str,
-) -> Result<serde_json::Value> {
+) -> Result<Vec<String>> {
     let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id agent_did requester_did interrupt_requested_at}}}}"#)).await?;
     let rows = lookup["data"]["AgentRequest"]
         .as_array()
@@ -158,11 +159,19 @@ async fn interrupt_request_matching_in_txn(
     let physical = row["_docID"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("interrupt request missing physical identity"))?;
+    let session_id = row["session_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("interrupt request missing session identity"))?;
+    let agent_did = row["agent_did"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("interrupt request missing principal identity"))?;
     if row["interrupt_requested_at"]
         .as_str()
         .is_some_and(|value| !value.is_empty())
     {
-        return Ok(row);
+        return Ok(Vec::new());
     }
     let physical = escape_graphql_string(physical);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
@@ -174,7 +183,14 @@ async fn interrupt_request_matching_in_txn(
         updated.len() == 1 && updated[0]["_docID"] == row["_docID"],
         "interrupt mutation did not update the selected physical request"
     );
-    Ok(row)
+    drain_automated_wakeups_in_txn(
+        txn,
+        session_id,
+        agent_did,
+        row["requester_did"].as_str(),
+        "automated wake-up drained because active request was interrupted",
+    )
+    .await
 }
 
 pub(crate) async fn interrupt_active_session_request(
@@ -237,66 +253,6 @@ pub(crate) async fn active_session_request(
         "multiple active physical requests in exact session scope"
     );
     Ok(rows.pop())
-}
-
-async fn drain_request_queue_after_interrupt(
-    node: &EmbeddedNode,
-    request_id: &str,
-    row: &serde_json::Value,
-) {
-    let Some(session_id) = row
-        .get("session_id")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-    else {
-        tracing::warn!(
-            request_id = %request_id,
-            "interrupted request has no session_id; cannot drain automated wake-ups"
-        );
-        return;
-    };
-
-    let Some(agent_did) = row
-        .get("agent_did")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-    else {
-        tracing::warn!(
-            request_id = %request_id,
-            session_id = %session_id,
-            "interrupted request has no agent_did; cannot drain automated wake-ups"
-        );
-        return;
-    };
-
-    let drained = match drain_automated_wakeups(
-        node,
-        session_id,
-        agent_did,
-        row.get("requester_did").and_then(|value| value.as_str()),
-        "automated wake-up drained because active request was interrupted",
-    )
-    .await
-    {
-        Ok(drained) => drained,
-        Err(error) => {
-            tracing::warn!(
-                request_id = %request_id,
-                session_id = %session_id,
-                error = %error,
-                "failed to drain queued automated wake-ups after request interrupt"
-            );
-            return;
-        }
-    };
-    if drained > 0 {
-        tracing::info!(
-            request_id = %request_id,
-            session_id = %session_id,
-            drained,
-            "drained queued automated wake-ups after request interrupt"
-        );
-    }
 }
 
 /// Fetch the durable interrupt intent for the exact physical AgentRequest
@@ -571,3 +527,6 @@ mod scope_tests;
 
 #[cfg(test)]
 mod physical_scope_tests;
+
+#[cfg(test)]
+mod queue_tests;
