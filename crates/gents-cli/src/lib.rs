@@ -647,11 +647,21 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
+/// Removes everything under `home_dir` except `keep` (the held store lock),
+/// so a runtime cannot take the store while it is wiped.
+pub(crate) fn dangerously_overwrite_home(home_dir: &Path, keep: &Path) -> Result<()> {
     if !home_dir.exists() {
         return Ok(());
     }
+    ensure_overwritable_home(home_dir)?;
+    let home =
+        fs::canonicalize(home_dir).with_context(|| format!("resolving {}", home_dir.display()))?;
+    remove_tree_except(&home, keep)
+        .with_context(|| format!("dangerously overwriting {}", home_dir.display()))
+}
 
+/// Refuses homes an overwrite must never wipe.
+pub(crate) fn ensure_overwritable_home(home_dir: &Path) -> Result<()> {
     if home_dir.as_os_str().is_empty() || home_dir == Path::new("/") {
         anyhow::bail!("refusing to dangerously overwrite {}", home_dir.display());
     }
@@ -664,8 +674,25 @@ pub(crate) fn dangerously_overwrite_home(home_dir: &Path) -> Result<()> {
         }
     }
 
-    fs::remove_dir_all(home_dir)
-        .with_context(|| format!("dangerously overwriting {}", home_dir.display()))?;
+    Ok(())
+}
+
+fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == keep {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() && keep.starts_with(&path) {
+            remove_tree_except(&path, keep)?;
+        } else if file_type.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
     Ok(())
 }
 

@@ -65,6 +65,28 @@ WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
 and write any file your user account can reach — no sandbox, no containment.\n\
 Use --write for sandboxed writes scoped to the tool root.";
 
+/// Takes the store lock for the rest of init. An overwrite wipes the home
+/// under that same lock, keeping the lock file itself, so no runtime can open
+/// the store while it is removed or hold a second lock afterwards.
+fn lock_init_store(
+    home_dir: &Path,
+    data_dir: &Path,
+    overwrite: bool,
+) -> Result<gents::home::StoreLock> {
+    if overwrite {
+        crate::ensure_overwritable_home(home_dir)?;
+    }
+    fs::create_dir_all(data_dir)
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let lock = gents::home::lock_store(home_dir, data_dir)?;
+    if overwrite {
+        dangerously_overwrite_home(home_dir, lock.path())?;
+        fs::create_dir_all(data_dir)
+            .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    }
+    Ok(lock)
+}
+
 pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
@@ -77,17 +99,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    if args.dangerously_overwrite {
-        // Refuse to wipe a home whose store a runtime has open. The lock file
-        // goes with the home, so it is taken again below.
-        if data_dir.is_dir() {
-            drop(gents::home::lock_store(&home_dir, &data_dir)?);
-        }
-        dangerously_overwrite_home(&home_dir)?;
-    }
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let _store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let _store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -1292,6 +1304,52 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_holds_the_store_lock_until_it_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("data");
+        let held = lock_init_store(&home, &data, false).expect("init locks a fresh store");
+        assert!(data.is_dir());
+        assert!(
+            gents::home::lock_store(&home, &data).is_err(),
+            "a runtime cannot open the store while init runs"
+        );
+        drop(held);
+        gents::home::lock_store(&home, &data).expect("init releases the store");
+    }
+
+    #[test]
+    fn an_overwrite_wipes_under_the_lock_and_keeps_excluding_others() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = home.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("MANIFEST"), "store").unwrap();
+        fs::write(home.join("init.json"), "{}").unwrap();
+
+        let runtime = gents::home::lock_store(&home, &data).unwrap();
+        assert!(
+            lock_init_store(&home, &data, true).is_err(),
+            "a store a runtime has open is not wiped"
+        );
+        assert!(data.join("MANIFEST").is_file());
+        drop(runtime);
+
+        let held = lock_init_store(&home, &data, true).expect("an idle home is overwritten");
+        assert!(!data.join("MANIFEST").exists());
+        assert!(!home.join("init.json").exists());
+        assert!(data.is_dir());
+        assert!(
+            held.path().is_file(),
+            "the held lock file survives the wipe"
+        );
+        assert!(
+            gents::home::lock_store(&home, &data).is_err(),
+            "the lock init holds is the one a runtime would take"
+        );
+    }
     use gents::BackendProviderKind;
 
     /// Compile-only guard that the retired flat Tools vocabulary is
