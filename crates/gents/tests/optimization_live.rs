@@ -80,6 +80,7 @@ const THIN_PROMPT: &str = "Look at the mailbox and say something.\n";
 const DEGRADED_PROMPT: &str = "Answer in one word. Do not use any tools.\n";
 
 /// Which prompt the baseline subject carries.
+#[derive(PartialEq, Eq)]
 enum Baseline {
     /// The M3 pack with its sidecar prompt replaced by [`THIN_PROMPT`].
     Thin,
@@ -223,16 +224,12 @@ impl Fixture {
             });
         let baseline_pack = dirs.path().join("baseline-pack");
         copy_tree(&pack, &baseline_pack);
-        let baseline_prompt = match baseline {
-            Baseline::Golden => golden_prompt.clone(),
-            Baseline::Thin => {
-                let sidecar = golden.prompt_asset.clone().expect(
-                    "assumption failed: the M3 pack keeps its system prompt in a sidecar asset",
-                );
-                std::fs::write(baseline_pack.join(&sidecar), THIN_PROMPT).unwrap();
-                THIN_PROMPT.to_owned()
-            }
-        };
+        if baseline == Baseline::Thin {
+            let sidecar = golden.prompt_asset.clone().expect(
+                "assumption failed: the M3 pack keeps its system prompt in a sidecar asset",
+            );
+            std::fs::write(baseline_pack.join(&sidecar), THIN_PROMPT).unwrap();
+        }
 
         let target = support::live_inference::live_target();
         install(
@@ -265,27 +262,10 @@ impl Fixture {
                     })
                     .unwrap(),
                 ),
-                // Ruling R5: the live context must hold the pack's prompt.
-                (
-                    Collection::AgentContext,
-                    json!({
-                        "context_id": golden.context_id,
-                        "agent_did": owner,
-                        "display_name": "Monitor",
-                        "system_prompt": baseline_prompt,
-                    }),
-                ),
-                (
-                    Collection::AgentBehavior,
-                    json!({
-                        "behavior_id": behavior,
-                        "agent_did": owner,
-                        "display_name": "Monitor",
-                        "context_id": golden.context_id,
-                        "inference_profile_id": "live",
-                    }),
-                ),
-            ],
+            ]
+            .into_iter()
+            .chain(live_subject(&baseline_pack, &owner, &behavior))
+            .collect(),
         )
         .await;
 
@@ -395,6 +375,36 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
         })
         .await
         .unwrap();
+}
+
+/// The baseline pack installed as the live subject, as `gents pack install`
+/// would with every slot bound to the live profile: a job's baseline is the
+/// live configuration (ruling R5 and baseline equivalence). The definition is
+/// installed on its own.
+fn live_subject(pack: &Path, owner: &str, behavior: &str) -> Vec<(Collection, Value)> {
+    let subject = materialize_pack(pack, owner, behavior).unwrap();
+    let bindings = subject
+        .manifest
+        .metadata
+        .inference_slots
+        .iter()
+        .map(|slot| (slot.name.clone(), "live".to_owned()))
+        .collect();
+    let bound =
+        gents::pack::bind_pack_install_config(&subject.manifest, &subject.config, &bindings)
+            .unwrap();
+    DesiredStateApplyPlan::from_pack_config(&bound)
+        .unwrap()
+        .documents()
+        .iter()
+        .filter(|document| {
+            !matches!(
+                document.collection,
+                Collection::AgentPrincipal | Collection::EvalDefinition
+            )
+        })
+        .map(|document| (document.collection, document.add.clone()))
+        .collect()
 }
 
 fn copy_tree(source: &Path, destination: &Path) {

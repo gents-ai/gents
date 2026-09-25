@@ -182,6 +182,142 @@ pub fn target_plan(
     .with_expected(expectations(frozen))
 }
 
+/// The first way a baseline pack's configuration differs from the live
+/// configuration a job would promote into. A job evaluates the frozen live
+/// revision (#1455), not a transfer to it, so a pack that installs any other
+/// configuration beside the target prompt cannot be a job's baseline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaselineMismatch {
+    pub collection: Collection,
+    pub id: String,
+    /// The first differing field, or `None` when the live configuration has
+    /// no such document.
+    pub field: Option<String>,
+}
+
+impl std::fmt::Display for BaselineMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.collection.graphql_type();
+        match &self.field {
+            Some(field) => write!(
+                formatter,
+                "the baseline pack's {name} {:?} differs from the live one in {field}; supply a pack exported from this configuration",
+                self.id
+            ),
+            None => write!(
+                formatter,
+                "the baseline pack declares {name} {:?}, which the live configuration does not have; supply a pack exported from this configuration",
+                self.id
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BaselineMismatch {}
+
+/// Whether a trial replaces `field` of a pack document (`None`: the whole
+/// document) when it installs the baseline pack, so the pack may differ from
+/// the live configuration there and still be the same subject. These are the
+/// only such remaps:
+///
+/// - The `AgentPrincipal`: a trial installs the pack's principal as its own
+///   fresh principal and names the subject behavior explicitly, so no
+///   principal setting of the live owner is part of what a trial runs.
+/// - An `AgentBehavior`'s `inference_profile_id` that names an inference slot:
+///   the trial binds every slot to the eval target's profile, never to the
+///   live binding.
+/// - `tags`: installing a pack stamps its provenance tag and merges retained
+///   discovery tags, the trial's install as much as the live one, and tags
+///   never select what executes (the pack owner compares immutable resources
+///   without them for the same reason).
+///
+/// Workspace and host paths are not configuration documents: a trial
+/// publishes its own `WorkspaceRoot`, which no closure holds.
+fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document: &Value) -> bool {
+    match (collection, field) {
+        (Collection::AgentPrincipal, _) => true,
+        (_, Some("tags")) => true,
+        (Collection::AgentBehavior, Some(field)) => {
+            field == "inference_profile_id"
+                && pack_document
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with(crate::pack::INFERENCE_SLOT_REFERENCE_PREFIX))
+        }
+        _ => false,
+    }
+}
+
+/// `document` without the fields a trial remaps, in the digest's canonical
+/// form.
+fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
+    let (_, projected) = crate::config_client::config_projection(collection, Some(document))?;
+    let mut projected = projected.context("canonical projection missing")?;
+    if let Some(object) = projected.as_object_mut() {
+        object.retain(|field, _| !remapped_by_trial(collection, Some(field), pack_document));
+    }
+    Ok(projected)
+}
+
+/// Refuse a baseline pack unless every configuration document it installs is
+/// the live document of the same identity, compared by the canonical digest
+/// promotion guards with, apart from [`remapped_by_trial`] fields.
+pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Result<()> {
+    for document in pack.documents() {
+        let collection = document.collection;
+        if !is_closure_collection(collection) || remapped_by_trial(collection, None, &document.add)
+        {
+            continue;
+        }
+        let id =
+            document_id(collection, &document.add).context("pack document has no logical ID")?;
+        let pack_value = comparable(collection, &document.add, &document.add)?;
+        let live_value = live
+            .iter()
+            .find(|(candidate, value)| {
+                *candidate == collection && document_id(*candidate, value).as_deref() == Some(&id)
+            })
+            .map(|(_, value)| comparable(collection, value, &document.add))
+            .transpose()?;
+        let Some(live_value) = live_value else {
+            return Err(BaselineMismatch {
+                collection,
+                id,
+                field: None,
+            }
+            .into());
+        };
+        if desired_state_document_digest(&pack_value)?
+            == desired_state_document_digest(&live_value)?
+        {
+            continue;
+        }
+        let field = first_differing_field(&pack_value, &live_value)
+            .unwrap_or_else(|| "its canonical form".to_owned());
+        return Err(BaselineMismatch {
+            collection,
+            id,
+            field: Some(field),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// The first root field, in name order, whose values differ once an absent,
+/// null or empty-list value is read as unset, as the digest reads them.
+fn first_differing_field(left: &Value, right: &Value) -> Option<String> {
+    fn unset(value: Option<&Value>) -> Option<&Value> {
+        value.filter(|value| !value.is_null() && !value.as_array().is_some_and(Vec::is_empty))
+    }
+    let (left, right) = (left.as_object()?, right.as_object()?);
+    let fields: std::collections::BTreeSet<&String> = left.keys().chain(right.keys()).collect();
+    fields
+        .into_iter()
+        .find(|field| unset(left.get(*field)) != unset(right.get(*field)))
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

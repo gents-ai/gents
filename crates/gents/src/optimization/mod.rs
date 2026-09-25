@@ -41,6 +41,6 @@ pub use proposer::{CheckFeedback, Proposal, ProposalInput, Proposer, Rejection, 
 pub use show::{show, DecisionView, JobView};
 pub use subject::{baseline_text, materialize_candidate, materialize_pack, MaterializedPack};
 pub use target::{
-    apply_text, capture_closure, closure_digests, current_text, expectations, target_digest,
-    target_plan, Closure, FrozenDocument, Target, TargetField,
+    apply_text, baseline_equivalence, capture_closure, closure_digests, current_text, expectations,
+    target_digest, target_plan, BaselineMismatch, Closure, FrozenDocument, Target, TargetField,
 };

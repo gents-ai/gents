@@ -43,7 +43,8 @@ use crate::optimization::subject::{
     baseline_text, materialize_candidate, materialize_pack, MaterializedPack,
 };
 use crate::optimization::target::{
-    capture_closure, closure_digests, current_text, Closure, Target, TargetField,
+    baseline_equivalence, capture_closure, closure_digests, current_text, BaselineMismatch,
+    Closure, Target, TargetField,
 };
 
 /// Everything an operator chose about a job. Read in full only when the job
@@ -949,6 +950,17 @@ async fn freeze_job(
             "the live AgentContext {:?} and the baseline pack disagree about the subject's system prompt; supply a pack exported from this configuration",
             target.id
         )));
+    }
+    // A promotable job evaluates the live revision: everything else the trial
+    // installs from the pack must be the live configuration too.
+    if let Err(error) = baseline_equivalence(
+        &crate::config_client::DesiredStateApplyPlan::from_pack_config(&source.config)?,
+        &closure,
+    ) {
+        return Err(match error.downcast::<BaselineMismatch>() {
+            Ok(mismatch) => refused(mismatch.to_string()),
+            Err(error) => error,
+        });
     }
 
     let baseline_path = baseline_dir(&request.jobs_dir, &request.job_id);

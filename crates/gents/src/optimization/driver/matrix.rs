@@ -132,6 +132,21 @@ fn context(prompt: &str) -> (Collection, Value) {
             "agent_did": OWNER,
             "display_name": "Monitor",
             "system_prompt": prompt,
+            "tools_id": "monitor-tools",
+        }),
+    )
+}
+
+/// The live Tools the subject pack declares: a job's baseline is the live
+/// configuration, not only its prompt.
+fn tools() -> (Collection, Value) {
+    (
+        Collection::Tools,
+        json!({
+            "tools_id": "monitor-tools",
+            "agent_did": OWNER,
+            "display_name": "Monitor tools",
+            "host": {"bash": {"mode": "Off"}},
         }),
     )
 }
@@ -377,6 +392,7 @@ impl Harness {
                     Collection::EvalDefinition,
                     definition(FEEDBACK_DEFINITION, "feedback_check", &VALIDATION_CASES, 1),
                 ),
+                tools(),
                 context(BASELINE_PROMPT),
                 behavior("Monitor"),
             ])
@@ -748,6 +764,53 @@ async fn a_resume_with_another_capture_list_is_refused() {
         crate::optimization::driver::job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
     assert!(refusal.0.contains("captures"), "{}", refusal.0);
     assert_eq!(journal(&harness, &request.job_id).await, before);
+}
+
+/// A job evaluates the live revision (#1455), not a transfer to it: a pack
+/// whose prompt matches but whose other configuration differs is refused at
+/// freeze with nothing written, and a pack that differs only where a trial
+/// remaps it (its behavior names an inference slot, the live one the profile
+/// `local`) freezes.
+#[tokio::test]
+async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
+    let harness = Harness::new().await;
+    let refusal = |error: anyhow::Error| {
+        crate::optimization::driver::job_refused(&error)
+            .unwrap_or_else(|| panic!("{error:#}"))
+            .0
+            .clone()
+    };
+
+    let mut request = harness.request("other-tools", DEFINITION, budgets(1_000));
+    request.baseline_pack = harness.launching.pack("read-only", "ReadOnly");
+    let error = super::freeze_job(harness.access(), &request, &policy())
+        .await
+        .unwrap_err();
+    let reason = refusal(error);
+    assert!(
+        reason.contains("Tools \"monitor-tools\"") && reason.contains("host"),
+        "{reason}"
+    );
+    assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());
+
+    harness.install(vec![behavior("Monitor, renamed")]).await;
+    let request = harness.request("other-behavior", DEFINITION, budgets(1_000));
+    let error = super::freeze_job(harness.access(), &request, &policy())
+        .await
+        .unwrap_err();
+    let reason = refusal(error);
+    assert!(
+        reason.contains("AgentBehavior \"monitor\"") && reason.contains("display_name"),
+        "{reason}"
+    );
+    assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());
+
+    harness.install(vec![behavior("Monitor")]).await;
+    let request = harness.request("equivalent", DEFINITION, budgets(1_000));
+    super::freeze_job(harness.access(), &request, &policy())
+        .await
+        .unwrap();
+    assert!(baseline_dir(&request.jobs_dir, &request.job_id).exists());
 }
 
 async fn settle_err(harness: &Harness, request: &JobRequest) -> anyhow::Error {
