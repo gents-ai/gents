@@ -315,3 +315,69 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     assert_eq!(invocation["attempts"], 2, "the second attempt succeeded");
     node.shutdown().await;
 }
+
+/// A run started before the engine noticed the revision's routes still runs:
+/// its first document is live work, not history.
+#[tokio::test]
+async fn a_run_started_before_its_routes_are_noticed_still_runs() {
+    let (home, record) = crate::plugin::tests::executor::installed_echo();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema(
+        "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
+         type EchoOutput { graph_run_id: String @index payload: String }",
+    )
+    .await
+    .unwrap();
+    let plan = echo_plan(&record.digest, None);
+    materialize_graph_revision(&node, None, graph_test_owner(), &plan)
+        .await
+        .unwrap();
+    activate_graph_revision(
+        &node,
+        None,
+        graph_test_owner(),
+        "echo-pipeline",
+        &plan.digest,
+        None,
+    )
+    .await
+    .unwrap();
+    let run = start_graph_run(
+        &node,
+        None,
+        graph_test_owner(),
+        "echo-pipeline",
+        None,
+        "input",
+        json!({ "payload": "hello" }),
+    )
+    .await
+    .unwrap();
+
+    // Only now does the engine start, and notice the route.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let engine = tokio::spawn(crate::callback::run_callback_engine(
+        node.clone(),
+        graph_test_owner().to_owned(),
+        None,
+        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        ))),
+        cancel.clone(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let view = loop {
+        let view = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+            .await
+            .unwrap();
+        if view.status != "running" || Instant::now() >= deadline {
+            break view;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    cancel.cancel();
+    let _ = engine.await;
+    assert_eq!(view.status, "succeeded", "{view:#?}");
+    node.shutdown().await;
+}

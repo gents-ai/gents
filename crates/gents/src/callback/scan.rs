@@ -74,6 +74,8 @@ impl CallbackEngine {
             }
         };
         let mut desired = HashSet::new();
+        // Per collection, each binding and the source field that correlates it.
+        let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
             match load_event_source(
                 self.node.as_ref(),
@@ -83,6 +85,10 @@ impl CallbackEngine {
             .await
             {
                 Ok(Some(source)) => {
+                    consumers
+                        .entry(source.source_collection.clone())
+                        .or_default()
+                        .push((binding.binding_id.clone(), source.correlation_field.clone()));
                     desired.insert(source.source_collection);
                 }
                 Ok(None) => {
@@ -98,7 +104,8 @@ impl CallbackEngine {
             .cloned()
             .collect();
         for collection in &added {
-            if let Err(error) = self.seed_seen_docs(collection).await {
+            let collection_consumers = consumers.get(collection).map_or(&[][..], Vec::as_slice);
+            if let Err(error) = self.seed_seen_docs(collection, collection_consumers).await {
                 tracing::warn!(
                     source_collection = %collection,
                     %error,
@@ -112,8 +119,36 @@ impl CallbackEngine {
         }
     }
 
-    async fn seed_seen_docs(&mut self, collection: &str) -> Result<()> {
-        let ids = load_doc_ids(self.node.as_ref(), collection).await?;
+    /// Marks the documents already in `collection` as history, except those of
+    /// a graph run already underway on one of `consumers`' own revisions: those
+    /// are live work the new consumer must still deliver.
+    async fn seed_seen_docs(
+        &mut self,
+        collection: &str,
+        consumers: &[(String, Option<String>)],
+    ) -> Result<()> {
+        let mut ids: HashSet<String> = load_doc_ids(self.node.as_ref(), collection)
+            .await?
+            .into_iter()
+            .collect();
+        let live = crate::graph_pipeline::live_run_correlations(
+            self.node.as_ref(),
+            &self.agent_did,
+            consumers.iter().map(|(id, _)| id.as_str()),
+        )
+        .await?;
+        if !live.is_empty() {
+            for (consumer, field) in consumers {
+                let Some(field) = field else { continue };
+                for (doc_id, correlation) in
+                    load_doc_field(self.node.as_ref(), collection, field).await?
+                {
+                    if crate::graph_pipeline::is_live_for(&live, consumer, &correlation) {
+                        ids.remove(&doc_id);
+                    }
+                }
+            }
+        }
         self.seen_docs
             .entry(collection.to_string())
             .or_default()
@@ -528,6 +563,33 @@ impl CallbackEngine {
         }
         self.collection_id_to_name.get(collection_id).cloned()
     }
+}
+
+/// Each document's id and string `field`, for the same bounded page
+/// [`load_doc_ids`] reads.
+async fn load_doc_field(
+    node: &EmbeddedNode,
+    collection: &str,
+    field: &str,
+) -> Result<Vec<(String, String)>> {
+    crate::graphql::validate_collection_identifier(collection)?;
+    crate::graphql::validate_graphql_name(field)?;
+    let query = format!(
+        r#"query {{ {collection}(limit: {limit}) {{ _docID {field} }} }}"#,
+        limit = SEEN_DOCS_SEED_LIMIT,
+    );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "callback.seed_correlations")
+            .await?;
+    Ok(crate::graphql::rows::<Value>(&response, collection)?
+        .into_iter()
+        .filter_map(|row| {
+            Some((
+                row.get("_docID")?.as_str()?.to_owned(),
+                row.get(field)?.as_str()?.to_owned(),
+            ))
+        })
+        .collect())
 }
 
 async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Result<Vec<String>> {

@@ -609,6 +609,20 @@ impl EventSource {
                     .map(str::to_owned)
             })
             .collect();
+        // Documents of a graph run already underway on a trigger's own
+        // revision are live work, never history, even when they predate this
+        // engine noticing the trigger.
+        let live = match snapshot.principal.as_ref() {
+            Some(principal) => {
+                crate::graph_pipeline::live_run_correlations(
+                    self.node.as_ref(),
+                    &principal.agent_did,
+                    trigger_ids.iter().map(String::as_str),
+                )
+                .await?
+            }
+            None => HashMap::new(),
+        };
         let mut deferred_by_doc: HashMap<String, HashSet<String>> = HashMap::new();
         for ((filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
@@ -638,17 +652,24 @@ impl EventSource {
                 .into_iter()
                 .flatten()
             {
-                let ready = row
+                let correlation = row
                     .get(&field)
                     .and_then(serde_json::Value::as_str)
                     .map(str::trim)
-                    .is_some_and(|value| !value.is_empty());
-                if !ready {
+                    .filter(|value| !value.is_empty());
+                let pending: Vec<&String> = match correlation {
+                    None => correlated_trigger_ids.iter().collect(),
+                    Some(correlation) => correlated_trigger_ids
+                        .iter()
+                        .filter(|id| crate::graph_pipeline::is_live_for(&live, id, correlation))
+                        .collect(),
+                };
+                if !pending.is_empty() {
                     if let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) {
                         deferred_by_doc
                             .entry(doc_id.to_string())
                             .or_default()
-                            .extend(correlated_trigger_ids.iter().cloned());
+                            .extend(pending.into_iter().cloned());
                     }
                 }
             }
