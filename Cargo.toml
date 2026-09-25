@@ -91,7 +91,7 @@ identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "b77
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
-minijinja = { version = "2", default-features = false, features = ["builtins", "serde", "unstable_machinery"] }
+minijinja = { version = "2", default-features = false, features = ["builtins", "json", "serde", "unstable_machinery"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }

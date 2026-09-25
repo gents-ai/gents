@@ -175,6 +175,9 @@ source consistency checks, not a separate runtime compatibility version.
   provide, instead of being accepted and failing on every trigger fire with
   `template render error: unknown filter`. Names are checked over the whole
   compiled template, so a conditional branch does not hide one (#1744).
+- Task templates can use `tojson` and `urlencode`. The template engine's `json`
+  feature is enabled, so the filters the configurator already emits resolve
+  instead of being rejected (#1744).
 - A pack scenario sidecar reference can no longer resolve outside its pack
   directory: the CLI holds sidecar paths to the same canonical asset-path rule
   the pack loader uses (#1642).

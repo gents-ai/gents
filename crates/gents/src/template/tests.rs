@@ -183,22 +183,25 @@ fn parse_template_for_validation_skips_suffix_event_in_attr_access() {
 
 #[test]
 fn authoring_rejects_a_filter_the_engine_cannot_provide() {
-    // The v0.19.0 RC configurator wrote this; every fire failed with
-    // "unknown filter: filter tojson is unknown" after apply had accepted it.
-    let error = check_template_vocabulary("{{ doc.correlation | tojson }}").unwrap_err();
+    let error = check_template_vocabulary("{{ doc.correlation | toyaml }}").unwrap_err();
     assert!(
-        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "tojson"),
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "toyaml"),
         "{error}"
     );
 }
 
 #[test]
+fn authoring_accepts_a_filter_the_engine_registers() {
+    check_template_vocabulary("{{ doc.correlation | tojson }}").unwrap();
+}
+
+#[test]
 fn authoring_rejects_an_unresolvable_name_a_fire_would_only_reach_conditionally() {
     for template in [
-        "{% if doc.urgent %}{{ doc.correlation | tojson }}{% endif %}",
-        "{% for row in doc.rows %}{{ row | tojson }}{% endfor %}",
-        "{% if doc.urgent %}ok{% else %}{{ doc.body | tojson }}{% endif %}",
-        "{{ doc.body | trim | tojson }}",
+        "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
+        "{% for row in doc.rows %}{{ row | toyaml }}{% endfor %}",
+        "{% if doc.urgent %}ok{% else %}{{ doc.body | toyaml }}{% endif %}",
+        "{{ doc.body | trim | toyaml }}",
         "{% if doc.body is jsonish %}yes{% endif %}",
     ] {
         let error = check_template_vocabulary(template).unwrap_err();
