@@ -98,6 +98,30 @@ async fn update_agent_principal_enabled(
     );
 }
 
+async fn write_documents(
+    node: &defra_node::EmbeddedNode,
+    operation: &'static str,
+    documents: Vec<(crate::Collection, serde_json::Value)>,
+) {
+    let documents = documents
+        .into_iter()
+        .map(
+            |(collection, value)| crate::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            },
+        )
+        .collect();
+    let plan = crate::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+    crate::config_client::ConfigAccess::transact_local(node, None, operation, |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let node = test_node().await;
@@ -526,4 +550,133 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_invalid() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-settle"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-settle",
+        "http://127.0.0.1:8114/v1",
+    )
+    .await;
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let agent_did = agent.agent_did().to_string();
+    let selected_behavior_id = agent.default_behavior_id().to_string();
+
+    let backend =
+        crate::backend_registry::lookup_backend(node.as_ref(), &agent_did, "backend-settle")
+            .await
+            .unwrap()
+            .expect("configured backend document");
+    crate::backend_registry::record_model_catalog(
+        node.as_ref(),
+        &backend,
+        crate::document_config::BackendModelCatalog {
+            agent_did: None,
+            observed_at: "2026-01-01T00:00:00Z".into(),
+            models: vec![crate::document_config::AdvertisedModel {
+                model_name: "default".into(),
+                display_name: None,
+                context_window: None,
+                max_context_window: None,
+                max_output_tokens: None,
+                reasoning_efforts: None,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    runtime_status
+        .initialize_startup(&selected_behavior_id)
+        .await
+        .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+
+    // Subscribe before writing: DefraDB subscriptions are live-only.
+    let subscription = node.subscribe_document_changes();
+    let spare_behavior_id = format!("{selected_behavior_id}:spare");
+    let spare_profile_id = format!("{spare_behavior_id}:inference");
+    write_documents(
+        node.as_ref(),
+        "test.settle.spare",
+        vec![
+            (
+                crate::Collection::InferenceProfile,
+                serde_json::json!({
+                    "agent_did": agent_did,
+                    "profile_id": spare_profile_id,
+                    "backend_id": "backend-settle",
+                    "model_name": "never-advertised-model"
+                }),
+            ),
+            (
+                crate::Collection::AgentBehavior,
+                serde_json::json!({
+                    "agent_did": agent_did,
+                    "behavior_id": spare_behavior_id,
+                    "inference_profile_id": spare_profile_id
+                }),
+            ),
+        ],
+    )
+    .await;
+
+    let watcher_task = tokio::spawn(run_test_control_watcher(
+        node.clone(),
+        subscription,
+        agent_did.clone(),
+        resolve_context,
+        proposal_tx,
+        runtime_status.clone(),
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
+
+    let snapshot = tokio::time::timeout(Duration::from_secs(5), proposal_rx.recv())
+        .await
+        .expect("a permanently invalid unselected behavior must not hold reconciliation")
+        .expect("reconciled snapshot");
+    assert!(snapshot.behaviors.contains_key(&selected_behavior_id));
+    assert!(!snapshot.behaviors.contains_key(&spare_behavior_id));
+    assert_eq!(
+        snapshot
+            .unavailable_behaviors
+            .get(&spare_behavior_id)
+            .expect("unavailable reason for the invalid behavior")
+            .public_reason,
+        BehaviorReadinessUnavailableReason::InferenceProfileInvalid
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+
+    let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &agent_did)
+        .await
+        .unwrap();
+    assert!(
+        !view.has_unresolved_behavior_references(),
+        "permanently invalid inference selection is not a pending document: {:?}",
+        view.pending_visibility_details()
+    );
 }

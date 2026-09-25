@@ -235,13 +235,21 @@ fn generated_r5_cross_principal_cases_drive_production_dispatch() {
         .expect("r5 cross-deployment conformance thread panicked");
 }
 
+// Drives two full agents and two P2P nodes. A single-threaded executor lets one
+// agent's shutdown starve behind a blocking DefraDB call on the other's, which the
+// 30s shutdown bound then reports as a hang. The std::thread wrapper stays:
+// block_on polls the root future on this thread, and thread_stack_size sizes only
+// the spawned workers, so the 16 MiB stack the fixture setup and teardown run on
+// comes from here.
 #[test]
 fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
     std::thread::Builder::new()
         .name("native-remote-spawn-conformance".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_stack_size(16 * 1024 * 1024)
                 .enable_all()
                 .build()
                 .expect("build native remote-spawn runtime")

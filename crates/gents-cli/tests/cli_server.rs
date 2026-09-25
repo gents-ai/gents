@@ -280,6 +280,117 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-stolen-port-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-stolen-port-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let stolen = allocate_port()?;
+    // Hold the reserved port for the whole test. The child's preflight bind
+    // keeps losing it, so a readiness JSON can only come from a replacement
+    // port -- a TCP-connect check would instead accept this listener and
+    // report the stolen port as ready.
+    let thief =
+        std::net::TcpListener::bind(("127.0.0.1", stolen)).context("holding the test port")?;
+
+    let (_serve, bound, readiness) = spawn_server_with_ready_json_recovering(
+        &home_dir,
+        stolen,
+        &["--p2p-transport", "none"],
+        &[],
+    )?;
+
+    assert_ne!(
+        bound, stolen,
+        "harness reported the port a foreign listener still holds"
+    );
+    let expected_graphql = graphql_url(bound);
+    assert_eq!(
+        readiness.get("graphql").and_then(Value::as_str),
+        Some(expected_graphql.as_str()),
+        "readiness must come from the child on its replacement port: {readiness}"
+    );
+    drop(thief);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-held-port-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-held-port-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    let held = allocate_port()?;
+    let thief =
+        std::net::TcpListener::bind(("127.0.0.1", held)).context("holding the test port")?;
+
+    let error = spawn_server_with_ready_json(&home_dir, held, &["--p2p-transport", "none"], &[])
+        .err()
+        .ok_or_else(|| anyhow!("the non-recovering spawn must fail while the port is held"))?;
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("embedded HTTP listener cannot bind"),
+        "must surface the child's own bind diagnostic, not a replacement port:\n{message}"
+    );
+    drop(thief);
+    Ok(())
+}
+
+#[test]
+fn port_replacement_requires_address_in_use_for_the_requested_address() {
+    let addr = "127.0.0.1:20001";
+    let context = "embedded HTTP listener cannot bind to 127.0.0.1:20001; if another Gents \
+                   runtime is serving there, stop it or pass --http-port";
+
+    assert!(support::process::is_address_in_use(
+        &format!("Error: {context}\n\nCaused by:\n    Address already in use (os error 48)\n"),
+        addr
+    ));
+    // serve.rs attaches the same context to every bind failure; only
+    // address-in-use may be recovered, the rest must fail unchanged.
+    assert!(!support::process::is_address_in_use(
+        &format!("Error: {context}\n\nCaused by:\n    Permission denied (os error 13)\n"),
+        addr
+    ));
+    assert!(!support::process::is_address_in_use(
+        "Error: embedded HTTP listener cannot bind to 127.0.0.1:20002\n\nCaused by:\n    \
+         Address already in use (os error 48)\n",
+        addr
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
     const GROK_BEHAVIOR: &str = "port-live";
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";

@@ -424,13 +424,13 @@ pub(super) fn collect_unresolved_behavior_references(
     let scope = view.principal.value.agent_did.as_str();
     let result: Result<()> = (|| {
         anyhow::ensure!(behavior.agent_did == scope, "behavior owner mismatch");
-        resolve_inference(view, &behavior.inference_profile_id)?;
+        select_inference_documents(view, &behavior.inference_profile_id)?;
         if let Some(id) = &behavior.context_id {
             let context = owned_doc!(&view.contexts, id.as_str(), scope)?;
             if let Some(id) = &context.compaction_id {
                 let compaction = owned_doc!(&view.compactions, id.as_str(), scope)?;
                 if let Some(id) = &compaction.inference_profile_id {
-                    resolve_inference(view, id)?;
+                    select_inference_documents(view, id)?;
                 }
             }
             if let Some(id) = &context.tools_id {
@@ -447,36 +447,66 @@ pub(super) fn collect_unresolved_behavior_references(
     }
 }
 
+struct SelectedInferenceDocuments<'a> {
+    profile: &'a crate::document_config::InferenceProfile,
+    backend: &'a crate::document_config::InferenceBackend,
+    sampling: Option<&'a crate::document_config::InferenceSampling>,
+    execution: Option<&'a crate::document_config::InferenceExecution>,
+    retry_policy: Option<&'a crate::document_config::InferenceRetryPolicy>,
+}
+
+/// Resolve the documents one inference selection names, without judging them.
+/// Only a failure here can be repaired by a document arriving, so this is what
+/// the control watcher's visibility gate may wait on; `resolve_inference`'s
+/// advertised-model, credential and structural validation can be permanently
+/// false for a behavior the router never selects, and the snapshot reports
+/// that per behavior as an `UnavailableBehavior` instead of blocking.
+fn select_inference_documents<'a>(
+    view: &'a DocumentRuntimeView,
+    id: &str,
+) -> Result<SelectedInferenceDocuments<'a>> {
+    let scope = view.principal.value.agent_did.as_str();
+    let profile = owned_doc!(&view.inference_profiles, id, scope)?;
+    let backend = owned_doc!(&view.backends, profile.backend_id.as_str(), scope)?;
+    let sampling = profile
+        .sampling_id
+        .as_deref()
+        .map(|id| owned_doc!(&view.inference_sampling, id, scope))
+        .transpose()?;
+    let execution = profile
+        .execution_id
+        .as_deref()
+        .map(|id| owned_doc!(&view.inference_execution, id, scope))
+        .transpose()?;
+    let retry_policy = execution
+        .and_then(|execution| execution.retry_policy_id.as_deref())
+        .map(|id| owned_doc!(&view.inference_retry_policies, id, scope))
+        .transpose()?;
+    Ok(SelectedInferenceDocuments {
+        profile,
+        backend,
+        sampling,
+        execution,
+        retry_policy,
+    })
+}
+
 fn resolve_inference(
     view: &DocumentRuntimeView,
     id: &str,
 ) -> Result<crate::config::ResolvedInference> {
     let scope = view.principal.value.agent_did.as_str();
-    let profile = owned_doc!(&view.inference_profiles, id, scope)?.clone();
-    let backend = owned_doc!(&view.backends, profile.backend_id.as_str(), scope)?.clone();
+    let selected = select_inference_documents(view, id)?;
+    let profile = selected.profile.clone();
+    let backend = selected.backend.clone();
     anyhow::ensure!(
         !profile.model_name.trim().is_empty(),
         "profile {} has no model selection",
         profile.profile_id
     );
-    let sampling = profile
-        .sampling_id
-        .as_deref()
-        .map(|id| owned_doc!(&view.inference_sampling, id, scope))
-        .transpose()?
-        .cloned();
-    let execution = profile
-        .execution_id
-        .as_deref()
-        .map(|id| owned_doc!(&view.inference_execution, id, scope))
-        .transpose()?
-        .cloned();
-    let retry_policy = execution
-        .as_ref()
-        .and_then(|execution| execution.retry_policy_id.as_deref())
-        .map(|id| owned_doc!(&view.inference_retry_policies, id, scope))
-        .transpose()?
-        .cloned();
+    let sampling = selected.sampling.cloned();
+    let execution = selected.execution.cloned();
+    let retry_policy = selected.retry_policy.cloned();
     let credential_scope = matches!(
         backend.auth,
         crate::document_config::BackendAuth::PrincipalOAuth
