@@ -125,32 +125,35 @@ pub(crate) fn commit(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    // The old pack moves aside first and is removed only once the new one is
-    // in place, so a failure at any step leaves one of them at `out`.
+    // The new pack lands complete beside `out` first (a copy when the staging
+    // directory is on another filesystem), so publishing it is a rename on
+    // one filesystem and never exposes a partial pack at `out`.
+    let landing = sibling(out, "new");
+    if std::fs::rename(staged.dir.path(), &landing).is_err() {
+        copy_tree(staged.dir.path(), &landing)
+            .inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&landing);
+            })
+            .with_context(|| format!("copying the definition pack to {}", landing.display()))?;
+    }
+    // The old pack moves aside and is removed only once the new one is in
+    // place; an error between the renames restores it. Only a process killed
+    // between the two renames leaves `out` absent, with both packs beside it
+    // as the hidden `.<name>.new-<pid>` and `.<name>.replaced-<pid>`.
     let aside = match &replaced {
         Some(existing) => {
-            let aside = existing.with_file_name(format!(
-                ".{}.replaced-{}",
-                existing
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                std::process::id()
-            ));
-            std::fs::rename(existing, &aside)
-                .with_context(|| format!("moving {} aside", existing.display()))?;
+            let aside = sibling(existing, "replaced");
+            if let Err(error) = std::fs::rename(existing, &aside) {
+                let _ = std::fs::remove_dir_all(&landing);
+                return Err(error).with_context(|| format!("moving {} aside", existing.display()));
+            }
             Some((existing, aside))
         }
         None => None,
     };
-    // A rename across filesystems fails; the copy then lands the same tree,
-    // and the temporary directory removes itself.
-    let landed = std::fs::rename(staged.dir.path(), out).or_else(|_| {
-        copy_tree(staged.dir.path(), out).inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(out);
-        })
-    });
+    let landed = std::fs::rename(&landing, out);
     if let Err(error) = landed {
+        let _ = std::fs::remove_dir_all(&landing);
         if let Some((existing, aside)) = &aside {
             std::fs::rename(aside, existing).with_context(|| {
                 format!(
@@ -160,8 +163,13 @@ pub(crate) fn commit(
                 )
             })?;
         }
-        return Err(error)
-            .with_context(|| format!("copying the definition pack to {}", out.display()));
+        return Err(error).with_context(|| {
+            format!(
+                "moving the definition pack from {} to {}",
+                landing.display(),
+                out.display()
+            )
+        });
     }
     if let Some((_, aside)) = aside {
         std::fs::remove_dir_all(&aside)
@@ -171,6 +179,18 @@ pub(crate) fn commit(
         out: out.to_path_buf(),
         pack_name: staged.pack_name,
     })
+}
+
+/// A hidden sibling of `path` for one step of replacing it, unique to this
+/// process.
+fn sibling(path: &Path, step: &str) -> PathBuf {
+    path.with_file_name(format!(
+        ".{}.{step}-{}",
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        std::process::id()
+    ))
 }
 
 /// The directory `--force` may replace at `out`, resolved canonically: never
@@ -209,7 +229,46 @@ fn replaceable_out(
         "refusing to replace --out {}: it is not a definition pack gents eval init wrote; choose another --out or remove it yourself",
         out.display()
     );
+    if let Some(extra) = undeclared_entry(&resolved)? {
+        anyhow::bail!(
+            "refusing to replace --out {}: {} is not part of the pack gents eval init wrote; move it out or remove --out yourself",
+            out.display(),
+            extra.display()
+        );
+    }
     Ok(resolved)
+}
+
+/// The first entry under `dir` that is neither a declared pack path nor a
+/// directory leading to one; a symbolic link always counts. Replacing
+/// `--out` removes the whole tree, so anything placed in a generated pack
+/// afterwards (notes, another Gents home) must stop the replacement.
+fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
+    let manifest: PackManifest = serde_json::from_slice(
+        &std::fs::read(dir.join("manifest.json")).context("reading the pack manifest")?,
+    )
+    .context("parsing the pack manifest")?;
+    let declared: std::collections::BTreeSet<PathBuf> = gents::pack::declared_paths(&manifest)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        let listed = dir.join(&relative);
+        for entry in
+            std::fs::read_dir(&listed).with_context(|| format!("listing {}", listed.display()))?
+        {
+            let entry = entry?;
+            let path = relative.join(entry.file_name());
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() && declared.iter().any(|asset| asset.starts_with(&path)) {
+                pending.push(path);
+            } else if !(file_type.is_file() && declared.contains(&path)) {
+                return Ok(Some(dir.join(path)));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Whether `dir` loads through the pack loader as a pack `write_files`
@@ -767,11 +826,26 @@ mod tests {
         write_pack(&assembled, SUMMARY, &dossier(), &out, false)
             .await
             .unwrap();
-        std::fs::write(out.join("cases/stale.json"), "{}").unwrap();
+        // Anything placed in a generated pack afterwards stops the
+        // replacement, another Gents home above all.
+        for extra in ["cases/stale.json", "other-home/init.json"] {
+            let path = out.join(extra);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{}").unwrap();
+            let error = format!(
+                "{:#}",
+                write_pack(&assembled, SUMMARY, &dossier(), &out, true)
+                    .await
+                    .unwrap_err()
+            );
+            assert!(error.contains("is not part of the pack"), "{error}");
+            assert!(path.exists(), "a refusal leaves out alone");
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::fs::remove_dir(out.join("other-home")).unwrap();
         write_pack(&assembled, SUMMARY, &dossier(), &out, true)
             .await
             .unwrap();
-        assert!(!out.join("cases/stale.json").exists());
         assert!(out.join("manifest.json").exists());
         let siblings: Vec<_> = std::fs::read_dir(root.path())
             .unwrap()
