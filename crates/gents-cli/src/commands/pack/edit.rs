@@ -333,7 +333,15 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
                 }
                 (None, None) => anyhow::bail!("name the stage's --task or --plugin"),
             };
-            add_stage(pack, &node, &graph, target, &input, &output, from.as_deref())
+            add_stage(
+                pack,
+                &node,
+                &graph,
+                target,
+                &input,
+                &output,
+                from.as_deref(),
+            )
         }
     }
 }

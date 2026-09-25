@@ -177,7 +177,7 @@ async fn resolve_pack_source(
             let (namespace, pack_name) = split_namespace(name);
             let base_url = registry::resolve_registry_url(registry_override);
             let client = registry::RegistryClient::new(base_url.clone());
-            let fetched = registry::fetch_pack(&client, Some(home), namespace, pack_name)
+            let fetched = registry::fetch_pack(&client, Some(home), namespace, pack_name, None)
                 .await
                 .map_err(|registry_error| {
                     anyhow::anyhow!(

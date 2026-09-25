@@ -11,13 +11,10 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
 pub(crate) use gents::pack_registry::{
-    fetch_pack, resolve_pack_coordinate, resolve_registry_url, stage_and_persist, verify_digest,
-    RegistryClient, RegistryPack,
+    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient, RegistryPack,
 };
 #[cfg(test)]
-use gents::pack_registry::{
-    verify_pack_coordinate, RegistryKind, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR,
-};
+use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -133,7 +130,7 @@ pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -252,17 +249,22 @@ mod tests {
     // --- a tiny fake registry, just the routes `gents pack` needs ---
 
     struct FakeRegistryState {
+        name: String,
+        latest: String,
         bytes: Vec<u8>,
         digest: String,
         downloads: Arc<AtomicUsize>,
     }
 
-    /// Only "plain_pack" is known; anything else is a real 404, so the
+    /// Only the one pack is known; anything else is a real 404, so an
     /// "unknown pack" test exercises a genuine not-found response instead
     /// of accidentally hitting the digest-mismatch path.
-    async fn fake_package(AxumPath((_ns, name)): AxumPath<(String, String)>) -> Response {
-        if name == "plain_pack" {
-            Json(json!({ "latest": "1.0.0" })).into_response()
+    async fn fake_package(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((_ns, name)): AxumPath<(String, String)>,
+    ) -> Response {
+        if name == state.name {
+            Json(json!({ "latest": state.latest })).into_response()
         } else {
             StatusCode::NOT_FOUND.into_response()
         }
@@ -289,28 +291,26 @@ mod tests {
             .unwrap()
     }
 
-    /// The two surfaces the registry actually serves, asserted by name.
-    ///
-    /// A client that asks the wrong one gets a correct 404 and an error
-    /// that says the registry has nothing there, which reads like a
-    /// missing package rather than a wrong route. That is what happened:
-    /// `gents pack install` asked the plugin surface for a pack. The route
-    /// segments are stated here, next to the fakes that must match them,
-    /// so swapping them fails a test instead of a customer's install.
-    #[test]
-    fn each_artifact_kind_addresses_its_own_registry_surface() {
-        assert_eq!(RegistryKind::Pack.path(), "packs");
-        assert_eq!(RegistryKind::Plugin.path(), "packages");
+    /// Starts a fake registry serving `plain_pack@1.0.0`, and returns its
+    /// base URL plus the download-hit counter.
+    async fn start_fake_registry(
+        bytes: Vec<u8>,
+        advertised_digest: String,
+    ) -> (String, Arc<AtomicUsize>) {
+        serve_fake_pack("plain_pack", "1.0.0", bytes, advertised_digest).await
     }
 
-    /// Starts a fake registry serving one version of one pack, and returns
-    /// its base URL plus the download-hit counter.
-    async fn start_fake_registry(
+    /// Starts a fake registry serving one version of one pack.
+    pub(crate) async fn serve_fake_pack(
+        name: &str,
+        latest: &str,
         bytes: Vec<u8>,
         advertised_digest: String,
     ) -> (String, Arc<AtomicUsize>) {
         let downloads = Arc::new(AtomicUsize::new(0));
         let state = Arc::new(FakeRegistryState {
+            name: name.to_owned(),
+            latest: latest.to_owned(),
             bytes,
             digest: advertised_digest,
             downloads: downloads.clone(),
@@ -409,7 +409,7 @@ mod tests {
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let first = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let first = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect("first fetch");
         assert_eq!(first.namespace, "gents");
@@ -421,7 +421,7 @@ mod tests {
             .unwrap());
 
         // A second fetch of the same pack reads the cache: no second download.
-        let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect("second fetch (cached)");
         assert_eq!(second.digest, first.digest);
@@ -440,7 +440,7 @@ mod tests {
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect_err("mismatched digest must be refused");
         let message = format!("{error:#}");
@@ -457,9 +457,15 @@ mod tests {
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "someone_else", "plain_pack")
-            .await
-            .expect_err("a manifest from another namespace must be refused");
+        let error = fetch_pack(
+            &client,
+            Some(home.path()),
+            "someone_else",
+            "plain_pack",
+            None,
+        )
+        .await
+        .expect_err("a manifest from another namespace must be refused");
         assert!(
             format!("{error:#}").contains("different identity"),
             "{error:#}"
@@ -474,7 +480,7 @@ mod tests {
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "gents", "does_not_exist")
+        let error = fetch_pack(&client, Some(home.path()), "gents", "does_not_exist", None)
             .await
             .expect_err("unknown pack must be refused, not silently substituted");
         assert!(format!("{error:#}").contains("nothing at"), "{error:#}");

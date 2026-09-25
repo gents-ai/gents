@@ -8,8 +8,8 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::cli::{
-    GraphScopeArgs, PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs,
-    PackLoginArgs, PackOutdatedArgs, PackRemoveArgs, PackSearchArgs, PackUpdateArgs,
+    GraphScopeArgs, PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs,
+    PackOutdatedArgs, PackRemoveArgs, PackSearchArgs, PackUpdateArgs,
 };
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
@@ -166,6 +166,9 @@ mod tests {
         let error = search(Some("http://127.0.0.1:1".into()), "x".into(), 1)
             .await
             .unwrap_err();
-        assert!(format!("{error:#}").contains("could not reach the registry"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("could not reach the registry"),
+            "{error:#}"
+        );
     }
 }

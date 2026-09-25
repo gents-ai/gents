@@ -35,40 +35,17 @@ pub fn resolve_registry_url(explicit: Option<&str>) -> String {
     DEFAULT_REGISTRY_URL.to_owned()
 }
 
+/// A client for the packs registry. Everything it serves is a pack; a plugin
+/// travels inside one.
 pub struct RegistryClient {
     base_url: String,
-    kind: RegistryKind,
     http: reqwest::Client,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegistryKind {
-    Pack,
-    Plugin,
-}
-
-impl RegistryKind {
-    pub fn path(self) -> &'static str {
-        match self {
-            Self::Pack => "packs",
-            Self::Plugin => "packages",
-        }
-    }
 }
 
 impl RegistryClient {
     pub fn new(base_url: String) -> Self {
-        Self::for_kind(base_url, RegistryKind::Pack)
-    }
-
-    pub fn for_plugins(base_url: String) -> Self {
-        Self::for_kind(base_url, RegistryKind::Plugin)
-    }
-
-    fn for_kind(base_url: String, kind: RegistryKind) -> Self {
         Self {
             base_url,
-            kind,
             http: reqwest::Client::new(),
         }
     }
@@ -116,21 +93,17 @@ impl RegistryClient {
     }
 
     pub async fn package(&self, namespace: &str, name: &str) -> Result<Value> {
-        self.get_json(&format!("/{}/{namespace}/{name}", self.kind.path()))
-            .await
+        self.get_json(&format!("/packs/{namespace}/{name}")).await
     }
 
     pub async fn version(&self, namespace: &str, name: &str, version: &str) -> Result<Value> {
-        self.get_json(&format!(
-            "/{}/{namespace}/{name}/{version}",
-            self.kind.path()
-        ))
-        .await
+        self.get_json(&format!("/packs/{namespace}/{name}/{version}"))
+            .await
     }
 
     /// One page of search results; `page` is 1-based.
     pub async fn search(&self, query: &str, page: u32) -> Result<Value> {
-        let url = self.api(&format!("/{}", self.kind.path()));
+        let url = self.api("/packs");
         let response = self
             .http
             .get(&url)
@@ -158,10 +131,7 @@ impl RegistryClient {
         out: &mut impl std::io::Write,
     ) -> Result<String> {
         use sha2::{Digest, Sha256};
-        let url = self.api(&format!(
-            "/{}/{namespace}/{name}/{version}/download",
-            self.kind.path()
-        ));
+        let url = self.api(&format!("/packs/{namespace}/{name}/{version}/download"));
         let mut response = self
             .http
             .get(&url)
@@ -260,10 +230,7 @@ impl RegistryClient {
         version: &str,
         undo: bool,
     ) -> Result<Value> {
-        let url = self.api(&format!(
-            "/{}/{namespace}/{name}/{version}/yank",
-            self.kind.path()
-        ));
+        let url = self.api(&format!("/packs/{namespace}/{name}/{version}/yank"));
         let response = self
             .http
             .post(&url)
@@ -401,8 +368,9 @@ pub async fn fetch_pack(
     cache_home: Option<&Path>,
     namespace: &str,
     name: &str,
+    version: Option<&str>,
 ) -> Result<RegistryPack> {
-    let coordinate = resolve_pack_coordinate(client, namespace, name, None).await?;
+    let coordinate = resolve_pack_coordinate(client, namespace, name, version).await?;
     let coordinate_label = format!(
         "{}/{}@{}",
         coordinate.namespace, coordinate.name, coordinate.version
