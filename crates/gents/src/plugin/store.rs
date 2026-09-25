@@ -97,6 +97,10 @@ pub struct InstalledPlugin {
     /// The authority the operator granted at install; absent means sealed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted: Option<crate::plugin::Manifold>,
+    /// The plugin's `TOOL.md`, kept with the install so a tool needs nothing
+    /// from the pack at call time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 impl InstalledPlugin {

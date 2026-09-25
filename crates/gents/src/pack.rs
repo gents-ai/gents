@@ -151,6 +151,27 @@ pub struct PackPlugin {
     /// nothing, which is the right default for a pure transform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifold: Option<serde_json::Value>,
+    /// Markdown a model reads to use the plugin as a tool:
+    /// `plugins/<name>/TOOL.md`. Absent, the description is all it gets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+/// Largest `TOOL.md` a plugin may ship: a model reads it on every turn the
+/// tool is offered.
+pub const MAX_TOOL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
+
+/// A plugin's `TOOL.md` as text, refused when it is not UTF-8 or too long to
+/// hand a model.
+pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String> {
+    anyhow::ensure!(
+        bytes.len() <= MAX_TOOL_INSTRUCTIONS_BYTES,
+        "plugin {plugin:?}'s TOOL.md is {} bytes; the limit is {} KiB",
+        bytes.len(),
+        MAX_TOOL_INSTRUCTIONS_BYTES / 1024
+    );
+    String::from_utf8(bytes.to_vec())
+        .with_context(|| format!("plugin {plugin:?}'s TOOL.md is not UTF-8 text"))
 }
 
 /// Where a plugin's compiled artifact must live inside a pack, by
@@ -243,6 +264,14 @@ impl PackPlugin {
             anyhow::ensure!(
                 is_distributable_asset_path(source),
                 "unsafe plugin source path: {source:?}"
+            );
+        }
+        if let Some(instructions) = &self.instructions {
+            anyhow::ensure!(
+                *instructions == format!("{PLUGIN_ARTIFACT_PREFIX}{}/TOOL.md", self.name),
+                "plugin {:?} instructions must be plugins/{}/TOOL.md, got {instructions:?}",
+                self.name,
+                self.name
             );
         }
         anyhow::ensure!(
@@ -445,6 +474,13 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             plugin.name,
             plugin.artifact
         );
+        if let Some(instructions) = &plugin.instructions {
+            anyhow::ensure!(
+                unique.contains(instructions),
+                "pack declares the plugin {:?} but not its instructions {instructions:?} as an asset",
+                plugin.name
+            );
+        }
     }
     anyhow::ensure!(
         manifest.metadata.kind != PackKind::Plugins || !manifest.metadata.plugins.is_empty(),
@@ -676,6 +712,7 @@ mod tests {
             language: "rust".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             manifold: None,
+            instructions: None,
         }
     }
 

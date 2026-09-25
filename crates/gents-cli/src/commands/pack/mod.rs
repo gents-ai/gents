@@ -478,12 +478,18 @@ pub(crate) fn install_pack_plugins<'a>(
         .plugins
         .iter()
         .map(|plugin| {
+            let instructions = plugin
+                .instructions
+                .as_deref()
+                .map(|path| gents::pack::tool_instructions(&plugin.name, asset(path)?))
+                .transpose()?;
             super::plugin::install_from_pack(
                 home,
                 &manifest.metadata.namespace,
                 &manifest.version,
                 plugin,
                 asset(&plugin.artifact)?,
+                instructions,
                 consent,
             )
         })

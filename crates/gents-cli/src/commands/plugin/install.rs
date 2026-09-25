@@ -155,3 +155,71 @@ mod tests {
         assert!(archive.asset("README.md").is_ok());
     }
 }
+
+#[cfg(test)]
+mod instruction_tests {
+    use crate::commands::plugin::store;
+
+    /// A pack whose plugin ships a TOOL.md installs it with the plugin, and the
+    /// model-facing tool shows that markdown rather than the one-line description.
+    #[tokio::test]
+    async fn a_plugins_tool_markdown_is_what_the_model_sees() {
+        let afb = crate::commands::plugin::testing::build_plugin_afb(
+            "echo",
+            b"fn main() { println!(\"{{}}\"); }",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tools");
+        std::fs::create_dir_all(root.join("plugins/echo")).unwrap();
+        std::fs::write(root.join("plugins/echo.afb"), &afb).unwrap();
+        std::fs::write(root.join("README.md"), "# tools").unwrap();
+        let markdown = "# echo\n\nReturns its input unchanged.";
+        std::fs::write(root.join("plugins/echo/TOOL.md"), markdown).unwrap();
+        let language = afterburner_cloud::Afb::from_bytes(&afb)
+            .unwrap()
+            .manifest
+            .package
+            .language;
+        std::fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "manifest_version": 1, "name": "tools", "namespace": "team", "version": "1.0.0",
+                "description": "Tools", "authors": ["team"], "tags": [], "kind": "plugins",
+                "assets": ["README.md", "plugins/echo.afb", "plugins/echo/TOOL.md"],
+                "plugins": [{"name": "echo", "description": "Echo tool.",
+                             "artifact": "plugins/echo.afb", "language": language,
+                             "input_schema": {"type": "object"},
+                             "instructions": "plugins/echo/TOOL.md"}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let home = tempfile::tempdir().unwrap();
+
+        crate::commands::pack::install_pack_plugins(
+            home.path(),
+            archive.manifest(),
+            |path| archive.asset(path),
+            false,
+        )
+        .unwrap();
+
+        let record = store::read_record(home.path(), "team", "echo").unwrap();
+        assert_eq!(record.instructions.as_deref(), Some(markdown));
+        let executor = std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        )));
+        let tool = gents::plugin::tool::PluginTool::resolve(
+            executor,
+            &gents::document_config::PluginToolRef {
+                plugin: "team/echo".into(),
+                digest: None,
+            },
+        )
+        .unwrap();
+        let definition = gents::llm::tool::ToolDyn::definition(&tool, String::new()).await;
+        assert_eq!(definition.description, markdown);
+    }
+}

@@ -48,6 +48,7 @@ pub(crate) fn install_from_pack(
     pack_version: &str,
     plugin: &gents::pack::PackPlugin,
     artifact_bytes: &[u8],
+    instructions: Option<String>,
     consent: bool,
 ) -> Result<store::InstalledPlugin> {
     let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
@@ -64,6 +65,7 @@ pub(crate) fn install_from_pack(
         language: plugin.language.clone(),
         declaration: plugin.clone(),
         granted,
+        instructions,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -185,6 +187,7 @@ pub(crate) fn declaration_from_artifact(
         // The AFB manifest has no model-facing input schema.
         input_schema: serde_json::json!({"type": "object"}),
         manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
+        instructions: None,
     })
 }
 

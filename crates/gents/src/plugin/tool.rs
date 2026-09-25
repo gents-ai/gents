@@ -35,7 +35,10 @@ impl PluginTool {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),
-            description: record.declaration.description.clone(),
+            description: record
+                .instructions
+                .clone()
+                .unwrap_or_else(|| record.declaration.description.clone()),
             parameters: record.declaration.input_schema.clone(),
         };
         Ok(Self {

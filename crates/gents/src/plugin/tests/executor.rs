@@ -23,6 +23,7 @@ pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
         language: "rust".into(),
         declaration,
         granted: None,
+        instructions: None,
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)

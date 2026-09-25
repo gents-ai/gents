@@ -427,6 +427,7 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         language: language.to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
+        instructions: None,
     }
 }
 
@@ -521,6 +522,7 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         language: "rust".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
+        instructions: None,
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
@@ -658,4 +660,27 @@ fn retry_backoff_doubles_and_is_capped() {
     assert_eq!(crate::plugin::retry_backoff(2), Duration::from_secs(2));
     assert_eq!(crate::plugin::retry_backoff(4), Duration::from_secs(8));
     assert_eq!(crate::plugin::retry_backoff(40), Duration::from_secs(60));
+}
+
+#[test]
+fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
+    let mut plugin: PackPlugin = serde_json::from_value(serde_json::json!({
+        "name": "lint", "description": "Lints", "artifact": "plugins/lint.afb",
+        "language": "rust", "input_schema": {"type": "object"},
+        "instructions": "plugins/lint/TOOL.md",
+    }))
+    .unwrap();
+    plugin.validate().unwrap();
+    plugin.instructions = Some("plugins/other/TOOL.md".into());
+    assert!(plugin.validate().is_err(), "another plugin's instructions");
+    plugin.instructions = Some("plugins/lint/README.md".into());
+    assert!(plugin.validate().is_err(), "not a TOOL.md");
+
+    assert_eq!(
+        crate::pack::tool_instructions("lint", b"# lint\nUse it.").unwrap(),
+        "# lint\nUse it."
+    );
+    assert!(crate::pack::tool_instructions("lint", &[0xff, 0xfe]).is_err());
+    let oversized = vec![b'a'; crate::pack::MAX_TOOL_INSTRUCTIONS_BYTES + 1];
+    assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }

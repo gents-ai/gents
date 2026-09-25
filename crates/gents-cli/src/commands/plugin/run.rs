@@ -132,6 +132,7 @@ mod tests {
             digest: format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
             language: "rust".to_owned(),
             granted: None,
+            instructions: None,
             declaration: crate::commands::plugin::declaration_from_artifact(
                 &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
             )
@@ -168,8 +169,16 @@ mod tests {
         });
         // No declared authority: never replace this with artifact capabilities.
         declaration.manifold = None;
-        super::super::install_from_pack(home.path(), "team", "1.0.0", &declaration, &bytes, false)
-            .unwrap();
+        super::super::install_from_pack(
+            home.path(),
+            "team",
+            "1.0.0",
+            &declaration,
+            &bytes,
+            None,
+            false,
+        )
+        .unwrap();
         let record = store::read_record(home.path(), "team", "echo").unwrap();
         assert_eq!(record.declaration, declaration);
         let runner = PluginRunner::compile(&bytes, &record.declaration).unwrap();
@@ -191,6 +200,7 @@ mod tests {
             "1.0.0",
             &invalid.declaration,
             &bytes,
+            None,
             false
         )
         .is_err());
@@ -247,6 +257,7 @@ mod tests {
             "1.0.0",
             &declaration,
             &bytes,
+            None,
             false,
         )
         .unwrap_err();
@@ -262,11 +273,20 @@ mod tests {
             "1.0.0",
             &declaration,
             &bytes,
+            None,
             true,
         )
         .unwrap();
         assert!(record.granted.is_some());
-        super::super::install_from_pack(home.path(), "team", "1.0.1", &declaration, &bytes, false)
-            .expect("the recorded grant covers the same request");
+        super::super::install_from_pack(
+            home.path(),
+            "team",
+            "1.0.1",
+            &declaration,
+            &bytes,
+            None,
+            false,
+        )
+        .expect("the recorded grant covers the same request");
     }
 }

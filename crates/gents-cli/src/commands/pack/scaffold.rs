@@ -187,6 +187,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
         PackTemplate::PluginTool => {
             manifest["kind"] = json!("plugins");
             let language = scaffold_plugin(dir, &names, args.language.as_deref())?;
+            let (instructions, markdown) = tool_markdown(&names.name);
             manifest["plugins"] = json!([{
                 "name": names.name,
                 "description": format!("{} tool.", names.title),
@@ -194,7 +195,9 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
                 "source": format!("plugins/{}", names.name),
                 "language": language,
                 "input_schema": {"type": "object"},
+                "instructions": instructions,
             }]);
+            files.push((instructions, markdown));
         }
     }
 
@@ -247,6 +250,22 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Where plugin `name`'s `TOOL.md` lives, and a starter for it: the markdown a
+/// model reads to use the plugin as a tool.
+pub(crate) fn tool_markdown(name: &str) -> (String, String) {
+    (
+        format!("plugins/{name}/TOOL.md"),
+        format!(
+            "# {name}\n\n\
+             Use this tool to <what it does, and when a model should reach for it>.\n\n\
+             ## Input\n\n\
+             One JSON object matching the tool's input schema. <Describe each field.>\n\n\
+             ## Output\n\n\
+             One JSON value. <Describe what comes back, and what an error looks like.>\n"
+        ),
+    )
 }
 
 /// Writes the plugin's source for the plugin-tool template.

@@ -445,6 +445,13 @@ fn add_plugin(
             entry["source"] = json!(format!("plugins/{name}"));
         }
     }
+    let (instructions, markdown) = super::scaffold::tool_markdown(name);
+    let instructions_path = pack.dir.join(&instructions);
+    std::fs::create_dir_all(instructions_path.parent().context("instructions parent")?)?;
+    std::fs::write(&instructions_path, markdown)
+        .with_context(|| format!("writing {instructions}"))?;
+    entry["instructions"] = json!(instructions);
+    pack.add_asset(&instructions);
     pack.add_asset(&artifact);
     pack.manifest_list("plugins")?.push(entry);
     Ok(())
@@ -598,6 +605,18 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
             let plugin = plugins.remove(index);
             if let Some(artifact) = plugin["artifact"].as_str() {
                 pack.remove_asset(artifact)?;
+            }
+            if let Some(instructions) = plugin["instructions"].as_str() {
+                pack.remove_asset(instructions)?;
+                let path = pack.dir.join(instructions);
+                if path.is_file() {
+                    std::fs::remove_file(&path)
+                        .with_context(|| format!("removing {}", path.display()))?;
+                }
+                // A prebuilt plugin's directory holds nothing but its TOOL.md.
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::remove_dir(dir);
+                }
             }
             if let Some(source) = plugin["source"].as_str() {
                 let source = pack.dir.join(source);
