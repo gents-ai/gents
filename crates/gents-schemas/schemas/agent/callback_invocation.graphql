@@ -8,6 +8,7 @@ type CallbackInvocation @branchable
     origin: JSON @immutable
     input: JSON @immutable
     idempotency_key: String @immutable
+    caused_by_correlation: String @index @immutable
     lifecycle_state: String @index
     attempts: Int
     action_plan: String

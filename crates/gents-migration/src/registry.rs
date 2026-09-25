@@ -370,7 +370,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_INVOCATION_NAME,
         gents_protocol::schemas::CALLBACK_INVOCATION,
-        "bafyreiacgrllu5orp4gl42owirfknwh2qu2gxpjifxbhptszkxhx5pdooa"
+        "bafyreig6thskmjr5d577za5bvlygnrmpt7wdjtfgwcfyqnei5bbl6aquuq"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_RESULT_NAME,

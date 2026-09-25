@@ -27,7 +27,7 @@ use crate::workspace::{
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
-const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key lifecycle_state attempts action_plan action_journal error claimed_at created_at";
+const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
 const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
@@ -88,6 +88,10 @@ pub struct CallbackInvocationDoc {
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
+    /// The source document's correlation, when its event source names one:
+    /// how a graph run finds the invocations it caused.
+    #[serde(default)]
+    pub caused_by_correlation: Option<String>,
     pub lifecycle_state: String,
     #[serde(default)]
     pub attempts: Option<i64>,
@@ -638,7 +642,9 @@ pub async fn create_pending_invocation(
         "invocation_id": invocation.invocation_id, "owner_agent_did": invocation.owner_agent_did,
         "callback_id": invocation.callback_id, "origin": invocation.origin,
         "input": callback_input_for_storage(&invocation.input),
-        "idempotency_key": invocation.idempotency_key, "lifecycle_state": "pending", "attempts": 0,
+        "idempotency_key": invocation.idempotency_key,
+        "caused_by_correlation": invocation.caused_by_correlation,
+        "lifecycle_state": "pending", "attempts": 0,
         "action_plan": "", "action_journal": "[]", "error": "", "claimed_at": "", "created_at": now
     });
     let variables = serde_json::json!({"input": input});

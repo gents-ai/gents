@@ -169,11 +169,15 @@ pub(super) async fn execute(
     persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
     let input = crate::callback::documents::strip_secret_fields(source.clone());
-    let correlation = handler
-        .correlation_field
-        .and_then(|field| source.get(field))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+    // The invocation carries the correlation it was caused by; a grouped
+    // delivery's input is an array, so the source itself cannot say.
+    let correlation = invocation.caused_by_correlation.clone().or_else(|| {
+        handler
+            .correlation_field
+            .and_then(|field| source.get(field))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
     let failure = match plugins.call(&record, input).await {
         Err(error) => Some(format!("{error:#}")),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(

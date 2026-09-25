@@ -263,27 +263,19 @@ impl CallbackEngine {
             Ok(None) => return Ok(false),
             Err(error) => return Err(error),
         };
+        let delivery = Delivery::Callback {
+            binding,
+            source: &event,
+        };
+        let correlation = match delivery.correlation_field() {
+            Some(field) => self.source_field(collection, doc_id, field).await?,
+            None => None,
+        };
         let (key, input, origin) = if event.group.is_some() {
-            let delivery = Delivery::Callback {
-                binding,
-                source: &event,
-            };
             delivery.validate_group()?;
-            let field = delivery
-                .correlation_field()
-                .ok_or_else(|| anyhow::anyhow!("group correlation field missing"))?;
-            let query = format!(
-                "{{{collection}(filter:{{_docID:{{_eq:\"{}\"}}}},limit:1){{{field}}}}}",
-                escape_graphql_string(doc_id)
-            );
-            let response = self.node.execute(&query).await;
-            let rows = crate::graphql::rows::<Value>(&response, collection)?;
-            let correlation = rows
-                .first()
-                .and_then(|row| row.get(field))
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("callback group correlation missing"))?;
-            return self.materialize_group(binding, &event, correlation).await;
+            let correlation =
+                correlation.ok_or_else(|| anyhow::anyhow!("callback group correlation missing"))?;
+            return self.materialize_group(binding, &event, &correlation).await;
         } else {
             let input = fetch_source_doc(
                 self.node.as_ref(),
@@ -312,6 +304,7 @@ impl CallbackEngine {
             input,
             origin,
             idempotency_key: key,
+            caused_by_correlation: correlation,
             lifecycle_state: LIFECYCLE_PENDING.to_string(),
             attempts: Some(0),
             action_plan: None,
@@ -321,6 +314,27 @@ impl CallbackEngine {
             created_at: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
         };
         self.publish_invocation(invocation, &callback).await
+    }
+
+    /// One string field of a source document.
+    async fn source_field(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<String>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        crate::graphql::validate_graphql_name(field)?;
+        let query = format!(
+            "{{{collection}(filter:{{_docID:{{_eq:\"{}\"}}}},limit:1){{{field}}}}}",
+            escape_graphql_string(doc_id)
+        );
+        let response = self.node.execute(&query).await;
+        Ok(crate::graphql::rows::<Value>(&response, collection)?
+            .first()
+            .and_then(|row| row.get(field))
+            .and_then(Value::as_str)
+            .map(str::to_owned))
     }
 
     async fn publish_invocation(
@@ -414,6 +428,7 @@ impl CallbackEngine {
                     group_key: group_key.clone(),
                 },
                 idempotency_key: group_key,
+                caused_by_correlation: Some(correlation.to_owned()),
                 lifecycle_state: LIFECYCLE_PENDING.into(),
                 attempts: Some(0),
                 action_plan: None,
