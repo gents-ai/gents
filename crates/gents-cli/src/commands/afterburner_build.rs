@@ -106,8 +106,79 @@ pub(crate) fn compile(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
+    let _progress_to_stderr = StdoutToStderr::start()?;
     dispatch_compile(dir, local, out_path, false)
         .with_context(|| format!("compiling {owner} from {}", dir.display()))
+}
+
+/// While alive, whatever the process or the toolchains it starts write to
+/// standard output goes to standard error. The compiler reports progress on
+/// stdout, and a gents command's stdout carries only its JSON report.
+struct StdoutToStderr {
+    #[cfg(unix)]
+    saved: libc::c_int,
+    #[cfg(windows)]
+    saved: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl StdoutToStderr {
+    fn start() -> Result<Self> {
+        use std::io::Write;
+        std::io::stdout().flush().context("flushing standard output")?;
+        #[cfg(unix)]
+        {
+            // SAFETY: dup/dup2 on the process's own standard descriptors; each
+            // result is checked before it is used.
+            let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
+            anyhow::ensure!(saved >= 0, "could not save standard output");
+            if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+                unsafe { libc::close(saved) };
+                anyhow::bail!("could not send compiler output to standard error");
+            }
+            Ok(Self { saved })
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{
+                GetStdHandle, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+            };
+            // SAFETY: reads and swaps the process's standard handles; restored on drop.
+            unsafe {
+                let saved = GetStdHandle(STD_OUTPUT_HANDLE);
+                anyhow::ensure!(
+                    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE)) != 0,
+                    "could not send compiler output to standard error"
+                );
+                Ok(Self { saved })
+            }
+        }
+    }
+}
+
+impl Drop for StdoutToStderr {
+    fn drop(&mut self) {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        #[cfg(unix)]
+        // SAFETY: restores the descriptor saved in `start`, then releases the copy.
+        unsafe {
+            if libc::dup2(self.saved, libc::STDOUT_FILENO) < 0 {
+                tracing::error!("could not restore standard output after compiling");
+            }
+            libc::close(self.saved);
+        }
+        #[cfg(windows)]
+        // SAFETY: restores the handle saved in `start`.
+        unsafe {
+            if windows_sys::Win32::System::Console::SetStdHandle(
+                windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE,
+                self.saved,
+            ) == 0
+            {
+                tracing::error!("could not restore standard output after compiling");
+            }
+        }
+    }
 }
 
 /// Serializes every `dispatch_compile` call in this crate's tests. Each
