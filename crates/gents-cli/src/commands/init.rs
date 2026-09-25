@@ -1226,12 +1226,9 @@ fn resolve_tool_root_for_package(
     }
 }
 
-/// Canonical init profile: the sampling and execution budgets the legacy flat
-/// profile carried are owned by referenced `InferenceSampling`/
-/// `InferenceExecution` documents, never copied back as flat fields. Sampling
-/// stays unbound. `initialize_runtime_home` binds the execution document this
-/// leaves unset, because the self-config tool can only edit an execution the
-/// profile already names.
+/// Sampling stays unbound. `initialize_runtime_home` binds the execution
+/// document this leaves unset, because the self-config tool can only edit an
+/// execution its profile already names.
 fn standard_inference_profile(
     agent_did: &str,
     profile_id: &str,
@@ -1258,9 +1255,8 @@ fn default_inference_execution_id_for_profile(profile_id: &str) -> String {
     format!("{profile_id}-execution")
 }
 
-/// Every limit stays unset so the canonical defaults keep owning each bound
-/// and init duplicates none of them. The document exists so a freshly
-/// initialized home has an execution the configurator can reach at all.
+/// Every limit stays unset so the canonical defaults keep owning each bound;
+/// the document exists only so the configurator has an execution to reach.
 fn standard_inference_execution(agent_did: &str, execution_id: &str) -> InferenceExecution {
     InferenceExecution {
         agent_did: agent_did.to_string(),
@@ -1629,11 +1625,9 @@ mod tests {
         );
     }
 
-    /// The knob has to be reachable on a home the configurator did not build:
-    /// init binds the execution document, the config tool reaches it through
-    /// the ordinary bound-document path, and the runtime resolves the limit it
-    /// wrote. The grant is the configurator's own profile category; its
-    /// no-lockout and preview guardrails are separate policy, not this fence.
+    /// The grant exercised here is the configurator's own profile category;
+    /// its no-lockout and preview guardrails are separate policy, not this
+    /// fence.
     #[tokio::test]
     async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
         use gents::llm::tool::ToolDyn;
