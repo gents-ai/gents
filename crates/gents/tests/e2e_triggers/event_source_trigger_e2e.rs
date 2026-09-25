@@ -339,7 +339,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        is_routed_ready_after(snapshot, 0)
+        is_routed_ready_after(snapshot, 0) && snapshot.default_behavior_id == default_behavior_id
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -370,6 +370,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
+            && snapshot.default_behavior_id == default_behavior_id
     })
     .await;
     assert!(
