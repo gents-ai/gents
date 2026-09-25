@@ -7,15 +7,30 @@
 //! phase, rather than allowing each polling helper a fresh latency budget.
 
 use super::*;
+use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use std::sync::Arc;
 use support::mocks::fake_llm::{ChatAction, FakeLlm};
 use tokio::time::timeout;
 
 const ENROLL_BUDGET: Duration = Duration::from_secs(30);
+/// Readiness reaches a client only over the runtime's push replicator; it has
+/// no snapshot or bootstrap path. DefraDB acks a pushed block whose DAG is
+/// incomplete as soon as the root is registered pending and leaves recovery
+/// to the receiver's per-root backoff ladder, and
+/// `p2p::PENDING_RECOVERY_WORST_CASE_SECS` is the pinned dependency's bound
+/// from that root's first fetch dispatch to its fifth. A fresh peer walking
+/// aged readiness history therefore needs that pacing on top of the ordinary
+/// enrollment budget before a timeout means anything is wedged.
+const AGED_HISTORY_RECOVERY: Duration = Duration::from_secs(p2p::PENDING_RECOVERY_WORST_CASE_SECS);
 const TURN_BUDGET: Duration = Duration::from_secs(20);
 const RECONNECT_BUDGET: Duration = Duration::from_secs(20);
 const MODEL_DELAY: Duration = Duration::from_secs(2);
 const RETURN_TO_OBSERVER_BUDGET: Duration = Duration::from_secs(2);
+const READINESS_PROBE_INTERVAL: Duration = Duration::from_secs(3);
+/// The sampler runs beside enrollment, so a probe never delays it; a probe that
+/// cannot answer within this is reported as such, so one stalled query does
+/// not silence the samples after it.
+const READINESS_PROBE_BUDGET: Duration = Duration::from_millis(750);
 const REPLY: &str = "PAIRING_CONTRACT_ASSISTANT_REPLY";
 const OFFLINE_REPLY: &str = "PAIRING_CONTRACT_OFFLINE_REPLY";
 const FOLLOWUP_REPLY: &str = "PAIRING_CONTRACT_CONTINUED_REPLY";
@@ -170,26 +185,72 @@ async fn run_contract_with_streaming_cadence(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
         core.set_selected_agent_did(Some(agent_did.clone()));
+        let enroll_budget = if readiness_timestamp.is_some() {
+            ENROLL_BUDGET + AGED_HISTORY_RECOVERY
+        } else {
+            ENROLL_BUDGET
+        };
+        let probe = ReadinessProbe::of(&core, &graphql, &agent_did);
         let enrollment_started = Instant::now();
-        let enrollment = timeout(ENROLL_BUDGET, async {
+        let phases = std::sync::Mutex::new(Vec::<(&'static str, u128)>::new());
+        let reached = |phase: &'static str| {
+            phases
+                .lock()
+                .expect("enrollment phase log")
+                .push((phase, enrollment_started.elapsed().as_millis()));
+        };
+        let sampler = tokio::spawn({
+            let probe = probe.clone();
+            async move {
+                let mut ticks = tokio::time::interval(READINESS_PROBE_INTERVAL);
+                loop {
+                    ticks.tick().await;
+                    let progress = probe.sample(READINESS_PROBE_BUDGET).await;
+                    tracing::info!(
+                        elapsed_ms = enrollment_started.elapsed().as_millis(),
+                        progress = %progress,
+                        "readiness replication progress",
+                    );
+                }
+            }
+        });
+        let enrollment = timeout(enroll_budget, async {
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+            reached("enrollment_token");
             let pending = core.request_status_enrollment_with_label(&status, Some("Contract")).await?;
             anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
+            reached("enrollment_offered");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
+            reached("runtime_saw_request");
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+            reached("operator_approved");
             wait_for_chat_ready_enrollment(&core, &agent_did).await?;
+            reached("chat_ready_route");
             wait_for_client_behavior_readiness(&core, &agent_did).await?;
+            reached("client_readiness_row");
             if let Some(expected) = readiness_timestamp.as_deref() {
                 wait_for_readiness_revision(&core, &agent_did, expected).await?;
+                reached("client_readiness_revision");
             }
             anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "runtime principal replicated to app");
             Ok::<_, anyhow::Error>(())
         }).await;
+        sampler.abort();
+        // A sample still in flight would query the client node while it shuts
+        // down.
+        let _ = sampler.await;
         if !matches!(enrollment, Ok(Ok(()))) {
+            let progress = probe.sample(Duration::from_secs(5)).await;
             let diagnostics = pairing_diagnostics(&core, &graphql).await;
             core.shutdown().await?;
-            bail!("enroll/approve/readiness exceeded 30s or failed: {enrollment:?}; {diagnostics}");
+            bail!(
+                "enroll/approve/readiness exceeded {enroll_budget:?} or failed: {enrollment:?}; phases_ms={:?}; {progress}; {diagnostics}",
+                phases.lock().expect("enrollment phase log"),
+            );
         }
+        // The probe holds the client's node; the store stays locked against
+        // the reopen below until it is released.
+        drop(probe);
         tracing::info!(elapsed_ms = enrollment_started.elapsed().as_millis(), "app enrollment ready");
         assert_observer_did_not_overflow(&core).await?;
 
@@ -597,6 +658,119 @@ async fn wait_for_replicated_reply(
     Ok(())
 }
 
+/// DefraDB makes a replicated document queryable only once its whole commit
+/// ancestry has transferred and merged, and a fresh peer has no owner index to
+/// short-circuit that walk. The readiness row can therefore stay absent on the
+/// client while every block is already in flight, so the merged head height
+/// against the runtime's — not row presence — separates an undelivered head
+/// from historical DAG transfer that has not finished.
+///
+/// It owns the client handles it reads, so the sampler runs beside enrollment
+/// rather than inside it.
+#[derive(Clone)]
+struct ReadinessProbe {
+    node: Arc<gents::defra_node::EmbeddedNode>,
+    p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
+    store: Arc<gents_desktop_core::client::ObservedStore>,
+    graphql: String,
+    agent: String,
+}
+
+impl ReadinessProbe {
+    fn of(core: &ClientCore, graphql: &str, agent: &str) -> Self {
+        Self {
+            node: core.node_arc(),
+            p2p: core.p2p().clone(),
+            store: core.store().clone(),
+            graphql: graphql.to_owned(),
+            agent: agent.to_owned(),
+        }
+    }
+
+    async fn sample(&self, budget: Duration) -> String {
+        let Self {
+            node,
+            p2p,
+            store,
+            graphql,
+            agent,
+        } = self;
+        let probe = async {
+            let escaped = escape_graphql_string(agent);
+            let runtime_row = graphql_query(
+                graphql,
+                &format!(
+                    r#"{{ AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{_docID updated_at}} }}"#
+                ),
+            )
+            .await;
+            let Some(doc_id) = runtime_row
+                .as_ref()
+                .ok()
+                .and_then(|row| row.pointer("/data/AgentBehaviorReadiness/0/_docID"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+            else {
+                return format!("readiness_progress=runtime_row_absent({runtime_row:?})");
+            };
+            let heads = format!(
+                r#"{{ _commits(docID: "{}", depth: 1) {{height fieldName}} }}"#,
+                escape_graphql_string(&doc_id)
+            );
+            let runtime_height = graphql_query(graphql, &heads)
+                .await
+                .ok()
+                .and_then(|response| highest_commit(response.pointer("/data/_commits")));
+            let client_heads = node.execute(&heads).await;
+            let client_height = client_heads
+                .data
+                .as_ref()
+                .and_then(|data| highest_commit(data.get("_commits")));
+            let client_rows = store
+                .snapshot()
+                .behavior_readiness
+                .iter()
+                .filter(|row| &row.agent_did == agent)
+                .count();
+            let sync = match p2p.sync_status().await {
+                Ok(status) => match JsonP2pSyncStatusAdapter.adapt(&status) {
+                    Ok(status) => format!(
+                        "pending_dags={} persisted_pending_dags={} quarantined_dags={} fetch_exhausted={} fetch_deferred_unavailable={} provider_rotations={} missing_link_retries={} car_requested_cids={} car_present_cids={} next_retry_ms={:?}",
+                        status.pending_dags,
+                        status.persisted_pending_dags,
+                        status.quarantined_pending_dags,
+                        status.pending_dag_fetch_exhausted,
+                        status.pending_dag_fetch_deferred_unavailable,
+                        status.provider_rotations,
+                        status.missing_link_retries,
+                        status.car_requested_cids,
+                        status.car_present_cids,
+                        status.next_pending_retry_in_ms,
+                    ),
+                    Err(error) => format!("undecodable({error})"),
+                },
+                Err(error) => format!("unavailable({error})"),
+            };
+            format!(
+                "readiness_progress=doc_id={doc_id} runtime_head_height={runtime_height:?} client_head_height={client_height:?} client_projected_rows={client_rows} client_commits_errors={:?}; client_sync={sync}",
+                client_heads.errors,
+            )
+        };
+        match timeout(budget, probe).await {
+            Ok(progress) => progress,
+            Err(_) => format!("readiness_progress=probe exceeded {budget:?}"),
+        }
+    }
+}
+
+fn highest_commit(commits: Option<&Value>) -> Option<i64> {
+    commits?
+        .as_array()?
+        .iter()
+        .filter_map(|commit| commit.get("height").and_then(Value::as_i64))
+        .max()
+}
+
 async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentRequest { _docID request_id agent_did requester_did lifecycle_state terminal_output } }";
     let client = core.node().execute(query).await;
@@ -691,8 +865,15 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
 }
 
 /// Production Amy had about 2,500 readiness revisions when a clean mobile
-/// client enrolled. Seed real signed runtime writes before creating the app;
-/// this must not become a dependency on old history for current readiness.
+/// client enrolled. Seed real signed runtime writes before creating the app.
+///
+/// A fresh peer cannot read the current revision before the whole ancestry
+/// transfers and merges: DefraDB resolves a replicated composite's document
+/// identity by walking parents to genesis, and it materializes nothing until
+/// that closure is complete. The enrollment budget therefore covers the whole
+/// history, and the revision count must stay below DefraDB's merge-depth
+/// limit, past which the walk fails terminally and the root is quarantined
+/// rather than retried.
 async fn seed_readiness_history(
     graphql: &str,
     agent: &str,
