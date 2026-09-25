@@ -2457,8 +2457,11 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    let fx = crate::workspace::artifact_test_fixture(&[]).await;
+    // Load the Lean cases before the fixture claims its execution lease: the
+    // first load may wait behind `lake build` under the shared proofs lock for
+    // longer than the lease, which would expire the grant under test.
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
+    let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
     let mut exercised = 0;
     for case in cases {
