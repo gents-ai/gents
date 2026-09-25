@@ -3093,7 +3093,6 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
-    let lifecycle = lock_lifecycle_superseding_start(&state).await;
     let authority = EffectiveManagedAuthority::from_request(
         request.tool_ceiling,
         request.tool_root.as_deref(),
@@ -3104,7 +3103,10 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
+    // Refused before taking the lifecycle lock, which supersedes an
+    // in-flight start: a refused restart must not cancel it.
     refuse_renaming_home(&agent_home, &request.agent_name).await?;
+    let lifecycle = lock_lifecycle_superseding_start(&state).await;
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&agent_home).await?;
     let previous_did = match &port {
