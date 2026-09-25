@@ -597,6 +597,13 @@ def claimedFailureObservation : Option TraceObservation :=
   observe (fixture "queued_steering_claimed_failure_before_execution_retains_input_without_transcript"
     [.enqueue, .claimWithoutBegin, .terminate .failBeforeStream])
 
+/-- This is the claimed, pre-execution interrupt path. It establishes the
+request/queue/input boundary, not native execution-generation fencing. -/
+def claimedInterruptObservation : Option TraceObservation :=
+  observe (fixture "queued_steering_claimed_interrupt_before_execution_retains_input_without_transcript"
+    [.enqueue, .claimWithoutBegin, .latchInterrupt,
+      .terminate .interruptClaimed, .capture, .send])
+
 def beforePublicationObservation : Option TraceObservation :=
   observe (fixture "queued_steering_owned_execution_cannot_send_before_publication"
     [.enqueue, .claimAndBegin, .capture, .send])
@@ -687,26 +694,29 @@ def guardObservations : List GuardObservation :=
 
 def traceObservations : List TraceObservation :=
   match interruptedBeforeClaimObservation, admissionRejectedObservation,
-      claimedFailureObservation, beforePublicationObservation, publicationHandoffObservation,
+      claimedFailureObservation, claimedInterruptObservation,
+      beforePublicationObservation, publicationHandoffObservation,
       preparationFailureObservation, interruptedDuringPreparationObservation,
       captureConflictObservation, publicationReplayObservation with
-  | some interrupted, some rejected, some failed, some before, some published,
+  | some interrupted, some rejected, some failed, some claimedInterrupted,
+      some before, some published,
       some preparationFailed, some interruptedPreparation, some captureBlocked, some replayed =>
-      [interrupted, rejected, failed, before, published, preparationFailed,
+      [interrupted, rejected, failed, claimedInterrupted, before, published, preparationFailed,
         interruptedPreparation, captureBlocked, replayed]
-  | _, _, _, _, _, _, _, _, _ => []
+  | _, _, _, _, _, _, _, _, _, _ => []
 
 theorem interrupted_trace_is_derived : interruptedBeforeClaimObservation.isSome = true := by native_decide
 theorem publication_trace_is_derived : publicationHandoffObservation.isSome = true := by native_decide
 theorem admission_rejection_trace_is_derived : admissionRejectedObservation.isSome = true := by native_decide
 theorem claimed_failure_trace_is_derived : claimedFailureObservation.isSome = true := by native_decide
+theorem claimed_interrupt_trace_is_derived : claimedInterruptObservation.isSome = true := by native_decide
 theorem before_publication_trace_is_derived : beforePublicationObservation.isSome = true := by native_decide
 theorem preparation_failure_trace_is_derived : preparationFailureObservation.isSome = true := by native_decide
 theorem interrupted_preparation_trace_is_derived :
     interruptedDuringPreparationObservation.isSome = true := by native_decide
 theorem capture_conflict_trace_is_derived : captureConflictObservation.isSome = true := by native_decide
 theorem publication_replay_trace_is_derived : publicationReplayObservation.isSome = true := by native_decide
-theorem nine_traces_exported : traceObservations.length = 9 := by native_decide
+theorem ten_traces_exported : traceObservations.length = 10 := by native_decide
 theorem prepublication_send_is_rejected :
     (beforePublicationObservation.map (·.providerSendPermitted)) = some false := by native_decide
 theorem published_send_is_permitted :
@@ -728,6 +738,12 @@ theorem claimed_failure_finishes_queue_and_retains_input :
       (observation.lifecycleState, observation.acceptedInput,
         observation.queueActive, observation.admissionVisible,
         observation.canonicalAuthoredCount)) = some ("failed", true, none, true, 0) := by native_decide
+theorem claimed_interrupt_finishes_queue_and_blocks_send :
+    (claimedInterruptObservation.map fun observation =>
+      (observation.lifecycleState, observation.acceptedInput,
+        observation.queueActive, observation.admissionVisible,
+        observation.canonicalAuthoredCount, observation.providerSendPermitted)) =
+      some ("interrupted", true, none, true, 0, false) := by native_decide
 theorem capture_conflict_blocks_send :
     (captureConflictObservation.map (·.providerSendPermitted)) = some false := by native_decide
 theorem exact_replay_does_not_duplicate_authored_owner :
