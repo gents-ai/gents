@@ -59,10 +59,10 @@ every runtime you pair with to 0.19.0 together.
   deterministic, and runs can be resumed. `gents eval init` interviews a model
   to draft, validate and optionally pilot a new definition pack.
 - `gents optimization` runs prompt optimization jobs over eval runs. The
-  promotion gates and paired sign-flip permutation test are modeled in Lean.
-  A job is promotable only when its baseline pack matches the live
-  configuration, and promote and revert publish guarded by digest
-  expectations of that configuration.
+  promotion gates are modeled in Lean; the paired sign-flip permutation test
+  they consult runs in Rust. A job is promotable only when its baseline pack
+  matches the live configuration. Promotion publishes only if the frozen
+  configuration is unchanged, and revert only if the promoted prompt is.
 - Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
   and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
