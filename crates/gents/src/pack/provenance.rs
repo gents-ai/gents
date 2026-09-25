@@ -64,9 +64,11 @@ pub(super) async fn apply_pack_documents(
 
 /// Live digest of every document [`apply_pack_documents`] is about to create
 /// or replace, read ahead of the install so the caller can pass the result
-/// back as `expected`. An absent document carries no expectation, because a
-/// create cannot conflict; one that exists is expected to still match this
-/// read when the install transaction finally runs.
+/// back as `expected`. Every target carries an expectation, so the guarded
+/// scope is exactly the set of documents the install writes: a document that
+/// exists is expected to still match this read, and one that is absent
+/// carries `digest: None`, which the desired-state owner reads as "expected
+/// absent" and refuses if another writer created it meanwhile.
 pub(super) async fn replaced_document_expectations(
     access: &ConfigAccess,
     config: &PackConfig,
@@ -90,23 +92,21 @@ pub(super) async fn replaced_document_expectations(
                     let id = document.add[document.collection.unique_field()]
                         .as_str()
                         .context("pack document is missing logical ID")?;
-                    if let Some(live) = crate::config_client::read_desired_state_document_in_txn(
+                    let digest = crate::config_client::read_desired_state_document_in_txn(
                         txn,
                         document.collection,
                         owner,
                         id,
                     )
                     .await?
-                    {
-                        expected.push(crate::config_client::DesiredStateExpectation {
-                            collection: document.collection,
-                            owner: owner.to_owned(),
-                            id: id.to_owned(),
-                            digest: Some(crate::config_client::desired_state_document_digest(
-                                &live,
-                            )?),
-                        });
-                    }
+                    .map(|live| crate::config_client::desired_state_document_digest(&live))
+                    .transpose()?;
+                    expected.push(crate::config_client::DesiredStateExpectation {
+                        collection: document.collection,
+                        owner: owner.to_owned(),
+                        id: id.to_owned(),
+                        digest,
+                    });
                 }
                 Ok(expected)
             })
@@ -326,7 +326,8 @@ mod tests {
         }))?;
 
         let expected = replaced_document_expectations(&access, &config).await?;
-        assert!(expected.is_empty());
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].digest, None);
         apply_pack_documents(&access, &config, expected).await?;
 
         let expected = replaced_document_expectations(&access, &config).await?;
@@ -363,6 +364,226 @@ mod tests {
         assert_eq!(stale.drifted[0].id, "shared-tools");
 
         node.shutdown().await;
+        Ok(())
+    }
+
+    /// A document-pack install is the guarded publication `ApplyReconcile.publishIf`
+    /// models, so its verdict and post-state are taken from that model's
+    /// executable cases rather than restated here. The pack layer refines the
+    /// model by fixing the expectation scope to exactly the documents the pack
+    /// writes, which is what [`replaced_document_expectations`] emits; a case
+    /// whose scope the pack cannot express — empty, or naming a document the
+    /// candidate does not write — is out of range here and stays with the
+    /// desired-state consumer of the same cases. Each Lean `content` maps onto
+    /// the `display_name` of a `Tools` document keyed by the Lean id: the Lean
+    /// collection is ignored because the scenario's ids are distinct across
+    /// collections, and Lean `refs` are not materialized because reference
+    /// closure is a separate gate with its own cases.
+    #[tokio::test]
+    async fn pack_install_matches_lean_publish_if_cases() -> Result<()> {
+        use crate::lean_vocab_test::lean_publish_if_cases;
+        use defra_node::EmbeddedNode;
+        use serde_json::json;
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::sync::Arc;
+
+        const OWNER: &str = "did:key:pack-owner";
+
+        fn tools_document(id: &str, content: &str) -> serde_json::Value {
+            json!({
+                "agent_did": OWNER,
+                "tools_id": id,
+                "display_name": content,
+                "tags": ["gents:pack:test_pack"],
+            })
+        }
+
+        async fn write(access: &ConfigAccess, documents: Vec<serde_json::Value>) -> Result<()> {
+            if documents.is_empty() {
+                return Ok(());
+            }
+            let plan = crate::config_client::DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|value| crate::config_client::DesiredStateApplyDocument {
+                        collection: Collection::Tools,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )?;
+            access
+                .transact("test.pack.lean.write", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        crate::config_client::apply_desired_state_plan(txn, plan).await
+                    })
+                })
+                .await?;
+            Ok(())
+        }
+
+        async fn live_content(access: &ConfigAccess, id: &str) -> Result<Option<String>> {
+            let id = id.to_owned();
+            access
+                .transact("test.pack.lean.read", |txn| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        Ok(crate::config_client::read_desired_state_document_in_txn(
+                            txn,
+                            Collection::Tools,
+                            OWNER,
+                            &id,
+                        )
+                        .await?
+                        .and_then(|live| live["display_name"].as_str().map(ToOwned::to_owned)))
+                    })
+                })
+                .await
+        }
+
+        let mut exercised = Vec::new();
+        let mut out_of_range = Vec::new();
+        for case in lean_publish_if_cases() {
+            let candidate_content = |target: &crate::lean_vocab_test::LeanApplyDocRef| {
+                case.candidate
+                    .iter()
+                    .find(|row| &row.target == target)
+                    .map(|row| row.content.as_str())
+            };
+            if case.expected.is_empty()
+                || !case
+                    .expected
+                    .iter()
+                    .all(|row| candidate_content(&row.target).is_some())
+            {
+                out_of_range.push(case.name.as_str());
+                continue;
+            }
+
+            let node = Arc::new(EmbeddedNode::builder().build().await?);
+            crate::ensure_runtime_schemas(&node).await?;
+            crate::document_config::ensure_agent_principal(&node, OWNER).await?;
+            let access = ConfigAccess::Local(node.clone());
+
+            // State when the install reads what it will replace: a Lean
+            // expectation row with no content means the document is absent.
+            write(
+                &access,
+                case.expected
+                    .iter()
+                    .filter_map(|row| {
+                        row.content
+                            .as_deref()
+                            .map(|content| tools_document(&row.target.id, content))
+                    })
+                    .collect(),
+            )
+            .await?;
+
+            let config: PackConfig = serde_json::from_value(json!({
+                "agent_principal": {"agent_did": OWNER},
+                "tools": case
+                    .expected
+                    .iter()
+                    .map(|row| {
+                        let content = candidate_content(&row.target).context("candidate row")?;
+                        Ok(tools_document(&row.target.id, content))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            }))?;
+
+            let expected = replaced_document_expectations(&access, &config).await?;
+            assert_eq!(
+                expected
+                    .iter()
+                    .map(|row| (row.id.as_str(), row.digest.is_some()))
+                    .collect::<BTreeMap<_, _>>(),
+                case.expected
+                    .iter()
+                    .map(|row| (row.target.id.as_str(), row.content.is_some()))
+                    .collect::<BTreeMap<_, _>>(),
+                "case {} capture",
+                case.name
+            );
+
+            // Another writer moves the rows to the case's pre-publication
+            // desired state after the capture and before the install writes.
+            write(
+                &access,
+                case.pre_desired
+                    .iter()
+                    .map(|row| tools_document(&row.target.id, &row.content))
+                    .collect(),
+            )
+            .await?;
+
+            let outcome = apply_pack_documents(&access, &config, expected).await;
+            assert_eq!(
+                outcome.is_ok(),
+                case.applied,
+                "case {}: {outcome:?}",
+                case.name
+            );
+            if let Err(error) = &outcome {
+                assert!(
+                    crate::config_client::stale_expectation(error).is_some(),
+                    "case {}: {error:#}",
+                    case.name
+                );
+            }
+
+            // Durable post-state over every document the case names: a refused
+            // install leaves the concurrent writer's rows live and writes no
+            // member of the candidate set, and an applied one writes them all.
+            let keys = case
+                .expected
+                .iter()
+                .map(|row| row.target.id.as_str())
+                .chain(case.pre_desired.iter().map(|row| row.target.id.as_str()))
+                .chain(case.candidate.iter().map(|row| row.target.id.as_str()))
+                .chain(
+                    case.expected_after_desired
+                        .iter()
+                        .map(|row| row.target.id.as_str()),
+                )
+                .collect::<BTreeSet<_>>();
+            for id in keys {
+                let want = case
+                    .expected_after_desired
+                    .iter()
+                    .find(|row| row.target.id == id)
+                    .map(|row| row.content.clone());
+                assert_eq!(
+                    live_content(&access, id).await?,
+                    want,
+                    "case {} document {id}",
+                    case.name
+                );
+            }
+
+            node.shutdown().await;
+            exercised.push(case.name.as_str());
+        }
+        // A case reaches these lists only after all of its assertions hold, so
+        // emitter drift fails loudly instead of silently dropping coverage.
+        assert_eq!(
+            exercised,
+            [
+                "all_expectations_match",
+                "target_drifted",
+                "closure_document_drifted",
+                "expected_absent_but_present",
+            ]
+        );
+        assert_eq!(
+            out_of_range,
+            [
+                "expected_absent_and_absent",
+                "expected_present_but_absent",
+                "empty_scope_is_publish",
+            ]
+        );
         Ok(())
     }
 }

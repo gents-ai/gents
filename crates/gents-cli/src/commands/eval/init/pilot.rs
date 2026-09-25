@@ -179,7 +179,8 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         },
         &|_name| None,
     )?;
-    gents::pack::install_pack_documents(&ctx.access, &config, Vec::new())
+    let expected = gents::pack::pack_document_expectations(&ctx.access, &config).await?;
+    gents::pack::install_pack_documents(&ctx.access, &config, expected)
         .await
         .context("installing the drafted definition pack into the home")?;
     Ok(())
