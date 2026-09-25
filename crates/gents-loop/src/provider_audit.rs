@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 pub type ProviderAuditReceiver = Arc<Mutex<mpsc::Receiver<ProviderAuditObservation>>>;
 pub const MAX_AUDIT_EVENTS_PER_SSE: usize = 3;
 
-pub async fn drain_ready(receiver: &ProviderAuditReceiver) -> Vec<ProviderAuditObservation> {
+pub fn drain_ready(receiver: &ProviderAuditReceiver) -> Vec<ProviderAuditObservation> {
     let mut receiver = receiver
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -19,7 +19,7 @@ pub async fn drain_ready(receiver: &ProviderAuditReceiver) -> Vec<ProviderAuditO
     observations
 }
 
-pub async fn try_recv_one(receiver: &ProviderAuditReceiver) -> Option<ProviderAuditObservation> {
+pub fn try_recv_one(receiver: &ProviderAuditReceiver) -> Option<ProviderAuditObservation> {
     receiver
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

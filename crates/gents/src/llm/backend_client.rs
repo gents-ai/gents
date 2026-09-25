@@ -77,6 +77,49 @@ pub(crate) enum BackendClient {
     ),
 }
 
+impl BackendClient {
+    /// Read the built client's URI builder, not the mutable backend document.
+    /// These are the completion paths used by the pinned Rig clients; body
+    /// capture independently records the destination used at send time.
+    pub(crate) fn replay_issuer(
+        &self,
+    ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
+        let request = match self {
+            Self::OpenAiChatCompletions(client) => client.post("/chat/completions")?,
+            Self::OpenAiResponses(client) => client.post("/responses")?,
+            Self::OpenRouter(client) => client.post("/chat/completions")?,
+            Self::ChatGptCodex(client) => client.post("/responses")?,
+            Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
+            Self::XaiGrokResponses(client) => client.post("/responses")?,
+            Self::ClaudeSubscription(_) => {
+                rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI)
+            }
+        }
+        .body(())?;
+        Ok(
+            gents_loop::rendered_request::transport::replay_issuer_for_destination(
+                self.provider_family(),
+                request.uri(),
+            ),
+        )
+    }
+
+    /// Family recorded from the branch that actually constructed this client.
+    pub(crate) fn provider_family(&self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions(_) | Self::OpenAiResponses(_) => {
+                BackendProviderKind::OpenAiCompatible.as_str()
+            }
+            Self::OpenRouter(_) => BackendProviderKind::OpenRouter.as_str(),
+            Self::ChatGptCodex(_) => BackendProviderKind::ChatGptCodex.as_str(),
+            Self::XaiGrokChatCompletions(_) | Self::XaiGrokResponses(_) => {
+                BackendProviderKind::XaiGrokOAuth.as_str()
+            }
+            Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
+        }
+    }
+}
+
 /// Build the provider completion client for `behavior`'s
 /// `backend_provider_kind` (and, where the provider has one, its configured
 /// `openai_wire_api`).
@@ -302,7 +345,15 @@ mod tests {
         let client = build_backend_client(node.clone(), &chat, "key", Duration::from_secs(1))
             .await
             .expect("chat completions client builds without I/O");
-        assert!(matches!(client, BackendClient::OpenAiChatCompletions(_)));
+        assert!(matches!(&client, BackendClient::OpenAiChatCompletions(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::OpenAiCompatible.as_str()
+        );
+        let chat_issuer = client
+            .replay_issuer()
+            .expect("built chat URI")
+            .expect("route");
 
         let responses = test_behavior(
             BackendProviderKind::OpenAiCompatible,
@@ -311,7 +362,17 @@ mod tests {
         let client = build_backend_client(node.clone(), &responses, "key", Duration::from_secs(1))
             .await
             .expect("responses client builds without I/O");
-        assert!(matches!(client, BackendClient::OpenAiResponses(_)));
+        assert!(matches!(&client, BackendClient::OpenAiResponses(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::OpenAiCompatible.as_str()
+        );
+        let responses_issuer = client
+            .replay_issuer()
+            .expect("built Responses URI")
+            .expect("route");
+        assert_eq!(chat_issuer.family, responses_issuer.family);
+        assert_ne!(chat_issuer.endpoint, responses_issuer.endpoint);
 
         let mut openrouter = test_behavior(
             BackendProviderKind::OpenRouter,
@@ -321,7 +382,11 @@ mod tests {
         let client = build_backend_client(node.clone(), &openrouter, "key", Duration::from_secs(1))
             .await
             .expect("openrouter client builds without I/O");
-        assert!(matches!(client, BackendClient::OpenRouter(_)));
+        assert!(matches!(&client, BackendClient::OpenRouter(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::OpenRouter.as_str()
+        );
     }
 
     async fn seed_oauth_credential(
@@ -373,7 +438,11 @@ mod tests {
         let client = build_backend_client(node.clone(), &codex, "key", Duration::from_secs(5))
             .await
             .expect("Codex client builds from the seeded credential without network I/O");
-        assert!(matches!(client, BackendClient::ChatGptCodex(_)));
+        assert!(matches!(&client, BackendClient::ChatGptCodex(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::ChatGptCodex.as_str()
+        );
 
         let xai_chat = test_behavior(
             BackendProviderKind::XaiGrokOAuth,
@@ -388,7 +457,11 @@ mod tests {
         let client = build_backend_client(node.clone(), &xai_chat, "key", Duration::from_secs(5))
             .await
             .expect("Grok Chat Completions client builds without network I/O");
-        assert!(matches!(client, BackendClient::XaiGrokChatCompletions(_)));
+        assert!(matches!(&client, BackendClient::XaiGrokChatCompletions(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::XaiGrokOAuth.as_str()
+        );
 
         let xai_responses = test_behavior(
             BackendProviderKind::XaiGrokOAuth,
@@ -404,7 +477,11 @@ mod tests {
             build_backend_client(node.clone(), &xai_responses, "key", Duration::from_secs(5))
                 .await
                 .expect("Grok Responses client builds without network I/O");
-        assert!(matches!(client, BackendClient::XaiGrokResponses(_)));
+        assert!(matches!(&client, BackendClient::XaiGrokResponses(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::XaiGrokOAuth.as_str()
+        );
 
         let claude = test_behavior(
             BackendProviderKind::ClaudeCliSubscription,
@@ -419,6 +496,18 @@ mod tests {
         let client = build_backend_client(node.clone(), &claude, "key", Duration::from_secs(5))
             .await
             .expect("Claude subscription client builds without network I/O");
-        assert!(matches!(client, BackendClient::ClaudeSubscription(_)));
+        assert!(matches!(&client, BackendClient::ClaudeSubscription(_)));
+        assert_eq!(
+            client.provider_family(),
+            BackendProviderKind::ClaudeCliSubscription.as_str()
+        );
+        assert_eq!(
+            client
+                .replay_issuer()
+                .expect("built Claude URI")
+                .unwrap()
+                .family,
+            BackendProviderKind::ClaudeCliSubscription.as_str()
+        );
     }
 }

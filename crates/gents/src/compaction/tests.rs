@@ -2047,6 +2047,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
             lifecycle.request(),
             lifecycle.request_commit_cid().unwrap(),
             "model".to_string(),
+            None,
         ),
         sink,
     );

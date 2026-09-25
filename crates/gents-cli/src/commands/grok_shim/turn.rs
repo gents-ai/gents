@@ -821,14 +821,15 @@ impl TurnManager {
         // use the bound principal as requester, just like submission and
         // AgentSession creation; foreign rows must never become UI turns.
         let principal = escape_graphql_string(&self.config.agent_did);
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
-                agent_did: {{ _eq: "{principal}" }}, requester_did: {{ _eq: "{principal}" }},
-                created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }} }},
-                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ {fields} }} }}"#,
+        let scope = gents::session::public_request_filter(&format!(
+            r#"session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{principal}" }}, requester_did: {{ _eq: "{principal}" }}, created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }}"#,
             escape_graphql_string(session_id),
             escape_graphql_string(&attached_at),
             escape_graphql_string(after),
+        ));
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ {scope} }},
+                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ {fields} }} }}"#,
             fields = gents::SIGNED_REQUEST_FIELDS,
         );
         let response = graphql_with_transaction_retry(
@@ -1352,13 +1353,13 @@ impl TurnManager {
         request: &str,
     ) -> Result<Option<(String, String)>> {
         let principal = escape_graphql_string(&self.config.agent_did);
-        let query = format!(
-            r#"{{AgentRequest(filter:{{request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},
-            agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}}})
-            {{content runtime_source_kind}}}}"#,
+        let scope = gents::session::public_request_filter(&format!(
+            r#"request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}"#,
             escape_graphql_string(request),
             escape_graphql_string(session)
-        );
+        ));
+        let query =
+            format!(r#"{{AgentRequest(filter:{{{scope}}}) {{content runtime_source_kind}}}}"#,);
         let response =
             graphql_with_transaction_retry(&self.node, &query, "read observed human prompt")
                 .await?;
@@ -1792,7 +1793,7 @@ impl TurnManager {
             .unwrap_or_default();
         let query = format!(
             "{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
-            gents::session::session_scope_filter(agent, session, requester),
+            gents::session::public_request_filter(&gents::session::session_scope_filter(agent, session, requester)),
             escape_graphql_string(request),
             gents::SIGNED_REQUEST_FIELDS
         );
@@ -2350,11 +2351,11 @@ impl TurnManager {
             Some(physical),
         )
         .await?;
-        let scope = gents::session::session_scope_filter(
+        let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
             agent,
             session,
             child.child_requester_did.as_deref(),
-        );
+        ));
         let mut seen = HashSet::new();
         let mut requests = Vec::new();
         let mut offset = 0usize;
@@ -3426,7 +3427,7 @@ mod tests {
         let result = node
             .execute(&format!(
                 r#"mutation {{create_AgentRequest(input:{{
-            request_id:"{request}",agent_did:"{principal}",requester_did:"{principal}",
+            request_id:"{request}",purpose:"normal",agent_did:"{principal}",requester_did:"{principal}",
             behavior_id:"{behavior}",session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
             content:"{}",created_at:"{}"}}) {{_docID}}}}"#,
                 escape_graphql_string(content),
@@ -3711,7 +3712,7 @@ mod tests {
         let state = escape_graphql_string(lifecycle_state);
         let now = chrono::Utc::now().to_rfc3339();
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id: "{child}", agent_did: "{owner}", requester_did: {requester}, behavior_id: "{behavior}", session_id: "session-1-child",
+            request_id: "{child}", purpose: "normal", agent_did: "{owner}", requester_did: {requester}, behavior_id: "{behavior}", session_id: "session-1-child",
             caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "test seed child request").unwrap();
@@ -3783,7 +3784,7 @@ mod tests {
         let mut receipts = Vec::new();
         for content in ["selected", "same-label other document"] {
             let result = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-                request_id:"collision", agent_did:"{principal}", requester_did:"{principal}",
+                request_id:"collision", purpose:"normal", agent_did:"{principal}", requester_did:"{principal}",
                 session_id:"session-1", behavior_id:"{behavior}", content:"{content}", lifecycle_state:"pending"
             }}) {{_docID}} }}"#)).await;
             ensure_no_errors(&result, "seed colliding requests").unwrap();
@@ -4129,7 +4130,7 @@ mod tests {
             let result = node
                 .execute(&format!(
                     r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{id}", session_id: "session-1", agent_did: "{}",
+                request_id: "{id}", purpose: "normal", session_id: "session-1", agent_did: "{}",
                 requester_did: {requester}, lifecycle_state: "completed",
                 created_at: "2026-06-04T12:00:00Z"
             }}) {{ _docID }} }}"#,
@@ -4426,7 +4427,7 @@ mod tests {
         let (buffer, sender) = buffer_sender();
         let behavior = gents::default_behavior_id_for_agent(&agent_did);
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
-            request_id:"pane-root", session_id:"session-1", agent_did:"{agent_did}", requester_did:"{agent_did}", behavior_id:"{behavior}", lifecycle_state:"processing"
+            request_id:"pane-root", purpose:"normal", session_id:"session-1", agent_did:"{agent_did}", requester_did:"{agent_did}", behavior_id:"{behavior}", lifecycle_state:"processing"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed pane root").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
@@ -4458,7 +4459,7 @@ mod tests {
                 let requester_field = requester
                     .map(|did| format!("\"{}\"", escape_graphql_string(did)))
                     .unwrap_or_else(|| "null".into());
-                let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{request_id:"{id}", session_id:"session-1-child", agent_did:"{agent_did}", requester_did:{requester_field}, behavior_id:"{behavior}", lifecycle_state:"processing"}}) {{_docID}} }}"#)).await;
+                let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{request_id:"{id}", purpose:"normal", session_id:"session-1-child", agent_did:"{agent_did}", requester_did:{requester_field}, behavior_id:"{behavior}", lifecycle_state:"processing"}}) {{_docID}} }}"#)).await;
                 ensure_no_errors(&response, "seed child followup").unwrap();
                 let doc = gents_protocol::graphql::extract_mutation_doc_id(
                     &json!({"data":response.data}),

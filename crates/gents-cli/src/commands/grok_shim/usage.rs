@@ -208,10 +208,11 @@ async fn descendant_owners(
             .map(|id| format!("\"{}\"", escape_graphql_string(id)))
             .collect::<Vec<_>>()
             .join(",");
+        let scope = gents::session::public_request_filter(&format!("request_id: {{_in: [{ids}]}}"));
         let response = graphql_with_transaction_retry(
             node,
             &format!(
-                r#"{{ AgentRequest(filter: {{request_id: {{_in: [{ids}]}}}}) {{
+                r#"{{ AgentRequest(filter: {{ {scope} }}) {{
             request_id agent_did requester_did session_id
         }} }}"#
             ),

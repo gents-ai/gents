@@ -1606,17 +1606,26 @@ def caseCoverage : List CoverageEntry :=
       "conformance::prompt_assembly::generated_claude_replay_cases_drive_native_messages_body"
       "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (followUpCoverage
       "prompt_assembly_cases"
-      "PromptAssemblyClaudeNarrowingCases"
-      "conformance::prompt_assembly::generated_claude_narrowing_cases_bind_native_evidence_and_replay"
-      "Checks supplied origin and exact reasoning witnesses through native narrowing and the strict replay codec. It does not establish the canonical closing-segment/capture join, checkpoint restoration, complete selected-row collection, or provider prefix acceptance (#1693).")
+      "PromptAssemblyReasoningSuffixCases"
+      "The model exports a provider-neutral historical suffix with physical block indices, issuer route, wire codec and prefix-compatibility premises. A native consumer remains to bind accepted source closure, complete selected rows and exact durable rewrite checkpoints.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayShapeCases"
+      "The model exports paired native-block and original-index shaping, including misaligned-sidecar rejection. Native compaction history must carry source coordinates through block drops without reindexing; a consumer remains.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayPrefixCases"
+      "The model compares selected context exactly and requires the captured reasoning-free conversation to prefix the current provider input. A native consumer must derive both projections from actual built request/capture values and exclude only structural non-prefix fields, not nested payload keys.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyClaudeCheckpointCases"
       "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
-      "Models source-tagged selected assistant occurrences, exact reduction split and required-reasoning survival. A native consumer remains to bind durable aligned coordinate sidecars, canonical resolution, and one prepared provider payload; this model does not prove tag issuance, complete request assembly, or provider prefix acceptance (#1693).")
+      "Models source-tagged selected assistant occurrences, exact reduction split and source association. The protected required split remains to be replaced by an atomic durable full-input rewrite; this model does not prove tag issuance, complete request assembly, or provider prefix acceptance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
@@ -1652,6 +1661,16 @@ def caseCoverage : List CoverageEntry :=
       "DurableReductionCases"
       "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "durable_full_input_rewrite_cases"
+      "DurableFullInputRewriteCases"
+      "The immutable reduction Fact now models exact all-row source association, DID/session/boundary admission, cumulative rewrite retirement, and consumed-lineage preservation. Native still must bind exact built body and canonical observations and atomically commit a session CompactionEntry cursor with its Fact; generated cases have no native adapter yet.")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "durable_session_rewrite_cases"
+      "DurableSessionRewriteCases"
+      "The session cursor and prepared full-input Fact advance in one modeled transition, including idempotent old-pair replay after a newer cursor and no state change on rejected creation. Native must bind both physical writes in one ConfigAccess transaction; generated cases have no native adapter yet.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rolling_compaction_cases"

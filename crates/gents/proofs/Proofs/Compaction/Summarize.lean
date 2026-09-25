@@ -126,8 +126,9 @@ inductive ProtectedReplaySplitError where
   | replay (error : PromptAssembly.ClaudeMap.MapError)
   deriving DecidableEq, Repr
 
-/-- The only replay check here is the existing ClaudeMap owner. Successful
-reduction therefore cannot reinterpret a required tag as summarized history. -/
+/-- A positive client-summary split changes the prefix of every previously
+signed Claude block. The protected split first verifies its exact association;
+the same checkpoint then retires provider replay without editing audit rows. -/
 def prepareProtectedReplayCheckpoint (msgs : List MessageRow)
     (rawIndex maxPrefix : Nat)
     (required : List PromptAssembly.ClaudeMap.ReplayTag)
@@ -140,7 +141,8 @@ def prepareProtectedReplayCheckpoint (msgs : List MessageRow)
     | none => .error .cannotFit
     | some split =>
         let assistantSplit := (msgs.take split |>.filter (fun row => row.role == .assistant)).length
-        (PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows assistantSplit).mapError .replay
+        ((PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows assistantSplit).mapError
+          .replay).map PromptAssembly.ClaudeMap.retireForPrefixRewrite
 
 theorem preparedProtectedReplayCheckpoint_uses_replay_owner
     (msgs : List MessageRow) (rawIndex maxPrefix : Nat)
@@ -152,9 +154,10 @@ theorem preparedProtectedReplayCheckpoint_uses_replay_owner
     ∃ split, protectedPairSafeBoundary msgs rawIndex maxPrefix = some split ∧
       split ≤ maxPrefix ∧
       rows.length = (msgs.filter (fun row => row.role == .assistant)).length ∧
-      PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows
+      ∃ prepared, PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows
         (msgs.take split |>.filter (fun row => row.role == .assistant)).length =
-          .ok checkpoint := by
+          .ok prepared ∧
+          PromptAssembly.ClaudeMap.retireForPrefixRewrite prepared = checkpoint := by
   unfold prepareProtectedReplayCheckpoint at h
   split_ifs at h with haligned
   cases hs : protectedPairSafeBoundary msgs rawIndex maxPrefix with
@@ -163,13 +166,14 @@ theorem preparedProtectedReplayCheckpoint_uses_replay_owner
         simp only [hs] at h
         cases hp : PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows
             (msgs.take split |>.filter (fun row => row.role == .assistant)).length with
-        | error error => simp [hp, Except.mapError] at h
+        | error error => simp [hp, Except.mapError, Except.map] at h
         | ok prepared =>
-            simp [hp, Except.mapError] at h
+            simp [hp, Except.mapError, Except.map] at h
             cases h
             exact ⟨split, rfl,
               protectedPairSafeBoundary_bounded msgs rawIndex maxPrefix split hs,
-              by simpa only [bne_iff_ne, ne_eq, not_not] using haligned, hp⟩
+              by simpa only [bne_iff_ne, ne_eq, not_not] using haligned,
+              prepared, hp, rfl⟩
 
 /-! ## Pair closure of the retained tail -/
 

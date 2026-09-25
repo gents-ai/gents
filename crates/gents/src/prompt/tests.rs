@@ -154,10 +154,14 @@ async fn build_preserves_each_source_through_summary_prepend_even_with_equal_nat
     let first = TaggedMessage {
         message: with_native_id("first"),
         source: Some(tag(1)),
+        physical_header: None,
+        block_indices: Vec::new(),
     };
     let second = TaggedMessage {
         message: with_native_id("second"),
         source: Some(tag(2)),
+        physical_header: None,
+        block_indices: Vec::new(),
     };
     let prompt = builder
         .build(

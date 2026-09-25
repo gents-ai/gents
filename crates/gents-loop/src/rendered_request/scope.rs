@@ -103,9 +103,9 @@ struct ScopeState {
     /// resend would be a completion body with no arm, which the transport now
     /// refuses to send.
     claimed: Option<PendingCapture>,
-    /// Fingerprint of the exact transport body whose durable write succeeded
-    /// for `claimed`. A byte-identical SSE reconnect can forward immediately;
-    /// a changed body still reaches the sink and its integrity check.
+    /// Fingerprint of the exact transport body and destination whose durable
+    /// write succeeded for `claimed`. A matching SSE reconnect can forward;
+    /// a changed body or URI still reaches the sink's integrity check.
     durable_body_fingerprint: Option<[u8; 32]>,
     /// Every arm this scope has seen, in order. Tests need this because an arm
     /// the transport never claims is silently replaced by the next one, so a
@@ -138,6 +138,7 @@ pub struct RequestCaptureScope {
     state: Mutex<ScopeState>,
     admission_join_lookup: AdmissionJoinLookup,
     auxiliary_output_sink: Option<AuxiliaryOutputSink>,
+    compaction_provider_family: Option<String>,
 }
 
 impl RequestCaptureScope {
@@ -148,6 +149,7 @@ impl RequestCaptureScope {
             state: Mutex::new(ScopeState::default()),
             admission_join_lookup: Arc::new(no_admission_join),
             auxiliary_output_sink: None,
+            compaction_provider_family: None,
         }
     }
 
@@ -161,6 +163,10 @@ impl RequestCaptureScope {
 
     pub fn set_auxiliary_output_sink(&mut self, sink: AuxiliaryOutputSink) {
         self.auxiliary_output_sink = Some(sink);
+    }
+
+    pub fn set_compaction_provider_family(&mut self, family: String) {
+        self.compaction_provider_family = Some(family);
     }
 
     pub fn context(&self) -> &RenderedRequestContext {
@@ -333,7 +339,7 @@ pub async fn drain_ready_audit() -> Vec<ProviderAuditObservation> {
     let Some(receiver) = receiver else {
         return Vec::new();
     };
-    crate::provider_audit::drain_ready(&receiver).await
+    crate::provider_audit::drain_ready(&receiver)
 }
 
 pub fn auxiliary_output_sink() -> Option<AuxiliaryOutputSink> {
@@ -423,7 +429,7 @@ pub async fn flush_received_auxiliary_partial() -> anyhow::Result<bool> {
         );
         (identity, Arc::clone(&audit.receiver))
     };
-    while let Some(audit) = crate::provider_audit::try_recv_one(&receiver).await {
+    while let Some(audit) = crate::provider_audit::try_recv_one(&receiver) {
         anyhow::ensure!(
             (audit.capture_scope, audit.turn, audit.attempt) == identity,
             "queued auxiliary audit changed source"
@@ -622,17 +628,31 @@ pub async fn capture_body(
     pending: PendingCapture,
     source: super::RenderedRequestSource,
     provider_endpoint: Option<String>,
+    provider_route_path_sha256: Option<String>,
     body: &[u8],
 ) -> std::result::Result<(), (CaptureFailureStage, anyhow::Error)> {
     let request_json: serde_json::Value = serde_json::from_slice(body)
         .map_err(|error| (CaptureFailureStage::DecodeBody, anyhow::Error::from(error)))?;
     let components = super::RenderedRequestComponents::from_provider_body(request_json, source);
     let admission_join = (scope.admission_join_lookup)(&pending.capture_scope);
+    let capture_kind = pending
+        .capture_scope
+        .parse::<gents_protocol::rendered_request::CaptureScope>()
+        .map_err(|error| (CaptureFailureStage::BuildFact, anyhow::Error::from(error)))?
+        .kind;
+    let mut context = scope.context().clone();
+    if matches!(
+        capture_kind,
+        CaptureScopeKind::Compaction | CaptureScopeKind::CompactionFallback
+    ) {
+        context.provider_family = scope.compaction_provider_family.clone();
+    }
     let rendered = super::build_rendered_completion_request(
-        scope.context(),
+        &context,
         &pending.capture_scope,
         source,
         provider_endpoint,
+        provider_route_path_sha256,
         pending.turn_index,
         pending.attempt,
         pending.assembly_trace,
@@ -726,6 +746,7 @@ mod tests {
             behavior_id: "behavior".to_string(),
             session_id: "session".to_string(),
             model_name: "test-model".to_string(),
+            provider_family: None,
         }
     }
 
@@ -762,9 +783,7 @@ mod tests {
                 })
                 .unwrap();
             drop(reservation);
-            let first = try_recv_one(&receiver)
-                .await
-                .expect("first audit observation");
+            let first = try_recv_one(&receiver).expect("first audit observation");
             assert!(matches!(
                 first.event,
                 ClaudeAuditEvent::BlockStart { index: 0, .. }

@@ -744,6 +744,27 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn same_capture_key_cannot_rebind_its_transport_route() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let mut first = rendered_fixture();
+        first.provenance_json["provider_family"] = json!("OpenAiCompatible");
+        first.provenance_json["provider_endpoint"] = json!("https://example.test");
+        first.provenance_json["provider_route_path_sha256"] = json!("path-a");
+        sink.capture(first.clone()).await.expect("first capture");
+
+        let mut rebound = first;
+        rebound.provenance_json["provider_route_path_sha256"] = json!("path-b");
+        let error = sink.capture(rebound).await.unwrap_err();
+        assert!(
+            error.to_string().contains("integrity violation"),
+            "{error:#}"
+        );
+        node.shutdown().await;
+    }
+
     /// The collection name is interpolated as a bare GraphQL identifier, where
     /// escaping cannot defend. It is a compile-time constant from the protocol
     /// catalog, and this is the fence that keeps it a valid identifier if that

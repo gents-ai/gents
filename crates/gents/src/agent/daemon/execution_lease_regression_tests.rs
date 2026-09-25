@@ -3,6 +3,7 @@
 struct NonTerminalProvider {
     empty_forever: bool,
     active_chunks: Option<usize>,
+    reasoning_prefix: bool,
     stream_calls: Arc<AtomicUsize>,
     empty_deltas: Arc<AtomicUsize>,
 }
@@ -89,6 +90,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     let mut daemon = BehaviorDaemon::new(
         node.clone(),
         behavior.clone(),
+        None,
         Arc::new(LeaseLossProvider),
         prompt.preamble().to_owned(),
         Arc::new(vec![
@@ -174,6 +176,7 @@ impl CompletionModel for NonTerminalProvider {
         Self {
             empty_forever: false,
             active_chunks: None,
+            reasoning_prefix: false,
             stream_calls: Arc::new(AtomicUsize::new(0)),
             empty_deltas: Arc::new(AtomicUsize::new(0)),
         }
@@ -195,6 +198,23 @@ impl CompletionModel for NonTerminalProvider {
         crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
+        if self.reasoning_prefix {
+            let inner: rig::streaming::StreamingResult<()> =
+                Box::pin(stream::unfold(0usize, |index| async move {
+                    if index == 0 {
+                        Some((
+                            Ok(RawStreamingChoice::ReasoningDelta {
+                                id: None,
+                                reasoning: "received deadline reasoning".into(),
+                            }),
+                            1,
+                        ))
+                    } else {
+                        std::future::pending().await
+                    }
+                }));
+            return Ok(StreamingCompletionResponse::stream(inner));
+        }
         let endless = self.empty_forever;
         let active_chunks = self.active_chunks;
         let empty_deltas = self.empty_deltas.clone();
@@ -249,6 +269,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let model = NonTerminalProvider {
         empty_forever,
         active_chunks: None,
+        reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
@@ -262,6 +283,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let mut daemon = BehaviorDaemon::new(
         node.clone(),
         behavior.clone(),
+        None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
         Arc::new(Vec::new()),
@@ -506,6 +528,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let model = NonTerminalProvider {
         empty_forever: false,
         active_chunks: Some(8),
+        reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
@@ -519,6 +542,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let mut daemon = BehaviorDaemon::new(
         node.clone(),
         behavior.clone(),
+        None,
         Arc::new(model.clone()),
         prompt.preamble().to_owned(),
         Arc::new(Vec::new()),
@@ -591,15 +615,179 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         panic!("completed streaming request must select its canonical message: {data}");
     };
     let (header, message) = crate::session::load_canonical_message_from_node(
-        &node, &message_doc_id, &agent_did, requester_did.as_deref(),
-    ).await.unwrap();
-    assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
-    assert_eq!(header.outcome, gents_protocol::output::OutputOutcome::Complete);
+        &node,
+        &message_doc_id,
+        &agent_did,
+        requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        header.request_doc_id.as_deref(),
+        Some(request_doc_id.as_str())
+    );
+    assert_eq!(
+        header.outcome,
+        gents_protocol::output::OutputOutcome::Complete
+    );
     let content = gents_protocol::transcript::present_message(&message).body_markdown;
     assert!(
         content.contains("chunk-8"),
         "final output was truncated: {data}"
     );
+    assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn deadline_closes_received_openai_reasoning_without_another_provider_call() {
+    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+    use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
+
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut behavior = test_behavior();
+    {
+        let behavior = Arc::get_mut(&mut behavior).unwrap();
+        behavior.deadline_duration = Duration::from_secs(3);
+        behavior.stream_liveness_timeout = Duration::from_secs(8);
+        behavior.provider_idle_timeout = Duration::from_secs(8);
+    }
+    let agent_did = behavior.agent_did().to_owned();
+    let identity = behavior.principal_identity().clone();
+    let model = NonTerminalProvider {
+        empty_forever: false,
+        active_chunks: None,
+        reasoning_prefix: true,
+        stream_calls: Arc::new(AtomicUsize::new(0)),
+        empty_deltas: Arc::new(AtomicUsize::new(0)),
+    };
+    let prompt = LayeredPromptBuilder::for_behavior(
+        &behavior.system_prompt,
+        &behavior.behavior_id,
+        &[],
+        false,
+        &[],
+    );
+    let mut daemon = BehaviorDaemon::new(
+        node.clone(),
+        behavior.clone(),
+        None,
+        Arc::new(model.clone()),
+        prompt.preamble().to_owned(),
+        Arc::new(Vec::new()),
+        prompt,
+        FailurePolicy::default(),
+        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+        Arc::new(StartupBarrier::ready_for_test()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        1,
+        crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    )
+    .unwrap();
+    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let doc_id = request.doc_id.clone();
+    let session = gents_protocol::session::AgentSession {
+        session_id: request.session_id.clone(),
+        agent_did: agent_did.clone(),
+        requester_did: request.requester_did.clone(),
+        behavior_id: behavior.behavior_id.clone(),
+        created_at: request.created_at.clone(),
+        closed_at: None,
+        title: Some(gents_protocol::session::SessionTitle {
+            text: "deadline reasoning regression".into(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        }),
+        tags: vec![],
+        provenance: None,
+        observation: None,
+    };
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let seeded = node
+        .execute(&format!(
+            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        daemon.process_request(request, shutdown_rx),
+    )
+    .await
+    .expect("request deadline must stop the nonterminal provider");
+
+    let escaped = crate::graphql::escape_graphql_string(&doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+        "failed"
+    );
+    let result = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        ))
+        .await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let rows = result.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| decode_output_segment_row(row).unwrap())
+        .collect::<Vec<_>>();
+    let closes = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.segment.close,
+                Some(SourceClose::Closed {
+                    outcome: OutputOutcome::Partial,
+                    ..
+                })
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        closes.len(),
+        1,
+        "deadline must close the owned received prefix once"
+    );
+    let facts = rows
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let Some(SourceClose::Closed { stream_bytes, .. }) = &closes[0].segment.close else {
+        unreachable!("filtered partial close")
+    };
+    assert!((0..stream_bytes.len()).any(|stream| {
+        reconstruct_stream(
+            &facts,
+            &[],
+            &[],
+            &PayloadRef {
+                close_doc_id: closes[0].doc_id.clone(),
+                stream: u32::try_from(stream).unwrap(),
+            },
+        )
+        .is_ok_and(|content| content.text == "received deadline reasoning")
+    }));
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
     node.shutdown().await;
 }

@@ -25,6 +25,7 @@ pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's officia
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayOrigin {
     ClaudeSubscription,
+    AcceptedProvider,
     Foreign,
     Missing,
     Ambiguous,
@@ -70,6 +71,8 @@ pub enum ReplayEvidenceError {
         "alteredReasoning: required continuation differs from its canonical reasoning witness"
     )]
     AlteredReasoning,
+    #[error("unsupportedContinuationOrigin: legacy Claude-only replay cannot accept Responses provenance")]
+    UnsupportedOrigin,
 }
 
 /// Lean `ClaudeMap.narrowReplay`'s native narrowing stage. Strict wire encoding
@@ -90,6 +93,9 @@ pub fn narrow_assistant_content(
         ReplayUsage::RequiredCurrent { origin, expected } => {
             match origin {
                 ReplayOrigin::ClaudeSubscription => {}
+                ReplayOrigin::AcceptedProvider => {
+                    return Err(ReplayEvidenceError::UnsupportedOrigin)
+                }
                 ReplayOrigin::Foreign => return Err(ReplayEvidenceError::ForeignOrigin),
                 ReplayOrigin::Missing => return Err(ReplayEvidenceError::MissingOrigin),
                 ReplayOrigin::Ambiguous => return Err(ReplayEvidenceError::AmbiguousOrigin),
@@ -124,6 +130,8 @@ impl ReplayTag {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaggedAssistantRow {
     pub source: Option<ReplayTag>,
+    pub physical_header: Option<String>,
+    pub block_indices: Vec<usize>,
     pub id: Option<String>,
     pub content: Vec<AssistantContent>,
 }
@@ -133,6 +141,7 @@ pub struct ReplayCheckpoint {
     pub required: Vec<ReplayTag>,
     pub prefix_rows: Vec<TaggedAssistantRow>,
     pub retained: Vec<TaggedAssistantRow>,
+    pub retired: Vec<ReplayTag>,
 }
 
 /// Supplied by the canonical header/close/capture owner, never reconstructed
@@ -141,6 +150,25 @@ pub struct ReplayCheckpoint {
 pub struct ResolvedReplayEvidence {
     pub origin: ReplayOrigin,
     pub reasoning: ReasoningWitness,
+    pub issuer: ReplayIssuer,
+    pub wire: ReplayWire,
+    pub physical_header: String,
+    pub complete: bool,
+    pub prefix_compatible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplayIssuer {
+    pub family: String,
+    /// Opaque, injectively encoded transport route identity supplied by the
+    /// capture owner; never infer this from a provider-assigned message ID.
+    pub endpoint: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplayWire {
+    ClaudeMessages,
+    Responses,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -155,6 +183,10 @@ pub enum ReplayCheckpointError {
     RequiredInPrefix,
     #[error("missingRequiredReplay")]
     MissingRequired,
+    #[error("invalidReplayGap")]
+    InvalidReplayGap,
+    #[error("retiredReplayRequired")]
+    RetiredReplayRequired,
     #[error("{0}")]
     Evidence(#[from] ReplayEvidenceError),
     #[error("{0}")]
@@ -215,7 +247,54 @@ pub fn prepare_replay_checkpoint(
         required,
         prefix_rows: rows[..split].to_vec(),
         retained: rows[split..].to_vec(),
+        retired: Vec::new(),
     })
+}
+
+/// A client-side prefix rewrite invalidates every signed block already in
+/// the selected provider input, including signed rows in the retained suffix.
+/// The original rows remain in the canonical audit transcript.
+pub fn retire_for_prefix_rewrite(mut checkpoint: ReplayCheckpoint) -> ReplayCheckpoint {
+    checkpoint.retired.extend(
+        checkpoint
+            .prefix_rows
+            .iter()
+            .chain(&checkpoint.retained)
+            .filter_map(|row| row.source.clone()),
+    );
+    checkpoint.required.clear();
+    checkpoint
+}
+
+/// Complete the retained signed-reasoning run from its first required Claude
+/// source onward. Each promoted source still needs canonical origin and exact
+/// reasoning evidence at restore; an unassociated signed row cannot join it.
+pub fn complete_required_reasoning_run(
+    required: &[ReplayTag],
+    rows: &[TaggedAssistantRow],
+) -> Result<Vec<ReplayTag>, ReplayCheckpointError> {
+    let mut started = false;
+    let mut completed = required.to_vec();
+    for row in rows {
+        if row
+            .source
+            .as_ref()
+            .is_some_and(|tag| required.contains(tag))
+        {
+            started = true;
+        }
+        if !started || reasoning_witness(&row.content).is_empty() {
+            continue;
+        }
+        let tag = row
+            .source
+            .as_ref()
+            .ok_or(ReplayCheckpointError::InvalidReplayGap)?;
+        if !completed.contains(tag) {
+            completed.push(tag.clone());
+        }
+    }
+    Ok(completed)
 }
 
 /// One transient, checked assistant occurrence for the same downstream body
@@ -237,6 +316,13 @@ pub fn restore_and_narrow_replay(
     checkpoint: &ReplayCheckpoint,
     mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
 ) -> Result<Vec<NarrowedAssistantRow>, ReplayCheckpointError> {
+    if checkpoint
+        .required
+        .iter()
+        .any(|tag| checkpoint.retired.contains(tag))
+    {
+        return Err(ReplayCheckpointError::RetiredReplayRequired);
+    }
     let rows = checkpoint
         .prefix_rows
         .iter()
@@ -248,6 +334,25 @@ pub fn restore_and_narrow_replay(
         rows,
         checkpoint.prefix_rows.len(),
     )?;
+    let mut kept = false;
+    let mut gap = false;
+    for row in &checked.retained {
+        if reasoning_witness(&row.content).is_empty() {
+            continue;
+        }
+        if row
+            .source
+            .as_ref()
+            .is_some_and(|tag| checked.required.contains(tag))
+        {
+            if gap {
+                return Err(ReplayCheckpointError::InvalidReplayGap);
+            }
+            kept = true;
+        } else if kept {
+            gap = true;
+        }
+    }
     checked
         .retained
         .into_iter()
@@ -279,6 +384,156 @@ pub fn restore_and_narrow_replay(
                 content,
                 wire_blocks,
             })
+        })
+        .collect()
+}
+
+/// The composed projection expands the authenticated run before strict
+/// origin, witness and codec checks are applied to every retained row.
+pub fn restore_contiguous_replay(
+    checkpoint: &ReplayCheckpoint,
+    resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+) -> Result<Vec<NarrowedAssistantRow>, ReplayCheckpointError> {
+    let mut completed = checkpoint.clone();
+    completed.required =
+        complete_required_reasoning_run(&checkpoint.required, &checkpoint.retained)?;
+    restore_and_narrow_replay(&completed, resolve)
+}
+
+struct ReasoningCandidate<'a> {
+    source: Option<&'a ReplayTag>,
+    physical_header: Option<&'a str>,
+    block_index: Option<usize>,
+    indices_complete: bool,
+    parts: &'a [ReasoningContent],
+}
+
+fn reasoning_candidates(rows: &[TaggedAssistantRow]) -> Vec<ReasoningCandidate<'_>> {
+    let mut candidates = Vec::new();
+    for row in rows {
+        let indices_complete = row.block_indices.len() == row.content.len()
+            && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
+        for (position, block) in row.content.iter().enumerate() {
+            if let AssistantContent::Reasoning(reasoning) = block {
+                candidates.push(ReasoningCandidate {
+                    source: row.source.as_ref(),
+                    physical_header: row.physical_header.as_deref(),
+                    block_index: row.block_indices.get(position).copied(),
+                    indices_complete,
+                    parts: &reasoning.content,
+                });
+            }
+        }
+    }
+    candidates
+}
+
+fn replayable_reasoning(wire: ReplayWire, parts: &[ReasoningContent]) -> bool {
+    if parts.is_empty() {
+        return false;
+    }
+    match wire {
+        ReplayWire::ClaudeMessages => encode_assistant_content(&[AssistantContent::Reasoning(
+            gents_protocol::message::Reasoning {
+                id: None,
+                content: parts.to_vec(),
+            },
+        )])
+        .is_ok(),
+        ReplayWire::Responses => {
+            parts
+                .iter()
+                .any(|part| matches!(part, ReasoningContent::Encrypted(bytes) if !bytes.is_empty()))
+                && parts.iter().all(|part| match part {
+                    ReasoningContent::Encrypted(bytes) => !bytes.is_empty(),
+                    ReasoningContent::Summary(_) => true,
+                    _ => false,
+                })
+        }
+    }
+}
+
+/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`: only the longest
+/// authenticated, complete, prefix-compatible suffix of physical reasoning
+/// candidates survives. This pure projection consumes independently bound
+/// header/close/capture evidence; it never manufactures that evidence from
+/// native bytes or provider message IDs. Ordinary blocks stay in their rows.
+pub fn restore_historical_reasoning_suffix(
+    checkpoint: &ReplayCheckpoint,
+    issuer: &ReplayIssuer,
+    wire: ReplayWire,
+    mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+) -> Vec<TaggedAssistantRow> {
+    let candidates = reasoning_candidates(&checkpoint.retained);
+    let valid =
+        |candidate: &ReasoningCandidate<'_>,
+         resolve: &mut dyn FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>| {
+            let (Some(tag), Some(header), Some(index)) = (
+                candidate.source,
+                candidate.physical_header,
+                candidate.block_index,
+            ) else {
+                return false;
+            };
+            if !tag.is_provider()
+                || checkpoint.retired.contains(tag)
+                || !candidate.indices_complete
+                || candidates
+                    .iter()
+                    .filter(|other| {
+                        other.source == Some(tag)
+                            && other.physical_header == Some(header)
+                            && other.block_index == Some(index)
+                    })
+                    .count()
+                    != 1
+                || !replayable_reasoning(wire, candidate.parts)
+            {
+                return false;
+            }
+            let evidence_rows = resolve(tag);
+            let [evidence] = evidence_rows.as_slice() else {
+                return false;
+            };
+            evidence.origin == ReplayOrigin::AcceptedProvider
+                && &evidence.issuer == issuer
+                && evidence.wire == wire
+                && evidence.physical_header == header
+                && evidence.complete
+                && evidence.prefix_compatible
+                && evidence.reasoning.iter().any(|(block_index, parts)| {
+                    *block_index == index && parts.as_slice() == candidate.parts
+                })
+        };
+    let kept = candidates
+        .iter()
+        .rev()
+        .take_while(|candidate| valid(candidate, &mut resolve))
+        .count();
+    let mut to_strip = candidates.len() - kept;
+    checkpoint
+        .retained
+        .iter()
+        .map(|row| {
+            let valid_indices = row.block_indices.len() == row.content.len()
+                && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
+            let mut narrowed = row.clone();
+            if !valid_indices {
+                narrowed.physical_header = None;
+            }
+            narrowed.content.clear();
+            narrowed.block_indices.clear();
+            for (position, block) in row.content.iter().enumerate() {
+                if matches!(block, AssistantContent::Reasoning(_)) && to_strip > 0 {
+                    to_strip -= 1;
+                    continue;
+                }
+                narrowed.content.push(block.clone());
+                if let Some(index) = row.block_indices.get(position) {
+                    narrowed.block_indices.push(*index);
+                }
+            }
+            narrowed
         })
         .collect()
 }

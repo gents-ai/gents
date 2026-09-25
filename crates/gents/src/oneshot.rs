@@ -71,11 +71,13 @@ pub async fn run_openai_oneshot_with_tools(
         crate::startup_readiness::StartupReadinessOptions::default().build_timeout,
     )
     .await?;
+    let provider_family = Some(client.provider_family().to_owned());
 
     crate::llm::backend_client::with_backend_client!(client, |client| {
         run_oneshot_with_completion_client(
             node,
             behavior,
+            provider_family,
             prompt,
             prompt_builder,
             &output_obligations,
@@ -91,6 +93,7 @@ pub async fn run_openai_oneshot_with_tools(
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
     behavior: &ResolvedBehavior,
+    provider_family: Option<String>,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
@@ -127,6 +130,7 @@ where
     run_oneshot_owned(
         node,
         behavior,
+        provider_family,
         &prompt_builder,
         model,
         prompt,
@@ -170,6 +174,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
     behavior: &ResolvedBehavior,
+    provider_family: Option<String>,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
     prompt: &str,
@@ -263,6 +268,7 @@ where
             behavior_id: behavior.behavior_id.clone(),
             session_id: request.session_id.clone(),
             model_name: behavior.model_name.clone(),
+            provider_family,
         },
         Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
     );

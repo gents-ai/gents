@@ -226,12 +226,16 @@ pub(crate) struct LeanContractSnapshot {
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
-    pub(crate) prompt_assembly_claude_narrowing_cases: Vec<LeanPromptAssemblyClaudeNarrowingCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
+    pub(crate) prompt_assembly_reasoning_suffix_cases: Vec<LeanPromptAssemblyReasoningSuffixCase>,
+    pub(crate) prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
+    pub(crate) prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub(crate) protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
+    pub(crate) durable_full_input_rewrite_cases: Vec<LeanDurableFullInputRewriteCase>,
+    pub(crate) durable_session_rewrite_cases: Vec<LeanDurableSessionRewriteCase>,
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
     pub(crate) compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
@@ -1807,14 +1811,24 @@ pub(crate) fn lean_prompt_assembly_claude_replay_cases(
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
 }
 
-pub(crate) fn lean_prompt_assembly_claude_narrowing_cases(
-) -> &'static [LeanPromptAssemblyClaudeNarrowingCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_narrowing_cases
-}
-
 pub(crate) fn lean_prompt_assembly_claude_checkpoint_cases(
 ) -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
     &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
+}
+
+pub(crate) fn lean_prompt_assembly_reasoning_suffix_cases(
+) -> &'static [LeanPromptAssemblyReasoningSuffixCase] {
+    &lean_contract_snapshot().prompt_assembly_reasoning_suffix_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_shape_cases(
+) -> &'static [LeanPromptAssemblyReplayShapeCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_shape_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_prefix_cases(
+) -> &'static [LeanPromptAssemblyReplayPrefixCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_prefix_cases
 }
 
 pub(crate) fn lean_protected_replay_compaction_cases(
@@ -1832,6 +1846,15 @@ pub(crate) fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCap
 
 pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
+}
+
+pub(crate) fn lean_durable_full_input_rewrite_cases() -> &'static [LeanDurableFullInputRewriteCase]
+{
+    &lean_contract_snapshot().durable_full_input_rewrite_cases
+}
+
+pub(crate) fn lean_durable_session_rewrite_cases() -> &'static [LeanDurableSessionRewriteCase] {
+    &lean_contract_snapshot().durable_session_rewrite_cases
 }
 
 pub(crate) fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompactionCase] {

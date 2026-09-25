@@ -71,6 +71,7 @@ pub(crate) fn context_for_claimed_request(
     request: &crate::watcher::AgentRequest,
     request_commit_cid: &str,
     model_name: String,
+    provider_family: Option<String>,
 ) -> RenderedRequestContext {
     RenderedRequestContext {
         request_doc_id: request.doc_id.clone(),
@@ -81,6 +82,7 @@ pub(crate) fn context_for_claimed_request(
         behavior_id: request.behavior_id.clone(),
         session_id: request.session_id.clone(),
         model_name,
+        provider_family,
     }
 }
 
@@ -142,11 +144,11 @@ mod tests {
     fn context_for_request_carries_an_absent_requester_as_empty() {
         let mut request = agent_request();
         request.requester_did = None;
-        let context = context_for_claimed_request(&request, "", "test-model".to_string());
+        let context = context_for_claimed_request(&request, "", "test-model".to_string(), None);
         assert_eq!(context.requester_did, "");
 
         request.requester_did = Some("did:key:requester".to_string());
-        let context = context_for_claimed_request(&request, "", "test-model".to_string());
+        let context = context_for_claimed_request(&request, "", "test-model".to_string(), None);
         assert_eq!(context.requester_did, "did:key:requester");
     }
 

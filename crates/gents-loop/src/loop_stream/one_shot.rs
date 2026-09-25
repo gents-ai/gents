@@ -512,6 +512,7 @@ mod tests {
                 behavior_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
+                provider_family: None,
             },
             capture_sink,
         );
@@ -601,6 +602,7 @@ mod tests {
                 behavior_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
+                provider_family: None,
             },
             capture_sink,
         );
@@ -726,6 +728,7 @@ mod tests {
                 behavior_id: "behavior".into(),
                 session_id: "session".into(),
                 model_name: "claude".into(),
+                provider_family: None,
             },
             capture_sink,
         );

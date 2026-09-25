@@ -386,15 +386,17 @@ async fn load_background_continuation_requests(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
+    let request_scope = gents::session::public_request_filter(&format!(
+        r#"session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, behavior_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(thread_id),
+        escape_graphql_string(state.agent_did.as_ref()),
+        escape_graphql_string(state.agent_did.as_ref()),
+        escape_graphql_string(state.behavior_id.as_ref()),
+    ));
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{thread_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{agent_did}" }},
-                    behavior_id: {{ _eq: "{behavior_id}" }}
-                }},
+                filter: {{ {request_scope} }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
                 _docID
@@ -408,9 +410,6 @@ async fn load_background_continuation_requests(
                 created_at
             }}
         }}"#,
-        thread_id = escape_graphql_string(thread_id),
-        agent_did = escape_graphql_string(state.agent_did.as_ref()),
-        behavior_id = escape_graphql_string(state.behavior_id.as_ref()),
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     response

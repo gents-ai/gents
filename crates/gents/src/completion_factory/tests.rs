@@ -701,6 +701,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         behavior_id: "general".to_string(),
         session_id: "session-1".to_string(),
         model_name: "model".to_string(),
+        provider_family: None,
     };
     let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
     let scope = test_scope(context, sink);

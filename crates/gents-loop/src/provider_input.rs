@@ -19,6 +19,8 @@ use crate::openai_wire::OpenAiWireApi;
 #[path = "provider_input_budget.rs"]
 pub mod budget;
 
+pub mod replay_prefix;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderInputProfile {
     OpenAiChatCompletions,

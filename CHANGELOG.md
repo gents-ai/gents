@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+### Breaking
+
+- Reasoning audit and detached title requests require a fresh home. Output
+  segments retain typed reasoning and signatures; `AgentRequest` and
+  `ProviderContextReduction` have new collection baselines. Update desktop and
+  paired runtimes together. Existing stores are not migrated.
+
 ### Changed
 
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum

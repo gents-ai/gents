@@ -91,6 +91,7 @@ async fn signed_claude_tool_round_trip_with_scope(
             lifecycle.request(),
             &request_commit_cid,
             "claude-sonnet-5".to_owned(),
+            None,
         ),
         Some(&capture_factory),
     )

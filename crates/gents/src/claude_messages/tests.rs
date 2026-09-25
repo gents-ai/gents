@@ -604,6 +604,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             behavior_id: "behavior".into(),
             session_id: "session".into(),
             model_name: "claude".into(),
+            provider_family: None,
         },
         sink,
     );

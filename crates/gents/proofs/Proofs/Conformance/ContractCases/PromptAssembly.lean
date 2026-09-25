@@ -990,86 +990,6 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
       [.reasoning none [.summary (utf8Bytes "summary")]]
   ]
 
-/-- The carrier labels are fixture observations only. `narrowReplayRows` sees
-the explicit origin, current-continuation use, and exact expected reasoning
-projection, never Rig's history/prompt placement. Native binding must supply
-these fields from canonical header/closing-segment/capture owners. -/
-structure PromptAssemblyClaudeNarrowingCase where
-  name : String
-  rows : List PromptAssembly.ClaudeMap.ReplayInput
-  carriers : List String
-  outcome : String
-  replay : List (List PromptAssembly.ClaudeMap.ReplayBlock)
-  deriving Repr
-
-private def claudeNarrowingCase (name : String)
-    (rows : List PromptAssembly.ClaudeMap.ReplayInput)
-    (carriers : List String) : PromptAssemblyClaudeNarrowingCase :=
-  match PromptAssembly.ClaudeMap.narrowReplayRows rows with
-  | .ok replay => { name, rows, carriers, outcome := "ok", replay }
-  | .error error =>
-      { name, rows, carriers, outcome := PromptAssembly.ClaudeMap.errorName error,
-        replay := [] }
-
-private def signedCurrentBlocks : List (CanonicalOutput.MessageBlock (List UInt8)) :=
-  [.text (utf8Bytes "current text"),
-   .reasoning none [.text (utf8Bytes "thinking") (some "signed")],
-   .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none]
-
-private def signedCurrentRow : PromptAssembly.ClaudeMap.ReplayInput :=
-  { usage := .requiredCurrent, origin := .claudeSubscription,
-    expectedReasoning := some (PromptAssembly.ClaudeMap.reasoningProjection signedCurrentBlocks),
-    blocks := signedCurrentBlocks }
-
-private def oldForeignRow : PromptAssembly.ClaudeMap.ReplayInput :=
-  { usage := .historical, origin := .foreign, expectedReasoning := none,
-    blocks := [.text (utf8Bytes "old text"),
-      .reasoning none [.text (utf8Bytes "old thinking") (some "foreign-signed")],
-      .toolCall 2 "toolu-2" none "echo" (utf8Bytes "{}") none none] }
-
-def promptAssemblyClaudeNarrowingCases : List PromptAssemblyClaudeNarrowingCase :=
-  [ claudeNarrowingCase "mixed-historical-and-current" [oldForeignRow, signedCurrentRow]
-      ["history", "prior"]
-  , claudeNarrowingCase "restored-required-current"
-      [{ usage := .requiredCurrent, origin := .claudeSubscription,
-         expectedReasoning := some (PromptAssembly.ClaudeMap.reasoningProjection
-           [.reasoning none [.text (utf8Bytes "retained") (some "sig"),
-                             .redacted (utf8Bytes "opaque")],
-            .toolCall 3 "toolu-3" none "echo" (utf8Bytes "{}") none none]),
-         blocks := [.reasoning none [.text (utf8Bytes "retained") (some "sig"),
-                                       .redacted (utf8Bytes "opaque")],
-                    .toolCall 3 "toolu-3" none "echo" (utf8Bytes "{}") none none] }]
-      ["restored-checkpoint"]
-  , claudeNarrowingCase "foreign-signed-current"
-      [{ signedCurrentRow with origin := .foreign }] ["prior"]
-  , claudeNarrowingCase "missing-current-origin"
-      [{ signedCurrentRow with origin := .missing }] ["prior"]
-  , claudeNarrowingCase "ambiguous-current-origin"
-      [{ signedCurrentRow with origin := .ambiguous }] ["prior"]
-  , claudeNarrowingCase "missing-current-witness"
-      [{ signedCurrentRow with expectedReasoning := none }] ["prior"]
-  , claudeNarrowingCase "altered-current-reasoning"
-      [{ signedCurrentRow with blocks :=
-        [.text (utf8Bytes "current text"),
-         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
-      ["prior"]
-  , claudeNarrowingCase "altered-current-reasoning-bytes"
-      [{ signedCurrentRow with blocks :=
-        [.text (utf8Bytes "current text"),
-         .reasoning none [.text (utf8Bytes "different") (some "signed")],
-         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
-      ["prior"]
-  , claudeNarrowingCase "moved-current-reasoning-block"
-      [{ signedCurrentRow with blocks :=
-        [.reasoning none [.text (utf8Bytes "thinking") (some "signed")],
-         .text (utf8Bytes "current text"),
-         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
-      ["prior"]
-  , claudeNarrowingCase "repair-carrier-history" [oldForeignRow, signedCurrentRow]
-      ["history", "history"]
-  , claudeNarrowingCase "compaction-carrier-prior" [oldForeignRow, signedCurrentRow]
-      ["history", "prior"]
-  ]
 
 /-! The checkpoint cases carry canonical coordinates independently of the
 surviving rows. `carrierIds` are observations only, deliberately duplicated in
@@ -1105,7 +1025,8 @@ private def checkpointCase (name : String)
         prefixRows := [], retained := [], replay := [] }
   | .ok checkpoint =>
       let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
-      match PromptAssembly.ClaudeMap.restoreAndNarrowReplay checkpoint resolve with
+      match PromptAssembly.ClaudeMap.restoreContiguousReplay checkpoint
+          { family := "claude", endpoint := "messages" } resolve with
       | .error error =>
           { name, required, rows, split, carrierIds, resolutions,
             outcome := PromptAssembly.ClaudeMap.errorName error,
@@ -1121,7 +1042,8 @@ private def checkpointTag (turn : Nat) : PromptAssembly.ClaudeMap.ReplayTag :=
 
 private def checkpointRow (tag : Option PromptAssembly.ClaudeMap.ReplayTag)
     (value : String) : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-  { source := tag,
+  { source := tag, physicalHeader := tag.map fun _ => "header",
+    blockIndices := [0, 1],
     blocks := [.reasoning none [.text (utf8Bytes value) (some ("sig-" ++ value))],
       .toolCall 9 ("tool-" ++ value) none "echo" (utf8Bytes "{}") none none] }
 
@@ -1130,11 +1052,29 @@ private def checkpointEvidence (turn : Nat) (value : String) :
   let reasoning := PromptAssembly.ClaudeMap.reasoningProjection
     (checkpointRow (some (checkpointTag turn)) value).blocks
   { tag := checkpointTag turn,
-    evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .claudeSubscription reasoning }
+    evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+      reasoning { family := "claude", endpoint := "messages" } .claudeMessages
+      "header" true true }
 
 def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCase :=
   let first := checkpointRow (some (checkpointTag 1)) "first"
   let second := checkpointRow (some (checkpointTag 2)) "second"
+  let middle : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := some (checkpointTag 2), physicalHeader := some "header",
+      blockIndices := [0],
+      blocks := [.reasoning none [.text (utf8Bytes "middle") (some "sig-middle")]] }
+  let middleEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 2,
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+        (PromptAssembly.ClaudeMap.reasoningProjection middle.blocks)
+        { family := "claude", endpoint := "messages" } .claudeMessages
+        "header" true true }
+  let thirdEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 3,
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+        (PromptAssembly.ClaudeMap.reasoningProjection second.blocks)
+        { family := "claude", endpoint := "messages" } .claudeMessages
+        "header" true true }
   let old := checkpointRow none "old"
   let unsignedFirst : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { first with blocks :=
@@ -1142,8 +1082,10 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
        .toolCall 9 "tool-first" none "echo" (utf8Bytes "{}") none none] }
   let unsignedEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { tag := checkpointTag 1,
-      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .claudeSubscription
-        (PromptAssembly.ClaudeMap.reasoningProjection unsignedFirst.blocks) }
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+        (PromptAssembly.ClaudeMap.reasoningProjection unsignedFirst.blocks)
+        { family := "claude", endpoint := "messages" } .claudeMessages
+        "header" true true }
   let resolutions := [checkpointEvidence 1 "first", checkpointEvidence 2 "second"]
   [ checkpointCase "two-required-same-provider-id" [checkpointTag 1, checkpointTag 2]
       [first, second] 0 ["same-provider-id", "same-provider-id"] resolutions
@@ -1166,6 +1108,242 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
   , checkpointCase "first-row-codec-error-precedes-later-missing-capture"
       [checkpointTag 1, checkpointTag 2] [unsignedFirst, second] 0 ["same", "same"]
       [unsignedEvidence]
+  , checkpointCase "reasoning-only-middle-promoted"
+      [checkpointTag 1, checkpointTag 3]
+      [first, middle, { second with source := some (checkpointTag 3) }]
+      0 ["first", "middle", "second"]
+      [checkpointEvidence 1 "first", middleEvidence, thirdEvidence]
+  , checkpointCase "reasoning-only-middle-kept-contiguously"
+      [checkpointTag 1, checkpointTag 2, checkpointTag 3]
+      [first, middle, { second with source := some (checkpointTag 3) }]
+      0 ["first", "middle", "second"]
+      [checkpointEvidence 1 "first", middleEvidence, thirdEvidence]
+  ]
+
+
+/-- These cases run the same historical suffix owner used by checkpoint restore.
+Durable restart and consumed-checkpoint behavior require the reduction owner. -/
+structure PromptAssemblyReasoningSuffixCase where
+  name : String
+  issuer : PromptAssembly.ClaudeMap.ReplayIssuer
+  wire : PromptAssembly.ClaudeMap.ReplayWire
+  rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  retired : List PromptAssembly.ClaudeMap.ReplayTag
+  resolutions : List PromptAssemblyClaudeCheckpointResolution
+  replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  deriving Repr
+
+private def reasoningSuffixCase (name : String)
+    (issuer : PromptAssembly.ClaudeMap.ReplayIssuer)
+    (wire : PromptAssembly.ClaudeMap.ReplayWire)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
+    (retired : List PromptAssembly.ClaudeMap.ReplayTag)
+    (resolutions : List PromptAssemblyClaudeCheckpointResolution) :
+    PromptAssemblyReasoningSuffixCase :=
+  let checkpoint : PromptAssembly.ClaudeMap.ReplayCheckpoint :=
+    { required := [], prefixRows := [], retained := rows, retired }
+  let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
+  { name, issuer, wire, rows, retired, resolutions,
+    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix checkpoint
+      issuer wire resolve }
+
+private def shapeTwoBlockRow : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source := some (checkpointTag 4), physicalHeader := some "header",
+    blockIndices := [0, 1],
+    blocks := [.reasoning none [.text (utf8Bytes "early") (some "sig-early")],
+      .reasoning none [.text (utf8Bytes "late") (some "sig-late")]] }
+
+def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase :=
+  let claude : PromptAssembly.ClaudeMap.ReplayIssuer :=
+    { family := "claude", endpoint := "messages" }
+  let responses : PromptAssembly.ClaudeMap.ReplayIssuer :=
+    { family := "openai", endpoint := "responses" }
+  let first := checkpointRow (some (checkpointTag 1)) "first"
+  let second := checkpointRow (some (checkpointTag 2)) "second"
+  let third := checkpointRow (some (checkpointTag 3)) "third"
+  let unknown := checkpointRow none "unknown"
+  let encrypted : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := some (checkpointTag 3), physicalHeader := some "header",
+      blockIndices := [0, 1],
+      blocks := [.reasoning none [.encrypted (utf8Bytes "sealed"),
+        .summary (utf8Bytes "summary")],
+        .text (utf8Bytes "visible")] }
+  let encryptedEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 3,
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+        (PromptAssembly.ClaudeMap.reasoningProjection encrypted.blocks)
+        responses .responses "header" true true }
+  let summaryOnly : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := encrypted.source, physicalHeader := encrypted.physicalHeader,
+      blockIndices := [0],
+      blocks := [.reasoning none [.summary (utf8Bytes "summary")]] }
+  let redactedOnResponses : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := encrypted.source, physicalHeader := encrypted.physicalHeader,
+      blockIndices := [0],
+      blocks := [.reasoning none [.redacted (utf8Bytes "redacted")]] }
+  let twoBlocks := shapeTwoBlockRow
+  let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := twoBlocks.source, physicalHeader := twoBlocks.physicalHeader,
+      blockIndices := [1],
+      blocks := [.reasoning none [.text (utf8Bytes "late") (some "sig-late")]] }
+  let twoBlocksEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 4,
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
+        (PromptAssembly.ClaudeMap.reasoningProjection twoBlocks.blocks)
+        claude .claudeMessages "header" true true }
+  let evidence := [checkpointEvidence 1 "first", checkpointEvidence 2 "second",
+    checkpointEvidence 3 "third"]
+  [ reasoningSuffixCase "historical-same-issuer" claude .claudeMessages
+      [first, second, third] [] evidence
+  , reasoningSuffixCase "provider-switch-removes-old-reasoning" responses .responses
+      [first, encrypted] [] [checkpointEvidence 1 "first", encryptedEvidence]
+  , reasoningSuffixCase "middle-unknown-cuts-leading-run" claude .claudeMessages
+      [first, unknown, third] [] evidence
+  , reasoningSuffixCase "retired-input-excludes-earlier-blocks" claude .claudeMessages
+      [first, second, third] [checkpointTag 1, checkpointTag 2] evidence
+  , reasoningSuffixCase "incomplete-physical-close-cuts-run" claude .claudeMessages
+      [first, second, third] []
+      [checkpointEvidence 1 "first",
+       { (checkpointEvidence 2 "second") with evidence :=
+          { (checkpointEvidence 2 "second").evidence with complete := false } },
+       checkpointEvidence 3 "third"]
+  , reasoningSuffixCase "same-wire-different-issuer-family" responses .responses
+      [encrypted] []
+      [{ encryptedEvidence with evidence :=
+        { encryptedEvidence.evidence with issuer :=
+          { family := "grok", endpoint := "responses" } } }]
+  , reasoningSuffixCase "same-issuer-changed-prefix" claude .claudeMessages
+      [first, second, third] []
+      [checkpointEvidence 1 "first",
+       { (checkpointEvidence 2 "second") with evidence :=
+          { (checkpointEvidence 2 "second").evidence with prefixCompatible := false } },
+       checkpointEvidence 3 "third"]
+  , reasoningSuffixCase "responses-summary-without-ciphertext" responses .responses
+      [summaryOnly] []
+      [{ encryptedEvidence with evidence :=
+        { encryptedEvidence.evidence with reasoning :=
+          PromptAssembly.ClaudeMap.reasoningProjection summaryOnly.blocks } }]
+  , reasoningSuffixCase "responses-rejects-foreign-redaction" responses .responses
+      [redactedOnResponses] []
+      [{ encryptedEvidence with evidence :=
+        { encryptedEvidence.evidence with reasoning :=
+          PromptAssembly.ClaudeMap.reasoningProjection redactedOnResponses.blocks } }]
+  , reasoningSuffixCase "original-block-index-survives-deletion" claude .claudeMessages
+      [laterBlock] [] [twoBlocksEvidence]
+  , reasoningSuffixCase "duplicate-original-block-index-rejected" claude .claudeMessages
+      [{ twoBlocks with blockIndices := [0, 0] }] [] [twoBlocksEvidence]
+  , reasoningSuffixCase "reordered-original-block-index-rejected" claude .claudeMessages
+      [{ twoBlocks with blockIndices := [1, 0] }] [] [twoBlocksEvidence]
+  , reasoningSuffixCase "duplicate-physical-candidate-rejected" claude .claudeMessages
+      [laterBlock, laterBlock] [] [twoBlocksEvidence]
+  , reasoningSuffixCase "foreign-accepted-source-cuts-run" claude .claudeMessages
+      [first, second, third] []
+      [checkpointEvidence 1 "first",
+       { (checkpointEvidence 2 "second") with evidence :=
+          { (checkpointEvidence 2 "second").evidence with origin := .foreign } },
+       checkpointEvidence 3 "third"]
+  , reasoningSuffixCase "subscription-label-without-accepted-provider-rejected"
+      claude .claudeMessages [first] []
+      [{ (checkpointEvidence 1 "first") with evidence :=
+        { (checkpointEvidence 1 "first").evidence with origin := .claudeSubscription } }]
+  , reasoningSuffixCase "physical-header-mismatch-cuts-run" claude .claudeMessages
+      [first, second, third] []
+      [checkpointEvidence 1 "first",
+       { (checkpointEvidence 2 "second") with evidence :=
+          { (checkpointEvidence 2 "second").evidence with physicalHeader := "other" } },
+       checkpointEvidence 3 "third"]
+  ]
+
+structure PromptAssemblyReplayShapeCase where
+  name : String
+  source : PromptAssembly.ClaudeMap.TaggedReplayRow
+  retainedIndices : List Nat
+  issuer : PromptAssembly.ClaudeMap.ReplayIssuer
+  wire : PromptAssembly.ClaudeMap.ReplayWire
+  retired : List PromptAssembly.ClaudeMap.ReplayTag
+  resolutions : List PromptAssemblyClaudeCheckpointResolution
+  outcome : String
+  shaped : Option PromptAssembly.ClaudeMap.TaggedReplayRow
+  replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  deriving Repr
+
+private def replayShapeCase (name : String)
+    (source : PromptAssembly.ClaudeMap.TaggedReplayRow)
+    (retainedIndices : List Nat) : PromptAssemblyReplayShapeCase :=
+  let issuer : PromptAssembly.ClaudeMap.ReplayIssuer :=
+    { family := "claude", endpoint := "messages" }
+  let wire : PromptAssembly.ClaudeMap.ReplayWire := .claudeMessages
+  let retired : List PromptAssembly.ClaudeMap.ReplayTag := []
+  let resolutions : List PromptAssemblyClaudeCheckpointResolution :=
+    [{ tag := checkpointTag 4,
+       evidence :=
+        { origin := .acceptedProvider,
+          reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness source,
+          issuer, wire, physicalHeader := "header", complete := true,
+          prefixCompatible := true } }]
+  let base : PromptAssemblyReplayShapeCase :=
+    { name, source, retainedIndices, issuer, wire, retired, resolutions,
+      outcome := "", shaped := none, replay := [] }
+  match PromptAssembly.ClaudeMap.selectReplayBlocks
+      (fun index _ => decide (index ∈ retainedIndices)) source with
+  | .error error => { base with outcome := PromptAssembly.ClaudeMap.errorName error }
+  | .ok shaped =>
+      let checkpoint : PromptAssembly.ClaudeMap.ReplayCheckpoint :=
+        { required := [], prefixRows := [], retained := [shaped], retired }
+      let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
+      { name, source, retainedIndices, issuer, wire, retired, resolutions,
+        outcome := "ok", shaped := some shaped,
+        replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix checkpoint
+          issuer wire resolve }
+
+def promptAssemblyReplayShapeCases : List PromptAssemblyReplayShapeCase :=
+  [ replayShapeCase "drop-first-original-index-keeps-second" shapeTwoBlockRow [1]
+  , replayShapeCase "sparse-original-indices-keep-seven"
+      { shapeTwoBlockRow with blockIndices := [3, 7] } [7]
+  , replayShapeCase "requested-reverse-order-keeps-source-order"
+      { shapeTwoBlockRow with blockIndices := [3, 7] } [7, 3]
+  , replayShapeCase "duplicate-requested-index-keeps-one-source-block"
+      { shapeTwoBlockRow with blockIndices := [3, 7] } [7, 7]
+  , replayShapeCase "unknown-requested-index-keeps-no-block"
+      { shapeTwoBlockRow with blockIndices := [3, 7] } [999]
+  , replayShapeCase "keep-both-original-order" shapeTwoBlockRow [0, 1]
+  , replayShapeCase "reject-misaligned-index-sidecar"
+      { shapeTwoBlockRow with blockIndices := [0] } [0]
+  , replayShapeCase "reject-reordered-index-sidecar"
+      { shapeTwoBlockRow with blockIndices := [1, 0] } [1]
+  ]
+
+/-- Inputs are already selected from the wire-shaped request. In particular,
+the nested `cache_control` bytes below are conversation payload, not a
+top-level cache-control field eligible for exclusion. -/
+structure PromptAssemblyReplayPrefixCase where
+  name : String
+  captured : PromptAssembly.ClaudeMap.ReplayPrefixProjection
+  current : PromptAssembly.ClaudeMap.ReplayPrefixProjection
+  compatible : Bool
+  deriving Repr
+
+private def replayPrefixCase (name : String)
+    (captured current : PromptAssembly.ClaudeMap.ReplayPrefixProjection) :
+    PromptAssemblyReplayPrefixCase :=
+  { name, captured, current,
+    compatible := PromptAssembly.ClaudeMap.replayPrefixCompatible captured current }
+
+def promptAssemblyReplayPrefixCases : List PromptAssemblyReplayPrefixCase :=
+  let captured : PromptAssembly.ClaudeMap.ReplayPrefixProjection :=
+    { context := utf8Bytes "system+tools+route",
+      messages := [utf8Bytes "user-one", utf8Bytes "assistant-one"] }
+  [ replayPrefixCase "append-preserves-prefix" captured
+      { captured with messages := captured.messages ++ [utf8Bytes "user-two"] }
+  , replayPrefixCase "system-or-tools-change-breaks-prefix" captured
+      { captured with context := utf8Bytes "changed-system+tools+route" }
+  , replayPrefixCase "changed-message-breaks-prefix" captured
+      { captured with messages := [utf8Bytes "user-one", utf8Bytes "assistant-edited"] }
+  , replayPrefixCase "deleted-message-breaks-prefix" captured
+      { captured with messages := [utf8Bytes "user-one"] }
+  , replayPrefixCase "nested-cache-control-key-is-payload"
+      { captured with messages := [utf8Bytes "{cache_control:one}"] }
+      { captured with messages := [utf8Bytes "{cache_control:two}"] }
   ]
 
 end Conformance.ContractCases

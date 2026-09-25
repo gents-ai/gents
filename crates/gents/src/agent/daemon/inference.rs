@@ -195,6 +195,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
+                replay.issuer = self.replay_issuer.clone();
+                replay.wire = match provider_profile {
+                    gents_loop::provider_input::ProviderInputProfile::ClaudeMessages => {
+                        Some(gents_loop::claude_messages_body::ReplayWire::ClaudeMessages)
+                    }
+                    gents_loop::provider_input::ProviderInputProfile::OpenAiResponsesNormalized
+                    | gents_loop::provider_input::ProviderInputProfile::ChatGptCodexResponses
+                    | gents_loop::provider_input::ProviderInputProfile::XaiResponses => {
+                        Some(gents_loop::claude_messages_body::ReplayWire::Responses)
+                    }
+                    gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions
+                    | gents_loop::provider_input::ProviderInputProfile::OpenRouterChatCompletions => {
+                        None
+                    }
+                };
                 let turn_context_window = self.behavior.context_window;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
@@ -375,28 +390,20 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         request_doc_id: &request.doc_id,
                         request_commit_cid: &row.request_commit_cid,
                     };
-                    replay.required = row.replay_associations()?.required;
-                    replay.evidence.clear();
-                    replay.resolved.clear();
-                    if replay.required.is_empty() {
-                        crate::session::validate_canonical_replay_boundary(
-                            self.node.as_ref(), replay_scope, &boundary,
-                        ).await?;
+                    let associations = row.replay_associations()?;
+                    if row.summary.trim().is_empty() {
+                        replay.required = associations.required;
                     } else {
-                        let resolved = crate::session::resolve_current_replay_tags(
-                            self.node.as_ref(),
-                            replay_scope,
-                            &boundary,
-                            &replay.required,
-                        )
-                        .await
-                        .context("resolving restored canonical replay sources")?;
-                        replay.evidence.extend(resolved.into_iter().flat_map(|(tag, evidence)|
-                            evidence.into_iter().map(move |evidence|
-                                crate::agent::loop_stream::ReplayEvidenceRow { tag: tag.clone(), evidence })
-                        ));
-                        replay.resolved = replay.required.clone();
+                        for tag in associations.retired_for_prefix_rewrite() {
+                            if !replay.retired.contains(&tag) {
+                                replay.retired.push(tag);
+                            }
+                        }
+                        replay.required.clear();
                     }
+                    crate::session::validate_canonical_replay_boundary(
+                        self.node.as_ref(), replay_scope, &boundary,
+                    ).await?;
                     loop_config.context_message = None;
                     loop_config.active_reduction_keys = row.active_reduction_keys();
                     loop_config.reduction_chain_keys = lineage_keys;
@@ -577,6 +584,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                                 &terminal_failure_reason,
                                                 error.to_string(),
                                             );
+                                            let output_result = processor
+                                                .persist_received_partial_turn(
+                                                    "persist deadline-expired assistant turn",
+                                                )
+                                                .await;
                                             drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
@@ -588,6 +600,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                                     "failed to sweep expired in-flight tool calls after request deadline"
                                                 );
                                             }
+                                            output_result.context(
+                                                "persisting received provider audit after request deadline",
+                                            )?;
                                             return Err(error);
                                         }
                                     }
@@ -596,48 +611,58 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 Some(item) => item,
                                 None => break,
                             };
-                            let processed = match await_with_request_deadline(
-                                request_deadline,
-                                processor.process_item(item),
-                                "processing inference stream item",
-                            )
-                            .await
-                            {
+                            // Once pulled from the stream, this item owns a write
+                            // receipt; timing out its future can lose its bytes.
+                            let processed = match processor.process_item(item).await {
                                 Ok(processed) => processed,
                                 Err(error) => {
-                                    admission::set_terminal_failure_reason(
-                                        &terminal_failure_reason,
-                                        error.to_string(),
-                                    );
                                     drop(stream);
-                                    if let Err(sweep_error) =
-                                        persistence_hook.timeout_expired_tool_calls().await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %sweep_error,
-                                            "failed to sweep expired in-flight tool calls after request deadline"
-                                        );
-                                    }
                                     return Err(error);
                                 }
                             };
+                            if let Err(error) = ensure_request_deadline_open(
+                                request_deadline,
+                                "processing inference stream item",
+                            ) {
+                                admission::set_terminal_failure_reason(
+                                    &terminal_failure_reason,
+                                    error.to_string(),
+                                );
+                                let output_result = processor
+                                    .persist_received_partial_turn(
+                                        "persist deadline-expired assistant turn",
+                                    )
+                                    .await;
+                                drop(stream);
+                                if let Err(sweep_error) =
+                                    persistence_hook.timeout_expired_tool_calls().await
+                                {
+                                    tracing::warn!(
+                                        request_id = %request_id,
+                                        session_id = %session_id,
+                                        error = %sweep_error,
+                                        "failed to sweep expired in-flight tool calls after request deadline"
+                                    );
+                                }
+                                output_result.context(
+                                    "persisting received provider audit after request deadline",
+                                )?;
+                                return Err(error);
+                            }
                             match processed {
-                                Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
-                                Ok(crate::agent::stream_processor::StreamAction::Done) => break,
-                                Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
+                                crate::agent::stream_processor::StreamAction::Continue => {}
+                                crate::agent::stream_processor::StreamAction::Done => break,
+                                crate::agent::stream_processor::StreamAction::Error(error) => {
                                     stream_error = Some(error);
                                     break;
                                 }
-                                Err(error) => return Err(error),
                             }
                         }
 
                         drop(stream);
                         if let Some(error) = stream_error {
                             let _ = processor
-                                .persist_partial_turn("persist errored assistant turn")
+                                .persist_received_partial_turn("persist errored assistant turn")
                                 .await?;
                             let error_reason = format!("agent stream failed: {}", error);
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
@@ -646,6 +671,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         }
 
                         if processor.final_text.is_none() {
+                            processor
+                                .persist_received_partial_turn("persist unterminated assistant turn")
+                                .await
+                                .context("persisting received provider audit after stream EOF")?;
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 "provider stream ended without an explicit terminal response"
                             )));
@@ -678,10 +707,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             )));
                         }
 
-                        ensure_request_deadline_open(
+                        if let Err(error) = ensure_request_deadline_open(
                             request_deadline,
                             "finalizing inference response",
-                        )?;
+                        ) {
+                            processor
+                                .persist_received_partial_turn(
+                                    "persist deadline-expired assistant turn",
+                                )
+                                .await
+                                .context("persisting received provider audit after request deadline")?;
+                            return Err(error);
+                        }
                         Ok(HandleRequestOutcome::Completed)
                     },
                 )
@@ -1228,6 +1265,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
+            None,
             Arc::new(RoutedReplyModel),
             preamble,
             loop_tools,
@@ -1369,6 +1407,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
+            None,
             Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
@@ -1506,6 +1545,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -1671,6 +1711,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),

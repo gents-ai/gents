@@ -6,22 +6,11 @@ use defra_node::EmbeddedNode;
 use gents_loop::claude_messages_body::reasoning_witness;
 use gents_loop::loop_stream::{LoopReplayInput, TaggedMessage};
 
-/// The accepted Claude assistant rows whose signed reasoning must survive a
-/// subsequent tool continuation. This is evaluated on canonical native input,
-/// before any provider-view projection can drop a tool call.
-pub(crate) fn requires_claude_tool_continuation(
-    message: &gents_protocol::message::Message,
-) -> bool {
+pub(crate) fn has_signed_reasoning(message: &gents_protocol::message::Message) -> bool {
     let gents_protocol::message::Message::Assistant { content, .. } = message else {
         return false;
     };
     !reasoning_witness(content).is_empty()
-        && content.iter().any(|block| {
-            matches!(
-                block,
-                gents_protocol::message::AssistantContent::ToolCall(_)
-            )
-        })
 }
 
 /// Resolve live and restored continuation evidence through physical canonical
@@ -34,7 +23,7 @@ pub(crate) fn owned_replay_input(
 ) -> LoopReplayInput {
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
-        resolve: Some(Arc::new(move |tags| {
+        resolve: Some(Arc::new(move |tags, projection| {
             let node = node.clone();
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
@@ -48,7 +37,7 @@ pub(crate) fn owned_replay_input(
                     &request_commit_cid,
                 )
                 .await?;
-                let resolved = crate::session::resolve_current_replay_tags(
+                let resolved = crate::session::resolve_canonical_replay_tags(
                     &node,
                     crate::session::CanonicalReplayScope {
                         agent_did: &request.agent_did,
@@ -61,6 +50,7 @@ pub(crate) fn owned_replay_input(
                     },
                     &boundary,
                     &tags,
+                    &projection,
                 )
                 .await?;
                 Ok(resolved
@@ -89,20 +79,21 @@ pub(crate) fn tag_canonical_history(
 ) -> Vec<TaggedMessage> {
     rows.iter()
         .map(|row| {
-            let source = row.provider_source.clone().filter(|tag| {
-                replay.request_doc_id.as_deref() == Some(tag.request_doc_id.as_str())
-            });
+            let source = row.provider_source.clone();
             if let Some(tag) = &source {
                 if profile == super::ProviderInputProfile::ClaudeMessages
-                    && requires_claude_tool_continuation(&row.message)
-                    && !replay.required.contains(tag)
+                    && has_signed_reasoning(&row.message)
+                    && !replay.retired.contains(tag)
+                    && !replay.candidates.contains(tag)
                 {
-                    replay.required.push(tag.clone());
+                    replay.candidates.push(tag.clone());
                 }
             }
             TaggedMessage {
                 message: row.message.clone(),
                 source,
+                physical_header: row.canonical_header_doc_id.clone(),
+                block_indices: row.block_indices.clone(),
             }
         })
         .collect()
@@ -158,6 +149,8 @@ mod tests {
         }
         crate::session::SequencedMessage {
             provider_source: Some(tag),
+            canonical_header_doc_id: Some(format!("header-{sequence}")),
+            block_indices: (0..content.len()).collect(),
             sequence,
             message: Message::Assistant {
                 id: Some("same-provider-message-id".to_string()),
@@ -194,11 +187,12 @@ mod tests {
         assert_eq!(tagged[0].message, rows[0].message);
         assert_eq!(tagged[1].message, rows[1].message);
         assert_eq!(tagged[2].message, rows[2].message);
-        assert_eq!(replay.required, vec![first, second]);
+        assert_eq!(replay.candidates, vec![first, second]);
+        assert!(replay.required.is_empty());
     }
 
     #[test]
-    fn only_claude_reasoning_with_a_tool_continuation_seeds_required() {
+    fn current_reasoning_rows_seed_provisional_sources_before_origin_check() {
         let tag = provider_tag("current-request", 1);
         let tool_turn = assistant_row(1, tag.clone(), true, true);
         let reasoning_final = assistant_row(2, provider_tag("current-request", 2), true, false);
@@ -211,17 +205,27 @@ mod tests {
             &mut replay,
             super::super::ProviderInputProfile::ClaudeMessages,
         );
-        assert_eq!(replay.required, vec![tag.clone()]);
+        assert_eq!(
+            replay.candidates,
+            vec![tag.clone(), provider_tag("current-request", 2)]
+        );
+        assert!(replay.required.is_empty());
         assert_eq!(tagged[0].source, Some(tag));
         assert_eq!(tagged[1].source, Some(provider_tag("current-request", 2)));
-        // The requirement is seeded from canonical rows, before the owned
-        // projection may strip or group an orphan tool call.
+        // Source coordinates survive provider projection; canonical origin
+        // selection decides which of them become required replay.
         let _projected = gents_loop::loop_stream::provider_view_tagged(
             super::super::ProviderInputProfile::ClaudeMessages,
             tagged,
         )
         .expect("canonical rows can be projected");
-        assert_eq!(replay.required, vec![provider_tag("current-request", 1)]);
+        assert_eq!(
+            replay.candidates,
+            vec![
+                provider_tag("current-request", 1),
+                provider_tag("current-request", 2)
+            ]
+        );
 
         let mut non_claude_replay = LoopReplayInput {
             request_doc_id: Some("current-request".to_string()),
@@ -233,6 +237,7 @@ mod tests {
             super::super::ProviderInputProfile::OpenAiChatCompletions,
         );
         assert!(non_claude_replay.required.is_empty());
+        assert!(non_claude_replay.candidates.is_empty());
         assert_eq!(
             non_claude[0].source,
             Some(provider_tag("current-request", 1))

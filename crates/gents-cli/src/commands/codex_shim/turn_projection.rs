@@ -748,7 +748,7 @@ fn observe_latest_response_completion(current: &mut Option<i64>, observed: Optio
 mod lean_reasoning_contracts;
 
 #[cfg(test)]
-mod tests {
+pub(in crate::commands::codex_shim) mod tests {
     use gents_codex_protocol as codex;
 
     use super::{
@@ -1114,7 +1114,9 @@ mod tests {
         }
     }
 
-    async fn notification_test_state(directory: &std::path::Path) -> super::super::ShimState {
+    pub(in crate::commands::codex_shim) async fn notification_test_state(
+        directory: &std::path::Path,
+    ) -> super::super::ShimState {
         use super::super::{CodexSidecar, ShimState};
         use std::sync::{atomic::AtomicU64, Arc};
         use std::time::Duration;
@@ -1127,6 +1129,9 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
+        gents::schema::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
         let state = ShimState {
             codex_home: directory.to_path_buf(),
             trace_path: directory.join("notifications.jsonl"),

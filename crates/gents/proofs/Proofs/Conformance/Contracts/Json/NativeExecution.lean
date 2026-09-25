@@ -646,6 +646,10 @@ def titleCases : List Case :=
       [.appendRaw 1 5 (AuxiliaryCases.observed .title),
        .recoverTerminal 2 20 8 .interrupted .noMessage
          [⟨AuxiliaryCases.recoveryClose .title, none⟩]] nativeGap
+  , mkModelCase "title_expired_unlatched_recovery_no_message" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .recoverTerminal 2 20 8 .failed .noMessage
+         [⟨AuxiliaryCases.recoveryClose .title, none⟩]] nativeGap
   , mkModelCase "title_recovery_accepts_closed_partial_before_future_dated_raw"
       titleProcessing
       [.replicate titleFutureDatedRaw,
@@ -689,7 +693,7 @@ def titleCases : List Case :=
 
 example : titleCases.map (fun value => value.expected.map (List.map (·.accepted))) =
     [some [true], some [true, true, true], some [true, true, true],
-      some [true, true], some [true, true], some [true, true, true],
+      some [true, true], some [true, true], some [true, true], some [true, true, true],
       some [true, false, true, true],
       some [true, true, true, true], some [true, true, true, true, true],
       some [true, false, false, false, false, true, true],
@@ -737,6 +741,9 @@ example :
       .closePartial 6 7 titleLivePartial, .terminalizeNoMessageAt 7] = true ∧
     titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
       .recoverTerminal 2 20 8 .interrupted .noMessage
+        [⟨AuxiliaryCases.recoveryClose .title, none⟩]] = true ∧
+    titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+      .recoverTerminal 2 20 8 .failed .noMessage
         [⟨AuxiliaryCases.recoveryClose .title, none⟩]] = true ∧
     titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
       .retract 6 titleRetraction, .terminalizeNoMessageAt 7] = true := by
