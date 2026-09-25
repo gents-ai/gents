@@ -721,23 +721,17 @@ async fn start_managed_server<'a, R: Runtime>(
             },
         )
         .await?;
-        // Provisioning never renames an initialized home, so the requested
-        // name is only remembered once the home confirms it.
-        if name_confirmed_by_home(
-            agent_name,
-            read_initialized_name(&agent_home).await.as_deref(),
-        ) {
-            let (tool_ceiling, tool_root) = authority.stored();
-            save_preference(
-                state,
-                &StoredManagedServer {
-                    agent_name: agent_name.to_string(),
-                    tool_ceiling: Some(tool_ceiling),
-                    tool_root,
-                },
-            )
-            .await?;
-        }
+        let (tool_ceiling, tool_root) = authority.stored();
+        save_confirmed_preference(
+            state,
+            &agent_home,
+            &StoredManagedServer {
+                agent_name: agent_name.to_string(),
+                tool_ceiling: Some(tool_ceiling),
+                tool_root,
+            },
+        )
+        .await?;
         ensure_default_port_identity(&agent_home).await?;
         // Install even when a unit file already exists. `install` leaves a
         // matching definition alone and refuses while the service is active.
@@ -3139,8 +3133,9 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
                 .map_err(|error| BridgeError::untyped(format!("{error:#}")))
         },
         || async {
-            save_preference(
+            save_confirmed_preference(
                 &state,
+                &agent_home,
                 &StoredManagedServer {
                     agent_name: request.agent_name.clone(),
                     tool_ceiling: Some(tool_ceiling),
@@ -3456,6 +3451,23 @@ fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
     initialized.is_some_and(|name| name.trim() == requested.trim())
 }
 
+/// Provisioning never renames an initialized home, so a requested name is
+/// remembered only once the home's init config carries it. Otherwise the
+/// stored preference is left as it was.
+async fn save_confirmed_preference(
+    state: &DesktopAppState,
+    agent_home: &std::path::Path,
+    stored: &StoredManagedServer,
+) -> Result<(), BridgeError> {
+    if name_confirmed_by_home(
+        &stored.agent_name,
+        read_initialized_name(agent_home).await.as_deref(),
+    ) {
+        save_preference(state, stored).await?;
+    }
+    Ok(())
+}
+
 fn ensure_matching_identity(
     initialized_did: Option<&str>,
     live_did: &str,
@@ -3514,6 +3526,64 @@ async fn save_preference(
 mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    #[tokio::test]
+    async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone() {
+        let (_temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let init = serde_json::json!({
+            "home": agent_home.display().to_string(),
+            "agent_name": "Forge",
+            "agent_did": "did:key:forge",
+            "key_path": null,
+            "tool_ceiling": "Readwrite",
+            "tool_root": null,
+        });
+        write(&agent_home.join("init.json"), &init.to_string());
+        let forge = StoredManagedServer {
+            agent_name: "Forge".to_string(),
+            tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
+            tool_root: None,
+        };
+        save_preference(&state, &forge).await.unwrap();
+
+        // What restart does with a stale requested name.
+        gents_server::server_host::ensure_standard_home(
+            gents_server::server_host::ProvisionOptions {
+                home: agent_home.clone(),
+                agent_name: "Scout".to_string(),
+                tool_ceiling: ManagedServerToolCeiling::Readwrite.into(),
+                tool_root: None,
+            },
+        )
+        .await
+        .unwrap();
+        save_confirmed_preference(
+            &state,
+            &agent_home,
+            &StoredManagedServer {
+                agent_name: "Scout".to_string(),
+                ..forge.clone()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            read_initialized_name(&agent_home).await.as_deref(),
+            Some("Forge")
+        );
+        let stored = load_preference(&state).await.unwrap().expect("preference");
+        assert_eq!(stored.agent_name, "Forge");
+
+        save_confirmed_preference(&state, &agent_home, &forge)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_preference(&state).await.unwrap().unwrap().agent_name,
+            "Forge"
+        );
+    }
 
     #[tokio::test]
     async fn requested_name_is_remembered_only_when_the_home_confirms_it() {
