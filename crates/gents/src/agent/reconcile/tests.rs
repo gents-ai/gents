@@ -1781,6 +1781,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: "initial".to_string(),
         tools: BehaviorToolConfig::meta_only(),
         compaction: None,

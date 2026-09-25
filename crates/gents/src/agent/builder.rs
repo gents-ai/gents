@@ -325,6 +325,7 @@ impl BehaviorBuilder {
 
     pub fn max_turns(mut self, max_turns: usize) -> Self {
         self.behavior.max_turns = max_turns;
+        self.behavior.max_turns_explicit = true;
         self
     }
 
@@ -500,6 +501,7 @@ pub(crate) struct PendingAgentBehavior {
     context_window: usize,
     max_output_tokens: usize,
     max_turns: usize,
+    max_turns_explicit: bool,
     system_prompt: String,
     tool_selection: ResolvedToolSelection,
     custom_tools: Vec<CustomToolFactory>,
@@ -524,6 +526,7 @@ impl PendingAgentBehavior {
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,
+            max_turns_explicit: false,
             system_prompt: String::new(),
             tool_selection: ResolvedToolSelection::default(),
             custom_tools: Vec::new(),
@@ -639,6 +642,11 @@ impl PendingAgentBehavior {
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
+            max_turns_provenance: if self.max_turns_explicit {
+                crate::config::MaxTurnsProvenance::Explicit
+            } else {
+                crate::config::MaxTurnsProvenance::Default
+            },
             system_prompt: self.system_prompt,
             tools: BehaviorToolConfig::from_selection(
                 &behavior_name,

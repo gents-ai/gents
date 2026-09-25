@@ -11,7 +11,7 @@ use crate::document_config::AdvertisedModel;
 use crate::openai_wire::OpenAiWireApi;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
-pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-15.1";
+pub const INFERENCE_DEFAULTS_VERSION: &str = "2026-09-25.1";
 
 pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
 pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";

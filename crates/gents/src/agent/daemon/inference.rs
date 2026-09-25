@@ -11,7 +11,7 @@ use tracing::Instrument;
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
 use crate::compaction::ReductionOptions;
-use crate::config::ResolvedBehavior;
+use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
 use crate::streaming::StreamWriter;
@@ -21,6 +21,31 @@ type RequestDeadline = Option<DateTime<Utc>>;
 
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Appends the resolved `max_turns`'s provenance to a max-turns stream failure
+/// so the operator knows whether to edit the profile or accept the built-in
+/// default (#1539). Every other stream error is returned unchanged. Harbor
+/// (`scripts/harbor/run_gents.sh`) and the pinned max-turns display test
+/// (`agent/loop_stream/tests/streaming.rs`) match rig's own
+/// `"agent stream failed: PromptError: MaxTurnError: "` prefix verbatim, so
+/// this only ever appends after `{error}`'s unmodified `Display`, never
+/// rewrites it.
+fn max_turns_provenance_suffix(
+    error: &rig::agent::StreamingError,
+    provenance: MaxTurnsProvenance,
+) -> String {
+    match error {
+        rig::agent::StreamingError::Prompt(prompt_error)
+            if matches!(
+                **prompt_error,
+                rig::completion::PromptError::MaxTurnsError { .. }
+            ) =>
+        {
+            format!(" ({})", provenance.describe())
+        }
+        _ => String::new(),
+    }
 }
 
 fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
@@ -193,6 +218,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
+                let max_turns_provenance = self.behavior.max_turns_provenance;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
                     aggregate_token_budget,
@@ -547,7 +573,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
-                            let error_reason = format!("agent stream failed: {}", error);
+                            let error_reason = format!(
+                                "agent stream failed: {}{}",
+                                error,
+                                max_turns_provenance_suffix(&error, max_turns_provenance)
+                            );
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 error_reason
                             )));
@@ -645,7 +675,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 mod tests {
     use super::{
         assemble_request_context_message, await_with_request_deadline,
-        ensure_request_deadline_open, request_deadline_remaining,
+        ensure_request_deadline_open, max_turns_provenance_suffix, request_deadline_remaining,
         terminal_response_has_visible_output, BehaviorDaemon,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
@@ -668,6 +698,62 @@ mod tests {
         Arc,
     };
     use std::time::Duration;
+
+    #[test]
+    fn max_turns_failure_message_reports_default_provenance_and_keeps_pinned_prefix() {
+        let error = rig::agent::StreamingError::Prompt(Box::new(
+            rig::completion::PromptError::MaxTurnsError {
+                max_turns: 1000,
+                chat_history: Box::new(Vec::new()),
+                prompt: Box::new(rig::completion::Message::user("test")),
+            },
+        ));
+        let reason = format!(
+            "agent stream failed: {}{}",
+            error,
+            max_turns_provenance_suffix(&error, crate::config::MaxTurnsProvenance::Default)
+        );
+        assert!(
+            reason.starts_with("agent stream failed: PromptError: MaxTurnError: "),
+            "must preserve the pinned Harbor/streaming-test prefix: {reason}"
+        );
+        assert!(
+            reason.contains("built-in default"),
+            "must name the default provenance: {reason}"
+        );
+    }
+
+    #[test]
+    fn max_turns_failure_message_reports_explicit_provenance_and_keeps_pinned_prefix() {
+        let error = rig::agent::StreamingError::Prompt(Box::new(
+            rig::completion::PromptError::MaxTurnsError {
+                max_turns: 40,
+                chat_history: Box::new(Vec::new()),
+                prompt: Box::new(rig::completion::Message::user("test")),
+            },
+        ));
+        let reason = format!(
+            "agent stream failed: {}{}",
+            error,
+            max_turns_provenance_suffix(&error, crate::config::MaxTurnsProvenance::Explicit)
+        );
+        assert!(reason.starts_with("agent stream failed: PromptError: MaxTurnError: "));
+        assert!(
+            reason.contains("execution profile"),
+            "must name the explicit-profile provenance: {reason}"
+        );
+    }
+
+    #[test]
+    fn max_turns_provenance_suffix_is_empty_for_non_max_turns_errors() {
+        let error = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError("boom".to_string()),
+        );
+        assert_eq!(
+            max_turns_provenance_suffix(&error, crate::config::MaxTurnsProvenance::Default),
+            ""
+        );
+    }
 
     #[derive(Clone)]
     struct RoutedReplyModel;
@@ -884,6 +970,7 @@ mod tests {
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
+            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,

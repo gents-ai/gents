@@ -665,6 +665,7 @@ mod tests {
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
+            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,

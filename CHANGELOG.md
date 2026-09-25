@@ -77,6 +77,11 @@ source consistency checks, not a separate runtime compatibility version.
   requested, the delegation depth limit, instead of eight. Explicit depths
   and the desktop cascade-cancel preview use the descendant walk's 32-level
   bound, matching what cancellation reaches (#1764).
+- The default agent turn limit is 1,000, up from 250, so long-running work is
+  not cut short by the built-in default. A max-turns failure now also names
+  whether the limit came from that default or from an explicit value on the
+  behavior's execution profile (#1539).
+
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 - The desktop transcript shows tool commands, arguments and output as they

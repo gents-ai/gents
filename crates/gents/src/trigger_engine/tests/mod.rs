@@ -595,6 +595,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
         tools: BehaviorToolConfig::default(),
         compaction: None,

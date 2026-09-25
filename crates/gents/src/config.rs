@@ -12,7 +12,7 @@ use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
-pub const DEFAULT_MAX_TURNS: usize = 250;
+pub const DEFAULT_MAX_TURNS: usize = 1_000;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 // Moved to gents-loop (G-1): compaction's own default/clamp constants.
@@ -57,6 +57,10 @@ pub struct ResolvedBehavior {
     pub context_window: usize,
     pub max_output_tokens: usize,
     pub max_turns: usize,
+    /// Whether `max_turns` came from the built-in default or an explicit
+    /// profile value (#1539); read by `agent/daemon/inference.rs` to name the
+    /// provenance in a max-turns failure.
+    pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
     pub tools: BehaviorToolConfig,
     /// Canonical compaction selection; absence uses runtime defaults.
@@ -131,13 +135,11 @@ impl ResolvedInference {
         )
     }
 
-    pub fn max_turns(&self) -> Result<usize> {
-        positive_inference_limit(
+    pub fn max_turns(&self) -> Result<ResolvedMaxTurns> {
+        resolve_max_turns(
             self.execution
                 .as_ref()
                 .and_then(|execution| execution.max_turns),
-            DEFAULT_MAX_TURNS,
-            "max_turns",
         )
     }
 
@@ -167,6 +169,46 @@ fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> 
         Some(value) if value > 0 => Ok(usize::try_from(value)?),
         Some(_) => anyhow::bail!("{field} must be positive"),
     }
+}
+
+/// Where a resolved `max_turns` came from: the built-in runtime default, or an
+/// explicit value on the profile's `InferenceExecution` document. Carried so a
+/// max-turns failure can name which knob the operator should change (#1539).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxTurnsProvenance {
+    Default,
+    Explicit,
+}
+
+impl MaxTurnsProvenance {
+    /// Operator-facing clause naming which knob controls this limit.
+    pub fn describe(self) -> &'static str {
+        match self {
+            MaxTurnsProvenance::Default => {
+                "max_turns is unset on this behavior's execution profile; using the built-in default"
+            }
+            MaxTurnsProvenance::Explicit => {
+                "max_turns is set explicitly on this behavior's execution profile"
+            }
+        }
+    }
+}
+
+/// A resolved `max_turns` limit paired with its provenance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedMaxTurns {
+    pub value: usize,
+    pub provenance: MaxTurnsProvenance,
+}
+
+fn resolve_max_turns(configured: Option<i64>) -> Result<ResolvedMaxTurns> {
+    let provenance = if configured.is_some() {
+        MaxTurnsProvenance::Explicit
+    } else {
+        MaxTurnsProvenance::Default
+    };
+    let value = positive_inference_limit(configured, DEFAULT_MAX_TURNS, "max_turns")?;
+    Ok(ResolvedMaxTurns { value, provenance })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -462,6 +504,7 @@ mod tests {
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,
+            max_turns_provenance: MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,
@@ -523,7 +566,27 @@ mod tests {
 
     #[test]
     fn default_max_turns_supports_long_running_agents() {
-        assert_eq!(DEFAULT_MAX_TURNS, 250);
+        assert_eq!(DEFAULT_MAX_TURNS, 1_000);
+    }
+
+    #[test]
+    fn max_turns_resolves_default_provenance_when_unset() {
+        let resolved = resolve_max_turns(None).expect("default resolves");
+        assert_eq!(resolved.value, DEFAULT_MAX_TURNS);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::Default);
+    }
+
+    #[test]
+    fn max_turns_resolves_explicit_provenance_when_set() {
+        let resolved = resolve_max_turns(Some(40)).expect("explicit value resolves");
+        assert_eq!(resolved.value, 40);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::Explicit);
+    }
+
+    #[test]
+    fn max_turns_rejects_non_positive_explicit_value_regardless_of_provenance() {
+        let error = resolve_max_turns(Some(0)).expect_err("zero must still be rejected");
+        assert!(error.to_string().contains("max_turns must be positive"));
     }
 
     #[test]

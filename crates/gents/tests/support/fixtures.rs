@@ -148,6 +148,7 @@ pub fn test_behavior_for_principal(
         context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: gents::config::DEFAULT_MAX_TURNS,
+        max_turns_provenance: gents::config::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
         tools: BehaviorToolConfig::default(),
         compaction: None,
