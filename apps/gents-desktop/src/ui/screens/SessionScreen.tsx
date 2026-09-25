@@ -54,7 +54,7 @@ import {
   type ToolStepStatus,
 } from "@gents/ui/conversation";
 import type { Shell } from "@/hooks/useShell";
-import { anchor } from "@/lib/scroll";
+import { anchor, scrollViewport, useFollowTail } from "@/lib/scroll";
 import { useResizableWidth } from "@/lib/resizable";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
@@ -116,8 +116,6 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
-const TRANSCRIPT_FOLLOW_THRESHOLD_PX = 64;
-
 /** Add only local composer emptiness; every other blocker belongs to ClientShell. */
 export function presentedComposerSendStatus(
   draft: string,
@@ -126,93 +124,6 @@ export function presentedComposerSendStatus(
   return draft.trim()
     ? canonicalNonEmptyStatus
     : { kind: "disabled", reason: "composerEmpty", hint: "Type a message to send" };
-}
-
-function transcriptViewport(owner: HTMLDivElement | null) {
-  return owner?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]") ?? null;
-}
-
-function transcriptIsNearTip(viewport: HTMLElement) {
-  return (
-    viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <
-    TRANSCRIPT_FOLLOW_THRESHOLD_PX
-  );
-}
-
-/**
- * Preserve the reader's intent across transcript growth. Measuring whether the
- * viewport is near the tip only after a large streamed chunk lands loses that
- * intent: the new height itself can make a previously pinned viewport appear
- * disengaged. The ref records intent on scroll and the layout effect consumes
- * that prior observation when content grows.
- */
-export function useTranscriptFollow(
-  ownerRef: RefObject<HTMLDivElement | null>,
-  sessionId: string | null,
-  contentSignal: string,
-) {
-  const shouldFollow = useRef(true);
-  const openedSession = useRef<string | null>(null);
-  const [atBottom, setAtBottom] = useState(true);
-
-  useLayoutEffect(() => {
-    if (!sessionId) {
-      openedSession.current = null;
-      shouldFollow.current = true;
-      setAtBottom(true);
-      return;
-    }
-    const viewport = transcriptViewport(ownerRef.current);
-    if (!viewport) return;
-
-    const sessionChanged = openedSession.current !== sessionId;
-    if (sessionChanged) {
-      openedSession.current = sessionId;
-      shouldFollow.current = true;
-    }
-    if (shouldFollow.current) {
-      viewport.scrollTop = viewport.scrollHeight;
-      setAtBottom(true);
-    }
-  }, [contentSignal, ownerRef, sessionId]);
-
-  useEffect(() => {
-    const viewport = transcriptViewport(ownerRef.current);
-    if (!viewport || !sessionId) return;
-    const observeIntent = () => {
-      const nearTip = transcriptIsNearTip(viewport);
-      shouldFollow.current = nearTip;
-      setAtBottom(nearTip);
-    };
-    observeIntent();
-    viewport.addEventListener("scroll", observeIntent, { passive: true });
-    return () => viewport.removeEventListener("scroll", observeIntent);
-  }, [ownerRef, sessionId]);
-
-  const toBottom = () => {
-    const viewport = transcriptViewport(ownerRef.current);
-    if (!viewport) return;
-    /* A smooth scroll is abandoned the moment anything else writes to the
-       scroller, and a long transcript writes constantly: every scroll event
-       on the way down re-renders hundreds of rows, and the animation is
-       dropped halfway or never starts. The button then plays its press and
-       does nothing, which is worse than arriving without ceremony.
-
-       So a short way is animated and a long way is not, and either way the
-       foot is claimed again on the next frame, after whatever render the
-       click set off has landed. */
-    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    shouldFollow.current = true;
-    viewport.scrollTo({
-      top: viewport.scrollHeight,
-      behavior: distance > viewport.clientHeight * 2 ? "auto" : "smooth",
-    });
-    requestAnimationFrame(() => {
-      if (shouldFollow.current) viewport.scrollTop = viewport.scrollHeight;
-    });
-  };
-
-  return { atBottom, toBottom };
 }
 
 /* how full the context is, as a stroked ring: the track is the window, the
@@ -824,7 +735,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
 
   const loadOlder = async () => {
-    const viewport = transcriptViewport(ownerRef.current);
+    const viewport = scrollViewport(ownerRef.current);
     const heightBefore = viewport?.scrollHeight ?? 0;
     const sessionId = session?.sessionId ?? null;
     setLoadingOlder(true);
@@ -938,7 +849,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
-  const viewport = () => transcriptViewport(column.current);
+  const viewport = () => scrollViewport(column.current);
   const transcriptContentSignal = useMemo(
     () =>
       (session?.timelineItems ?? [])
@@ -974,7 +885,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     };
   }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useTranscriptFollow(
+  const { atBottom, toBottom } = useFollowTail(
     column,
     shell.selectedSessionId,
     transcriptContentSignal,

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -14,7 +14,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 
 import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
 import { ToolBody } from "../src/ui/screens/tool-views";
-import { diffText, toolSummary } from "../src/ui/screens/tool-summary";
+import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
 import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
 
 function tool(
@@ -119,6 +119,70 @@ describe("file edit diff", () => {
     expect(
       diffText(edit.presentation.kind === "fileEdit" ? edit.presentation.diff : []),
     ).toBe(" fn b() {}\n-fn c() {}\n+fn c2() {}");
+  });
+});
+
+function command(
+  fields: Partial<Extract<RenderedToolCallView["presentation"], { kind: "command" }>>,
+): RenderedToolCallView["presentation"] {
+  return {
+    kind: "command",
+    command: "cargo test",
+    exitCode: 0,
+    timedOut: false,
+    failed: false,
+    durationMs: null,
+    cwd: null,
+    executionMode: null,
+    networkMode: null,
+    stdout: "",
+    stderr: "",
+    fallbackOutput: null,
+    ...fields,
+  };
+}
+
+describe("long command output", () => {
+  it("says how many lines a multi-line output holds", () => {
+    const stdout =
+      Array.from({ length: 1200 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    render(<ToolBody tool={tool(command({ stdout, stderr: "one warning" }))} />);
+    expect(screen.getByText(/1,200 lines/)).toBeInTheDocument();
+    expect(screen.getAllByText(/ lines$/)).toHaveLength(1);
+  });
+
+  it("counts lines without an extra one for the final newline", () => {
+    expect(lineCount("")).toBe(0);
+    expect(lineCount("a")).toBe(1);
+    expect(lineCount("a\n")).toBe(1);
+    expect(lineCount("a\r\nb\r\n")).toBe(2);
+  });
+
+  it("keeps a running command's live output at its newest line until the reader scrolls up", () => {
+    const running = (tail: string) => ({
+      ...tool(command({}), "running"),
+      partialOutputTail: tail,
+    });
+    const { rerender } = render(<ToolBody tool={running("a")} />);
+    const viewport = screen
+      .getByTestId("tool-live-output-tool-1")
+      .querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")!;
+    let scrollHeight = 500;
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, get: () => 160 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+
+    rerender(<ToolBody tool={running("a\nb")} />);
+    expect(viewport.scrollTop).toBe(500);
+
+    act(() => {
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    scrollHeight = 900;
+    rerender(<ToolBody tool={running("a\nb\nc")} />);
+    expect(viewport.scrollTop).toBe(0);
   });
 });
 

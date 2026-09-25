@@ -3,12 +3,14 @@
    presentation kinds (command, fileRead, fileEdit, subagent, process,
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
+import { useRef } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
+import { useFollowTail } from "../lib/scroll";
 import { isLocalAgent } from "../lib/firstRun";
 import { useDeployment } from "./deployment-context";
 import { CopyButton } from "./Markdown";
@@ -18,6 +20,7 @@ import {
   duration,
   isAbsolutePath,
   isRedacted,
+  lineCount,
   toolSummary,
 } from "./tool-summary";
 
@@ -59,7 +62,16 @@ export function ToolSummary({
   );
 }
 
-function Payload({ label, value }: { label: string; value?: string | null }) {
+function Payload({
+  label,
+  value,
+  counted = false,
+}: {
+  label: string;
+  value?: string | null;
+  /** say how many lines it holds, for output long enough to scroll */
+  counted?: boolean;
+}) {
   if (!value?.trim()) return null;
   if (isRedacted(value))
     return (
@@ -73,11 +85,15 @@ function Payload({ label, value }: { label: string; value?: string | null }) {
       </div>
     );
   const text = pretty(value);
+  const lines = counted ? lineCount(text) : 0;
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
       <div className="flex items-center justify-between">
         <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
           {label}
+          {lines > 1 && (
+            <span className="normal-case"> · {lines.toLocaleString()} lines</span>
+          )}
         </span>
         <CopyButton getText={() => text} />
       </div>
@@ -151,9 +167,9 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               p.networkMode && `network: ${p.networkMode}`,
             ]}
           />
-          <Payload label="stdout" value={p.stdout} />
-          <Payload label="stderr" value={p.stderr} />
-          <Payload label="output" value={p.fallbackOutput} />
+          <Payload label="stdout" value={p.stdout} counted />
+          <Payload label="stderr" value={p.stderr} counted />
+          <Payload label="output" value={p.fallbackOutput} counted />
         </>
       )}
       {p.kind === "fileRead" && (
@@ -231,18 +247,29 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="result" value={p.output} />
         </>
       )}
-      {live && (
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-          <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            live output
-          </span>
-          <ScrollArea className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
-            <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
-              {live}
-            </pre>
-          </ScrollArea>
-        </div>
-      )}
+      {live && <LiveOutput subject={tool.itemKey} tail={live} />}
+    </div>
+  );
+}
+
+/* a running command's newest lines are the ones that matter: the box keeps
+   to its foot as output arrives, unless the reader has scrolled up */
+function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
+  const owner = useRef<HTMLDivElement>(null);
+  useFollowTail(owner, subject, tail);
+  return (
+    <div ref={owner} className="grid grid-cols-[minmax(0,1fr)] gap-1">
+      <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+        live output
+      </span>
+      <ScrollArea
+        data-testid={`tool-live-output-${subject}`}
+        className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      >
+        <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
+          {tail}
+        </pre>
+      </ScrollArea>
     </div>
   );
 }
