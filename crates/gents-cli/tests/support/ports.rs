@@ -13,10 +13,12 @@ static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
 pub fn allocate_port() -> Result<u16> {
     // Binding port 0 chooses from the OS ephemeral range. Once that probe is
     // dropped, any outbound test connection may claim the same port before the
-    // server child binds it. Allocate monotonically from a non-ephemeral range
-    // instead. Keep an advisory reservation until this test process exits so
-    // other test binaries/worktrees cannot allocate the same currently unbound
-    // port during child startup. The bind still rejects unrelated listeners.
+    // server child binds it. Allocate monotonically from a fixed range
+    // instead. That range is not free of ephemeral collisions -- it overlaps
+    // Linux's default 32768-60999 -- so this only narrows the window, it does
+    // not close it. Keep an advisory reservation until this test process exits
+    // so other test binaries/worktrees cannot allocate the same currently
+    // unbound port during child startup.
     // Do not unlink reservation files: replacing an inode defeats its lock.
     let reservations = std::env::temp_dir().join("gents-cli-test-port-reservations");
     std::fs::create_dir_all(&reservations).context("creating test port reservation directory")?;
@@ -61,20 +63,14 @@ pub fn allocate_port() -> Result<u16> {
 }
 
 /// True while this process still holds `allocate_port`'s advisory
-/// reservation for `port`. The recovery paths in `process` consult it as a
-/// secondary gate, so they only retry a port this registry actually handed
-/// out.
+/// reservation for `port`.
 ///
-/// This check is deliberately not what protects the fixtures that provoke
-/// bind conflicts on purpose -- `server_fails_closed_when_http_port_is_occupied`
-/// and `server_rejects_ephemeral_http_port_before_publishing_readiness` in
-/// cli_server.rs. Those are safe structurally: they drive `spawn_server` and
-/// that suite's local `wait_for_server_exit`, so they never call a recovering
-/// helper and cannot reach the recovery path at all. The registry check on
-/// its own would not be airtight, because `FIRST_TEST_PORT..=LAST_TEST_PORT`
-/// (20000-45000) overlaps Linux's default ephemeral range (32768-60999), so a
-/// port a fixture binds with port 0 can collide with one this registry
-/// handed out.
+/// The reservation is a lock on a file named after the port, not on the
+/// socket: it stops other Gents test processes from handing out the same
+/// number, and does nothing to stop an unrelated process from binding it.
+/// A true answer therefore means "this process asked for that port", not
+/// "that port is ours". Fixtures that bind a port themselves are never
+/// registered here, so recovery cannot reach them.
 pub fn is_reserved(port: u16) -> bool {
     PORT_RESERVATIONS
         .get()

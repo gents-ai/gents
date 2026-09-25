@@ -31,7 +31,7 @@ pub use process::{
     run_cli_failure_stdout_json, run_cli_json, run_cli_json_with_env, run_cli_text,
     run_desktop_init_json, run_init_json, spawn_cli, spawn_server, spawn_server_with_env,
     spawn_server_with_ready_json, spawn_server_with_ready_json_recovering, wait_for_port,
-    wait_for_port_recovering, ServeProcess,
+    ServeProcess,
 };
 pub use waits::{
     canonical_tool_result_text, wait_for_completed_inference_behaviors,

@@ -290,8 +290,9 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    let port = wait_for_port_recovering(port, &mut serve, |port| spawn_server(&home_dir, port))?;
+    // Bound, not dropped: the server must outlive the chat child below.
+    let (_serve, port, _readiness) =
+        spawn_server_with_ready_json_recovering(&home_dir, port, &[], &[])?;
     let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;

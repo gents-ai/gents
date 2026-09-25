@@ -10,26 +10,17 @@ use serde_json::Value;
 use super::fs::read_captured_log;
 use super::ports;
 
-/// Bound retries for lost-port-race recovery (`wait_for_port_recovering`,
-/// `spawn_server_with_ready_json`) -- never a blind "try the same thing
-/// again": every retry changes the port, and only after positive evidence
-/// (see `is_port_conflict_diagnostic`) that the previous one was raced away.
+/// Bound on replacement ports tried after a lost bind race.
 const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
 
-/// The gap between `ports::allocate_port`'s advisory reservation and a
-/// spawned `gents server`'s own bind is a real TOCTOU that cannot be closed
-/// from this side: the bind happens inside the pinned DefraDB dependency
-/// (`defra_node::EmbeddedNode::build`, vendored `crates/defra-node/src/lib.rs`
-/// around line 1232), which exposes neither a pre-bound-listener hook nor a
-/// way to read back the address it eventually binds. `serve.rs`'s own
-/// preflight check fails closed with this diagnostic when something else
-/// already owns the target address; treat it as positive evidence a
-/// reservation was raced away, never as a generic startup failure to paper
-/// over. Deliberately narrower than also matching the later
-/// "did not become ready" timeout in the same file, which can fire from
-/// ordinary host slowness with no port theft involved.
-fn is_port_conflict_diagnostic(text: &str) -> bool {
-    text.contains("embedded HTTP listener cannot bind to")
+/// Positive evidence that the child's preflight bind found `addr` already
+/// taken. The context string alone is not enough: `serve.rs` attaches it to
+/// every bind failure, so descriptor exhaustion or a permission error would
+/// otherwise be misread as a stolen port and silently retried. Unix renders
+/// `io::ErrorKind::AddrInUse` as this text on both macOS and Linux.
+pub fn is_address_in_use(text: &str, addr: &str) -> bool {
+    text.contains(&format!("embedded HTTP listener cannot bind to {addr}"))
+        && text.contains("Address already in use")
 }
 
 pub struct ServeProcess {
@@ -169,36 +160,29 @@ fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
 
 /// Spawn a `gents server` and wait for its readiness JSON.
 ///
-/// Never recovers from a lost port race: a caller holding only this
-/// signature cannot observe a port change, so moving the server to a fresh
-/// port would strand it waiting on a port nothing is listening on, replacing
-/// the child's precise bind diagnostic with an opaque timeout. Callers that
-/// want recovery must take the port back explicitly via
-/// `spawn_server_with_ready_json_recovering`.
+/// Never replaces a raced-away port: a caller holding this signature cannot
+/// observe a port change, so moving the server would strand it on a port
+/// nothing is listening on. Use `spawn_server_with_ready_json_recovering`
+/// to opt into recovery and take the resulting port back.
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
-    // Recovery is off, so the returned port is always the requested one.
+    // Recovery is off, so the bound port is always the requested one.
     let (serve, _port, value) =
         spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false)?;
     Ok((serve, value))
 }
 
-/// `spawn_server_with_ready_json` plus recovery from a lost port race: when
-/// the child fails its preflight bind on a port this process reserved (see
-/// `is_port_conflict_diagnostic`), release that reservation, allocate a fresh
-/// port and respawn, at most `MAX_STOLEN_PORT_ATTEMPTS` times.
+/// `spawn_server_with_ready_json`, but if the child's preflight bind finds
+/// the requested port already taken and this process reserved that port,
+/// release it, allocate another and respawn.
 ///
-/// Returns the port the server actually bound, which may differ from `port`.
-/// A recovered port invalidates every value derived from the requested one:
-/// derive `graphql_url` and any other address from the returned port, after
-/// this call, never from the port passed in. Fixtures that build those URLs
-/// before spawning are why adoption is a deliberate per-site move rather than
-/// a mechanical sweep -- a blanket destructure that kept using the requested
-/// port would compile while leaving recovery silently half-wired.
+/// Returns the port the child actually bound, which may differ from `port`.
+/// Derive `graphql_url` and every other address from the returned port,
+/// after this call.
 pub fn spawn_server_with_ready_json_recovering(
     home_dir: &Path,
     port: u16,
@@ -208,11 +192,10 @@ pub fn spawn_server_with_ready_json_recovering(
     spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true)
 }
 
-/// Single implementation behind both readiness-JSON spawners, so the
-/// recovery policy exists in exactly one place. `recover_stolen_port` gates
-/// it by starting the attempt budget at zero, which keeps the non-recovering
-/// caller's failures byte-identical to what it reported before recovery
-/// existed.
+/// Single owner of the readiness wait and the port-replacement policy.
+/// `recover_stolen_port` gates replacement by zeroing the attempt budget, so
+/// the non-recovering caller keeps reporting the child's own bind failure.
+/// The 30s budget spans the whole sequence, replacements included.
 fn spawn_server_with_ready_json_inner(
     home_dir: &Path,
     port: u16,
@@ -226,6 +209,7 @@ fn spawn_server_with_ready_json_inner(
     } else {
         0
     };
+    let deadline = Instant::now() + Duration::from_secs(30);
     'attempt: loop {
         let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
         let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
@@ -247,7 +231,6 @@ fn spawn_server_with_ready_json_inner(
         let child = command.spawn().context("spawning gents server")?;
         let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
-        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
             if let Some(value) = server_readiness_json(&stdout_so_far) {
@@ -260,14 +243,17 @@ fn spawn_server_with_ready_json_inner(
             let timed_out = Instant::now() >= deadline;
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
+                let addr = format!("127.0.0.1:{port}");
                 let recoverable = attempts_left > 0
                     && ports::is_reserved(port)
-                    && (is_port_conflict_diagnostic(&stdout)
-                        || is_port_conflict_diagnostic(&stderr));
+                    && (is_address_in_use(&stdout, &addr) || is_address_in_use(&stderr, &addr));
                 if recoverable {
                     attempts_left -= 1;
                     ports::release(port);
                     port = ports::allocate_port()?;
+                    // Reap the losing child before its replacement starts, so
+                    // two servers never hold the same home.
+                    drop(serve);
                     continue 'attempt;
                 }
                 if let Some(status) = exited {
@@ -338,6 +324,13 @@ pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&s
     }
 }
 
+/// Wait until something accepts TCP on `port`.
+///
+/// Any listener satisfies this, so a success is not evidence that `serve`
+/// owns the port: if an unrelated process holds it, this returns as soon as
+/// that process answers. Use `spawn_server_with_ready_json_recovering` when
+/// ownership matters -- the child publishes its readiness JSON only after an
+/// instance-specific probe confirms the listener is its own.
 pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -365,46 +358,6 @@ pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
             );
         }
         thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// Like `wait_for_port`, but when the wait fails specifically because an
-/// unrelated process won the race for an `allocate_port()`-reserved port
-/// (see `is_port_conflict_diagnostic`), release the stolen reservation,
-/// allocate a fresh port, and respawn with `respawn` instead of failing the
-/// caller's test on a known-recoverable race. A port the caller bound itself
-/// (never registered with `ports::allocate_port`) is never recovered, so
-/// fixtures that deliberately occupy a port to exercise bind-conflict
-/// handling keep observing that failure unchanged.
-///
-/// Returns the port the server is actually listening on, which may differ
-/// from `port`. A recovered port invalidates every value derived from the
-/// requested one: derive `graphql_url` and any other address from the
-/// returned port, after this call, never from the port passed in.
-pub fn wait_for_port_recovering(
-    mut port: u16,
-    serve: &mut ServeProcess,
-    respawn: impl Fn(u16) -> Result<ServeProcess>,
-) -> Result<u16> {
-    let mut attempts_left = MAX_STOLEN_PORT_ATTEMPTS;
-    loop {
-        match wait_for_port(port, serve) {
-            Ok(()) => return Ok(port),
-            Err(error) => {
-                let (stdout, stderr) = serve.captured_output()?;
-                let recoverable = attempts_left > 0
-                    && ports::is_reserved(port)
-                    && (is_port_conflict_diagnostic(&stdout)
-                        || is_port_conflict_diagnostic(&stderr));
-                if !recoverable {
-                    return Err(error);
-                }
-                attempts_left -= 1;
-                ports::release(port);
-                port = ports::allocate_port()?;
-                *serve = respawn(port)?;
-            }
-        }
     }
 }
 
