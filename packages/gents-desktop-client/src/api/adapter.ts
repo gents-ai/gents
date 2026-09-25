@@ -64,10 +64,11 @@ export function createDesktopApiAdapter(
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
         request: { agentName, ...authority },
       }),
-    resetManagedServer: (confirmation) =>
+    resetManagedServer: (confirmation, disposition) =>
       invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
-        request: { confirmation: confirmation ?? null },
+        request: { confirmation: confirmation ?? null, disposition: disposition ?? null },
       }),
+    quitDesktop: () => invokeDesktop<void>("desktop_app_quit"),
     validateManagedServerRoot: (path) =>
       invokeDesktop<{ canonicalPath: string }>(
         "desktop_managed_server_validate_root",

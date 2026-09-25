@@ -31,7 +31,7 @@ pub struct ResolvedBridgePolicy {
 pub enum ClientStartProgress {
     Pending,
     Ready,
-    Failed(String),
+    Failed(crate::error::BridgeError),
 }
 
 pub struct DesktopAppState {
@@ -227,6 +227,9 @@ pub struct ManagedServerState {
     /// launchd refused this start because macOS has not approved a
     /// background item it has not registered yet.
     pub approval_refused: bool,
+    /// The managed runtime refused its store as incompatible, as observed by
+    /// the last failed start or status read. Scopes a home reset.
+    pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
 pub struct DesktopBridge {
@@ -243,6 +246,9 @@ pub struct DesktopBridge {
     /// the detached starter task; waiters hold receivers and do not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
+    /// The last client start refused the client store as incompatible.
+    /// Scopes a home reset.
+    pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
 impl DesktopAppState {
@@ -255,6 +261,7 @@ impl DesktopAppState {
                 claude_login_cancel: None,
                 grok_login_cancel: None,
                 start_inflight: None,
+                incompatible_client_store: None,
             }),
             client_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             managed_server_lifecycle: tokio::sync::Mutex::new(()),

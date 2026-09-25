@@ -66,7 +66,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::trigger_engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
 const CLI_AFTER_HELP: &str = "\
 Quick start:
   gents init
@@ -600,7 +600,9 @@ pub(crate) async fn resolve_config_access(
                     format!("building embedded DefraDB node from {}", data_dir.display())
                 })?,
         );
-        gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
+        gents::migration::ensure_all_runtime_migrations(node_arc.clone())
+            .await
+            .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
         Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
             unreachable!("node_arc had exactly one strong reference at this point")
         })

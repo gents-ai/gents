@@ -12,9 +12,7 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
-  ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
-import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import {
   projectStartupPhaseAfterSnapshot,
@@ -29,6 +27,7 @@ import {
 } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
+import { useIncompatibleHome } from "./useIncompatibleHome";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
@@ -82,8 +81,6 @@ export function useDesktopClientLifecycle({
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [managedServerReset, setManagedServerReset] =
-    useState<ManagedServerResetResult | null>(null);
   const [managedServerWait, setManagedServerWait] = useState<ManagedServerWait | null>(
     null,
   );
@@ -111,6 +108,11 @@ export function useDesktopClientLifecycle({
       current = false;
     };
   }, [api, managedServerFailed, startupDiagnosticsHint, snapshot]);
+  const incompatibleHome = useIncompatibleHome({
+    api,
+    setError,
+    startFresh: () => initializeDesktop(),
+  });
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -171,6 +173,7 @@ export function useDesktopClientLifecycle({
           if (startupPhaseRef.current === "starting-client") {
             setStartupPhase("client-error");
           }
+          await incompatibleHome.adopt(error);
         }
         throw error;
       } finally {
@@ -209,25 +212,14 @@ export function useDesktopClientLifecycle({
           // already-saved remote peers. Surface the error after the shell is up.
           localServerAvailable.current = false;
           setError(error instanceof Error ? error.message : String(error));
+          if (await incompatibleHome.adopt(error)) {
+            setStartupPhase("managed-server-error");
+            return;
+          }
           if (error instanceof ManagedServerStartupError) {
             setManagedServerFailure(error);
             setStartupPhase("managed-server-error");
             return;
-          }
-          if (
-            error instanceof BridgeInvokeError &&
-            error.code === "incompatibleLocalStore" &&
-            api.resetManagedServer
-          ) {
-            try {
-              setManagedServerReset(await api.resetManagedServer());
-              setStartupPhase("managed-server-error");
-              return;
-            } catch (previewError) {
-              setError(
-                `${String(error)} Reset inspection failed: ${String(previewError)}`,
-              );
-            }
           }
         }
       }
@@ -277,6 +269,7 @@ export function useDesktopClientLifecycle({
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
       setStartupPhase("managed-server-error");
+      await incompatibleHome.adopt(error);
     } finally {
       setStarting(false);
     }
@@ -284,25 +277,6 @@ export function useDesktopClientLifecycle({
 
   async function onRetryStartup() {
     await initializeDesktop();
-  }
-
-  async function onResetManagedServer() {
-    if (!managedServerReset || !api.resetManagedServer) return;
-    setStarting(true);
-    setError(null);
-    try {
-      const result = await api.resetManagedServer(managedServerReset.confirmation);
-      if (!result.completed || !result.backupPath) {
-        throw new Error("managed server reset did not create a backup");
-      }
-      setManagedServerReset(null);
-      await initializeDesktop();
-    } catch (error) {
-      setError(String(error));
-      setStartupPhase("managed-server-error");
-    } finally {
-      setStarting(false);
-    }
   }
 
   useEffect(() => {
@@ -348,6 +322,7 @@ export function useDesktopClientLifecycle({
       logShellEvent(`restart failed reason="${reason}" error=${String(error)}`);
       if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
         setError(`desktop client restart failed after ${reason}: ${String(error)}`);
+        await incompatibleHome.adopt(error);
       }
     } finally {
       setStopping(false);
@@ -373,8 +348,7 @@ export function useDesktopClientLifecycle({
     ensureDesktopClientStarted,
     onStartClient,
     onRetryStartup,
-    onResetManagedServer,
-    managedServerReset,
+    incompatibleHome,
     managedServerWait,
     diagnosticsHint: snapshot?.bootstrap.diagnosticsHint || startupDiagnosticsHint,
     onSkipManagedServerWait,

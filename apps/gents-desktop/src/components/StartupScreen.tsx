@@ -11,7 +11,6 @@ import {
 } from "../lib/managedServerStartup";
 import { Mark } from "../ui/app/Mark";
 import { DiagnosticsHint } from "../ui/screens/setup/SetupProgress";
-import type { ManagedServerResetResult } from "@source-inc/gents-desktop-client";
 
 const STARTUP_ASIDES = [
   "Catalyzing dilithium converters.",
@@ -27,8 +26,6 @@ type StartupScreenProps = {
   managedServerSupported?: boolean;
   onRetry: () => Promise<void>;
   phase: Exclude<DesktopStartupPhase, "ready">;
-  managedServerReset?: ManagedServerResetResult | null;
-  onResetManagedServer?: () => Promise<void>;
   managedServerWait?: ManagedServerWait | null;
   onSkipManagedServerWait?: () => void;
   onOpenLoginItems?: () => Promise<void>;
@@ -41,8 +38,6 @@ export function StartupScreen({
   managedServerSupported = false,
   onRetry,
   phase,
-  managedServerReset = null,
-  onResetManagedServer,
   managedServerWait = null,
   onSkipManagedServerWait,
   onOpenLoginItems,
@@ -50,7 +45,6 @@ export function StartupScreen({
   diagnosticsHint = null,
 }: StartupScreenProps) {
   const [asideIndex, setAsideIndex] = useState(0);
-  const [resetConfirmed, setResetConfirmed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const status = projectStartupLoadingStatus(phase, managedServerSupported);
   const wait =
@@ -151,38 +145,6 @@ export function StartupScreen({
               {error ?? "Gents could not finish starting."}
             </p>
             <DiagnosticsHint hint={diagnosticsHint} />
-            {phase === "managed-server-error" && managedServerReset ? (
-              <div className="grid gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
-                <p>
-                  This installation contains an incompatible local database at{" "}
-                  <code className="break-all">{managedServerReset.dataPath}</code>.
-                </p>
-                <p>{managedServerReset.consequence}</p>
-                <label className="flex items-start gap-2">
-                  <input
-                    checked={resetConfirmed}
-                    data-testid="managed-server-reset-confirmation"
-                    onChange={(event) => setResetConfirmed(event.currentTarget.checked)}
-                    type="checkbox"
-                  />
-                  <span>
-                    Archive this exact managed home and initialize a new local database:
-                    <code className="block break-all">
-                      {managedServerReset.managedHome}
-                    </code>
-                  </span>
-                </label>
-                <button
-                  className="inline-flex h-8 w-fit items-center rounded-lg bg-destructive px-3 text-sm font-medium text-destructive-foreground disabled:opacity-50"
-                  data-testid="managed-server-reset"
-                  disabled={!resetConfirmed || !onResetManagedServer}
-                  onClick={() => void onResetManagedServer?.()}
-                  type="button"
-                >
-                  Archive old data and start fresh
-                </button>
-              </div>
-            ) : null}
             <div className="flex flex-wrap gap-2">
               <button
                 className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
@@ -192,7 +154,7 @@ export function StartupScreen({
               >
                 Try again
               </button>
-              {phase === "managed-server-error" && !managedServerReset ? (
+              {phase === "managed-server-error" ? (
                 <>
                   {onRestartManagedServer ? (
                     <button

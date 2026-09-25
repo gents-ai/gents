@@ -10,6 +10,7 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 - `allow-desktop-client-start`
 - `allow-desktop-client-shutdown`
 - `allow-desktop-set-selected-agent`
+- `allow-desktop-app-quit`
 
 ## Permission Table
 
@@ -42,6 +43,32 @@ Enables the desktop_agent_config_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_agent_config_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-app-quit`
+
+</td>
+<td>
+
+Enables the desktop_app_quit command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-app-quit`
+
+</td>
+<td>
+
+Denies the desktop_app_quit command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2303,7 +2330,7 @@ Bootstrap summary, aggregate snapshot, observer metrics
 </td>
 <td>
 
-Client start/shutdown and selected-agent
+Client start/shutdown, selected-agent, and application quit
 
 </td>
 </tr>

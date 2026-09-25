@@ -47,8 +47,12 @@ pub struct ManagedServerRestartRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetRequest {
-    /// Omit to preview the exact managed home and required confirmation.
+    /// Omit to preview what would be retired and the required confirmation.
     pub confirmation: Option<String>,
+    /// Archive (the default) or delete. Each has its own confirmation text.
+    #[ts(optional = nullable)]
+    #[serde(default)]
+    pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
 /// Fetch peer runtime status by **saved peer id** only — read grants never

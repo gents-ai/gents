@@ -188,8 +188,16 @@ async fn run_detached_client_start<R: Runtime>(
             .await
         {
             Ok(lifecycle) => start_client_core_async(paths, lifecycle).await,
-            Err(error) => Err(error),
+            Err(error) => Err((error, None)),
         };
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.incompatible_client_store = match &start_result {
+            Ok(_) => None,
+            Err((_, incompatible)) => incompatible.clone(),
+        };
+    }
+    let start_result = start_result.map_err(|(error, _)| error);
 
     match start_result {
         Ok((core, _lifecycle_guard)) => {
@@ -235,12 +243,12 @@ async fn run_detached_client_start<R: Runtime>(
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 bridge.start_inflight = None;
             }
-            let message = error.message.clone();
-            let _ = progress_tx.send(ClientStartProgress::Failed(message));
             tracing::error!(
                 error = %error.message,
+                code = error.code.as_str(),
                 "desktop client start: single-flight failed"
             );
+            let _ = progress_tx.send(ClientStartProgress::Failed(error));
         }
     }
 }
@@ -260,14 +268,12 @@ async fn wait_for_client_start_progress(
                 }
             }
             ClientStartProgress::Ready => return Ok(()),
-            ClientStartProgress::Failed(message) => {
-                return Err(BridgeError::untyped(message));
-            }
+            ClientStartProgress::Failed(error) => return Err(error),
         }
     }
 }
 
-fn start_inflight_is_pending(state: &State<'_, DesktopAppState>) -> bool {
+fn start_inflight_is_pending(state: &DesktopAppState) -> bool {
     state
         .bridge
         .lock()
@@ -278,7 +284,7 @@ fn start_inflight_is_pending(state: &State<'_, DesktopAppState>) -> bool {
 
 /// Wait until any in-flight start finishes (ready or failed). Does **not** hold
 /// `client_lifecycle` so the detached starter can acquire it to install.
-async fn wait_for_start_inflight(state: &State<'_, DesktopAppState>) -> Result<(), BridgeError> {
+async fn wait_for_start_inflight(state: &DesktopAppState) -> Result<(), BridgeError> {
     loop {
         let progress_rx = {
             let bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
@@ -310,44 +316,68 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     // Let that bounded operation unwind before dropping its core instead of
     // aborting the future between install and cleanup.
     let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
-    super::managed_server::drain_managed_runtime_pairing(&state).await;
-    // Drain in-flight start first (without lifecycle) so the starter can install
-    // and we can then take the core cleanly. Retry if a start sneaks in between
-    // drain and the lifecycle lock.
-    let (core, updates_task) = loop {
-        wait_for_start_inflight(&state).await?;
-        let lifecycle_guard = state.client_lifecycle.lock().await;
-        if start_inflight_is_pending(&state) {
-            drop(lifecycle_guard);
-            continue;
-        }
-        let taken = {
-            let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
-            (bridge.core.take(), bridge.updates_task.take())
-        };
-        drop(lifecycle_guard);
-        break taken;
-    };
-
-    if let Some(task) = updates_task {
-        task.abort();
-    }
-
-    if let Some(core) = core {
-        core.shutdown()
-            .await
-            .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    }
-
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("lifecycle"),
-    );
+    shutdown_client_under_managed_lifecycle(&app, &state).await?;
 
     let grants = snapshot_grants(&state);
     build_client_snapshot_with_grants(None, Some(&state.policy), grants)
         .await
         .map_err(BridgeError::untyped)
+}
+
+/// Stops the live desktop client, if any, and releases its store. The caller
+/// holds the managed-server lifecycle lock.
+pub(super) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    super::managed_server::drain_managed_runtime_pairing(state).await;
+    drop(exclude_client(state).await?);
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("lifecycle"),
+    );
+    Ok(())
+}
+
+/// Stops the live desktop client and returns the owned client lifecycle lock
+/// with no client running and no start in flight. The lock is the one a
+/// start thread owns while it opens the store (and keeps until a late core
+/// is closed), so while the guard is held no start, current or timed out,
+/// has the store, peer directory or keys open, and the caller may move or
+/// delete the client state.
+pub(super) async fn exclude_client(
+    state: &DesktopAppState,
+) -> Result<ClientLifecycleGuard, BridgeError> {
+    // Drain an in-flight start without the lifecycle lock so its starter can
+    // finish installing; retry if another start is claimed in between.
+    loop {
+        wait_for_start_inflight(state).await?;
+        let lifecycle_guard = Arc::clone(&state.client_lifecycle).lock_owned().await;
+        if start_inflight_is_pending(state) {
+            drop(lifecycle_guard);
+            continue;
+        }
+        let (core, updates_task) = {
+            let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+            (bridge.core.take(), bridge.updates_task.take())
+        };
+        if let Some(task) = updates_task {
+            task.abort();
+        }
+        if let Some(core) = core {
+            core.shutdown()
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        }
+        return Ok(lifecycle_guard);
+    }
+}
+
+/// Quits the desktop application without touching any local state; the
+/// "keep it and quit" answer to a home this version cannot open.
+#[tauri::command]
+pub fn desktop_app_quit<R: Runtime>(app: AppHandle<R>) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -361,7 +391,7 @@ pub async fn desktop_client_snapshot(
         .map_err(BridgeError::untyped)
 }
 
-type ClientLifecycleGuard = tokio::sync::OwnedMutexGuard<()>;
+pub(super) type ClientLifecycleGuard = tokio::sync::OwnedMutexGuard<()>;
 
 /// How long a start waits for the store while an earlier start that stalled
 /// is still closing it.
@@ -382,13 +412,19 @@ async fn acquire_client_lifecycle(
 }
 type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuard);
 
+type ClientStartFailure = (
+    BridgeError,
+    Option<gents::storage_backend::IncompatibleStore>,
+);
+
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
 /// worker: the worker awaits a oneshot instead of `thread::join`. The thread
 /// owns the lifecycle guard and hands it back with the core.
 async fn start_client_core_async(
     paths: gents_desktop_core::client::DesktopPaths,
     lifecycle: ClientLifecycleGuard,
-) -> Result<(ClientCore, ClientLifecycleGuard), BridgeError> {
+) -> Result<(ClientCore, ClientLifecycleGuard), ClientStartFailure> {
+    let node_data_dir = paths.node_data_dir().to_path_buf();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
     std::thread::Builder::new()
@@ -404,12 +440,15 @@ async fn start_client_core_async(
             })
         })
         .map_err(|error| {
-            BridgeError::new(
-                BridgeErrorCode::ClientStartFailed,
-                format!("spawning desktop client startup thread: {error}"),
+            (
+                BridgeError::new(
+                    BridgeErrorCode::ClientStartFailed,
+                    format!("spawning desktop client startup thread: {error}"),
+                ),
+                None,
             )
         })?;
-    bounded_client_start(rx, stage_rx, CLIENT_START_STALL_TIMEOUT).await
+    bounded_client_start(rx, stage_rx, CLIENT_START_STALL_TIMEOUT, &node_data_dir).await
 }
 
 /// Hands the started core and the lifecycle guard to the waiting starter. A
@@ -441,7 +480,8 @@ async fn bounded_client_start<T>(
     mut delivered: tokio::sync::oneshot::Receiver<ClientStartDelivery<T>>,
     mut completed_stage: watch::Receiver<&'static str>,
     stall: std::time::Duration,
-) -> Result<(T, ClientLifecycleGuard), BridgeError> {
+    node_data_dir: &std::path::Path,
+) -> Result<(T, ClientLifecycleGuard), ClientStartFailure> {
     let mut deadline = tokio::time::Instant::now() + stall;
     let mut reporting = true;
     loop {
@@ -449,10 +489,13 @@ async fn bounded_client_start<T>(
             delivered = &mut delivered => {
                 return match delivered {
                     Ok((Ok(core), lifecycle)) => Ok((core, lifecycle)),
-                    Ok((Err(error), _)) => Err(BridgeError::untyped(error.to_string())),
-                    Err(_) => Err(BridgeError::new(
-                        BridgeErrorCode::ClientStartFailed,
-                        "desktop client startup thread panicked or dropped its result",
+                    Ok((Err(error), _)) => Err(classify_client_start_error(&error, node_data_dir)),
+                    Err(_) => Err((
+                        BridgeError::new(
+                            BridgeErrorCode::ClientStartFailed,
+                            "desktop client startup thread panicked or dropped its result",
+                        ),
+                        None,
                     )),
                 };
             }
@@ -461,16 +504,34 @@ async fn bounded_client_start<T>(
                 Err(_) => reporting = false,
             },
             () = tokio::time::sleep_until(deadline) => {
-                return Err(BridgeError::new(
-                    BridgeErrorCode::ClientStartFailed,
-                    format!(
-                        "the desktop client made no startup progress for {} seconds (last completed stage: {})",
-                        stall.as_secs(),
-                        *completed_stage.borrow()
+                return Err((
+                    BridgeError::new(
+                        BridgeErrorCode::ClientStartFailed,
+                        format!(
+                            "the desktop client made no startup progress for {} seconds (last completed stage: {})",
+                            stall.as_secs(),
+                            *completed_stage.borrow()
+                        ),
                     ),
+                    None,
                 ));
             }
         }
+    }
+}
+
+/// A client store this version cannot open is `IncompatibleLocalStore`,
+/// naming the store; every other start failure stays untyped.
+fn classify_client_start_error(
+    error: &anyhow::Error,
+    node_data_dir: &std::path::Path,
+) -> ClientStartFailure {
+    match gents::storage_backend::incompatible_store(error, node_data_dir) {
+        Some(store) => (
+            BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
+            Some(store),
+        ),
+        None => (BridgeError::untyped(error.to_string()), None),
     }
 }
 
@@ -589,11 +650,17 @@ mod tests {
 
         let error = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            bounded_client_start(delivery_rx, stage_rx, std::time::Duration::from_millis(20)),
+            bounded_client_start(
+                delivery_rx,
+                stage_rx,
+                std::time::Duration::from_millis(20),
+                std::path::Path::new("/tmp/node"),
+            ),
         )
         .await
         .expect("a stalled start is bounded")
-        .expect_err("a stalled start fails");
+        .expect_err("a stalled start fails")
+        .0;
         assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
         assert!(error.message.contains("embedded_node"), "{}", error.message);
 
@@ -669,12 +736,158 @@ mod tests {
             })
             .await;
         });
-        let (core, _lifecycle) =
-            bounded_client_start(delivery_rx, stage_rx, std::time::Duration::from_millis(150))
-                .await
-                .expect("a start that keeps progressing is not cut off");
+        let (core, _lifecycle) = bounded_client_start(
+            delivery_rx,
+            stage_rx,
+            std::time::Duration::from_millis(150),
+            std::path::Path::new("/tmp/node"),
+        )
+        .await
+        .expect("a start that keeps progressing is not cut off");
         assert_eq!(core, 7);
         progress.await.unwrap();
+    }
+
+    #[test]
+    fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
+        let node = std::path::Path::new("/tmp/desktop/node");
+        let refused = anyhow::Error::new(gents::migration::MigrationError::UnknownLineage {
+            collection: "AgentSession".into(),
+            versions: "bafy-old".into(),
+        })
+        .context("ensure_migrations");
+        let (error, store) = classify_client_start_error(&refused, node);
+        assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
+        assert!(
+            error.message.contains("/tmp/desktop/node"),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            store.map(|store| store.kind),
+            Some(gents::storage_backend::IncompatibleStoreKind::UnknownLineage)
+        );
+
+        let (error, store) =
+            classify_client_start_error(&anyhow::anyhow!("peer directory is locked"), node);
+        assert_eq!(error.code, BridgeErrorCode::Unknown);
+        assert!(store.is_none());
+    }
+
+    fn test_state() -> (tempfile::TempDir, DesktopAppState) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = crate::config::BridgeConfig {
+            home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
+            ..Default::default()
+        };
+        let policy = crate::state::resolve_policy(&config, None).expect("policy");
+        (temp, DesktopAppState::new(policy))
+    }
+
+    /// A reset holds the client exclusion across shutdown and retirement: an
+    /// in-flight start finishes first, and a start claimed meanwhile cannot
+    /// reach the client state until the exclusion is released.
+    #[tokio::test]
+    async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let (_temp, state) = test_state();
+        let state = Arc::new(state);
+
+        // A start is in flight: the exclusion waits for it.
+        let (progress, _) = watch::channel(ClientStartProgress::Pending);
+        state.bridge.lock().unwrap().start_inflight = Some(progress.clone());
+        let excluding = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let guard = exclude_client(&state).await.expect("exclude");
+                drop(guard);
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !excluding.is_finished(),
+            "an in-flight start is drained first"
+        );
+        state.bridge.lock().unwrap().start_inflight = None;
+        let _ = progress.send(ClientStartProgress::Ready);
+        tokio::time::timeout(Duration::from_secs(5), excluding)
+            .await
+            .expect("exclusion follows the drained start")
+            .unwrap();
+
+        // While excluded, a newly claimed starter waits at the lifecycle lock
+        // that guards opening the store.
+        let guard = exclude_client(&state).await.expect("exclude");
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let starter = {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            let opened = Arc::clone(&opened);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let _lifecycle = state.client_lifecycle.lock().await;
+                opened.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        barrier.wait().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !opened.load(std::sync::atomic::Ordering::SeqCst),
+            "no start opens client state during retirement"
+        );
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(5), starter)
+            .await
+            .expect("the start proceeds after the reset")
+            .unwrap();
+        assert!(opened.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// A desktop state whose principal key an older build wrote with ambient
+    /// (0644) permissions fails start as an incompatible local store, before
+    /// any node or peer directory is opened, and the key is left as it was.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
+        gents::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
+        std::fs::set_permissions(
+            paths.identity_key_path(),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
+        let Err((error, store)) = start_client_core_async(paths.clone(), lifecycle).await else {
+            panic!("an insecure key must not start the client");
+        };
+        assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
+        assert!(
+            error.message.contains("unsafe file permissions"),
+            "{}",
+            error.message
+        );
+        let store = store.expect("typed refusal");
+        assert_eq!(
+            store.kind,
+            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+        );
+        assert_eq!(store.data_path, paths.identity_key_path());
+        assert_eq!(
+            std::fs::metadata(paths.identity_key_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        assert!(!paths.peer_directory_path().exists());
     }
 
     #[test]
@@ -687,9 +900,9 @@ mod tests {
             ClientStartProgress::Ready,
             ClientStartProgress::Ready
         ));
-        let failed = ClientStartProgress::Failed("boom".into());
+        let failed = ClientStartProgress::Failed(BridgeError::untyped("boom"));
         match failed {
-            ClientStartProgress::Failed(message) => assert_eq!(message, "boom"),
+            ClientStartProgress::Failed(error) => assert_eq!(error.message, "boom"),
             other => panic!("expected Failed, got {other:?}"),
         }
     }

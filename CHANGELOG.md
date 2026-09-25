@@ -46,6 +46,14 @@ every runtime you pair with to 0.19.0 together.
 - The desktop window can be as narrow as half of a 1440pt display. Navigation
   and side panels become menus and sheets at narrow widths (#1717).
 - "Make default" enables the behavior and sets it as the default in one step.
+- When the desktop finds a home an earlier version created, it says so and
+  offers to back it up and start fresh (the default: the old home moves to a
+  dated folder beside it), delete it and start fresh, or keep it and quit.
+  Only the files a Gents runtime writes are moved or deleted, and the panel
+  lists them first; other agents' homes, backups and your own files in
+  `~/.gents` stay in place. `gents server` refuses such a store before
+  writing its schema and exits with status 65 (67 for a store another,
+  possibly newer, version extended), which systemd does not restart.
 
 ### Changed
 

@@ -439,10 +439,11 @@ async fn multi_version_lineage_is_rejected() {
     let err = ensure_migrations(node.as_ref())
         .await
         .expect_err("foreign multi-version DAG must fail");
+    // The root is this baseline's; the extra version came from another build.
+    assert!(err.is_foreign_version(), "unexpected error: {err}");
+    assert!(!err.is_unknown_lineage());
     match err {
-        Error::UnknownLineage { collection, .. } | Error::ForeignVersion { collection, .. } => {
-            assert_eq!(collection, "AgentRequest");
-        }
+        Error::ForeignVersion { collection, .. } => assert_eq!(collection, "AgentRequest"),
         other => panic!("unexpected error: {other}"),
     }
 
@@ -486,6 +487,79 @@ async fn single_version_unknown_root_is_rejected() {
     assert!(
         matches!(err, Error::UnknownLineage { ref collection, .. } if collection == "PinnedFixture"),
         "unexpected error: {err}"
+    );
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
+    const EXPECTED_SDL: &str = "type PinnedFixture { name: String label: String }";
+    const OLD_SDL: &str = "type PinnedFixture { name: String }";
+    const ADDED_SDL: &str = "type AddedFixture { title: String }";
+
+    let authoring_node = fresh_node().await;
+    authoring_node
+        .add_schema(EXPECTED_SDL)
+        .await
+        .expect("register expected root");
+    let expected_root = authoring_node
+        .get_collection("PinnedFixture")
+        .expect("load expected root")
+        .expect("expected root exists")
+        .version_id;
+    authoring_node.shutdown().await;
+
+    // A store written by an older build: its collection predates this
+    // registry's root, and it lacks a collection this build adds.
+    let node = fresh_node().await;
+    node.add_schema(OLD_SDL).await.expect("register old root");
+    let before = node
+        .get_all_collection_versions()
+        .await
+        .expect("versions before");
+    let registry = DynamicRegistry {
+        baseline: vec![
+            BaselineCollectionOwned {
+                name: "PinnedFixture".into(),
+                sdl: EXPECTED_SDL.into(),
+                expected_version: Some(expected_root),
+                expected_state: CollectionExpectation::dag_only(),
+            },
+            BaselineCollectionOwned {
+                name: "AddedFixture".into(),
+                sdl: ADDED_SDL.into(),
+                expected_version: None,
+                expected_state: CollectionExpectation::dag_only(),
+            },
+        ],
+        steps: vec![],
+    };
+
+    let err = ensure_migrations_dynamic(node.as_ref(), &registry)
+        .await
+        .expect_err("an older lineage must fail closed");
+    assert!(err.is_unknown_lineage(), "unexpected error: {err}");
+    assert!(
+        node.get_collection("AddedFixture")
+            .expect("load added collection")
+            .is_none(),
+        "rejecting an older store must not register this build's baseline into it"
+    );
+    let after = node
+        .get_all_collection_versions()
+        .await
+        .expect("versions after");
+    assert_eq!(
+        before
+            .iter()
+            .map(|version| version.version_id.clone())
+            .collect::<Vec<_>>(),
+        after
+            .iter()
+            .map(|version| version.version_id.clone())
+            .collect::<Vec<_>>(),
+        "classification reads the version DAG without changing it"
     );
 
     node.shutdown().await;

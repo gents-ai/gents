@@ -625,6 +625,7 @@ export function SetupScreen({
     } catch (e) {
       setPhase(failedPhase);
       setError(setupErrorMessage(e));
+      await shell.incompatibleHome?.adopt(e);
     } finally {
       setBusy(false);
     }

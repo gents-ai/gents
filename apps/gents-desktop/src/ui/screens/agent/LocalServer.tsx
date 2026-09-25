@@ -56,7 +56,9 @@ export function LocalServer({ shell }: { shell: Shell }) {
       await shell.refreshSnapshot();
       toast(label);
     } catch (e) {
-      toast(`${label} failed: ${String(e)}`);
+      if (!(await shell.incompatibleHome?.adopt(e))) {
+        toast(`${label} failed: ${String(e)}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -104,6 +106,7 @@ export function LocalServer({ shell }: { shell: Shell }) {
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
       setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      await shell.incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
     }

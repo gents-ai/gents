@@ -20,7 +20,7 @@ use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long discovery waits for a bound runtime to report it finished starting.
@@ -300,15 +300,26 @@ pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Clears the desktop client's embedded store, leaving its identity and peer
+/// directory in place. Retiring the whole client state (after an upgrade that
+/// cannot open it) retires [`DesktopPaths::client_state_entries`] through the
+/// same [`gents::home::retire_entries`] owner.
 pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
-    let node_data_dir = paths.node_data_dir();
-    if !node_data_dir.exists() {
-        return Ok(false);
-    }
-
-    std::fs::remove_dir_all(node_data_dir)
-        .with_context(|| format!("clearing desktop runtime state {}", node_data_dir.display()))?;
-    Ok(true)
+    let node_data_dir = [paths.node_data_dir().to_path_buf()];
+    let cleared = gents::home::retire_entries(
+        &[gents::home::RetireGroup {
+            name: "desktop",
+            entries: &node_data_dir,
+        }],
+        gents::home::RetireDisposition::Delete,
+    )
+    .with_context(|| {
+        format!(
+            "clearing desktop runtime state {}",
+            paths.node_data_dir().display()
+        )
+    })?;
+    Ok(!cleared.is_empty())
 }
 
 pub async fn init_standard_local_runtime(

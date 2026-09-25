@@ -297,7 +297,10 @@ fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::pa
         .digest()
         .strip_prefix("sha256:")
         .context("invalid pack digest")?;
-    Ok(home.join("packs").join(&pack.manifest().name).join(hash))
+    Ok(home
+        .join(gents::home::PACKS_DIR_NAME)
+        .join(&pack.manifest().name)
+        .join(hash))
 }
 
 fn prune(args: PackPruneArgs) -> Result<()> {

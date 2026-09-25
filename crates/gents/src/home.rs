@@ -41,9 +41,37 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub tool_root: Option<String>,
 }
 
+const DATA_DIR_NAME: &str = "data";
+const KEYS_DIR_NAME: &str = "keys";
+/// The runtime's persisted serving state (`gents server`).
+pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+/// The runtime's persisted P2P transport key.
+pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
+/// Installed and cached packs.
+pub const PACKS_DIR_NAME: &str = "packs";
+/// Installed plugins.
+pub const PLUGINS_DIR_NAME: &str = "plugins";
+/// The Codex shim's own home.
+pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
+
+/// Every top-level entry a gents runtime writes in its home. Writers name
+/// these entries through this module, and retiring a home (after an upgrade
+/// that cannot open it) moves or deletes exactly these names; anything else
+/// in the home is left in place. A new top-level entry belongs here first.
+pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
+    DATA_DIR_NAME,
+    INIT_CONFIG_FILE_NAME,
+    KEYS_DIR_NAME,
+    RUNTIME_STATE_FILE_NAME,
+    P2P_SECRET_KEY_FILE_NAME,
+    PACKS_DIR_NAME,
+    PLUGINS_DIR_NAME,
+    CODEX_UI_DIR_NAME,
+];
+
 /// The default DefraDB data directory under a gents home.
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join("data")
+    home_dir.join(DATA_DIR_NAME)
 }
 
 /// The exclusive lock a process holds on a data directory while it has the
@@ -124,7 +152,9 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
 
 /// The default identity key path under a gents home, for the named agent.
 pub fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
-    home_dir.join("keys").join(format!("{agent_name}.key"))
+    home_dir
+        .join(KEYS_DIR_NAME)
+        .join(format!("{agent_name}.key"))
 }
 
 /// The path `init.json` lives at under a gents home.
@@ -161,6 +191,278 @@ pub fn read_init_config<ToolPackage: DeserializeOwned, ToolCeiling: DeserializeO
     let state = serde_json::from_slice(&bytes)
         .with_context(|| format!("decoding init config {}", path.display()))?;
     Ok(Some(state))
+}
+
+/// The top-level entries of a gents home, split into those the home's
+/// runtime owns and those left in place.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HomeEntries {
+    /// Present entries named in [`RUNTIME_HOME_ENTRIES`]. Symbolic links are
+    /// listed as links; their targets are never part of the home.
+    pub owned: Vec<PathBuf>,
+    /// Everything else: other agents' homes, backups, user files, a store
+    /// lock, and any owned name that another home's `init.json` refers into
+    /// or that contains an `exclude`d path.
+    pub retained: Vec<PathBuf>,
+}
+
+/// Lists a home's top-level entries without following symbolic links.
+///
+/// Only the fixed runtime inventory is owned. A default home (`~/.gents`) may
+/// hold other agents' homes and the user's own files; they are retained, and
+/// so is an owned entry that an immediate child home's `init.json` (its
+/// `home`, `key_path` or `tool_root`) points into.
+pub fn home_entries(home_dir: &Path, exclude: &[PathBuf]) -> Result<HomeEntries> {
+    let mut entries = HomeEntries::default();
+    let listing = match fs::read_dir(home_dir) {
+        Ok(listing) => listing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(entries),
+        Err(error) => {
+            return Err(error).with_context(|| format!("listing home {}", home_dir.display()))
+        }
+    };
+    let mut candidates = Vec::new();
+    for entry in listing {
+        let entry = entry.with_context(|| format!("listing home {}", home_dir.display()))?;
+        let path = entry.path();
+        let owned_name = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| RUNTIME_HOME_ENTRIES.contains(&name));
+        if owned_name {
+            candidates.push(path);
+        } else {
+            entries.retained.push(path);
+        }
+    }
+    let mut references: Vec<PathBuf> = exclude.to_vec();
+    for retained in &entries.retained {
+        references.extend(child_home_references(retained));
+    }
+    for candidate in candidates {
+        if references
+            .iter()
+            .any(|reference| reference.starts_with(&candidate))
+        {
+            entries.retained.push(candidate);
+        } else {
+            entries.owned.push(candidate);
+        }
+    }
+    entries.owned.sort();
+    entries.retained.sort();
+    Ok(entries)
+}
+
+/// Paths an immediate child home's `init.json` names. An unreadable or
+/// unparsable record names nothing; the directory itself is retained anyway.
+fn child_home_references(directory: &Path) -> Vec<PathBuf> {
+    let Ok(bytes) = fs::read(init_config_path(directory)) else {
+        return Vec::new();
+    };
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Vec::new();
+    };
+    ["home", "key_path", "tool_root"]
+        .iter()
+        .filter_map(|field| record.get(field).and_then(serde_json::Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            let path = PathBuf::from(value);
+            fs::canonicalize(&path).unwrap_or(path)
+        })
+        .collect()
+}
+
+/// What [`retire_entries`] does with the entries it is given.
+#[derive(Debug, Clone, Copy)]
+pub enum RetireDisposition<'a> {
+    /// Move every entry into `backup/<group>/`. `backup` must not exist yet
+    /// and must be on the same filesystem (see [`archive_preflight`]):
+    /// entries are renamed, never copied, so file contents and modes are
+    /// carried over without being read. Backup directories are private to
+    /// the user.
+    Archive { backup: &'a Path },
+    /// Remove every entry. Symbolic links are removed, not followed.
+    Delete,
+}
+
+/// A named set of entries retired together, e.g. a runtime home's own
+/// entries or the desktop client's state.
+#[derive(Debug, Clone, Copy)]
+pub struct RetireGroup<'a> {
+    pub name: &'a str,
+    pub entries: &'a [PathBuf],
+}
+
+/// Fails unless every present entry can be renamed into `backup`: renames do
+/// not cross filesystems, and discovering that after the owning service was
+/// stopped would leave a half-retired home.
+pub fn archive_preflight(groups: &[RetireGroup<'_>], backup: &Path) -> Result<()> {
+    archive_preflight_with(groups, backup, device_of)
+}
+
+#[cfg(unix)]
+fn device_of(path: &Path) -> std::io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).map(|metadata| metadata.dev())
+}
+
+#[cfg(not(unix))]
+fn device_of(_path: &Path) -> std::io::Result<u64> {
+    Ok(0)
+}
+
+fn archive_preflight_with(
+    groups: &[RetireGroup<'_>],
+    backup: &Path,
+    device: impl Fn(&Path) -> std::io::Result<u64>,
+) -> Result<()> {
+    let parent = backup
+        .parent()
+        .with_context(|| format!("backup {} has no parent directory", backup.display()))?;
+    let target = device(parent).with_context(|| format!("inspecting {}", parent.display()))?;
+    for entry in groups.iter().flat_map(|group| group.entries.iter()) {
+        match device(entry) {
+            Ok(source) if source == target => {}
+            Ok(_) => anyhow::bail!(
+                "{} is on a different filesystem than the backup location {}; nothing was changed",
+                entry.display(),
+                parent.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspecting {}", entry.display()))
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Archives or deletes the given entries and returns the ones that existed.
+///
+/// Only a missing entry is skipped; any other failure to inspect one is an
+/// error. Archiving is all-or-nothing: if any step fails, the entries already
+/// moved are renamed back and the backup directory is removed again.
+/// Deleting stops at the first failure and reports what was already removed.
+pub fn retire_entries(
+    groups: &[RetireGroup<'_>],
+    disposition: RetireDisposition<'_>,
+) -> Result<Vec<PathBuf>> {
+    retire_entries_with(groups, disposition, |path| {
+        fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
+    })
+}
+
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+/// `inspect` reports whether an entry is a real directory (not a link).
+fn retire_entries_with(
+    groups: &[RetireGroup<'_>],
+    disposition: RetireDisposition<'_>,
+    inspect: impl Fn(&Path) -> std::io::Result<bool>,
+) -> Result<Vec<PathBuf>> {
+    let present = |entry: &Path| -> Result<Option<bool>> {
+        match inspect(entry) {
+            Ok(is_dir) => Ok(Some(is_dir)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("inspecting {}", entry.display())),
+        }
+    };
+    match disposition {
+        RetireDisposition::Archive { backup } => {
+            private_dir(backup).with_context(|| format!("creating backup {}", backup.display()))?;
+            let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+            let result = (|| -> Result<()> {
+                for group in groups {
+                    let target_dir = backup.join(group.name);
+                    private_dir(&target_dir)
+                        .with_context(|| format!("creating {}", target_dir.display()))?;
+                    for entry in group.entries {
+                        if present(entry)?.is_none() {
+                            continue;
+                        }
+                        let name = entry.file_name().with_context(|| {
+                            format!("{} has no file name to archive", entry.display())
+                        })?;
+                        let target = target_dir.join(name);
+                        fs::rename(entry, &target).with_context(|| {
+                            format!("moving {} to {}", entry.display(), target.display())
+                        })?;
+                        moved.push((entry.clone(), target));
+                    }
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => Ok(moved.into_iter().map(|(source, _)| source).collect()),
+                Err(error) => {
+                    let mut unrestored = Vec::new();
+                    for (source, target) in moved.iter().rev() {
+                        if fs::rename(target, source).is_err() {
+                            unrestored.push(target.display().to_string());
+                        }
+                    }
+                    if unrestored.is_empty() {
+                        for group in groups {
+                            let _ = fs::remove_dir(backup.join(group.name));
+                        }
+                        let _ = fs::remove_dir(backup);
+                        Err(error.context("archiving was rolled back; nothing was moved"))
+                    } else {
+                        Err(error.context(format!(
+                            "archiving failed and these entries could not be moved back: {}",
+                            unrestored.join(", ")
+                        )))
+                    }
+                }
+            }
+        }
+        RetireDisposition::Delete => {
+            let mut removed: Vec<PathBuf> = Vec::new();
+            let done = |removed: &[PathBuf]| {
+                removed
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            for entry in groups.iter().flat_map(|group| group.entries.iter()) {
+                let is_dir = match present(entry) {
+                    Ok(Some(is_dir)) => is_dir,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        return Err(error.context(format!(
+                            "deleting stopped after deleting [{}]",
+                            done(&removed)
+                        )))
+                    }
+                };
+                let outcome = if is_dir {
+                    fs::remove_dir_all(entry)
+                } else {
+                    fs::remove_file(entry)
+                };
+                if let Err(error) = outcome {
+                    return Err(anyhow::Error::new(error).context(format!(
+                        "deleting {} failed after deleting [{}]",
+                        entry.display(),
+                        done(&removed)
+                    )));
+                }
+                removed.push(entry.clone());
+            }
+            Ok(removed)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +553,328 @@ mod tests {
     }
 
     use super::*;
+
+    fn write(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn home_entries_own_only_the_runtime_inventory() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join(".gents");
+        write(&home.join("init.json"), "{}");
+        write(&home.join("data/MANIFEST"), "REGOMAN");
+        write(&home.join("keys/agent.key"), "key");
+        write(&home.join("runtime.json"), "{}");
+        write(&home.join("packs/registry-cache/x.tar.gz"), "pack");
+        write(&home.join("data.lock"), "123");
+        write(&home.join("backups/legacy-store-1/data/MANIFEST"), "old");
+        write(&home.join("notes.md"), "mine");
+        write(&home.join(".env"), "SECRET=1");
+        write(&home.join("grok-port-home/init.json"), "{}");
+        write(
+            &home.join("half-onboarded/data/MANIFEST"),
+            "live store, no init.json yet",
+        );
+        write(&home.join("a/b/c/d/e/init.json"), "{}");
+        write(&home.join("desktop/peers.json"), "{}");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(temp.path(), home.join("keys-link")).unwrap();
+
+        let entries = home_entries(&home, &[]).unwrap();
+
+        assert_eq!(
+            entries.owned,
+            vec![
+                home.join("data"),
+                home.join("init.json"),
+                home.join("keys"),
+                home.join("packs"),
+                home.join("runtime.json"),
+            ]
+        );
+        for retained in [
+            ".env",
+            "a",
+            "backups",
+            "data.lock",
+            "desktop",
+            "grok-port-home",
+            "half-onboarded",
+            "notes.md",
+        ] {
+            assert!(
+                entries.retained.contains(&home.join(retained)),
+                "{retained}"
+            );
+        }
+        assert_eq!(
+            home_entries(&temp.path().join("absent"), &[]).unwrap(),
+            HomeEntries::default()
+        );
+    }
+
+    #[test]
+    fn owned_entries_another_home_or_an_exclusion_points_into_are_retained() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(temp.path()).unwrap().join(".gents");
+        write(&home.join("keys/local.key"), "mine");
+        write(&home.join("keys/other.key"), "theirs");
+        write(&home.join("plugins/p/manifest.json"), "{}");
+        write(&home.join("data/MANIFEST"), "store");
+        write(
+            &home.join("other/init.json"),
+            &serde_json::json!({
+                "home": home.join("other"),
+                "key_path": home.join("keys/other.key"),
+                "tool_root": home.join("plugins/p"),
+            })
+            .to_string(),
+        );
+
+        let entries = home_entries(&home, &[home.join("data/client")]).unwrap();
+
+        assert!(entries.owned.is_empty(), "{:?}", entries.owned);
+        for retained in ["data", "keys", "other", "plugins"] {
+            assert!(
+                entries.retained.contains(&home.join(retained)),
+                "{retained}"
+            );
+        }
+    }
+
+    /// Every top-level name a runtime writes in its home is named through
+    /// this module, so retiring a home cannot miss one.
+    #[test]
+    fn runtime_writers_name_home_entries_only_from_the_inventory() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let pattern = regex::Regex::new(
+            r#"\b(?:home|home_dir|agent_home|gents_home)\s*\.join\(\s*"([^"]+)"\s*\)"#,
+        )
+        .unwrap();
+        let mut unlisted = Vec::new();
+        for krate in [
+            "gents",
+            "gents-cli",
+            "gents-desktop-core",
+            "gents-desktop-bridge",
+        ] {
+            let mut pending = vec![crates.join(krate).join("src")];
+            while let Some(dir) = pending.pop() {
+                for entry in fs::read_dir(&dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        if path.file_name().is_some_and(|name| name != "tests") {
+                            pending.push(path);
+                        }
+                        continue;
+                    }
+                    let name = path.file_name().unwrap().to_string_lossy();
+                    if !name.ends_with(".rs") || name.contains("test") {
+                        continue;
+                    }
+                    for (line_number, line) in
+                        fs::read_to_string(&path).unwrap().lines().enumerate()
+                    {
+                        if line.contains("#[cfg(test)]") {
+                            break;
+                        }
+                        for capture in pattern.captures_iter(line) {
+                            let top = capture[1].split('/').next().unwrap_or_default().to_string();
+                            if !RUNTIME_HOME_ENTRIES.contains(&top.as_str()) {
+                                unlisted.push(format!(
+                                    "{}:{}: {top}",
+                                    path.display(),
+                                    line_number + 1
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            unlisted.is_empty(),
+            "home entries written outside RUNTIME_HOME_ENTRIES: {unlisted:#?}"
+        );
+    }
+
+    #[test]
+    fn archive_moves_groups_into_private_dirs_and_delete_removes_links_without_following_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let outside = temp.path().join("outside");
+        write(&home.join("data/MANIFEST"), "store");
+        write(&home.join("init.json"), "{}");
+        write(&outside.join("keep.txt"), "keep");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, home.join("keys")).unwrap();
+        let owned = home_entries(&home, &[]).unwrap().owned;
+
+        let backup = temp.path().join("home-backup");
+        archive_preflight(
+            &[RetireGroup {
+                name: "home",
+                entries: &owned,
+            }],
+            &backup,
+        )
+        .unwrap();
+        let moved = retire_entries(
+            &[RetireGroup {
+                name: "home",
+                entries: &owned,
+            }],
+            RetireDisposition::Archive { backup: &backup },
+        )
+        .unwrap();
+        assert_eq!(moved, owned);
+        assert_eq!(
+            fs::read_to_string(backup.join("home/data/MANIFEST")).unwrap(),
+            "store"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for dir in [backup.clone(), backup.join("home")] {
+                let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700, "{}", dir.display());
+            }
+        }
+        assert!(!home.join("data").exists());
+        assert!(
+            retire_entries(
+                &[RetireGroup {
+                    name: "home",
+                    entries: &owned,
+                }],
+                RetireDisposition::Archive { backup: &backup },
+            )
+            .is_err(),
+            "an existing backup is never merged into"
+        );
+
+        let archived = home_entries(&backup.join("home"), &[]).unwrap().owned;
+        let removed = retire_entries(
+            &[RetireGroup {
+                name: "home",
+                entries: &archived,
+            }],
+            RetireDisposition::Delete,
+        )
+        .unwrap();
+        assert_eq!(removed, archived);
+        assert_eq!(
+            fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn a_failed_archive_moves_everything_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        write(&home.join("data/MANIFEST"), "store");
+        let entries = vec![
+            home.join("data"),
+            temp.path().join("absent"),
+            PathBuf::from("/"),
+        ];
+        let backup = temp.path().join("backup");
+
+        let error = retire_entries(
+            &[RetireGroup {
+                name: "home",
+                entries: &entries,
+            }],
+            RetireDisposition::Archive { backup: &backup },
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("rolled back"), "{error:#}");
+        assert_eq!(
+            fs::read_to_string(home.join("data/MANIFEST")).unwrap(),
+            "store"
+        );
+        assert!(!backup.exists());
+    }
+
+    /// Only a missing entry is skipped. An entry that cannot be inspected
+    /// (permission denied, I/O error) stops the retirement with an account of
+    /// what already happened. Injected, so it holds on privileged runners.
+    #[test]
+    fn an_uninspectable_entry_stops_retirement_with_an_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        write(&home.join("data/MANIFEST"), "store");
+        write(&home.join("runtime.json"), "{}");
+        let entries = vec![home.join("data"), home.join("runtime.json")];
+        let denied = home.join("runtime.json");
+        let inspect = |path: &Path| {
+            if path == denied {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            } else {
+                fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
+            }
+        };
+        let groups = [RetireGroup {
+            name: "home",
+            entries: &entries,
+        }];
+
+        let backup = temp.path().join("backup");
+        let error = retire_entries_with(
+            &groups,
+            RetireDisposition::Archive { backup: &backup },
+            inspect,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("rolled back"), "{error:#}");
+        assert!(home.join("data/MANIFEST").is_file());
+        assert!(!backup.exists());
+
+        let error = retire_entries_with(&groups, RetireDisposition::Delete, inspect).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("after deleting ["), "{message}");
+        assert!(
+            message.contains(&home.join("data").display().to_string()),
+            "{message}"
+        );
+        assert!(
+            home.join("runtime.json").is_file(),
+            "the uninspectable entry stays"
+        );
+    }
+
+    #[test]
+    fn archive_preflight_refuses_a_cross_filesystem_rename_before_anything_moves() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        write(&home.join("data/MANIFEST"), "store");
+        let entries = vec![home.join("data"), home.join("absent")];
+        let backup = temp.path().join("backup");
+        let groups = [RetireGroup {
+            name: "home",
+            entries: &entries,
+        }];
+        archive_preflight_with(&groups, &backup, |_| Ok(1)).unwrap();
+        let error = archive_preflight_with(&groups, &backup, |path| {
+            if path == home.join("data") {
+                Ok(2)
+            } else if path == home.join("absent") {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                Ok(1)
+            }
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("different filesystem"),
+            "{error}"
+        );
+        assert!(home.join("data/MANIFEST").is_file());
+    }
 
     fn sample() -> StoredInitConfig<String, String> {
         StoredInitConfig {

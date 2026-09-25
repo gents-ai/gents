@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the desktop_agent_config_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_app_quit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-app-quit",
+          "markdownDescription": "Enables the desktop_app_quit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_app_quit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-app-quit",
+          "markdownDescription": "Denies the desktop_app_quit command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_backend_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-backend-delete",
@@ -1339,10 +1351,10 @@
           "markdownDescription": "Denies the desktop_workspace_list command without any pre-configured scope."
         },
         {
-          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`",
+          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
+          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`",
@@ -1351,10 +1363,10 @@
           "markdownDescription": "Bootstrap summary, aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-bootstrap-summary`\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`"
         },
         {
-          "description": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`",
+          "description": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "client-lifecycle",
-          "markdownDescription": "Client start/shutdown and selected-agent\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`"
+          "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-agent`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`",
