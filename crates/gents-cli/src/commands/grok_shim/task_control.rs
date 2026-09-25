@@ -109,6 +109,8 @@ pub(super) async fn kill(
         .await?
         {
             Outcome::Cancelled { .. } => "killed",
+            Outcome::Lost => "lost",
+            Outcome::Unverified => "kill_unverified",
             Outcome::AlreadyTerminal { .. } => "already_exited",
             Outcome::NotBackground | Outcome::NotFound => "not_found",
         }

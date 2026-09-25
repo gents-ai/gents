@@ -419,7 +419,13 @@ async fn run_agent_owned(
         .document_runtime_context()
         .is_some()
         .then(|| agent.node.subscribe_document_changes());
-    log_recovery(&agent.node, agent.agent_did(), agent.default_behavior_id()).await;
+    log_recovery(
+        &agent.node,
+        agent.agent_did(),
+        agent.default_behavior_id(),
+        &agent.background_execution_registry,
+    )
+    .await;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
         tracing::warn!(
             behavior_id = %behavior_id,
@@ -1051,10 +1057,13 @@ async fn log_recovery(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agent_did: &str,
     default_behavior_id: &str,
+    executions: &crate::hook::BackgroundExecutionRegistry,
 ) {
     // Sweep order lives in `startup_recovery`, not here: the inference-call
     // sweep is parent-gated and must run after request repair (#1001).
-    let outcome = crate::startup_recovery::run_startup_recovery(node, agent_did).await;
+    let outcome =
+        crate::startup_recovery::run_startup_recovery_with_executions(node, agent_did, executions)
+            .await;
     let mut recovered_any = false;
 
     match outcome.tool_calls {

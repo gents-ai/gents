@@ -83,6 +83,7 @@ async fn restart_obligations(
 /// through canonical provider publication. Linked-child rows are exercised
 /// separately once their reserved child has been materialized; the missing
 /// parent row remains an integration fault-injection fixture by design.
+#[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
     let cases = crate::lean_vocab_test::lean_restart_disposition_cases();
@@ -91,6 +92,8 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         "restart_native_background_deadline_expired_times_out",
         "restart_native_background_interrupted_parent_cancelled",
         "restart_native_background_terminal_parent_failed",
+        "restart_native_background_unowned_process_lost",
+        "restart_native_background_exited_process_lost",
         "restart_foreground_live_parent_left_running",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
@@ -146,9 +149,37 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             other => panic!("unsupported native restart parent observation {other}"),
         }
 
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+        // The crashed runtime left a durable record for a surviving
+        // test-owned group; the restarted runtime's owner reads it.
+        let records = tempfile::tempdir().unwrap();
+        let registry = crate::hook::BackgroundExecutionRegistry::default()
+            .with_process_records(records.path().to_path_buf());
+        let process = if case.await_mode == "background" {
+            crate::managed_exec::ownership::test_support::process_for_generated_outcome(
+                &registry,
+                admission.tool.tool_call_id(),
+                &tool_doc,
+                &case.process_outcome,
+            )
             .await
-            .unwrap();
+        } else {
+            None
+        };
+        let report = ToolCallLifecycle::recover_all_with_executions(
+            &admission.node,
+            &admission.agent_did,
+            &registry,
+        )
+        .await
+        .unwrap();
+        if let Some(process) = process {
+            assert_ne!(
+                process.identity.observe(),
+                crate::managed_exec::ownership::ProcessObservation::Running,
+                "{name}: restart recovery left the recorded process running"
+            );
+            process.finish().await;
+        }
         let actual = row(&admission.node, &tool_doc).await;
         match case.disposition.as_str() {
             "leave_running" => {
@@ -178,7 +209,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
                 assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
                 assert!(actual["tool_failure_class"].is_null(), "{name}");
             }
-            Some("parentTerminal") => {
+            Some("parentTerminal" | "processLost") => {
                 assert!(actual["cancel_cause"].is_null(), "{name}");
                 assert_eq!(actual["tool_failure_class"], "external", "{name}");
             }
@@ -219,9 +250,13 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             assert!(messages.is_empty(), "{name}");
             assert!(wakes.is_empty(), "{name}");
         }
-        let second = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
-            .await
-            .unwrap();
+        let second = ToolCallLifecycle::recover_all_with_executions(
+            &admission.node,
+            &admission.agent_did,
+            &registry,
+        )
+        .await
+        .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
         let (messages_after, wakes_after) = restart_obligations(
             &admission.node,
@@ -384,7 +419,7 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
 async fn generated_native_recovery_cases_use_canonical_admission_owner() {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
     for name in [
-        "tool_backgrounded_running_live_parent_to_cancelled",
+        "tool_backgrounded_running_unowned_process_to_failed",
         "tool_running_deadline_exceeded_to_timed_out",
         "tool_running_parent_interrupted_to_cancelled",
         "live_running_native_tool_parent_interrupted_to_cancelled",
@@ -454,10 +489,10 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
         let actual = row(&admission.node, &tool_doc).await;
         assert_eq!(actual["request_doc_id"], request_doc, "{name}");
         assert_eq!(actual["lifecycle_state"], case.terminal_state, "{name}");
-        if name.starts_with("tool_backgrounded") || parent_interrupted {
+        if parent_interrupted {
             assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
             assert!(actual["tool_failure_class"].is_null(), "{name}");
-        } else if deadline_expired || parent_terminal {
+        } else if name.starts_with("tool_backgrounded") || deadline_expired || parent_terminal {
             assert_eq!(actual["tool_failure_class"], "external", "{name}");
         }
         teardown(admission).await;

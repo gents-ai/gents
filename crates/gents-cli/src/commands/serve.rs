@@ -806,6 +806,9 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             server_start_failure_hint(&home_dir)
         )
     })?;
+    // The store lock held above makes this runtime the only reader of these
+    // records, so a surviving background process can be proven owned.
+    let agent = agent.with_background_process_records(data_dir.join("background-processes"));
     let background_execution_registry = agent.background_execution_registry();
     let runtime_configuration_probe = agent.clone();
     activation_runtime

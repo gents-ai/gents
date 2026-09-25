@@ -812,6 +812,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PairingReconcileSweepSchedulingCases".to_string(),
         ));
     }
+    if !snapshot.process_stop_cases.is_empty() {
+        emitted.insert((
+            "process_stop_cases".to_string(),
+            "ProcessStopCases".to_string(),
+        ));
+    }
     if !snapshot.managed_exec_liveness_cases.is_empty() {
         emitted.insert((
             "managed_exec_cases".to_string(),

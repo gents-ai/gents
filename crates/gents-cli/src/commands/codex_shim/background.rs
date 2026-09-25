@@ -264,6 +264,12 @@ pub(super) async fn cancel_projected_background_tool_key(
     match &outcome {
         CancelBackgroundToolCallOutcome::Cancelled { .. }
         | CancelBackgroundToolCallOutcome::AlreadyTerminal { .. } => Ok(outcome),
+        CancelBackgroundToolCallOutcome::Lost => anyhow::bail!(
+            "GENTS background tool `{tool_call_key}` is not owned by this runtime; it was settled as lost without verifying termination"
+        ),
+        CancelBackgroundToolCallOutcome::Unverified => anyhow::bail!(
+            "GENTS background tool `{tool_call_key}` is still running after termination was requested"
+        ),
         CancelBackgroundToolCallOutcome::NotFound => {
             anyhow::bail!("unknown GENTS background tool `{tool_call_key}`")
         }

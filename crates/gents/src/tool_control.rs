@@ -6,10 +6,21 @@ use defra_node::EmbeddedNode;
 use crate::hook::BackgroundExecutionRegistry;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, CascadeDispatch, ToolCallLifecycle};
 
+/// Lean `ManagedExec.cancelReply`: `Cancelled` is reported only after the
+/// execution's process was observed to stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
-    Cancelled { live_execution_cancelled: bool },
-    AlreadyTerminal { state: String },
+    Cancelled {
+        live_execution_cancelled: bool,
+    },
+    /// Settled as lost without a stop claim: no live worker here and no
+    /// durable record proving ownership, or it ended while unobserved.
+    Lost,
+    /// Signalled, but a process is still observed running.
+    Unverified,
+    AlreadyTerminal {
+        state: String,
+    },
     NotBackground,
     NotFound,
 }
@@ -87,6 +98,19 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
         });
     }
 
+    let process_owned = !lifecycle.is_subagent_bridge();
+    if process_owned && !background_executions.contains(tool_call_id).await {
+        let (process, _) = ToolCallLifecycle::cancel_unowned_background_tool(
+            &node,
+            &mut lifecycle,
+            background_executions,
+            cause,
+            cause_completion_reason(cause),
+        )
+        .await?;
+        return Ok(outcome_for_process(process, false));
+    }
+
     let persisted = lifecycle
         .cancel_during_run_with_cascade_dispatch(cause, agent_did)
         .await;
@@ -95,7 +119,18 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
     // terminal write with the less-specific `interrupted` cause. A persistence
     // failure must still stop the live work: cancellation is best-effort state
     // control, not contingent on observability storage being available.
-    let live_execution_cancelled = background_executions.cancel(tool_call_id).await;
+    let (live_execution_cancelled, process) = if process_owned {
+        let doc_id = lifecycle
+            .doc_id()
+            .ok_or_else(|| anyhow::anyhow!("background cancellation lacks physical identity"))?
+            .to_owned();
+        let process = background_executions
+            .stop_execution(tool_call_id, &doc_id)
+            .await;
+        (true, Some(process))
+    } else {
+        (background_executions.cancel(tool_call_id).await, None)
+    };
     let dispatch = match persisted {
         Ok(dispatch) => dispatch,
         Err(error) => {
@@ -126,13 +161,41 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
     }
 
     if lifecycle.is_cancelled() {
-        Ok(CancelBackgroundToolCallOutcome::Cancelled {
-            live_execution_cancelled,
+        Ok(match process {
+            Some(process) => outcome_for_process(process, live_execution_cancelled),
+            None => CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled,
+            },
         })
     } else {
         Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
             state: lifecycle.state().as_str().to_string(),
         })
+    }
+}
+
+fn cause_completion_reason(cause: CancelCause) -> &'static str {
+    match cause {
+        CancelCause::Deadline => "deadline_exceeded",
+        CancelCause::Interrupted => "parent_interrupted",
+        CancelCause::UserCancelled => "explicit_cancel",
+    }
+}
+
+fn outcome_for_process(
+    process: crate::managed_exec::ProcessStopOutcome,
+    live_execution_cancelled: bool,
+) -> CancelBackgroundToolCallOutcome {
+    match process.cancel_reply() {
+        crate::managed_exec::CancelProcessReply::Cancelled => {
+            CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled,
+            }
+        }
+        crate::managed_exec::CancelProcessReply::Lost => CancelBackgroundToolCallOutcome::Lost,
+        crate::managed_exec::CancelProcessReply::Unverified => {
+            CancelBackgroundToolCallOutcome::Unverified
+        }
     }
 }
 
@@ -241,9 +304,16 @@ mod tests {
 
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
-        registry
-            .reserve("cancel-native-tool".to_string(), token.clone())
-            .disarm();
+        let reservation = registry.reserve("cancel-native-tool".to_string(), token.clone());
+        // A live worker releases its execution once signalled; cancellation
+        // is reported only after that release.
+        let worker = {
+            let token = token.clone();
+            tokio::spawn(async move {
+                token.cancelled().await;
+                drop(reservation);
+            })
+        };
 
         let denied = cancel_session_background_process(
             node.clone(),
@@ -279,6 +349,7 @@ mod tests {
             }
         );
         assert!(token.is_cancelled());
+        worker.await.unwrap();
 
         let row = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
             .await
@@ -287,6 +358,85 @@ mod tests {
         assert!(row.is_cancelled());
 
         let _ = std::fs::remove_dir_all(&data_path);
+    }
+
+    /// After a runtime loss there is no live worker. Cancellation must not
+    /// claim a stop it did not observe: an unrecorded process settles as lost,
+    /// while a recorded surviving group is stopped and then reported cancelled.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_without_live_worker_never_reports_an_unobserved_stop() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+        let records = tempfile::tempdir().unwrap();
+        let registry =
+            BackgroundExecutionRegistry::default().with_process_records(records.path().into());
+        for (name, recorded) in [("cancel-unrecorded", false), ("cancel-recorded", true)] {
+            let admission = published_admission(PublishedAdmissionOptions {
+                name: name.into(),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let tool_doc = admission.tool.doc_id().unwrap().to_owned();
+            let process = if recorded {
+                crate::managed_exec::ownership::test_support::process_for_generated_outcome(
+                    &registry,
+                    admission.tool.tool_call_id(),
+                    &tool_doc,
+                    "stopped",
+                )
+                .await
+            } else {
+                None
+            };
+            let outcome = cancel_background_tool_call(
+                admission.node.clone(),
+                &registry,
+                &admission.agent_did,
+                admission.tool.session_id(),
+                admission.tool.tool_call_id(),
+            )
+            .await
+            .unwrap();
+            let row = ToolCallLifecycle::load(
+                admission.node.clone(),
+                admission.tool.session_id(),
+                admission.tool.tool_call_id(),
+            )
+            .await
+            .unwrap()
+            .expect("tool row");
+            match process {
+                Some(process) => {
+                    assert_eq!(
+                        outcome,
+                        CancelBackgroundToolCallOutcome::Cancelled {
+                            live_execution_cancelled: false
+                        }
+                    );
+                    assert!(row.is_cancelled());
+                    assert_ne!(
+                        process.identity.observe(),
+                        crate::managed_exec::ownership::ProcessObservation::Running
+                    );
+                    process.finish().await;
+                }
+                None => {
+                    assert_eq!(outcome, CancelBackgroundToolCallOutcome::Lost);
+                    assert_eq!(
+                        row.state(),
+                        crate::tool_call_lifecycle::ToolCallState::Failed
+                    );
+                }
+            }
+            assert!(registry.process_record_list().is_empty(), "{name}");
+            admission.node.shutdown().await;
+            let _ = std::fs::remove_dir_all(admission.path);
+        }
     }
 
     /// Owned cancel of a background tool must persist the operator-authored

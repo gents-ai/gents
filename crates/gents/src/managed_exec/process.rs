@@ -94,6 +94,9 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
             ManagedExecKind::ForegroundCommand,
         )
     });
+    if let Some(pid) = pid {
+        super::ownership::record_spawned(pid);
+    }
 
     if !request.stdin.is_empty() {
         if let Some(mut stdin) = child.inner.stdin.take() {

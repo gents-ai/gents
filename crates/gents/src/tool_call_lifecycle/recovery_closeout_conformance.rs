@@ -933,6 +933,7 @@ async fn generated_queued_descendant_case_releases_local_and_foreign_parent_chil
     std::fs::remove_dir_all(admission.path).expect("remove exact queued-descendant fixture");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
@@ -941,9 +942,12 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         "orphaned_background_tool_expired_terminal_parent_to_timed_out",
         "orphaned_background_tool_unclaimed_to_failed",
         "orphaned_background_tool_terminal_parent_to_failed",
+        "orphaned_background_tool_unowned_process_to_failed",
+        "orphaned_background_tool_exited_process_to_failed",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert_eq!(case.execution_registered, Some(false), "{name}");
+        assert_eq!(case.owner_task_deleted, Some(false), "{name}");
         let fixture_name = format!("recovery-closeout-{name}");
         let admission = published_admission(PublishedAdmissionOptions {
             name: fixture_name.clone(),
@@ -979,7 +983,18 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             )
             .await;
         }
-        let registry = crate::BackgroundExecutionRegistry::default();
+        // The restarted runtime's owner reads the record a crashed runtime left
+        // for a surviving test-owned process group.
+        let records = tempfile::tempdir().unwrap();
+        let registry = crate::BackgroundExecutionRegistry::default()
+            .with_process_records(records.path().to_path_buf());
+        let process = crate::managed_exec::ownership::test_support::process_for_generated_outcome(
+            &registry,
+            admission.tool.tool_call_id(),
+            &tool_doc_id,
+            case.process_outcome.as_deref().unwrap(),
+        )
+        .await;
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.agent_did,
@@ -988,6 +1003,15 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         .await
         .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1, "{name}");
+        if let Some(process) = process {
+            assert_ne!(
+                process.identity.observe(),
+                crate::managed_exec::ownership::ProcessObservation::Running,
+                "{name}: settled row left its process running"
+            );
+            process.finish().await;
+        }
+        assert!(registry.process_record_list().is_empty(), "{name}");
         let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
         let response = admission
             .node
@@ -1004,7 +1028,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             "{name}"
         );
         match case.recovery_cause.as_deref() {
-            Some("deadlineExceeded" | "parentTerminal") => {
+            Some("deadlineExceeded" | "parentTerminal" | "processLost") => {
                 assert_eq!(row["tool_failure_class"], "external", "{name}");
             }
             Some("unclaimedCrossPrincipalSpawn") => {
@@ -1041,6 +1065,157 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         admission.node.shutdown().await;
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
+}
+
+/// A live worker keeps its row until the task that started its request is
+/// deleted; then the cancellation is persisted and the worker's process
+/// stopped through the same owner.
+#[cfg(unix)]
+#[tokio::test]
+async fn generated_registered_background_task_deletion_cases_use_live_worker() {
+    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+    let left = cases
+        .iter()
+        .find(|case| case.name == "registered_background_tool_left_to_worker")
+        .unwrap();
+    let deleted = cases
+        .iter()
+        .find(|case| case.name == "registered_background_tool_task_deleted_to_cancelled")
+        .unwrap();
+    assert_eq!(left.execution_registered, Some(true));
+    assert_eq!(left.owner_task_deleted, Some(false));
+    assert_eq!(deleted.owner_task_deleted, Some(true));
+
+    let name = "task-deleted";
+    let path =
+        std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&path).unwrap();
+    let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
+    let agent_did = identity.did().to_owned();
+    let node = Arc::new(
+        crate::defra_node::EmbeddedNode::builder()
+            .data_path(&path)
+            .with_node_identity_did(&agent_did)
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_behavior(&node, &agent_did, "general").await;
+    let session_id = format!("session-{name}");
+    let mut parent =
+        crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger(
+            &node,
+            &format!("request-{name}"),
+            &session_id,
+            &identity,
+            None,
+            Some("trigger-1858"),
+        )
+        .await;
+    let tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+        node.clone(),
+        &mut parent,
+        &agent_did,
+        0,
+        crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+        "task-native-tool",
+        serde_json::json!({"tool_name": "bash", "args": {}}),
+        None,
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        true,
+    )
+    .await
+    .unwrap();
+    let tool_doc_id = tool.doc_id().unwrap().to_owned();
+    let tool_call_id = tool.tool_call_id().to_owned();
+
+    // The live worker: it owns a test process group until its token fires,
+    // then stops it, releases its record and its execution.
+    let registry = crate::BackgroundExecutionRegistry::default();
+    let token = tokio_util::sync::CancellationToken::new();
+    let reservation = registry.reserve(tool_call_id.clone(), token.clone());
+    let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
+    let worker = {
+        let registry = registry.clone();
+        let recorder = registry.process_recorder(&tool_call_id, &tool_doc_id);
+        let tool_call_id = tool_call_id.clone();
+        let tool_doc_id = tool_doc_id.clone();
+        tokio::spawn(async move {
+            let process = crate::managed_exec::ownership::test_support::OwnedTestProcess::spawn(
+                Some(recorder),
+            )
+            .await;
+            let _ = identity_tx.send(process.identity.clone());
+            token.cancelled().await;
+            process.finish().await;
+            registry
+                .release_process_record(&tool_call_id, &tool_doc_id)
+                .await;
+            drop(reservation);
+        })
+    };
+    let process = identity_rx.await.unwrap();
+
+    let escaped_agent = crate::graphql::escape_graphql_string(&agent_did);
+    for mutation in [
+        format!(
+            r#"mutation {{ create_Task(input: {{ task_id: "task-1858", agent_did: "{escaped_agent}", behavior_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", agent_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
+        ),
+    ] {
+        let response = node.execute(&mutation).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+    let report =
+        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &agent_did, &registry)
+            .await
+            .unwrap();
+    assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
+    assert_eq!(
+        process.observe(),
+        crate::managed_exec::ownership::ProcessObservation::Running,
+        "{}",
+        left.name
+    );
+
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "task-1858" }}, agent_did: {{ _eq: "{escaped_agent}" }} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let report =
+        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &agent_did, &registry)
+            .await
+            .unwrap();
+    assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
+    worker.await.unwrap();
+    assert_ne!(
+        process.observe(),
+        crate::managed_exec::ownership::ProcessObservation::Running,
+        "{}",
+        deleted.name
+    );
+    let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.unwrap()["AgentToolCall"][0];
+    assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
+    assert_eq!(row["cancel_cause"], "interrupted");
+    let (notifications, _) = completion_obligations(&node, &session_id, &agent_did).await;
+    let reason = deleted.notification_reason.as_deref().unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
+    node.shutdown().await;
+    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[tokio::test]

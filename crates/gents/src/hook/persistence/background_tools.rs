@@ -231,8 +231,12 @@ impl DefraSessionHook {
         let source_fields = runtime_context
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
+        let executions = self.background_executions.clone();
+        let process_recorder =
+            executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
         tokio::spawn(async move {
-            let execution = AssertUnwindSafe(async {
+            let execution = AssertUnwindSafe(crate::managed_exec::ownership::scope_process_recorder(
+                process_recorder,
                 crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
                     requester_did,
                     request_agent_did,
@@ -255,9 +259,8 @@ impl DefraSessionHook {
                         )
                         .await
                     },
-                )
-                .await
-            })
+                ),
+            ))
             .catch_unwind()
             .await;
 
@@ -517,6 +520,9 @@ impl DefraSessionHook {
             }
 
             live_outputs.remove(&execution_tool_doc_id).await;
+            executions
+                .release_process_record(&execution_call_id, &execution_tool_doc_id)
+                .await;
             // Keep volatile ownership attached to the spawned task itself.
             // Dropping this guard after cleanup signals ordinary completion;
             // task panic or abort also releases ownership for recovery.
@@ -956,7 +962,31 @@ impl DefraSessionHook {
             .as_deref()
             .map(str::trim)
             .unwrap_or("explicit_cancel");
-        let (lifecycle, won_terminal_compare) = self
+        if !self
+            .background_executions
+            .contains(background_tool_call_id)
+            .await
+        {
+            let mut lifecycle = lifecycle;
+            let (process, _) =
+                crate::tool_call_lifecycle::ToolCallLifecycle::cancel_unowned_background_tool(
+                    &self.node,
+                    &mut lifecycle,
+                    &self.background_executions,
+                    CancelCause::UserCancelled,
+                    notification_reason,
+                )
+                .await?;
+            let result = cancel_process_reply(background_tool_call_id, process);
+            return self
+                .complete_control_tool_call(
+                    &mut control_lifecycle,
+                    CANCEL_PROCESS_TOOL_NAME,
+                    result,
+                )
+                .await;
+        }
+        let (lifecycle, won_terminal_compare, process) = self
             .cancel_background_tool_lifecycle(
                 lifecycle,
                 CancelCause::UserCancelled,
@@ -995,14 +1025,42 @@ impl DefraSessionHook {
                 "failed to append explicitly cancelled background tool notification"
             );
         }
-        let result = json_string(json!({
-            "ok": true,
-            "tool_call_id": background_tool_call_id,
-            "status": "cancelled"
-        }));
+        let result = cancel_process_reply(
+            background_tool_call_id,
+            process.unwrap_or(crate::managed_exec::ProcessStopOutcome::StillRunning),
+        );
         self.complete_control_tool_call(&mut control_lifecycle, CANCEL_PROCESS_TOOL_NAME, result)
             .await
     }
+}
+
+/// Lean `ManagedExec.cancelReply`: `cancelled` only for an observed stop.
+fn cancel_process_reply(
+    tool_call_id: &str,
+    process: crate::managed_exec::ProcessStopOutcome,
+) -> String {
+    use crate::managed_exec::CancelProcessReply;
+    let reply = process.cancel_reply();
+    let error = match reply {
+        CancelProcessReply::Cancelled => serde_json::Value::Null,
+        CancelProcessReply::Lost => json!({
+            "reason": "process_lost",
+            "message": "this runtime could not prove it owned the process, or the process ended while no runtime observed it; its termination was not verified",
+            "failure_class": "external"
+        }),
+        CancelProcessReply::Unverified => json!({
+            "reason": "stop_unverified",
+            "message": "the process was signalled but is still observed running",
+            "failure_class": "external"
+        }),
+    };
+    json_string(json!({
+        "ok": reply == CancelProcessReply::Cancelled,
+        "tool_call_id": tool_call_id,
+        "status": reply.as_str(),
+        "process": process.as_str(),
+        "error": error
+    }))
 }
 
 fn background_timeout_terminal() -> ChildTerminal {

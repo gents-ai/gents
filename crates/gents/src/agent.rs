@@ -334,6 +334,16 @@ impl Gents {
         self.background_execution_registry.clone()
     }
 
+    /// Keep durable records of spawned background processes in `dir`, which
+    /// must belong to this runtime's exclusively locked store, so a restarted
+    /// runtime can prove ownership of a surviving process and stop it. Call
+    /// before the runtime starts.
+    pub fn with_background_process_records(mut self, dir: PathBuf) -> Self {
+        self.background_execution_registry =
+            self.background_execution_registry.with_process_records(dir);
+        self
+    }
+
     /// Resolve the exact operational configuration identity used by the
     /// runtime reconciler. Observers can use this to fence an external config
     /// transaction without reimplementing the fingerprint's field set.

@@ -854,6 +854,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_managed_exec_state_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
+            id: "managed_exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model",
+            package: "gents",
+            source_path: "crates/gents/src/managed_exec/tests.rs",
+            module_path: "managed_exec::tests",
+            function: "rust_process_stop_outcome_vocabulary_matches_lean_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "managed_exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model",
+            package: "gents",
+            source_path: "crates/gents/src/managed_exec/tests.rs",
+            module_path: "managed_exec::tests",
+            function: "rust_cancel_process_reply_vocabulary_matches_lean_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "managed_exec::tests::generated_process_stop_cases_drive_host_owner",
+            package: "gents",
+            source_path: "crates/gents/src/managed_exec/tests.rs",
+            module_path: "managed_exec::tests",
+            function: "generated_process_stop_cases_drive_host_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "managed_exec::tests::managed_exec_state_machine_contract_is_complete",
             package: "gents",
             source_path: "crates/gents/src/managed_exec/tests.rs",
