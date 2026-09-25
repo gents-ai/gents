@@ -59,6 +59,7 @@ import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
+import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Contracts.Json.R5Scenarios
@@ -155,6 +156,8 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
+    ++ "\"canonical_dispatch_observation_cases\":"
+      ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_worker_capacity_cases\":"
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"

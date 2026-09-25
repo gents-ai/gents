@@ -624,6 +624,127 @@ fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     }
 }
 
+#[tokio::test]
+async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies() {
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().canonical_dispatch_observation_cases;
+    for case in cases
+        .iter()
+        .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
+    {
+        for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            ensure_runtime_schemas(&node).await.unwrap();
+            let hook = DefraSessionHook::with_identity(
+                node.clone(),
+                "general",
+                "did:test:dispatch-receipt",
+                policy,
+            );
+            assert!(matches!(
+                hook.on_completion_call(&user_text_message("Run a tool"), &[])
+                    .await,
+                HookAction::Continue
+            ));
+            let session_id = hook.session_id().await.unwrap();
+            bind_interruptible_request(
+                &node,
+                &hook,
+                "request-receipt",
+                &session_id,
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
+            accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
+            let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
+            let admitted = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            assert_eq!(case.inputs.len(), case.expected.len());
+            for (input, expected) in case.inputs.iter().zip(&case.expected) {
+                if expected.observation == "replay" {
+                    // Restore the original publication binding so replay must
+                    // reach the durable election, not the consumed-map guard.
+                    hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
+                        .await
+                        .unwrap();
+                }
+                let call = hook.on_tool_call("read", None, "receipt-call", "{}");
+                let action = if input.acknowledged {
+                    call.await
+                } else {
+                    let (action, fired) =
+                        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(call)
+                            .await;
+                    assert!(fired, "{}: receipt fault must fire", case.name);
+                    action
+                };
+                assert_eq!(
+                    matches!(action, ToolCallHookAction::Continue),
+                    expected.may_invoke,
+                    "{}: {action:?}",
+                    case.name
+                );
+                if expected.observation == "replay" {
+                    assert!(
+                        matches!(&action, ToolCallHookAction::Terminate { reason }
+                        if reason.contains("no longer pending")),
+                        "{action:?}"
+                    );
+                }
+                let row = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+                assert_eq!(
+                    row["lifecycle_state"].as_str() == Some("running"),
+                    expected.running,
+                    "{}: durable dispatch state",
+                    case.name
+                );
+            }
+            let mut fixture = hook_execution_fixtures()
+                .lock()
+                .await
+                .remove(&hook_execution_fixture_key(&hook, "request-receipt"))
+                .unwrap();
+            let selection = fixture
+                .writer
+                .terminal_output(&fixture.lifecycle.request().doc_id)
+                .await;
+            let outcome = match case.parent_outcome.as_str() {
+                "failed" => crate::lifecycle::RequestTerminalOutcome::Failed,
+                other => panic!("unsupported modeled parent outcome {other}"),
+            };
+            let terminalized = fixture
+                .lifecycle
+                .terminalize_owned(outcome, selection, Some("dispatch observation failed"))
+                .await
+                .unwrap();
+            assert_eq!(terminalized, crate::lifecycle::TerminalizeResult::Won);
+            let document =
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+            let observed = crate::ConfigAccess::Local(node.clone()).execute(&format!(
+                "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
+            )).await.unwrap();
+            let data = &observed["data"];
+            let rows = data["AgentToolCall"].as_array().unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the exact committed call survives parent failure"
+            );
+            assert_eq!(rows[0]["_docID"], admitted["_docID"]);
+            let expected = &case.expected_after_parent_failure;
+            assert_eq!(
+                rows[0]["lifecycle_state"].as_str() == Some("running"),
+                expected.running
+            );
+            assert_eq!(rows[0]["stuck_since"].is_string(), expected.needs_recovery);
+            assert_eq!(
+                data["AgentMessage"].as_array().unwrap().len(),
+                expected.message_count
+            );
+            node.shutdown().await;
+        }
+    }
+}
+
 #[test]
 fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     let mut state = session_state_for_test();
@@ -641,6 +762,103 @@ fn transcript_turn_state_allocates_new_assistant_after_saved_turn() {
     state.reset_after_user_message();
     assert_eq!(state.begin_or_continue_assistant_turn(), 2);
     assert_eq!(state.persist_assistant_turn(), 2);
+}
+
+/// Completion persistence can fail after a control tool has already committed
+/// its effect. Neither that failure nor a subsequent replay permits dispatch.
+#[tokio::test]
+async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
+        .iter()
+        .find(|case| case.expected == "fresh" && case.token_budget.is_none())
+        .unwrap();
+    let replay = crate::lean_vocab_test::lean_canonical_dispatch_observation_cases()
+        .iter()
+        .find(|case| case.name == "won_dispatch_then_replay")
+        .unwrap();
+    let args = json!({"objective": goal_case.objective}).to_string();
+    for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+        let mut completion_mutation = None;
+        for inject in [false, true] {
+            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            ensure_runtime_schemas(&node).await.unwrap();
+            let hook = DefraSessionHook::with_identity(
+                node.clone(),
+                "general",
+                "did:test:control-receipt",
+                policy,
+            )
+            .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
+            assert!(matches!(
+                hook.on_completion_call(&user_text_message("Create a goal"), &[])
+                    .await,
+                HookAction::Continue
+            ));
+            let session = hook.session_id().await.unwrap();
+            bind_interruptible_request(
+                &node,
+                &hook,
+                "control-receipt",
+                &session,
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
+            accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
+            let (action, mutations) =
+                crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                    completion_mutation,
+                    hook.on_tool_call("create_goal", None, "control-call", &args),
+                )
+                .await;
+            let goal =
+                crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
+                    .await
+                    .unwrap()
+                    .expect("the control effect committed before completion");
+            assert_eq!(goal.objective, goal_case.objective);
+            if inject {
+                assert_eq!(Some(mutations), completion_mutation, "fault must fire");
+                assert!(
+                    matches!(action, ToolCallHookAction::Terminate { .. }),
+                    "{action:?}"
+                );
+                let row = fetch_tool_call_row(&node, &session, "control-call").await;
+                assert_eq!(
+                    row["lifecycle_state"].as_str() == Some("running"),
+                    replay.expected[0].running
+                );
+                let again = hook
+                    .on_tool_call("create_goal", None, "control-call", &args)
+                    .await;
+                assert_eq!(
+                    matches!(again, ToolCallHookAction::Continue),
+                    replay.expected[1].may_invoke
+                );
+                let after =
+                    crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(
+                    serde_json::to_value(after).unwrap(),
+                    serde_json::to_value(goal).unwrap(),
+                    "replay must not alter the committed goal"
+                );
+            } else {
+                assert!(
+                    matches!(action, ToolCallHookAction::Skip { .. }),
+                    "{action:?}"
+                );
+                assert!(mutations > 0);
+                completion_mutation = Some(mutations);
+            }
+            hook_execution_fixtures()
+                .lock()
+                .await
+                .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
+            node.shutdown().await;
+        }
+    }
 }
 
 #[test]

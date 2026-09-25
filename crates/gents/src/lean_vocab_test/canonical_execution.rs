@@ -11,6 +11,41 @@ use super::request_execution_lease::LeanRequestExecutionWorld;
 pub(crate) type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationCase {
+    pub(crate) name: String,
+    pub(crate) inputs: Vec<LeanDispatchObservationInput>,
+    pub(crate) expected: Vec<LeanDispatchObservationResult>,
+    pub(crate) parent_outcome: String,
+    pub(crate) expected_after_parent_failure: LeanDispatchParentFailure,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchParentFailure {
+    pub(crate) running: bool,
+    pub(crate) in_flight: bool,
+    pub(crate) needs_recovery: bool,
+    pub(crate) message_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationInput {
+    pub(crate) acknowledged: bool,
+    pub(crate) policy_allows: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchObservationResult {
+    pub(crate) observation: String,
+    pub(crate) may_invoke: bool,
+    pub(crate) running: bool,
+    pub(crate) in_flight: bool,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanCanonicalExecutionCase {
     TraceSummary {

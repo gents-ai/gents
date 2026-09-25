@@ -738,14 +738,18 @@ impl DefraSessionHook {
         }
     }
 
+    /// Call-hook failure never authorizes ordinary dispatch: the election may
+    /// have committed without a receipt, or a control tool may already have
+    /// performed its effect. Result-write policy cannot grant that authority.
     fn on_tool_persistence_error(
         &self,
         context: &str,
         error: &anyhow::Error,
     ) -> ToolCallHookAction {
-        match self.decide_persistence_outcome(context, error) {
-            PolicyDecision::Continue => ToolCallHookAction::Continue,
-            PolicyDecision::Terminate(reason) => ToolCallHookAction::Terminate { reason },
+        self.counters.failures.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(error = %error, context = %context, "tool call persistence failed; dispatch denied");
+        ToolCallHookAction::Terminate {
+            reason: format!("tool call persistence failed: {error}"),
         }
     }
 
