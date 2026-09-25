@@ -424,7 +424,12 @@ async fn revise(
                 .written
                 .as_ref()
                 .ok_or_else(|| anyhow!("nothing was written to revise"))?;
-            let written = commit(staged, &written.out, true)?;
+            let written = commit(
+                staged,
+                &written.out,
+                true,
+                &crate::home_state::resolve_home_dir(init.scope.home.as_deref()),
+            )?;
             writeln!(out, "the author revised the draft after the pilot")?;
             print_written(init, &assembled, &written, out)?;
             Ok(true)

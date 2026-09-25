@@ -112,7 +112,12 @@ pub(crate) async fn interview(
         let summary = said.join("\n");
         match checked(parsed, ctx, ctx.definition_id.as_deref(), &summary, None).await {
             Ok((assembled, staged)) => {
-                let written = commit(staged, &ctx.out, ctx.force)?;
+                let written = commit(
+                    staged,
+                    &ctx.out,
+                    ctx.force,
+                    &crate::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
                     written: Some(written),

@@ -3723,7 +3723,7 @@ pub(crate) struct EvalRunArgs {
 }
 
 /// `gents eval init`'s exit statuses.
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and an --out that is, lies inside, or contains the subject's directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {
@@ -3751,7 +3751,7 @@ pub(crate) struct EvalInitArgs {
     /// Pilot without asking first.
     #[arg(long)]
     pub(crate) yes: bool,
-    /// Replace an existing --out.
+    /// Replace an existing --out that gents eval init wrote.
     #[arg(long)]
     pub(crate) force: bool,
     /// The fewest validation cases a draft may have.

@@ -24,6 +24,9 @@ use super::validate::Assembled;
 
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
+/// The manifest author of every pack `write_files` writes; `--force`
+/// replaces only such a pack.
+const GENERATED_BY: &str = "gents eval init";
 
 /// What a pilot left for the README to record: one run per populated split,
 /// and whether the draft was revised after it.
@@ -94,34 +97,147 @@ pub(crate) async fn stage(
 
 /// Move a staged pack to `out`. An existing `out` is refused unless `force`,
 /// which replaces it.
-pub(crate) fn commit(staged: Staged, out: &Path, force: bool) -> Result<Written> {
-    if out.symlink_metadata().is_ok() {
+pub(crate) fn commit(
+    staged: Staged,
+    out: &Path,
+    force: bool,
+    gents_home: &Path,
+) -> Result<Written> {
+    let replaced = if out.symlink_metadata().is_ok() {
         anyhow::ensure!(
             force,
             "{} already exists; pass --force to replace it",
             out.display()
         );
-        if out.is_dir() {
-            std::fs::remove_dir_all(out)
-        } else {
-            std::fs::remove_file(out)
-        }
-        .with_context(|| format!("removing {}", out.display()))?;
-    }
+        // $HOME first, then the password database, as `gents init` does.
+        let user_home = std::env::home_dir();
+        let cwd = std::env::current_dir().context("resolving the working directory")?;
+        Some(replaceable_out(
+            out,
+            user_home.as_deref(),
+            gents_home,
+            &cwd,
+        )?)
+    } else {
+        None
+    };
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
+    // The old pack moves aside first and is removed only once the new one is
+    // in place, so a failure at any step leaves one of them at `out`.
+    let aside = match &replaced {
+        Some(existing) => {
+            let aside = existing.with_file_name(format!(
+                ".{}.replaced-{}",
+                existing
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                std::process::id()
+            ));
+            std::fs::rename(existing, &aside)
+                .with_context(|| format!("moving {} aside", existing.display()))?;
+            Some((existing, aside))
+        }
+        None => None,
+    };
     // A rename across filesystems fails; the copy then lands the same tree,
     // and the temporary directory removes itself.
-    if std::fs::rename(staged.dir.path(), out).is_err() {
-        copy_tree(staged.dir.path(), out)
-            .with_context(|| format!("copying the definition pack to {}", out.display()))?;
+    let landed = std::fs::rename(staged.dir.path(), out).or_else(|_| {
+        copy_tree(staged.dir.path(), out).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(out);
+        })
+    });
+    if let Err(error) = landed {
+        if let Some((existing, aside)) = &aside {
+            std::fs::rename(aside, existing).with_context(|| {
+                format!(
+                    "restoring {} from {} after the new pack failed to land",
+                    existing.display(),
+                    aside.display()
+                )
+            })?;
+        }
+        return Err(error)
+            .with_context(|| format!("copying the definition pack to {}", out.display()));
+    }
+    if let Some((_, aside)) = aside {
+        std::fs::remove_dir_all(&aside)
+            .with_context(|| format!("removing the replaced pack at {}", aside.display()))?;
     }
     Ok(Written {
         out: out.to_path_buf(),
         pack_name: staged.pack_name,
     })
+}
+
+/// The directory `--force` may replace at `out`, resolved canonically: never
+/// the filesystem root, the user home or an ancestor of it (refused as
+/// `gents init --dangerously-overwrite` refuses them, and when the user home
+/// cannot be resolved), a Gents home or an ancestor of one, or an ancestor of
+/// the working directory; and only a pack `gents eval init` wrote.
+fn replaceable_out(
+    out: &Path,
+    user_home: Option<&Path>,
+    gents_home: &Path,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !out.symlink_metadata()?.file_type().is_symlink(),
+        "refusing to replace --out {}: it is a symbolic link",
+        out.display()
+    );
+    let resolved = crate::overwritable_home(out, user_home)
+        .map_err(|error| anyhow::anyhow!("refusing to replace --out: {error:#}"))?
+        .with_context(|| format!("{} does not exist", out.display()))?;
+    let contains =
+        |path: &Path| std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved));
+    anyhow::ensure!(
+        !contains(gents_home) && crate::home_state::read_init_config(&resolved)?.is_none(),
+        "refusing to replace --out {}: it is or contains a Gents home",
+        out.display()
+    );
+    anyhow::ensure!(
+        !contains(cwd),
+        "refusing to replace --out {}: it is or contains the working directory",
+        out.display()
+    );
+    anyhow::ensure!(
+        is_generated_eval_pack(&resolved),
+        "refusing to replace --out {}: it is not a definition pack gents eval init wrote; choose another --out or remove it yourself",
+        out.display()
+    );
+    Ok(resolved)
+}
+
+/// Whether `dir` loads through the pack loader as a pack `write_files`
+/// wrote: its manifest names `gents eval init` as the author and its
+/// configuration holds an eval definition.
+fn is_generated_eval_pack(dir: &Path) -> bool {
+    let Ok((manifest, assets)) = read_pack(dir) else {
+        return false;
+    };
+    manifest
+        .metadata
+        .authors
+        .iter()
+        .any(|author| author == GENERATED_BY)
+        && load_pack_config(
+            &manifest,
+            &PackInstallOptions {
+                agent_did: "did:key:eval-init-replace-check".to_owned(),
+            },
+            &|path| {
+                assets
+                    .get(path)
+                    .cloned()
+                    .with_context(|| format!("pack has no asset {path:?}"))
+            },
+            &|_| None,
+        )
+        .is_ok_and(|config| !config.eval_definitions.is_empty())
 }
 
 /// Refuses an `--out` that is the subject's directory, lies inside it, or
@@ -192,7 +308,7 @@ pub(crate) async fn write_pack(
     let staged = stage(assembled, interview_summary, subject, None)
         .await
         .map_err(|messages| anyhow::anyhow!(messages.join("\n")))?;
-    commit(staged, out, force)
+    commit(staged, out, force, Path::new("/nonexistent/gents-home"))
 }
 
 /// The pack's README: what was drafted, for which subject, from what
@@ -374,7 +490,7 @@ fn write_files(
             "Eval definition {}, drafted by gents eval init.",
             definition.definition_id
         ),
-        "authors": ["gents eval init"],
+        "authors": [GENERATED_BY],
         "tags": ["eval"],
         "kind": "documents",
         "assets": files.keys().collect::<Vec<_>>(),
@@ -624,25 +740,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_existing_out_is_replaced_only_with_force() {
+    async fn an_existing_out_is_replaced_only_with_force_and_only_when_eval_init_wrote_it() {
         let assembled = validated(&good());
         let root = tempfile::tempdir().unwrap();
         let out = root.path().join("canary_eval");
         std::fs::create_dir_all(&out).unwrap();
-        std::fs::write(out.join("stale.txt"), "old").unwrap();
+        std::fs::write(out.join("notes.txt"), "mine").unwrap();
 
         let error = write_pack(&assembled, SUMMARY, &dossier(), &out, false)
             .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("--force"), "{error}");
-        assert!(out.join("stale.txt").exists(), "a refusal leaves out alone");
+        assert!(out.join("notes.txt").exists(), "a refusal leaves out alone");
 
+        let error = format!(
+            "{:#}",
+            write_pack(&assembled, SUMMARY, &dossier(), &out, true)
+                .await
+                .unwrap_err()
+        );
+        assert!(error.contains("not a definition pack"), "{error}");
+        assert_eq!(files_under(&out), vec!["notes.txt".to_owned()]);
+
+        std::fs::remove_dir_all(&out).unwrap();
+        write_pack(&assembled, SUMMARY, &dossier(), &out, false)
+            .await
+            .unwrap();
+        std::fs::write(out.join("cases/stale.json"), "{}").unwrap();
         write_pack(&assembled, SUMMARY, &dossier(), &out, true)
             .await
             .unwrap();
-        assert!(!out.join("stale.txt").exists());
+        assert!(!out.join("cases/stale.json").exists());
         assert!(out.join("manifest.json").exists());
+        let siblings: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(siblings, vec![std::ffi::OsString::from("canary_eval")]);
+    }
+
+    #[tokio::test]
+    async fn force_never_replaces_a_home_the_working_directory_or_their_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let user = root.join("user");
+        let gents_home = root.join("state/gents");
+        let cwd = root.join("work/project");
+        for dir in [&user, &gents_home, &cwd] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Even a generated pack is refused where one of them lies inside it.
+        let pack = root.join("state");
+        let staged = stage(&validated(&good()), SUMMARY, &dossier(), None)
+            .await
+            .unwrap();
+        copy_tree(staged.dir.path(), &pack).unwrap();
+        let refused = |out: &Path, user_home: Option<&Path>, expected: &str| {
+            let error = format!(
+                "{:#}",
+                replaceable_out(out, user_home, &gents_home, &cwd).unwrap_err()
+            );
+            assert!(error.contains(expected), "{}: {error}", out.display());
+            assert!(out.exists(), "{} left in place", out.display());
+        };
+        refused(&user, Some(&user), "user home");
+        refused(&root, Some(&user), "user home");
+        refused(Path::new("/"), Some(&user), "filesystem root");
+        refused(&root.join("work"), None, "cannot be determined");
+        refused(&pack, Some(&user), "Gents home");
+        refused(&gents_home, Some(&user), "Gents home");
+        refused(&root.join("work"), Some(&user), "working directory");
+        refused(&cwd, Some(&user), "working directory");
     }
 
     #[test]
@@ -683,7 +852,7 @@ mod tests {
         );
         let root = tempfile::tempdir().unwrap();
         let out = root.path().join("canary_eval");
-        commit(staged, &out, false).unwrap();
+        commit(staged, &out, false, Path::new("/nonexistent/gents-home")).unwrap();
 
         let home = EmbeddedHome::create_temp("init-write").await.unwrap();
         let owner = home.did().to_owned();
