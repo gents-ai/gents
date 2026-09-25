@@ -180,3 +180,64 @@ fn parse_template_for_validation_skips_suffix_event_in_attr_access() {
         }]
     );
 }
+
+#[test]
+fn authoring_rejects_a_filter_the_engine_cannot_provide() {
+    // The v0.19.0 RC configurator wrote this; every fire failed with
+    // "unknown filter: filter tojson is unknown" after apply had accepted it.
+    let error = check_template_vocabulary("{{ doc.correlation | tojson }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "tojson"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_an_unresolvable_name_a_fire_would_only_reach_conditionally() {
+    for template in [
+        "{% if doc.urgent %}{{ doc.correlation | tojson }}{% endif %}",
+        "{% for row in doc.rows %}{{ row | tojson }}{% endfor %}",
+        "{% if doc.urgent %}ok{% else %}{{ doc.body | tojson }}{% endif %}",
+        "{{ doc.body | trim | tojson }}",
+        "{% if doc.body is jsonish %}yes{% endif %}",
+    ] {
+        let error = check_template_vocabulary(template).unwrap_err();
+        assert!(
+            matches!(error, TemplateError::UnknownName { .. }),
+            "accepted {template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_rejects_a_function_the_engine_cannot_provide() {
+    let error = check_template_vocabulary("{{ now() }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "function" && name == "now"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_accepts_fields_configuration_cannot_enumerate() {
+    // Document and argument fields are caller-defined, and strict undefined is a
+    // fire-time outcome: neither may be an authoring rejection.
+    for template in [
+        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.behavior_id }}",
+        "{{ args.mode | default('review') }} {{ args.count | int }}",
+        "{{ doc.whatever.deeply.nested.field }}",
+        "{% for row in group.docs %}{{ row.title | default('untitled') }}{% endfor %}",
+        "{% if doc.body is defined %}{{ doc.body | trim | replace('a', 'b') }}{% endif %}",
+        "{{ group.count }} of {{ event.correlation }} ({{ group.complete }})",
+        "{% set names = doc.people | join(', ') %}{{ names | length }}",
+        "{% raw %}{{ doc.x | tojson }}{% endraw %}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_reports_a_syntax_error_rather_than_a_missing_name() {
+    let error = check_template_vocabulary("{% if doc.message %}missing endif").unwrap_err();
+    assert!(matches!(error, TemplateError::Parse(_)), "{error}");
+}

@@ -170,6 +170,11 @@ source consistency checks, not a separate runtime compatibility version.
 - Collection introspection now names a non-nillable field `Int!` instead of
   reporting the bare `NON_NULL` wrapper kind, so `defra_query` discovery and the
   new obligation check both read the field's actual type (#1735).
+- Task `prompt_template` and `goal_objective_template` are refused at configure
+  time when they name a filter, test or function the template engine does not
+  provide, instead of being accepted and failing on every trigger fire with
+  `template render error: unknown filter`. Names are checked over the whole
+  compiled template, so a conditional branch does not hide one (#1744).
 - A pack scenario sidecar reference can no longer resolve outside its pack
   directory: the CLI holds sidecar paths to the same canonical asset-path rule
   the pack loader uses (#1642).

@@ -81,3 +81,41 @@ fn task_hook_admission_matches_existing_lean_guards() {
         .validate()
         .unwrap();
 }
+
+#[test]
+fn task_templates_that_cannot_render_are_refused_at_configure_time() {
+    let task = |field: &str, template: &str| {
+        let mut value = json!({"agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
+            "prompt_template":"{{ doc.name }}"});
+        value[field] = json!(template);
+        serde_json::from_value::<Task>(value).unwrap()
+    };
+    for field in ["prompt_template", "goal_objective_template"] {
+        // The v0.19.0 RC configurator wrote this and apply accepted it; every
+        // fire then failed with "unknown filter: filter tojson is unknown".
+        for template in [
+            "{{ doc.correlation | tojson }}",
+            "{% if doc.urgent %}{{ doc.correlation | tojson }}{% endif %}",
+            "{{ now() }}",
+        ] {
+            let error = task(field, template)
+                .validate()
+                .expect_err(&format!("accepted {field}={template}"));
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(field) && message.contains("cannot render"),
+                "{message}"
+            );
+        }
+    }
+    // Every scope root a fire can supply, including fields only the invocation
+    // knows, stays authorable.
+    task(
+        "prompt_template",
+        "{{ doc.customer.name | upper }} {{ args.mode | default('review') }} \
+         {{ event.correlation }} {{ node.behavior_id }} at {{ ctx.now }}\
+         {% for row in group.docs %} {{ row.title | default('untitled') }}{% endfor %}",
+    )
+    .validate()
+    .unwrap();
+}
