@@ -228,8 +228,21 @@ pub fn bind_pack_install_config(
 pub async fn install_pack_documents(
     access: &ConfigAccess,
     config: &PackConfig,
+    expected: Vec<crate::config_client::DesiredStateExpectation>,
 ) -> Result<crate::config_client::DesiredStateApplyCounts> {
-    super::provenance::apply_pack_documents(access, config).await
+    super::provenance::apply_pack_documents(access, config, expected).await
+}
+
+/// Live digest of every document a document-pack install with `config` would
+/// create or replace, read before the install transaction opens. Thread the
+/// result into [`install_pack_documents`] so a document edited after this
+/// read, but before the install writes, is refused as drift instead of
+/// silently overwritten.
+pub async fn pack_document_expectations(
+    access: &ConfigAccess,
+    config: &PackConfig,
+) -> Result<Vec<crate::config_client::DesiredStateExpectation>> {
+    super::provenance::replaced_document_expectations(access, config).await
 }
 
 pub(super) fn validate_pack_inference_authoring(

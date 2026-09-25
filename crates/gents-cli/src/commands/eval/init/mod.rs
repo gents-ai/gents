@@ -429,7 +429,7 @@ async fn install_author(
             .await?;
     let bound =
         gents::pack::bind_pack_install_config(&pack.manifest, &config, &inference.bindings)?;
-    gents::pack::install_pack_documents(access, &bound)
+    gents::pack::install_pack_documents(access, &bound, Vec::new())
         .await
         .context("installing the eval_author pack")
 }

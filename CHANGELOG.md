@@ -19,6 +19,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- Installing a document pack refuses, rather than silently overwriting, when a
+  document it replaces was edited after the install read it (#1651).
 - A pack scenario sidecar reference can no longer resolve outside its pack
   directory: the CLI holds sidecar paths to the same canonical asset-path rule
   the pack loader uses (#1642).

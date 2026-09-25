@@ -38,6 +38,7 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
 pub(super) async fn apply_pack_documents(
     access: &ConfigAccess,
     config: &PackConfig,
+    expected: Vec<crate::config_client::DesiredStateExpectation>,
 ) -> Result<crate::config_client::DesiredStateApplyCounts> {
     let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
     let documents = bundle
@@ -49,10 +50,65 @@ pub(super) async fn apply_pack_documents(
     access
         .transact("pack.documents.install", |txn| {
             let documents = &documents;
+            let expected = expected.clone();
             Box::pin(async move {
-                let plan = prepare_pack_plan_in_txn(txn, documents, false).await?;
+                let plan = prepare_pack_plan_in_txn(txn, documents, false)
+                    .await?
+                    .with_expected(expected)?;
                 crate::config_client::validate_desired_state_plan(txn, &plan).await?;
                 crate::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        })
+        .await
+}
+
+/// Live digest of every document [`apply_pack_documents`] is about to create
+/// or replace, read ahead of the install so the caller can pass the result
+/// back as `expected`. An absent document carries no expectation, because a
+/// create cannot conflict; one that exists is expected to still match this
+/// read when the install transaction finally runs.
+pub(super) async fn replaced_document_expectations(
+    access: &ConfigAccess,
+    config: &PackConfig,
+) -> Result<Vec<crate::config_client::DesiredStateExpectation>> {
+    let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let documents = bundle
+        .documents()
+        .iter()
+        .filter(|document| document.collection != Collection::AgentPrincipal)
+        .cloned()
+        .collect::<Vec<_>>();
+    access
+        .transact("pack.documents.expected", |txn| {
+            let documents = &documents;
+            Box::pin(async move {
+                let mut expected = Vec::new();
+                for document in documents {
+                    let owner = document.add["agent_did"]
+                        .as_str()
+                        .context("pack document is missing owner")?;
+                    let id = document.add[document.collection.unique_field()]
+                        .as_str()
+                        .context("pack document is missing logical ID")?;
+                    if let Some(live) = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        document.collection,
+                        owner,
+                        id,
+                    )
+                    .await?
+                    {
+                        expected.push(crate::config_client::DesiredStateExpectation {
+                            collection: document.collection,
+                            owner: owner.to_owned(),
+                            id: id.to_owned(),
+                            digest: Some(crate::config_client::desired_state_document_digest(
+                                &live,
+                            )?),
+                        });
+                    }
+                }
+                Ok(expected)
             })
         })
         .await
@@ -245,5 +301,68 @@ mod tests {
             pack_artifact_document_digest(&left).unwrap(),
             pack_artifact_document_digest(&right).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn install_refuses_a_replaced_document_edited_after_the_expectation_read() -> Result<()> {
+        use defra_node::EmbeddedNode;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = "did:key:pack-owner";
+        crate::document_config::ensure_agent_principal(&node, owner).await?;
+        let access = ConfigAccess::Local(node.clone());
+
+        let config: PackConfig = serde_json::from_value(json!({
+            "agent_principal": {"agent_did": owner},
+            "tools": [{
+                "agent_did": owner,
+                "tools_id": "shared-tools",
+                "display_name": "Pack-authored",
+                "tags": ["gents:pack:test_pack"],
+            }],
+        }))?;
+
+        let expected = replaced_document_expectations(&access, &config).await?;
+        assert!(expected.is_empty());
+        apply_pack_documents(&access, &config, expected).await?;
+
+        let expected = replaced_document_expectations(&access, &config).await?;
+        assert_eq!(expected.len(), 1);
+
+        let edited = json!({
+            "agent_did": owner,
+            "tools_id": "shared-tools",
+            "display_name": "Edited out from under the install",
+            "tags": ["gents:pack:test_pack"],
+        });
+        let edit_plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+            crate::config_client::DesiredStateApplyDocument {
+                collection: Collection::Tools,
+                add: edited.clone(),
+                update: edited,
+            },
+        ])?;
+        access
+            .transact("test.pack.concurrent_edit", |txn| {
+                let edit_plan = &edit_plan;
+                Box::pin(async move {
+                    crate::config_client::apply_desired_state_plan(txn, edit_plan).await
+                })
+            })
+            .await?;
+
+        let error = apply_pack_documents(&access, &config, expected)
+            .await
+            .unwrap_err();
+        let stale = crate::config_client::stale_expectation(&error)
+            .unwrap_or_else(|| panic!("expected StaleExpectation, got: {error:#}"));
+        assert_eq!(stale.drifted.len(), 1);
+        assert_eq!(stale.drifted[0].id, "shared-tools");
+
+        node.shutdown().await;
+        Ok(())
     }
 }

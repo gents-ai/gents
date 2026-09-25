@@ -612,6 +612,11 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                     "would_write": false,
                 }));
             }
+            // Read what the install will replace before the dependency and
+            // schema installs below open their own transactions: the plan is
+            // published after that window, so without this the write is a
+            // blind last-writer-wins overwrite of anything edited meanwhile.
+            let expected = gents::pack::pack_document_expectations(&access, &desired).await?;
             for dependency in dependencies {
                 let dependency_slots = dependency_inference[&dependency.manifest.name]
                     .bindings
@@ -636,7 +641,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
                 .await
                 .context("pack install schemas")?;
-            let apply = gents::pack::install_pack_documents(&access, &desired).await?;
+            let apply = gents::pack::install_pack_documents(&access, &desired, expected).await?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "source": pack.label(),
