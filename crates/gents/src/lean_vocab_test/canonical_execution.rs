@@ -16,6 +16,8 @@ pub(crate) struct LeanDispatchObservationCase {
     pub(crate) name: String,
     pub(crate) inputs: Vec<LeanDispatchObservationInput>,
     pub(crate) expected: Vec<LeanDispatchObservationResult>,
+    pub(crate) completion_probe_outcome: String,
+    pub(crate) completion_probe_accepted: bool,
     pub(crate) parent_outcome: String,
     pub(crate) expected_after_parent_failure: LeanDispatchParentFailure,
 }

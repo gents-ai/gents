@@ -50,6 +50,16 @@ def rejectedThenWon : List Input := [⟨true, false⟩, ⟨true, true⟩]
 
 def parentOutcome : RequestExecutionLease.Outcome := .failed
 
+def completionProbeOutcome : RequestExecutionLease.Outcome := .completed
+
+/-- Probe the actual terminal owner before handoff. A committed foreground
+dispatch remains a completion obligation even when its receipt was lost;
+the caller's volatile handle map is not evidence that the obligation vanished. -/
+def completionProbe (inputs : List Input) : Option Bool := do
+  let (after, _) ← runWorld inputs
+  let held ← acquire after 1 true
+  pure (commit held 1 5 (.terminalize 7 completionProbeOutcome (.message 501))).isSome
+
 /-- Request failure hands the unacknowledged running call to recovery. It does
 not invent tool completion, remove committed intent, or retain the parent's
 foreground claim. No fact here asserts that an external process stopped. -/
@@ -62,6 +72,18 @@ def afterParentFailure (inputs : List Input) : Option (Bool × Bool × Bool × N
     tool.stuckSince.isSome, terminal.messages.length)
 
 example : afterParentFailure lostThenReplay = some (true, false, true, 1) := by native_decide
+
+example : completionProbe lostThenReplay = some false := by native_decide
+example : completionProbe wonThenReplay = some false := by native_decide
+example : completionProbe rejectedThenWon = some false := by native_decide
+example : completionProbe [] = some true := by native_decide
+
+example : (runWorld lostThenReplay).map (fun (world, _) =>
+    (terminalSelectionValid world (.message 501),
+     terminalReplayPresent world 7 .completed (.message 501),
+     world.terminalSelection.isNone,
+     normalCompletionToolsReady world 7)) = some (true, false, true, false) := by
+  native_decide
 
 example : run lostThenReplay = some
     [⟨.unacknowledged, false, true, true⟩, ⟨.replay, false, true, true⟩] := by native_decide

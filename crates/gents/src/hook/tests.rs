@@ -711,6 +711,43 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 "failed" => crate::lifecycle::RequestTerminalOutcome::Failed,
                 other => panic!("unsupported modeled parent outcome {other}"),
             };
+            let completion_outcome = match case.completion_probe_outcome.as_str() {
+                "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
+                other => panic!("unsupported modeled completion probe {other}"),
+            };
+            assert!(
+                !case.completion_probe_accepted,
+                "{}: this adapter branch requires a running-call completion rejection",
+                case.name
+            );
+            let document =
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+            let request_query = format!(
+                "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
+            );
+            let access = crate::ConfigAccess::Local(node.clone());
+            let before_probe = access.execute(&request_query).await.unwrap();
+            let before_request = before_probe["data"]["AgentRequest"].as_array().unwrap();
+            assert_eq!(before_request.len(), 1);
+            let completion = fixture
+                .lifecycle
+                .terminalize_owned(completion_outcome, selection.clone(), None)
+                .await;
+            assert_eq!(completion.is_ok(), case.completion_probe_accepted);
+            let rejection = completion.expect_err("running foreground call must block completion");
+            assert!(
+                matches!(
+                    rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
+                    Some(crate::lifecycle::ToolAccountingRejection::ForegroundRunning)
+                ),
+                "completion must be rejected by durable tool accounting: {rejection:#}"
+            );
+            let after_probe = access.execute(&request_query).await.unwrap();
+            assert_eq!(
+                after_probe["data"]["AgentRequest"].as_array().unwrap(),
+                before_request,
+                "rejected completion must not terminalize or replace the request generation"
+            );
             let terminalized = fixture
                 .lifecycle
                 .terminalize_owned(outcome, selection, Some("dispatch observation failed"))

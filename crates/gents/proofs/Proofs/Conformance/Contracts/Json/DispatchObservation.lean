@@ -35,6 +35,8 @@ def caseJson (entry : String × List Input) : String :=
     ",\"expected\":" ++ (match run entry.2 with
       | none => "null"
       | some results => jsonArray (results.map resultJson)) ++
+    ",\"completion_probe_outcome\":" ++ jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName completionProbeOutcome) ++
+    ",\"completion_probe_accepted\":" ++ jsonOptionalBool (completionProbe entry.2) ++
     ",\"parent_outcome\":" ++ jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName parentOutcome) ++
     ",\"expected_after_parent_failure\":" ++
     (match afterParentFailure entry.2 with
@@ -48,5 +50,7 @@ def caseJson (entry : String × List Input) : String :=
 def casesJson : String := jsonArray (cases.map caseJson)
 
 example : cases.all (fun entry => (run entry.2).isSome) = true := by native_decide
+
+example : cases.all (fun entry => (completionProbe entry.2).isSome) = true := by native_decide
 
 end Conformance.DispatchObservationContracts
