@@ -715,6 +715,11 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
                 other => panic!("unsupported modeled completion probe {other}"),
             };
+            assert!(
+                !case.completion_probe_accepted,
+                "{}: this adapter branch requires a running-call completion rejection",
+                case.name
+            );
             let document =
                 crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
             let request_query = format!(
