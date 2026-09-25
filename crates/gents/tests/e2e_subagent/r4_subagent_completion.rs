@@ -48,7 +48,7 @@ struct ToolCallRow {
     await_mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 struct MessageRow {
     sequence: u32,
     role: String,
@@ -769,13 +769,19 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
 }
 
 async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
+    let header_doc_ids = parent_message_header_ids(node, session_id).await;
+    load_parent_messages(node, session_id, &header_doc_ids).await
+}
+
+/// Physical header identities of the parent transcript, in sequence order.
+async fn parent_message_header_ids(node: &EmbeddedNode, session_id: &str) -> Vec<String> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role request_doc_id }}
+            ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -784,39 +790,70 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
         "message query failed: {:?}",
         response.errors
     );
-    let rows: Vec<MessageRow> = response
+    response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    let (agent_did, requester_did) = request_scope_for_session(node, session_id).await;
-    let history = gents::load_history(node, session_id, &agent_did, requester_did.as_deref())
-        .await
-        .expect("load canonical parent history");
-    assert_eq!(
-        rows.len(),
-        history.len(),
-        "message metadata/history mismatch"
-    );
-    rows.into_iter()
-        .zip(history)
-        .map(|(mut row, message)| {
-            row.content = serde_json::to_string(&message).expect("serialize native message");
-            // Keep the structured rendering for tool IDs and function names,
-            // while exposing user-authored notification text without JSON
-            // string escaping to the status/body assertions below.
-            if let Message::User { content } = &message {
-                for item in content {
-                    if let UserContent::Text(Text { text }) = item {
-                        row.content.push('\n');
-                        row.content.push_str(text);
-                    }
-                }
-            }
-            row
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            row["_docID"]
+                .as_str()
+                .expect("AgentMessage physical identity")
+                .to_owned()
         })
         .collect()
+}
+
+/// Reconstruct each named header through the canonical message owner. Each
+/// row's metadata and content come from the same immutable header, so a
+/// publication racing this observation can add headers but never pair one
+/// header's metadata with another's content.
+async fn load_parent_messages(
+    node: &EmbeddedNode,
+    session_id: &str,
+    header_doc_ids: &[String],
+) -> Vec<MessageRow> {
+    let (agent_did, requester_did) = request_scope_for_session(node, session_id).await;
+    let mut rows = Vec::with_capacity(header_doc_ids.len());
+    for header_doc_id in header_doc_ids {
+        let (header, message) = gents::session::load_canonical_message_from_node(
+            node,
+            header_doc_id,
+            &agent_did,
+            requester_did.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reconstruct parent message {header_doc_id}: {error:#}"));
+        assert_eq!(
+            header.session_id, session_id,
+            "header left the parent session"
+        );
+        let mut content = serde_json::to_string(&message).expect("serialize native message");
+        // Keep the structured rendering for tool IDs and function names,
+        // while exposing user-authored notification text without JSON
+        // string escaping to the status/body assertions below.
+        if let Message::User { content: items } = &message {
+            for item in items {
+                if let UserContent::Text(Text { text }) = item {
+                    content.push('\n');
+                    content.push_str(text);
+                }
+            }
+        }
+        rows.push(MessageRow {
+            sequence: header.sequence,
+            role: serde_json::to_value(header.role)
+                .expect("serialize message role")
+                .as_str()
+                .expect("message role string")
+                .to_owned(),
+            content,
+            request_doc_id: header.request_doc_id,
+        });
+    }
+    rows
 }
 
 async fn fetch_background_notifications(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
@@ -1601,4 +1638,77 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
         .find(|message| message.content.contains("parent hook resumes"))
         .expect("resumed authored prompt");
     assert!(resumed.sequence > notification.sequence);
+}
+
+/// #1806: a publication landing between the identity read and the content
+/// read of one observation must not mismatch metadata and content. The
+/// runtime is stopped while the identities are read and publishes before they
+/// are reconstructed, so this ordering is deterministic.
+#[tokio::test]
+async fn parent_message_observation_is_coherent_across_publication() {
+    let (db, session_id, _parent_request_id) =
+        setup_runtime_fixture("parent_message_observation_publication").await;
+    let args = json!({
+        "name": CHILD_BEHAVIOR_ID,
+        "prompt": "observed before publication",
+        "await_mode": "background"
+    })
+    .to_string();
+    let first_runtime = run_canonical_background_spawn(&db, &args, "model-call-observation").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !fetch_parent_messages(db.node.as_ref(), &session_id)
+        .await
+        .iter()
+        .any(|message| message.content.contains("observed before publication"))
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for canonical background notification"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    first_runtime.shutdown().await;
+
+    let before_ids = parent_message_header_ids(db.node.as_ref(), &session_id).await;
+    let before = load_parent_messages(db.node.as_ref(), &session_id, &before_ids).await;
+
+    let runtime = run_canonical_parent_prompt(
+        &db,
+        &session_id,
+        "observation-publication-request",
+        "published between reads",
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let after = loop {
+        let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
+        if messages
+            .iter()
+            .any(|message| message.content.contains("published between reads"))
+        {
+            break messages;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the publication between reads"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    runtime.shutdown().await;
+
+    // The identities read before the publication still reconstruct to exactly
+    // their own rows; the new header is simply not part of that observation.
+    let straddling = load_parent_messages(db.node.as_ref(), &session_id, &before_ids).await;
+    assert!(after.len() > before_ids.len());
+    assert_eq!(straddling.len(), before_ids.len());
+    for (observed, original) in straddling.iter().zip(&before) {
+        assert_eq!(observed.sequence, original.sequence);
+        assert_eq!(observed.role, original.role);
+        assert_eq!(observed.request_doc_id, original.request_doc_id);
+        assert_eq!(observed.content, original.content);
+    }
+    assert!(straddling
+        .iter()
+        .all(|message| !message.content.contains("published between reads")));
+    assert_eq!(&after[..before.len()], &before[..]);
 }
