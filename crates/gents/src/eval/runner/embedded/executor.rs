@@ -898,6 +898,7 @@ async fn submit_stage(
 ) -> Result<()> {
     let create = build_signed_request(
         RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             RequestIdentity {
                 request_id: request_id.to_string(),
                 agent_did: locator.trial_agent_did.clone(),
