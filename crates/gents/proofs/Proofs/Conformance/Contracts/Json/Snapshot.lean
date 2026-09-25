@@ -169,6 +169,8 @@ def snapshotJson : String :=
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"terminal_diagnostic_presentation_cases\":"
       ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
+    ++ "\"terminal_diagnostic_replay_cases\":"
+      ++ Conformance.TerminalDiagnosticReplayContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"

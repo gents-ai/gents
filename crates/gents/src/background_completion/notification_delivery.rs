@@ -30,8 +30,30 @@ pub(crate) async fn append_background_tool_completion(
     let existing =
         existing_tool_completion_notification(node, &parent_request, tool_call_doc_id).await?;
     let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
-    let (notification, presentation) =
-        tool_completion_presentation(&tool_call_id, tool_name, status, result, reason);
+    let render = |budget: usize| {
+        tool_completion_presentation(&tool_call_id, tool_name, status, result, reason, budget)
+    };
+    // A published notice is replayed exactly (Lean ToolDelivery
+    // notification replay), so a redrive renders with the budget that notice
+    // was rendered under, not whatever the configuration says now.
+    let published_budget = match &existing {
+        Some(existing) => {
+            published_notification_budget(node, &parent_request, &existing.doc_id, &render).await
+        }
+        None => None,
+    };
+    let output_budget = match published_budget {
+        Some(budget) => budget,
+        None => crate::tool_surface::configured_output_budget(
+            node,
+            &parent_request.agent_did,
+            &parent_request.behavior_id,
+            tool_name,
+        )
+        .await
+        .min(super::rendering::NOTIFICATION_SUMMARY_BYTES),
+    };
+    let (notification, presentation) = render(output_budget);
     let key = background_completion_notification_message_key(tool_call_doc_id, "tool");
     let effects = ensure_notification_delivery(
         node,
@@ -60,6 +82,49 @@ pub(crate) async fn append_background_tool_completion(
         "persisted background completion side effects"
     );
     Ok(())
+}
+
+/// The summary budget an already published notice was rendered under: the
+/// unescaped length of its `<result>` body, with or without a truncation
+/// marker, whichever re-renders the stored text exactly. `None` when the
+/// stored notice cannot be read or matches neither, which leaves the atomic
+/// publication owner to reject the conflicting replay.
+async fn published_notification_budget(
+    node: &EmbeddedNode,
+    parent: &crate::AgentRequest,
+    notification_doc_id: &str,
+    render: &impl Fn(usize) -> (String, Vec<gents_protocol::output::PresentationPart>),
+) -> Option<usize> {
+    let (_, message) = crate::session::load_canonical_message_from_node(
+        node,
+        notification_doc_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .map_err(|error| {
+        tracing::warn!(
+            notification_doc_id,
+            error = %format!("{error:#}"),
+            "published background notification could not be read for replay"
+        )
+    })
+    .ok()?;
+    let stored = message.rag_text()?;
+    let body = stored.split_once("<result>")?.1.split_once("</result>")?.0;
+    let unescaped = body
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let candidates = [
+        unescaped.strip_suffix("...").map(str::len),
+        Some(unescaped.len()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .filter(|budget| *budget <= super::rendering::NOTIFICATION_SUMMARY_BYTES)
+        .find(|budget| render(*budget).0 == stored)
 }
 
 async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Result<String> {

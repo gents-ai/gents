@@ -287,3 +287,184 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     hook_execution_fixtures().lock().await.remove(&request_id);
     node.shutdown().await;
 }
+
+struct NoisyTool(String);
+
+impl ToolDyn for NoisyTool {
+    fn name(&self) -> String {
+        self.0.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: self.0.clone(),
+                description: "Completes with long output".into(),
+                parameters: json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async { Ok("x".repeat(100)) })
+    }
+}
+
+/// The owning behavior's configured `max_output_chars` for the tool bounds
+/// the completion notification's summary, resolved when the notice renders.
+#[tokio::test]
+async fn background_completion_summary_honors_the_configured_output_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path())
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    {
+        use crate::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let tools = json!({"agent_did": identity.did(), "tools_id": "general:tools",
+            "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
+                "max_output_chars": 10}}});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: tools.clone(),
+            update: tools,
+        }])
+        .unwrap();
+        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    }
+    let executions = BackgroundExecutionRegistry::default();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        identity.did(),
+        FailurePolicy::default(),
+    )
+    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+        vec![Box::new(NoisyTool("bash".into()))],
+        &["bash".into()],
+    ))
+    .with_background_execution_registry(executions.clone());
+    hook.on_completion_call(&user_text_message("budgeted background"), &[])
+        .await;
+    let session = hook.session_id().await.unwrap();
+    crate::session::create_session_with_behavior_id(
+        &node,
+        &session,
+        "general",
+        identity.did(),
+        "general",
+    )
+    .await
+    .unwrap();
+    let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
+    bind_interruptible_request(
+        &node,
+        &hook,
+        &request_id,
+        &session,
+        Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let receipt = invoke(
+        &hook,
+        "budgeted-spawn",
+        "spawn_process",
+        r#"{"tool_name":"bash","args":{}}"#,
+    )
+    .await;
+    let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
+    executions.wait_for_completion(&child).await;
+    let row = fetch_tool_call_row(&node, &session, &child).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+
+    let history = crate::session::load_history(&node, &session, identity.did(), None)
+        .await
+        .unwrap();
+    let marker = format!("<tool-completion tool_call_id=\"{child}\"");
+    let notification = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|content| match content {
+            UserContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .find(|text| text.contains(&marker))
+        .unwrap_or_else(|| panic!("completion notification missing: {history:?}"));
+    assert!(
+        notification.contains(&format!("<result>{}...</result>", "x".repeat(10))),
+        "{notification}"
+    );
+
+    // Redrive after a budget change (a crash before the delivery was marked):
+    // the published notice replays under the budget it was rendered with.
+    {
+        use crate::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let tools = json!({"agent_did": identity.did(), "tools_id": "general:tools",
+            "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
+                "max_output_chars": 25}}});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: tools.clone(),
+            update: tools,
+        }])
+        .unwrap();
+        ConfigAccess::transact_local(&node, None, "test.output_budget", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    }
+    let tool_doc_id = row["_docID"].as_str().unwrap();
+    crate::background_completion::append_background_tool_completion(
+        &node,
+        &session,
+        &request_id,
+        tool_doc_id,
+        "bash",
+        "completed",
+        &"x".repeat(100),
+        None,
+    )
+    .await
+    .expect("redrive after a budget change replays the published notice");
+    let history = crate::session::load_history(&node, &session, identity.did(), None)
+        .await
+        .unwrap();
+    let notices = history
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter(|content| matches!(content, UserContent::Text(text) if text.text.contains(&marker)))
+        .count();
+    assert_eq!(notices, 1, "redrive must not publish a second notice");
+
+    hook_execution_fixtures().lock().await.remove(&request_id);
+    node.shutdown().await;
+}

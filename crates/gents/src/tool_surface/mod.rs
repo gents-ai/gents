@@ -2,6 +2,7 @@ mod behavior_config;
 mod build;
 mod explain;
 mod modes;
+mod output_budget;
 mod policy;
 mod root_admission;
 mod runtime_context;
@@ -13,6 +14,7 @@ pub use build::measured_mcp_services_for_access;
 pub(crate) use build::{measured_available_mcp_service_ids, resolve_effective_tool_root};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub(crate) use output_budget::configured_output_budget;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,

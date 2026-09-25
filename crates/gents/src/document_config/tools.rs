@@ -184,11 +184,13 @@ pub struct BashTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_wait_timeout_secs: Option<i64>,
-    /// Output budget for stdout and for stderr, each, in the result a
-    /// completed foreground command returns; the rest is truncated. Counted in
-    /// UTF-8 bytes, cut on a character boundary. Unset uses 16,000. Must be
-    /// between 1 and 1,000,000. Background completion notifications and
-    /// interrupted-call diagnostics keep their fixed budgets (#1770).
+    /// Output budget for stdout and for stderr, each, in what a command shows
+    /// the model; the rest is truncated. Counted in UTF-8 bytes, cut on a
+    /// character boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+    /// It bounds a completed command's result and an interrupted command's
+    /// output tail, and a background completion notification summarizes at
+    /// most this much (never more than 4,000 bytes), using the value configured
+    /// when the output is presented.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_chars: Option<i64>,
@@ -210,11 +212,13 @@ pub struct CliTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
-    /// Output budget for stdout and for stderr, each, in the result a
-    /// completed call returns; the rest is truncated. Counted in UTF-8 bytes,
-    /// cut on a character boundary. Unset keeps the host CLI registration's
-    /// budget (16,000 for every built-in registration). Must be between 1 and
-    /// 1,000,000. Interrupted-call diagnostics keep the default budget (#1770).
+    /// Output budget for stdout and for stderr, each, in what a call shows the
+    /// model; the rest is truncated. Counted in UTF-8 bytes, cut on a
+    /// character boundary. Unset keeps the host CLI registration's budget
+    /// (16,000 for every built-in registration). Must be between 1 and
+    /// 1,000,000. It bounds a completed call's result and an interrupted
+    /// call's output tail, using the value configured when the result is
+    /// presented, not at dispatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_chars: Option<i64>,
@@ -786,6 +790,40 @@ impl Tools {
         );
         Ok(())
     }
+}
+
+/// The Tools document a behavior selects, under its owner: behavior ->
+/// context -> `tools_id`. `None` when the behavior has no context or the
+/// context selects no Tools; a missing referenced document is an error.
+pub(crate) async fn load_behavior_tools_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    behavior_id: &str,
+) -> anyhow::Result<Option<Tools>> {
+    use crate::collection::Collection;
+    use crate::config_client::read_desired_state_document_in_txn as read;
+    use anyhow::Context as _;
+    let behavior: super::AgentBehavior = serde_json::from_value(
+        read(txn, Collection::AgentBehavior, owner, behavior_id)
+            .await?
+            .with_context(|| format!("AgentBehavior {behavior_id} not found for {owner}"))?,
+    )?;
+    let Some(context_id) = behavior.context_id else {
+        return Ok(None);
+    };
+    let context: super::AgentContext = serde_json::from_value(
+        read(txn, Collection::AgentContext, owner, &context_id)
+            .await?
+            .with_context(|| format!("AgentContext {context_id} not found for {owner}"))?,
+    )?;
+    let Some(tools_id) = context.tools_id.as_deref() else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_value(
+        read(txn, Collection::Tools, owner, tools_id)
+            .await?
+            .with_context(|| format!("Tools {tools_id} not found for {owner}"))?,
+    )?))
 }
 
 /// Compact full-document serialization. Explicit sparse patches use a separate

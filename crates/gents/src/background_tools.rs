@@ -1735,7 +1735,6 @@ async fn load_subagent_tool_selection(
 ) -> Result<SubagentToolSelection> {
     use crate::collection::Collection;
     use crate::config_client::{read_desired_state_document_in_txn as read, ConfigAccess};
-    use crate::document_config::{AgentBehavior, AgentContext, Tools};
     let owner = agent_did.to_owned();
     let behavior_id = behavior_id.to_owned();
     ConfigAccess::transact_local(
@@ -1746,31 +1745,12 @@ async fn load_subagent_tool_selection(
             let owner = owner.clone();
             let behavior_id = behavior_id.clone();
             Box::pin(async move {
-                let behavior: AgentBehavior = serde_json::from_value(
-                    read(txn, Collection::AgentBehavior, &owner, &behavior_id)
+                let Some(tools) =
+                    crate::document_config::load_behavior_tools_in_txn(txn, &owner, &behavior_id)
                         .await?
-                        .ok_or_else(|| {
-                            anyhow!("AgentBehavior {behavior_id} not found for {owner}")
-                        })?,
-                )?;
-                let Some(context_id) = behavior.context_id else {
+                else {
                     return Ok(SubagentToolSelection::default());
                 };
-                let context: AgentContext = serde_json::from_value(
-                    read(txn, Collection::AgentContext, &owner, &context_id)
-                        .await?
-                        .ok_or_else(|| {
-                            anyhow!("AgentContext {context_id} not found for {owner}")
-                        })?,
-                )?;
-                let Some(tools_id) = context.tools_id.as_deref() else {
-                    return Ok(SubagentToolSelection::default());
-                };
-                let tools: Tools = serde_json::from_value(
-                    read(txn, Collection::Tools, &owner, tools_id)
-                        .await?
-                        .ok_or_else(|| anyhow!("Tools {tools_id} not found for {owner}"))?,
-                )?;
                 let resolved = crate::tool_surface::SubagentToolConfig::from_document(&tools)?;
                 let group = tools.subagents.as_ref();
 

@@ -43,6 +43,19 @@ pub(crate) struct LeanTerminalDiagnosticPresentationCase {
     pub(crate) expected: LeanTerminalDiagnosticPresentationExpected,
 }
 
+/// `Conformance.TerminalDiagnosticReplayContracts`: whether a stored
+/// interrupted-call diagnostic replays under a (possibly changed) budget.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanTerminalDiagnosticReplayCase {
+    pub(crate) name: String,
+    pub(crate) raw: Vec<u8>,
+    pub(crate) cause: Vec<u8>,
+    pub(crate) configured_budget: u64,
+    pub(crate) stored: LeanPresentation,
+    pub(crate) accepted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanTerminalDiagnosticPresentationExpected {

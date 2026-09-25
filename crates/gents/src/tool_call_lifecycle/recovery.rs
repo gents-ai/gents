@@ -772,6 +772,7 @@ mod tests {
                     delegated_workspace: None,
                     await_mode: AwaitMode::Foreground,
                 }),
+                tool_name: None,
             },
         )
         .await

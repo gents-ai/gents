@@ -155,14 +155,46 @@ struct TerminalOutputPlan<'a> {
     raw: &'a str,
     presentation: PayloadPresentation,
     rendered: String,
+    /// An interrupted-call diagnostic: a tail of `raw`, a newline, the cause.
+    diagnostic: bool,
 }
 
+/// Whether `stored` is exactly the diagnostic `terminal_diagnostic_presentation`
+/// produces for `raw` and `cause` under some tail budget (Lean
+/// `TerminalDiagnosticReplayContracts.accepted`). The budget follows
+/// configuration, which may change between delivery and replay, so it is
+/// recovered from the stored presentation itself: the suffix range's length,
+/// or zero for a cause-only diagnostic. Any other shape is rejected.
+fn diagnostic_replay_matches(raw: &str, cause: &str, stored: &PayloadPresentation) -> Result<bool> {
+    use gents_protocol::output::PresentationPart;
+    let budget = match stored {
+        PayloadPresentation::Composed { parts } => match parts.first() {
+            Some(PresentationPart::Literal { .. }) if parts.len() == 1 => 0,
+            Some(PresentationPart::OutputRange { start_byte, .. }) => {
+                match usize::try_from(*start_byte)
+                    .ok()
+                    .and_then(|start| raw.len().checked_sub(start))
+                {
+                    Some(budget) => budget,
+                    None => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        },
+        PayloadPresentation::Full => return Ok(false),
+    };
+    Ok(terminal_diagnostic_presentation(raw, cause, budget)? == *stored)
+}
+
+/// `output_budget` bounds an interrupted call's diagnostic tail; it comes from
+/// current configuration (`ToolCallLifecycle::output_budget`).
 fn terminal_output_plan<'a>(
     prefix: &'a str,
     text: &'a str,
     pending_raw: Option<&'a str>,
     prepared: Option<&PayloadPresentation>,
     state: ToolCallState,
+    output_budget: usize,
 ) -> Result<TerminalOutputPlan<'a>> {
     let candidate_raw = if prepared.is_some() {
         pending_raw.unwrap_or(prefix)
@@ -170,16 +202,13 @@ fn terminal_output_plan<'a>(
         text
     };
     if state != ToolCallState::Completed && !candidate_raw.starts_with(prefix) {
-        let presentation = terminal_diagnostic_presentation(
-            prefix,
-            text,
-            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
-        )?;
+        let presentation = terminal_diagnostic_presentation(prefix, text, output_budget)?;
         let rendered = render_presentation(prefix, &presentation)?;
         return Ok(TerminalOutputPlan {
             raw: prefix,
             presentation,
             rendered,
+            diagnostic: true,
         });
     }
     anyhow::ensure!(
@@ -196,6 +225,7 @@ fn terminal_output_plan<'a>(
         raw: candidate_raw,
         presentation,
         rendered,
+        diagnostic: false,
     })
 }
 
@@ -1095,6 +1125,13 @@ impl ToolCallLifecycle {
         }
         let tool_name = self.tool_name.clone();
         let deadline_at = self.deadline_at;
+        // Only an interrupted call renders a budgeted diagnostic; a completed
+        // call's presentation is prepared by its tool and never reads it.
+        let output_budget = if fields.state == ToolCallState::Completed {
+            crate::toolset::DEFAULT_MAX_COMMAND_CHARS
+        } else {
+            self.output_budget().await
+        };
         let terminal_status = self.terminal_persistence_status(fields.completion_reason);
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
 
@@ -1142,6 +1179,7 @@ impl ToolCallLifecycle {
                         text,
                         pending_raw,
                         presentation.as_ref(),
+                        output_budget,
                         adopt_competing_terminal,
                         publish_native_result,
                     )
@@ -1183,6 +1221,7 @@ async fn terminalize_transaction(
     text: &str,
     pending_raw: Option<&str>,
     presentation: Option<&PayloadPresentation>,
+    output_budget: usize,
     adopt_competing_terminal: bool,
     publish_native_result: bool,
 ) -> Result<bool> {
@@ -1486,12 +1525,23 @@ async fn terminalize_transaction(
                 pending_raw,
                 presentation,
                 fields.state,
+                output_budget,
             )?;
             anyhow::ensure!(
                 reconstructed.text == plan.raw
-                    && result_payload.presentation == plan.presentation
-                    && render_presentation(&reconstructed.text, &result_payload.presentation)?
-                        == plan.rendered,
+                    && if plan.diagnostic {
+                        diagnostic_replay_matches(
+                            &reconstructed.text,
+                            text,
+                            &result_payload.presentation,
+                        )?
+                    } else {
+                        result_payload.presentation == plan.presentation
+                            && render_presentation(
+                                &reconstructed.text,
+                                &result_payload.presentation,
+                            )? == plan.rendered
+                    },
                 "canonical tool delivery replay payload differs from terminal plan"
             );
             return Ok(false);
@@ -1599,6 +1649,7 @@ async fn terminalize_transaction(
             pending_raw,
             presentation,
             fields.state,
+            output_budget,
         )?;
         anyhow::ensure!(
             reconstructed.text == plan.raw,
@@ -1638,7 +1689,14 @@ async fn terminalize_transaction(
             "clock moved backwards while closing canonical tool output"
         );
     }
-    let plan = terminal_output_plan(prefix, text, pending_raw, presentation, fields.state)?;
+    let plan = terminal_output_plan(
+        prefix,
+        text,
+        pending_raw,
+        presentation,
+        fields.state,
+        output_budget,
+    )?;
     let suffix = plan.raw[prefix.len()..].to_owned();
     let final_flush = !suffix.is_empty() || extent.segments == 0;
     let stream_bytes = vec![u64::try_from(plan.raw.len())?];
@@ -2078,6 +2136,7 @@ mod spawned_background_tests {
             Some(&cause),
             Some(&PayloadPresentation::Full),
             ToolCallState::TimedOut,
+            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
         )
         .unwrap();
         assert_eq!(empty.raw, cause);
@@ -2090,6 +2149,7 @@ mod spawned_background_tests {
             Some(&cause),
             Some(&PayloadPresentation::Full),
             ToolCallState::TimedOut,
+            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
         )
         .unwrap();
         let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok {
@@ -2490,6 +2550,166 @@ mod spawned_background_tests {
 
             node.shutdown().await;
             let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    async fn configure_bash_output_budget(
+        node: &std::sync::Arc<EmbeddedNode>,
+        owner: &str,
+        budget: i64,
+    ) {
+        use crate::config_client::{
+            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let tools = serde_json::json!({"agent_did": owner, "tools_id": "general:tools",
+            "host": {"bash": {"mode": "ReadOnly", "max_output_chars": budget}}});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: tools.clone(),
+            update: tools,
+        }])
+        .unwrap();
+        ConfigAccess::transact_local(node, None, "test.output_budget", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn interrupted_presentation(
+        node: &std::sync::Arc<EmbeddedNode>,
+        tool: &ToolCallLifecycle,
+    ) -> String {
+        crate::tool_call_lifecycle::load_tool_call_presentation(
+            &crate::config_client::ConfigAccess::Local(node.clone()),
+            tool.doc_id().unwrap(),
+            &tool.agent_did,
+            &tool.session_id,
+            tool.requester_did.as_deref(),
+        )
+        .await
+        .unwrap()
+        .result
+        .expect("terminal delivery presentation")
+    }
+
+    /// An interrupted call's diagnostic tail follows the owning behavior's
+    /// configured budget for the tool, resolved from configuration so a
+    /// reloaded owner (restart recovery) applies it too. Tools without a host
+    /// group, and behaviors that no longer resolve, keep the default.
+    #[tokio::test]
+    async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmission, PublishedAdmissionOptions,
+        };
+        for (name, tool_name, configured, reload, bounded) in [
+            ("budget-bash", "bash", true, false, true),
+            ("budget-bash-restart", "bash", true, true, true),
+            ("budget-remote", "mcp__search__query", true, false, false),
+            ("budget-unresolved", "bash", false, false, false),
+        ] {
+            let PublishedAdmission {
+                node,
+                path,
+                mut tool,
+                ..
+            } = published_admission(PublishedAdmissionOptions {
+                name: name.to_owned(),
+                tool_name: Some(tool_name.to_owned()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let binding = tool.tool_output_binding().expect("running output binding");
+            append_tool_output(&binding, "0123456789abcdefghij")
+                .await
+                .unwrap();
+            // Configuration is read when the diagnostic is presented.
+            if configured {
+                crate::test_support::install_test_behavior(&node, &tool.agent_did, "general").await;
+                configure_bash_output_budget(&node, &tool.agent_did, 5).await;
+            }
+            if reload {
+                tool = ToolCallLifecycle::load_by_doc_id(
+                    node.clone(),
+                    tool.doc_id().unwrap(),
+                    &tool.agent_did,
+                    &tool.session_id,
+                    tool.requester_did.as_deref(),
+                )
+                .await
+                .unwrap()
+                .expect("reloaded running tool");
+            }
+            let mut replay = ToolCallLifecycle::load_by_doc_id(
+                node.clone(),
+                tool.doc_id().unwrap(),
+                &tool.agent_did,
+                &tool.session_id,
+                tool.requester_did.as_deref(),
+            )
+            .await
+            .unwrap()
+            .expect("running tool for a later same-state replay");
+            assert!(tool.timeout().await.unwrap(), "{name}");
+            let presented = interrupted_presentation(&node, &tool).await;
+            if bounded {
+                assert!(
+                    presented.starts_with("fghij\n") && !presented.contains("0123456789abcde"),
+                    "{name}: {presented:?}"
+                );
+            } else {
+                assert!(
+                    presented.starts_with("0123456789abcdefghij\n"),
+                    "{name}: {presented:?}"
+                );
+            }
+            assert!(
+                presented.contains("tool call deadline exceeded at "),
+                "{presented:?}"
+            );
+
+            if bounded && !reload {
+                // A configuration change after delivery does not make the
+                // delivered diagnostic a conflicting replay.
+                configure_bash_output_budget(&node, &tool.agent_did, 12).await;
+                assert!(!replay.timeout().await.unwrap(), "{name}: replay");
+                assert_eq!(interrupted_presentation(&node, &tool).await, presented);
+            }
+            node.shutdown().await;
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[test]
+    fn generated_terminal_diagnostic_replay_cases_bind_native_replay() {
+        let cases = crate::lean_vocab_test::lean_terminal_diagnostic_replay_cases();
+        assert_eq!(cases.len(), 12, "all generated replay shapes must be bound");
+        assert!(cases.iter().any(|case| case.accepted) && cases.iter().any(|case| !case.accepted));
+        for case in cases {
+            let raw = String::from_utf8(case.raw.clone()).expect("valid replay source");
+            let cause = String::from_utf8(case.cause.clone()).expect("valid replay cause");
+            let stored = crate::lean_vocab_test::native_presentation(&case.stored)
+                .expect("modeled presentation translates");
+            assert_eq!(
+                diagnostic_replay_matches(&raw, &cause, &stored).expect("replay check"),
+                case.accepted,
+                "{}: native diagnostic replay diverged from the model",
+                case.name
+            );
+            if case.accepted {
+                // The configured budget at replay may differ from delivery; the
+                // replayed plan's own presentation is irrelevant to acceptance.
+                let budget = usize::try_from(case.configured_budget).unwrap();
+                let current = terminal_diagnostic_presentation(&raw, &cause, budget).unwrap();
+                assert!(
+                    diagnostic_replay_matches(&raw, &cause, &current).unwrap(),
+                    "{}: freshly planned diagnostic must also replay",
+                    case.name
+                );
+            }
         }
     }
 

@@ -15,10 +15,12 @@ export type CliTool = { name: string,
  */
 timeout_secs?: number | null,
 /**
- * Output budget for stdout and for stderr, each, in the result a
- * completed call returns; the rest is truncated. Counted in UTF-8 bytes,
- * cut on a character boundary. Unset keeps the host CLI registration's
- * budget (16,000 for every built-in registration). Must be between 1 and
- * 1,000,000. Interrupted-call diagnostics keep the default budget (#1770).
+ * Output budget for stdout and for stderr, each, in what a call shows the
+ * model; the rest is truncated. Counted in UTF-8 bytes, cut on a
+ * character boundary. Unset keeps the host CLI registration's budget
+ * (16,000 for every built-in registration). Must be between 1 and
+ * 1,000,000. It bounds a completed call's result and an interrupted
+ * call's output tail, using the value configured when the result is
+ * presented, not at dispatch.
  */
 max_output_chars?: number | null, };

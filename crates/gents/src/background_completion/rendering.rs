@@ -1,5 +1,11 @@
 use super::*;
 
+/// Bytes of normalized output a completion notification summarizes. The
+/// notification wakes the parent; `read_process` and `read_subagent` page the
+/// full output, so the summary stays small even when a tool's own output
+/// budget is larger.
+pub(crate) const NOTIFICATION_SUMMARY_BYTES: usize = 4000;
+
 pub(super) fn render_notification(edge: &ChildEdge, status: &str, summary: &str) -> String {
     format!(
         r#"<subagent-notification child_request_id="{child_request_id}" child_session_id="{child_session_id}" behavior_id="{behavior_id}" parent_tool_call_id="{parent_tool_call_id}" status="{status}">
@@ -39,12 +45,14 @@ pub(super) fn render_tool_completion(
 /// Build the identical rendered notification while retaining unchanged result
 /// bytes as references to the canonical tool-output stream. Only wrappers,
 /// collapsed whitespace, XML entities and the truncation marker are literals.
+/// `budget` bounds the normalized result bytes shown.
 pub(super) fn tool_completion_presentation(
     tool_call_id: &str,
     tool_name: &str,
     status: &str,
     result: &str,
     reason: Option<&str>,
+    budget: usize,
 ) -> (String, Vec<gents_protocol::output::PresentationPart>) {
     use gents_protocol::output::PresentationPart;
 
@@ -83,7 +91,7 @@ pub(super) fn tool_completion_presentation(
         }
         let width = ch.len_utf8();
         let separator = usize::from(pending_space && saw_text);
-        if normalized_bytes + separator + width > 4000 {
+        if normalized_bytes + separator + width > budget {
             truncated = true;
             break;
         }
@@ -143,7 +151,8 @@ pub(super) fn subagent_notification_presentation(
     let suffix = "</summary>\n</subagent-notification>".to_string();
     let mut parts = vec![PresentationPart::Literal { text: prefix }];
     if compact_summary(source) == summary {
-        let (_, mut source_parts) = tool_completion_presentation("", "", "", source, None);
+        let (_, mut source_parts) =
+            tool_completion_presentation("", "", "", source, None, NOTIFICATION_SUMMARY_BYTES);
         source_parts.remove(0);
         source_parts.pop();
         parts.extend(source_parts);
@@ -161,7 +170,7 @@ pub(super) fn subagent_notification_presentation(
 
 pub(super) fn compact_summary(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    const LIMIT: usize = 4000;
+    const LIMIT: usize = NOTIFICATION_SUMMARY_BYTES;
     if normalized.len() <= LIMIT {
         return normalized;
     }
@@ -202,6 +211,7 @@ mod canonical_presentation_tests {
                 "failed",
                 result,
                 Some("reason<&>"),
+                NOTIFICATION_SUMMARY_BYTES,
             );
             assert_eq!(
                 rendered,

@@ -33,6 +33,11 @@ source consistency checks, not a separate runtime compatibility version.
 - `write_file` no longer replaces an existing file blindly: pass the
   `content_hash` from your latest read (rejected if the file changed since) or
   `overwrite: true`. Creating new files is unchanged (#1605).
+- A configured `max_output_chars` now also bounds what an interrupted
+  command's diagnostic shows and how much a background command's completion
+  notice summarizes (at most 4,000 bytes) (#1770). The value is read from the
+  behavior's current Tools document when the output is presented, including
+  after a restart; a behavior that no longer resolves uses the default.
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
@@ -144,9 +149,7 @@ every runtime you pair with to 0.19.0 together.
 - Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
   and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
-  Background completion notices and interrupted-call diagnostics keep their
-  fixed budgets for now (#1770). Runtimes older than 0.19.0 reject documents
-  that set them.
+  Runtimes older than 0.19.0 reject documents that set them.
 
 ### Changed
 
