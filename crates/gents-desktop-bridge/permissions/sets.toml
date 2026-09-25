@@ -15,11 +15,12 @@ permissions = [
 
 [[set]]
 identifier = "client-lifecycle"
-description = "Client start/shutdown and selected-agent"
+description = "Client start/shutdown, selected-agent, and application quit"
 permissions = [
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
   "allow-desktop-set-selected-agent",
+  "allow-desktop-app-quit",
 ]
 
 [[set]]

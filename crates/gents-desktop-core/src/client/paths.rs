@@ -92,6 +92,20 @@ impl DesktopPaths {
             && self.iroh_secret_key_path.is_file()
             && self.node_data_dir.join("MANIFEST").is_file()
     }
+
+    /// Every entry of the desktop client's durable state: its store, peer
+    /// directory (and lease), principal identity and P2P key. The packaged
+    /// runtime copied under the same root is not client state.
+    pub fn client_state_entries(&self) -> Vec<PathBuf> {
+        vec![
+            self.node_data_dir.clone(),
+            self.peer_directory_path.clone(),
+            self.peer_directory_path.with_extension("lock"),
+            self.principal_metadata_path.clone(),
+            self.identity_key_path.clone(),
+            self.iroh_secret_key_path.clone(),
+        ]
+    }
 }
 
 #[cfg(test)]

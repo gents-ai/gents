@@ -754,7 +754,14 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         node.shutdown().await;
         return Err(error);
     }
-    gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    // A store from an older build is refused before anything else starts, and
+    // exits with the incompatible-store status instead of a generic failure.
+    if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
+        node.shutdown().await;
+        return Err(gents::storage_backend::classify_store_error(
+            error, &data_dir,
+        ));
+    }
     let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
         .await
         .context("reading client route collection versions after migrations")?;
@@ -1397,7 +1404,7 @@ fn has_agent_did(did: &str) -> bool {
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join("p2p-secret-key")
+    home_dir.join(gents::home::P2P_SECRET_KEY_FILE_NAME)
 }
 
 fn resolve_server_p2p_config(
@@ -1651,6 +1658,38 @@ mod grok_shim_tests {
             Command::Server(args) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    /// A home key an older build wrote with ambient (0644) permissions stops
+    /// the runtime with the insecure-key exit status, not a generic crash.
+    #[cfg(unix)]
+    #[test]
+    fn an_older_insecure_home_key_exits_with_the_insecure_key_status() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("keys").join("local.key");
+        gents::identity::load_or_create_file_identity(&key).unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let args = parse_server(&["--key-path", key.to_str().unwrap()]);
+
+        let error = match resolve_server_identity(&args, None, temp.path(), "local") {
+            Ok(_) => panic!("an insecure key must not load"),
+            Err(error) => error,
+        };
+        let store = gents::storage_backend::incompatible_store(&error, Path::new(""))
+            .expect("typed refusal");
+        assert_eq!(
+            store.kind,
+            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+        );
+        assert_eq!(
+            crate::native_service::incompatible_store_exit_code(store.kind),
+            crate::native_service::INSECURE_KEY_EXIT_CODE
+        );
+        assert_eq!(
+            fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 
     #[test]

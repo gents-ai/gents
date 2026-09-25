@@ -26,7 +26,8 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
-    /// The exact managed runtime data directory uses an incompatible store.
+    /// A local store (the managed runtime's or the desktop client's) was
+    /// written by a version this build cannot open.
     IncompatibleLocalStore,
     /// Enrollment-owned peer pairing and route-actuation failures.
     Pairing,

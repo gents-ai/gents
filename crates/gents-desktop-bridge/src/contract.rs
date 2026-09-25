@@ -45,6 +45,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_client_start", "client-lifecycle"),
         ("desktop_client_shutdown", "client-lifecycle"),
         ("desktop_set_selected_agent", "client-lifecycle"),
+        ("desktop_app_quit", "client-lifecycle"),
         // runtime-admin
         ("desktop_init_local_standard", "runtime-admin"),
         ("desktop_managed_server_status", "runtime-admin"),
@@ -427,6 +428,7 @@ mod tests {
             ("desktop_client_start", "mutate"),
             ("desktop_client_shutdown", "mutate"),
             ("desktop_set_selected_agent", "mutate"),
+            ("desktop_app_quit", "mutate"),
             ("desktop_init_local_standard", "mutate"),
             ("desktop_managed_server_status", "mutate"),
             ("desktop_managed_server_start", "mutate"),

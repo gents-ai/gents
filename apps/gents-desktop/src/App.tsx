@@ -8,6 +8,7 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { IncompatibleHomeScreen } from "./components/IncompatibleHomeScreen";
 import { StartupScreen } from "./components/StartupScreen";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
@@ -108,6 +109,11 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     );
   }, [agent, route.name, shell.selectedSession?.title]);
   const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
+  // A completed home reset starts over from first-run detection.
+  const homeGeneration = shell.incompatibleHome.generation;
+  useEffect(() => {
+    if (homeGeneration > 0) setSetup("unknown");
+  }, [homeGeneration]);
   useNativeWindowReadiness(
     shell.startupPhase === "ready" &&
       (setup === "done" ||
@@ -121,6 +127,17 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
       {isWindowsTauriShell() && <WindowControls />}
     </div>
   );
+
+  /* A home this version cannot open is answered before anything else,
+     whichever operation found it; the wizard restarts at welcome after. */
+  if (shell.incompatibleHome.report) {
+    return (
+      <>
+        {titlebar}
+        <IncompatibleHomeScreen error={shell.error} home={shell.incompatibleHome} />
+      </>
+    );
+  }
 
   /* First-run owns its own starting page. Do not swap it for the global
      startup screen or the wizard remounts at welcome after the server is up. */
@@ -165,8 +182,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           error={shell.error}
           managedServerSupported={bridge.supportsManagedServer === true}
           onRetry={shell.reconnect}
-          onResetManagedServer={shell.onResetManagedServer}
-          managedServerReset={shell.managedServerReset}
           managedServerWait={shell.managedServerWait}
           diagnosticsHint={shell.diagnosticsHint}
           onSkipManagedServerWait={shell.skipManagedServerWait}

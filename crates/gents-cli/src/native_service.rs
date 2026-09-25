@@ -15,6 +15,28 @@ use anyhow::{bail, Context, Result};
 
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
+/// Exit status of `gents` when it refuses to open a store this build cannot
+/// read (`gents::storage_backend::IncompatibleStore`). Supervisors and the
+/// desktop read it from the exit record to tell that refusal apart from a
+/// crash; systemd does not restart it. It is sysexits `EX_DATAERR`.
+pub const INCOMPATIBLE_STORE_EXIT_CODE: i32 = 65;
+/// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for a store another (possibly
+/// newer) build extended rather than an older one (sysexits `EX_NOUSER`, an
+/// otherwise unused status here).
+pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
+/// Like [`INCOMPATIBLE_STORE_EXIT_CODE`], for an identity key an older build
+/// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
+pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
+
+/// The exit status `gents` uses when it refuses a store of `kind`.
+pub fn incompatible_store_exit_code(kind: gents::storage_backend::IncompatibleStoreKind) -> i32 {
+    use gents::storage_backend::IncompatibleStoreKind;
+    match kind {
+        IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
+        IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
+        _ => INCOMPATIBLE_STORE_EXIT_CODE,
+    }
+}
 pub const BACKGROUND_APPROVAL_REQUIRED: &str = "macOS has not allowed Gents to run in the background. Approve Gents in System Settings > General > Login Items & Extensions, then start it again.";
 
 /// A start that macOS refused because the background item is not approved.
@@ -1128,7 +1150,7 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .map(systemd_append_target)
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
-    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!("[Unit]\nDescription=Gents agent runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.
@@ -1327,6 +1349,32 @@ pub struct ServiceExit {
     pub reason: String,
     pub restarts: u64,
     pub clean: bool,
+    /// The recorded exit status, when the process exited rather than being
+    /// terminated by a signal.
+    pub code: Option<i32>,
+}
+
+impl ServiceExit {
+    /// The runtime exited because it refused to open its store.
+    pub fn incompatible_store(&self) -> bool {
+        self.refused_store().is_some()
+    }
+
+    /// Which store refusal the exit status reports, if any.
+    pub fn refused_store(&self) -> Option<gents::storage_backend::IncompatibleStoreKind> {
+        match self.code {
+            Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::UnknownLineage)
+            }
+            Some(FOREIGN_STORE_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
+            }
+            Some(INSECURE_KEY_EXIT_CODE) => {
+                Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
+            }
+            _ => None,
+        }
+    }
 }
 
 fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
@@ -1344,23 +1392,28 @@ fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
         .and_then(|runs| runs.parse::<u64>().ok())
         .unwrap_or_default()
         .saturating_sub(1);
-    let (reason, clean) = if let Some(signal) = field("last terminating signal = ") {
-        (format!("terminated by signal {signal}"), false)
+    let (reason, clean, status) = if let Some(signal) = field("last terminating signal = ") {
+        (format!("terminated by signal {signal}"), false, None)
     } else {
         let code = field("last exit code = ")?;
         if code.starts_with('(') {
             return None;
         }
-        if code.split(':').next().map(str::trim) == Some("0") {
-            ("exited normally".to_string(), true)
+        let status = code
+            .split(':')
+            .next()
+            .and_then(|status| status.trim().parse::<i32>().ok());
+        if status == Some(0) {
+            ("exited normally".to_string(), true, status)
         } else {
-            (format!("exited with code {code}"), false)
+            (format!("exited with code {code}"), false, status)
         }
     };
     Some(ServiceExit {
         reason,
         restarts,
         clean,
+        code: status,
     })
 }
 
@@ -1382,6 +1435,9 @@ fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
         reason: format!("{result} (exit status {})", field("ExecMainStatus")),
         restarts: field("NRestarts").parse().unwrap_or_default(),
         clean: false,
+        code: (result == "exit-code")
+            .then(|| field("ExecMainStatus").parse().ok())
+            .flatten(),
     })
 }
 
@@ -1751,6 +1807,9 @@ mod tests {
         let unit = render_systemd(&config).unwrap();
         assert!(unit.contains("agent %% $$ home\\\" \\\\ path"));
         assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains(&format!(
+            "RestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}"
+        )));
         assert!(!unit.contains("sh -c"));
         assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
     }
@@ -2030,6 +2089,7 @@ mod tests {
                 reason: "exited with code 78: Function not implemented".into(),
                 restarts: 2,
                 clean: false,
+                code: Some(78),
             })
         );
         assert_eq!(
@@ -2040,6 +2100,7 @@ mod tests {
                 reason: "terminated by signal Killed: 9".into(),
                 restarts: 0,
                 clean: false,
+                code: None,
             })
         );
         assert!(
@@ -2052,6 +2113,7 @@ mod tests {
                 reason: "exited normally".into(),
                 restarts: 0,
                 clean: true,
+                code: Some(0),
             })
         );
         assert!(launchd_exit_failure("state = running\npid = 42\nlast exit code = 1\n").is_none());
@@ -2064,7 +2126,45 @@ mod tests {
                 reason: "exit-code (exit status 1)".into(),
                 restarts: 4,
                 clean: false,
+                code: Some(1),
             })
+        );
+        let refused = launchd_exit_failure(&format!(
+            "state = not running\nruns = 2\nlast exit code = {INCOMPATIBLE_STORE_EXIT_CODE}: Inappropriate file type or format\n"
+        ))
+        .expect("launchd exit record");
+        assert!(refused.incompatible_store());
+        let refused = systemd_exit_failure(&format!(
+            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INCOMPATIBLE_STORE_EXIT_CODE}\nNRestarts=0\n"
+        ))
+        .expect("systemd exit record");
+        assert!(refused.incompatible_store());
+        assert!(!systemd_exit_failure(
+            "ActiveState=failed\nSubState=failed\nResult=signal\nExecMainStatus=65\nNRestarts=0\n"
+        )
+        .expect("signal exit record")
+        .incompatible_store());
+        let foreign = launchd_exit_failure(&format!(
+            "state = not running\nruns = 1\nlast exit code = {FOREIGN_STORE_EXIT_CODE}: No such user\n"
+        ))
+        .expect("launchd exit record");
+        assert_eq!(
+            foreign.refused_store(),
+            Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
+        );
+        let insecure = systemd_exit_failure(&format!(
+            "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus={INSECURE_KEY_EXIT_CODE}\nNRestarts=0\n"
+        ))
+        .expect("systemd exit record");
+        assert_eq!(
+            insecure.refused_store(),
+            Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
+        );
+        assert_eq!(
+            incompatible_store_exit_code(
+                gents::storage_backend::IncompatibleStoreKind::InsecureKey
+            ),
+            INSECURE_KEY_EXIT_CODE
         );
         assert!(systemd_exit_failure(
             "ActiveState=activating\nSubState=start\nResult=success\nExecMainStatus=0\nNRestarts=0\n"

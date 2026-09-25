@@ -5,6 +5,7 @@ import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteReq
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
+import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
@@ -94,9 +95,13 @@ export type DesktopApiAdapter = {
     agentName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
+  /** Omit `confirmation` to preview a home this version cannot open. */
   resetManagedServer?: (
     confirmation?: string,
+    disposition?: HomeResetDisposition,
   ) => Promise<ManagedServerResetResult>;
+  /** Quits the application, leaving all local state untouched. */
+  quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
@@ -300,4 +305,4 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
 };
 
-export type { ManagedServerResetResult, ManagedServerStatus };
+export type { HomeResetDisposition, ManagedServerResetResult, ManagedServerStatus };

@@ -87,6 +87,18 @@ impl ClientCore {
 
         checkpoint("embedded_node");
 
+        if let Err(error) = ensure_runtime_schemas(node.as_ref()).await {
+            // Checked before the peer directory is opened or rewritten, and
+            // the store released before reporting, so a reset can retire the
+            // refused client state without racing this node.
+            node.shutdown().await;
+            return Err(gents::storage_backend::classify_store_error(
+                error,
+                paths.node_data_dir(),
+            ));
+        }
+        checkpoint("runtime_schemas");
+
         let loaded_peer_directory = PeerDirectory::open_writer(paths.peer_directory_path()).await?;
         let sync_state = super::sync_state::ClientSyncStateOwner::new(
             P2PHealth::default(),
@@ -96,8 +108,6 @@ impl ClientCore {
         sync_state.clear_ephemeral_pairing_readiness().await?;
         let records = sync_state.records();
         checkpoint("peer_directory");
-        ensure_runtime_schemas(node.as_ref()).await?;
-        checkpoint("runtime_schemas");
         subscribe_all_collections(node.as_ref()).await?;
         checkpoint("collection_subscriptions");
 
