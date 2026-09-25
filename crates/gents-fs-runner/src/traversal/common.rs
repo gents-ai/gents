@@ -109,6 +109,11 @@ pub(super) fn sorted_children(
 ) -> Result<Vec<std::fs::DirEntry>> {
     if let Some(duration) = sorted_children_block_for_test(dir) {
         std::thread::sleep(duration);
+        // Written only when the blocker returns on its own, so a caller can
+        // tell completion apart from preemption without timing the runner.
+        if let Ok(marker) = std::env::var("GENTS_FS_RUNNER_BLOCK_RELEASED") {
+            let _ = std::fs::write(marker, b"released");
+        }
     }
     let read_dir = match std::fs::read_dir(dir) {
         Ok(read_dir) => read_dir,

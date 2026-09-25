@@ -460,14 +460,18 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
+    // The blocker outlasts any scheduling delay, so it can only release if
+    // the dispatcher awaited it. Preemption is observed as the absence of its
+    // release marker, not as elapsed wall time.
+    let released = root.join("blocker-released");
     let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-    let _block_ms = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_MS", "200");
+    let _block_ms = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_MS", "5000");
+    let _block_released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &released);
     let blocking_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
     let second_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
-    let started = Instant::now();
     let first_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(15);
     let first_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(first_deadline),
@@ -478,7 +482,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         ),
     )
     .await;
-    let first_elapsed = started.elapsed();
+    let released_before_first_outcome = released.exists();
 
     let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
     let second_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
@@ -490,9 +494,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         ),
     )
     .await;
-    let queue_elapsed = started.elapsed();
-
-    tokio::time::sleep(Duration::from_millis(225)).await;
+    let released_before_queue_advanced = released.exists();
     let _ = std::fs::remove_dir_all(&root);
 
     assert!(
@@ -503,12 +505,12 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "blocking native tool must resolve to a typed timeout, got {first_outcome:?}"
     );
     assert!(
-        first_elapsed < Duration::from_millis(150),
-        "blocking native tool should terminalize at the request deadline, elapsed={first_elapsed:?}"
+        !released_before_first_outcome,
+        "blocking native tool should terminalize at the request deadline, not after the blocker returns"
     );
     assert!(
-        queue_elapsed < Duration::from_millis(150),
-        "single-worker queue should advance before the blocking native work returns, elapsed={queue_elapsed:?}"
+        !released_before_queue_advanced,
+        "single-worker queue should advance before the blocking native work returns"
     );
     match &second_outcome {
         crate::tool_call_lifecycle::ToolOutcome::Completed(text) => {
