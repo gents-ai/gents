@@ -54,6 +54,15 @@ every runtime you pair with to 0.19.0 together.
   `~/.gents` stay in place. `gents server` refuses such a store before
   writing its schema and exits with status 65 (67 for a store another,
   possibly newer, version extended), which systemd does not restart.
+- `gents eval` measures a behavior against an eval definition pack. Each
+  trial runs in a fresh embedded home against an inference target, grading is
+  deterministic, and runs can be resumed. `gents eval init` interviews a model
+  to draft, validate and optionally pilot a new definition pack.
+- `gents optimization` runs prompt optimization jobs over eval runs. The
+  promotion gates and paired sign-flip permutation test are modeled in Lean.
+  A job is promotable only when its baseline pack matches the live
+  configuration, and promote and revert publish guarded by digest
+  expectations of that configuration.
 - Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
   and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
