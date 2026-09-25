@@ -69,6 +69,10 @@ every runtime you pair with to 0.19.0 together.
   CLI from the release workflow's artifacts.
 - The execution lease defaults to two minutes instead of 30, so crash recovery
   takes over sooner (#1626).
+- The ChatGPT subscription advertises Codex client 0.157.0, which unlocks the
+  GPT-6 models. New setups default to `gpt-6-astra` for the ChatGPT
+  subscription, `claude-opus-5-5` for the Claude subscription, and `grok-4.7`
+  for the Grok subscription.
 
 ### Fixed
 

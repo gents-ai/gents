@@ -38,7 +38,7 @@ pub fn default_backend_endpoint() -> &'static str {
 }
 
 pub fn default_model_name() -> &'static str {
-    "grok-4.5"
+    "grok-4.7"
 }
 
 pub fn normalize_endpoint(endpoint: &str) -> String {

@@ -25,7 +25,7 @@ use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind
 /// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
 /// Default client-facing model slug for ClaudeCliSubscription.
-pub const DEFAULT_MODEL_ID: &str = "claude-sonnet-5";
+pub const DEFAULT_MODEL_ID: &str = "claude-opus-5-5";
 
 pub fn default_backend_endpoint() -> &'static str {
     DEFAULT_BACKEND_ENDPOINT
