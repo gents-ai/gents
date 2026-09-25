@@ -205,6 +205,11 @@ source consistency checks, not a separate runtime compatibility version.
 - Desktop onboarding shows the recommended reasoning effort as a default that
   can be changed later; the selector sits with the other adjustable settings
   and says it applies to new requests (#1618).
+- Desktop: a local agent's subagent sessions open with their messages and
+  tool calls. The transcript was read under the desktop's own requester scope,
+  but a subagent the agent spawns for itself is requested by the agent, so the
+  read matched nothing; the agent's operator now reads such a session under
+  its own scope (#1537).
 
 ## 0.19.0 - 2026-09-24
 
