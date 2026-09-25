@@ -128,7 +128,6 @@ jobs:
             echo "::error::No successful Release Linux gents run for ${RELEASE_TAG}."
             exit 1
           fi
-          # These archives are workflow artifacts, not GitHub Release assets.
           # Multiple named artifacts extract into subdirectories.
           staging="$(mktemp -d)"
           gh run download "${run_id}" --dir "${staging}" \

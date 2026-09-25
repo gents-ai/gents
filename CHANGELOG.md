@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+### Changed
+
+- GitHub Releases attach the gents CLI archives again, with per-OS checksum
+  files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
+
 ## 0.19.0 - 2026-09-24
 
 This release changes how conversations are stored. Earlier stores are not
