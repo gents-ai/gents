@@ -424,13 +424,13 @@ pub(super) fn collect_unresolved_behavior_references(
     let scope = view.principal.value.agent_did.as_str();
     let result: Result<()> = (|| {
         anyhow::ensure!(behavior.agent_did == scope, "behavior owner mismatch");
-        resolve_inference(view, &behavior.inference_profile_id)?;
+        ensure_inference_references_visible(view, &behavior.inference_profile_id)?;
         if let Some(id) = &behavior.context_id {
             let context = owned_doc!(&view.contexts, id.as_str(), scope)?;
             if let Some(id) = &context.compaction_id {
                 let compaction = owned_doc!(&view.compactions, id.as_str(), scope)?;
                 if let Some(id) = &compaction.inference_profile_id {
-                    resolve_inference(view, id)?;
+                    ensure_inference_references_visible(view, id)?;
                 }
             }
             if let Some(id) = &context.tools_id {
@@ -445,6 +445,29 @@ pub(super) fn collect_unresolved_behavior_references(
     if let Err(error) = result {
         details.push(format!("behavior {}: {error:#}", behavior.behavior_id));
     }
+}
+
+/// `resolve_inference`'s advertised-model, credential, and structural
+/// validation can be permanently false for a behavior the router never
+/// selects; the snapshot already reports that per-behavior as an
+/// `UnavailableBehavior` rather than failing. The control watcher's
+/// visibility gate must therefore only wait for referenced documents to
+/// exist, not for every behavior to be semantically valid, or a permanently
+/// invalid non-selected behavior holds reconciliation in `Debouncing` forever.
+fn ensure_inference_references_visible(view: &DocumentRuntimeView, id: &str) -> Result<()> {
+    let scope = view.principal.value.agent_did.as_str();
+    let profile = owned_doc!(&view.inference_profiles, id, scope)?;
+    owned_doc!(&view.backends, profile.backend_id.as_str(), scope)?;
+    if let Some(id) = profile.sampling_id.as_deref() {
+        owned_doc!(&view.inference_sampling, id, scope)?;
+    }
+    if let Some(id) = profile.execution_id.as_deref() {
+        let execution = owned_doc!(&view.inference_execution, id, scope)?;
+        if let Some(id) = execution.retry_policy_id.as_deref() {
+            owned_doc!(&view.inference_retry_policies, id, scope)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_inference(
