@@ -11,6 +11,10 @@ source consistency checks, not a separate runtime compatibility version.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
+### Fixed
+
+- CLI integration tests recover from a port taken between allocation and the
+  server's bind, instead of failing the run (#1641).
 
 ### Changed
 

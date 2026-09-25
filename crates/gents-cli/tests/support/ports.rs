@@ -8,7 +8,7 @@ const FIRST_TEST_PORT: u16 = 20_000;
 const LAST_TEST_PORT: u16 = 45_000;
 
 static NEXT_TEST_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
-static PORT_RESERVATIONS: OnceLock<Mutex<Vec<File>>> = OnceLock::new();
+static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
 
 pub fn allocate_port() -> Result<u16> {
     // Binding port 0 chooses from the OS ephemeral range. Once that probe is
@@ -52,12 +52,53 @@ pub fn allocate_port() -> Result<u16> {
                 .get_or_init(|| Mutex::new(Vec::new()))
                 .lock()
                 .expect("test port reservations poisoned")
-                .push(reservation);
+                .push((port, reservation));
             return Ok(port);
         }
     }
 
     bail!("no free test port in {FIRST_TEST_PORT}..={LAST_TEST_PORT}")
+}
+
+/// True while this process still holds `allocate_port`'s advisory
+/// reservation for `port`. The recovery paths in `process` consult it as a
+/// secondary gate, so they only retry a port this registry actually handed
+/// out.
+///
+/// This check is deliberately not what protects the fixtures that provoke
+/// bind conflicts on purpose -- `server_fails_closed_when_http_port_is_occupied`
+/// and `server_rejects_ephemeral_http_port_before_publishing_readiness` in
+/// cli_server.rs. Those are safe structurally: they drive `spawn_server` and
+/// that suite's local `wait_for_server_exit`, so they never call a recovering
+/// helper and cannot reach the recovery path at all. The registry check on
+/// its own would not be airtight, because `FIRST_TEST_PORT..=LAST_TEST_PORT`
+/// (20000-45000) overlaps Linux's default ephemeral range (32768-60999), so a
+/// port a fixture binds with port 0 can collide with one this registry
+/// handed out.
+pub fn is_reserved(port: u16) -> bool {
+    PORT_RESERVATIONS
+        .get()
+        .map(|reservations| {
+            reservations
+                .lock()
+                .expect("test port reservations poisoned")
+                .iter()
+                .any(|(reserved, _file)| *reserved == port)
+        })
+        .unwrap_or(false)
+}
+
+/// Give up this process's advisory reservation for `port` after positive
+/// evidence (a captured bind-conflict diagnostic) that an unrelated process
+/// now owns it, so neither a later `is_reserved` check nor another
+/// `allocate_port` caller in this process treats it as still ours.
+pub fn release(port: u16) {
+    if let Some(reservations) = PORT_RESERVATIONS.get() {
+        reservations
+            .lock()
+            .expect("test port reservations poisoned")
+            .retain(|(reserved, _file)| *reserved != port);
+    }
 }
 
 pub fn graphql_url(port: u16) -> String {
