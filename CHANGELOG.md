@@ -8,8 +8,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
-- GitHub Releases attach the signed gents CLI archives again (Linux
-  x86_64/aarch64, macOS arm64) with checksums.
+- GitHub Releases attach the gents CLI archives again, with per-OS checksum
+  files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
 ## 0.19.0 - 2026-09-24
 
