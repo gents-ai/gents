@@ -109,6 +109,8 @@ struct ToolCallRow {
     delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     #[serde(default)]
     delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
+    #[serde(default)]
+    cancel_cascade_intent_at: Option<String>,
 }
 
 #[derive(Clone)]
@@ -289,6 +291,7 @@ impl SubagentSource {
                     spawn_behavior_id
                     delegated_workspace
                     delegated_input
+                    cancel_cascade_intent_at
                 }}
             }}"#
         );
@@ -528,6 +531,40 @@ impl SubagentSource {
             }
         }
         None
+    }
+
+    /// Interrupt the exact child this bridge receipt names, by its physical
+    /// document and principal scope.
+    async fn interrupt_created_child(&self, bridge_doc_id: &str, child_request_id: &str) {
+        let result = async {
+            let child = crate::descendant_graph::resolve_bridge_receipt_child(
+                crate::descendant_graph::DescendantGraphAccess::Local(self.node.as_ref()),
+                bridge_doc_id,
+            )
+            .await?
+            .context("created child does not corroborate its bridge receipt")?;
+            crate::interrupt::interrupt_request_by_doc_id(
+                &self.node,
+                child
+                    .doc_id
+                    .as_deref()
+                    .context("created child omitted _docID")?,
+                child
+                    .agent_did
+                    .as_deref()
+                    .context("created child omitted agent_did")?,
+                child.requester_did.as_deref(),
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(
+                child_request_id,
+                %error,
+                "subagent source failed to interrupt a child created for a settled bridge",
+            );
+        }
     }
 
     async fn fail_unauthorized_tool_call(
@@ -945,6 +982,7 @@ impl SubagentSource {
         // interrupt when the bridge policy is Cascade AND a real cancel signal is
         // present. A parent that completed NORMALLY is NOT a cancel signal — a
         // cleanly-completed parent never cascade-cancels its tools anywhere else.
+        let latest_bridge = self.load_tool_call(doc_id).await;
         if bridge_cancel_policy != CancelPolicy::Cascade {
             tracing::debug!(
                 child_request_id = %request_id,
@@ -953,7 +991,7 @@ impl SubagentSource {
                 "subagent source: detached child, skipping orphan cancel re-check (child outlives parent)",
             );
         } else {
-            let bridge_cancelled = match self.load_tool_call(doc_id).await {
+            let bridge_cancelled = match &latest_bridge {
                 Ok(Some(latest)) => {
                     latest.lifecycle_state.as_deref() == Some(ToolCallState::Cancelled.as_str())
                 }
@@ -1012,16 +1050,35 @@ impl SubagentSource {
                     parent_cancel_worthy_terminal,
                     "subagent source: Cascade bridge with real cancel signal in materialize window; interrupting just-created orphan child",
                 );
-                if let Err(error) =
-                    crate::interrupt::interrupt_request(&self.node, &request_id).await
-                {
-                    tracing::warn!(
-                        child_request_id = %request_id,
-                        %error,
-                        "subagent source failed to interrupt orphaned child after cancel-before-materialize race",
-                    );
-                }
+                self.interrupt_created_child(doc_id, &request_id).await;
             }
+        }
+
+        // Lean `SpawnClaimFence`: a bridge that left `running` or carries a
+        // cancel intent would have failed the running-bridge gate above, so its
+        // child is fenced before any claim, whatever the cancel policy.
+        let bridge_fenced = match &latest_bridge {
+            Ok(Some(latest)) => {
+                latest.lifecycle_state.as_deref() != Some("running")
+                    || non_empty(latest.cancel_cascade_intent_at.as_deref()).is_some()
+            }
+            Ok(None) => false,
+            Err(error) => {
+                tracing::warn!(
+                    child_request_id = %request_id,
+                    %error,
+                    "subagent source failed to re-read bridge after child create; the claim gate and cancel mirror remain the fence",
+                );
+                false
+            }
+        };
+        if bridge_fenced {
+            tracing::info!(
+                child_request_id = %request_id,
+                parent_request_id = %parent_request_id,
+                "subagent source: bridge settled while the child was created; interrupting it before claim",
+            );
+            self.interrupt_created_child(doc_id, &request_id).await;
         }
 
         self.processed_tool_calls.insert(processed_key);
@@ -1412,3 +1469,5 @@ mod delegated_workspace_tests {
 
 #[cfg(test)]
 mod delegated_child_tests;
+#[cfg(test)]
+mod spawn_fence_tests;

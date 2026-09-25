@@ -472,7 +472,10 @@ impl DefraSessionHook {
             lifecycle.spawn_behavior_id.as_deref() == Some(target.behavior_id.as_str()),
             "spawn_subagent dispatch behavior conflicts with immutable accepted bridge admission"
         );
-        if await_mode == AwaitMode::Background {
+        // Lean `SpawnClaimFence.unclaimedDeadlineApplies`: only a spawn onto
+        // another principal waits on a peer. This runtime's own subagent source
+        // materializes a same-principal child, so a queued one has not failed.
+        if await_mode == AwaitMode::Background && target_host == SubagentTargetHost::Remote {
             let timeout_secs =
                 effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);
             lifecycle.set_unclaimed_deadline_at(Some(

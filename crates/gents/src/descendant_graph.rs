@@ -126,6 +126,10 @@ pub struct DescendantEdge {
     /// This is not a [`RequestLifecycleState`]; the child request's own state
     /// is [`Self::child_lifecycle_state`].
     pub lifecycle_state: String,
+    /// The bridge settled but still awaits its child's stop acknowledgement
+    /// (Lean `SpawnClaimFence`): the child may still be running.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_pending: bool,
     /// Lifecycle of the corroborated child `AgentRequest`; `None` until a
     /// child row materializes and corroborates the bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +249,8 @@ struct BridgeRow {
     // physical route fact rather than re-resolving an alias from tool args.
     spawn_behavior_id: Option<String>,
     unclaimed_deadline_at: Option<String>,
+    #[serde(default)]
+    cancel_pending_remote_ack: Option<bool>,
 }
 
 const BRIDGE_FIELDS: &str = r#"
@@ -267,6 +273,7 @@ const BRIDGE_FIELDS: &str = r#"
     spawn_target_did
     spawn_behavior_id
     unclaimed_deadline_at
+    cancel_pending_remote_ack
 "#;
 
 #[derive(Debug, Deserialize)]
@@ -790,6 +797,8 @@ fn project_descendant_edge(
                 .unwrap_or_else(|| "foreground".to_string()),
             cancel_policy: clean(bridge.cancel_policy.as_deref()),
             lifecycle_state,
+            stop_pending: bridge_state_is_terminal(&bridge_state)
+                && bridge.cancel_pending_remote_ack == Some(true),
             child_lifecycle_state: child.as_ref().and_then(|row| row.lifecycle_state),
             materialization_state,
             terminal_result_ref,
@@ -1012,13 +1021,46 @@ pub async fn resolve_physical_bridge_child(
         bridge_corroborates_parent(&parent, &bridge),
         "physical bridge does not corroborate parent scope"
     );
+    unique_bridge_child(&access, &bridge, |child| {
+        child_corroborates(&parent, &bridge, child)
+    })
+    .await
+}
+
+/// The child a bridge receipt names, resolved on a host that may not hold the
+/// parent request: the child row must carry the receipt's exact physical
+/// lineage and principal. A row that merely reuses the logical child id is not
+/// this bridge's child.
+pub async fn resolve_bridge_receipt_child(
+    access: DescendantGraphAccess<'_>,
+    bridge_doc_id: &str,
+) -> Result<Option<AgentRequestRow>> {
+    let Some(bridge) = load_unique_bridge_by_doc_id(&access, bridge_doc_id).await? else {
+        return Ok(None);
+    };
+    unique_bridge_child(&access, &bridge, |child| {
+        child_corroborates_receipt(&bridge, child)
+    })
+    .await
+}
+
+/// Children of a spawn receipt must also run as its immutable target principal.
+async fn unique_bridge_child(
+    access: &DescendantGraphAccess<'_>,
+    bridge: &BridgeRow,
+    corroborates: impl Fn(&AgentRequestRow) -> bool,
+) -> Result<Option<AgentRequestRow>> {
     let Some(child_id) = bridge.child_request_id.as_ref() else {
         return Ok(None);
     };
-    let children = load_requests(&access, std::slice::from_ref(child_id)).await?;
-    let mut matching = children
-        .into_iter()
-        .filter(|child| child_corroborates(&parent, &bridge, child));
+    let target = clean(bridge.spawn_target_did.as_deref());
+    let children = load_requests(access, std::slice::from_ref(child_id)).await?;
+    let mut matching = children.into_iter().filter(|child| {
+        corroborates(child)
+            && target
+                .as_deref()
+                .is_none_or(|target| clean(child.agent_did.as_deref()).as_deref() == Some(target))
+    });
     let child = matching.next();
     anyhow::ensure!(
         matching.next().is_none(),
@@ -1027,13 +1069,26 @@ pub async fn resolve_physical_bridge_child(
     Ok(child)
 }
 
+fn child_corroborates_receipt(bridge: &BridgeRow, child: &AgentRequestRow) -> bool {
+    clean(child.caused_by_parent_request_id.as_deref()).as_deref()
+        == Some(bridge.request_id.as_str())
+        && clean(child.caused_by_parent_request_doc_id.as_deref())
+            == clean(bridge.request_doc_id.as_deref())
+        && clean(child.caused_by_parent_request_doc_id.as_deref()).is_some()
+        && child_corroborates_receipt_tool(bridge, child)
+}
+
 fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &AgentRequestRow) -> bool {
     clean(child.caused_by_parent_request_id.as_deref()).as_deref()
         == Some(parent.row.request_id.as_str())
         && clean(child.caused_by_parent_request_doc_id.as_deref()).as_deref()
             == Some(request_doc_id(&parent.row))
-        && clean(child.caused_by_parent_tool_call_id.as_deref()).as_deref()
-            == Some(bridge.tool_call_id.as_str())
+        && child_corroborates_receipt_tool(bridge, child)
+}
+
+fn child_corroborates_receipt_tool(bridge: &BridgeRow, child: &AgentRequestRow) -> bool {
+    clean(child.caused_by_parent_tool_call_id.as_deref()).as_deref()
+        == Some(bridge.tool_call_id.as_str())
         && clean(child.caused_by_parent_tool_call_doc_id.as_deref()).as_deref()
             == Some(bridge.doc_id.as_str())
         && clean(bridge.child_request_id.as_deref()).as_deref() == Some(child.request_id.as_str())
@@ -1088,6 +1143,7 @@ async fn load_requests_filtered(
                 behavior_id
                 session_id
                 lifecycle_state
+                interrupt_requested_at
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
@@ -1527,6 +1583,7 @@ mod tests {
             await_mode: "background".into(),
             cancel_policy: Some("cascade".into()),
             lifecycle_state: lifecycle.into(),
+            stop_pending: false,
             child_lifecycle_state: None,
             materialization_state: DescendantMaterializationState::AwaitingChild,
             terminal_result_ref: None,

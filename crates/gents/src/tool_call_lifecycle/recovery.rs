@@ -1366,6 +1366,12 @@ async fn recover_orphan_subagent_children(
         if child_request_exists(node, &child_request_id).await? {
             continue;
         }
+        // An expired bridge is settled (and fenced) by this same recovery
+        // pass; materializing its child now would start work nobody awaits
+        // (Lean `SpawnClaimFence`: settled bridges refuse materialization).
+        if deadline_is_expired(Utc::now(), row.deadline_at.as_deref()) {
+            continue;
+        }
         if row
             .unclaimed_deadline_at
             .as_deref()
@@ -1747,12 +1753,37 @@ async fn recover_stuck_running_tool_calls(
             continue;
         };
 
+        if outcome == RecoveryOutcome::UnclaimedCrossDeploymentSpawn {
+            // Lean `missing_parent_never_terminalizes`: an unresolved exact
+            // parent defers settlement even when the deadline has passed.
+            if parent.is_none() {
+                continue;
+            }
+            if child_request_id(&row).is_some() {
+                // The expiry fences its child through the same owner as the
+                // periodic reconciler (Lean `SpawnClaimFence.expire`).
+                match crate::background_completion::settle_unclaimed_spawn(node, &row.doc_id).await
+                {
+                    Ok(crate::background_completion::UnclaimedSpawnSettlement::Abandoned) => {
+                        recovered += 1;
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to settle unclaimed subagent spawn during recovery"
+                    ),
+                }
+                continue;
+            }
+        }
+
         // Cascade only on cancel-worthy parent terminals (not clean completion).
         let mut remote_cancel_intent_at = None;
-        let should_cascade = outcome != RecoveryOutcome::UnclaimedCrossDeploymentSpawn
-            && parent
-                .as_ref()
-                .is_none_or(|p| !request_is_cleanly_completed(p));
+        let should_cascade = parent
+            .as_ref()
+            .is_none_or(|p| !request_is_cleanly_completed(p));
         if should_cascade {
             if let Some(child_request_id) = cascade_child_request_id(&row) {
                 if child_request_is_locally_owned(node, agent_did, child_request_id).await? {
@@ -3077,7 +3108,7 @@ impl RecoveryOutcome {
     fn failure_class(self) -> Option<FailureClass> {
         match self {
             Self::TimedOut | Self::Failed | Self::ProcessLost => Some(FailureClass::External),
-            Self::UnclaimedCrossDeploymentSpawn => Some(FailureClass::ServiceUnavailable),
+            Self::UnclaimedCrossDeploymentSpawn => Some(FailureClass::SpawnUnclaimed),
             Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => None,
         }
     }

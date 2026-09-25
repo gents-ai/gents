@@ -1,11 +1,12 @@
 import Proofs.Conformance.ContractCases.Types
+import Proofs.SpawnClaimFence
 
 namespace Conformance.ContractCases
 
 def r5CrossPrincipalCase
     (name route parentPrincipal childPrincipal parentRequestId parentToolCallId
       childRequestId targetBehaviorId : String)
-    (crossPrincipalRoutingFired samePrincipalFallback unclaimedDeadlineSet : Bool) :
+    (crossPrincipalRoutingFired samePrincipalFallback : Bool) :
     R5CrossPrincipalCase :=
   { name := name
   , route := route
@@ -26,7 +27,8 @@ def r5CrossPrincipalCase
   , causedByTriggerKind := "subagent"
   , crossPrincipalRoutingFired := crossPrincipalRoutingFired
   , samePrincipalFallback := samePrincipalFallback
-  , unclaimedDeadlineSet := unclaimedDeadlineSet
+  , unclaimedDeadlineSet := SpawnClaimFence.unclaimedDeadlineApplies
+      (if crossPrincipalRoutingFired then .crossPrincipal else .samePrincipal)
   }
 
 def r5CrossPrincipalCases : List R5CrossPrincipalCase :=
@@ -41,7 +43,6 @@ def r5CrossPrincipalCases : List R5CrossPrincipalCase :=
       "r5-lean-cross-child-behavior"
       true
       false
-      true
   , r5CrossPrincipalCase
       "r5_same_principal_background_fallback_materializes_child"
       "same_principal"
@@ -52,7 +53,6 @@ def r5CrossPrincipalCases : List R5CrossPrincipalCase :=
       "runtime_generated"
       "r5-lean-local-child-behavior"
       false
-      true
       true
   ]
 

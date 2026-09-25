@@ -151,6 +151,15 @@ source consistency checks, not a separate runtime compatibility version.
   `spawn_process` admits a background command. Tool calls settled before
   dispatch (policy rejection, pre-dispatch failure or cancellation) no longer
   record a made-up `started_at` or `latency_ms` (#1801).
+- A background subagent spawned on this runtime's own principal no longer
+  fails after 60 seconds while it waits to be claimed; it stays queued and
+  attached to its spawn. A cross-principal spawn that no host claims in time
+  fails with the new `spawnUnclaimed` failure class instead of
+  `serviceUnavailable`. Whichever deadline gives up on an unconfirmed child
+  records a cancel intent in the same write, so a child that materializes or
+  is claimed later is refused or interrupted instead of running unsupervised,
+  and `list_subagents` reports such a spawn as `stopping` until its child has
+  stopped (#1807).
 
 ## 0.19.0 - 2026-09-24
 

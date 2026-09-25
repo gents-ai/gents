@@ -89,6 +89,44 @@ impl ToolCallLifecycle {
         Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
     }
 
+    /// Rehydrate one physical row by `_docID` within the session scope it
+    /// records. Background owners that hold only the physical identity use
+    /// this; the scoped load still enforces the row's own boundary.
+    pub(crate) async fn load_physical(
+        node: Arc<EmbeddedNode>,
+        doc_id: &str,
+    ) -> Result<Option<Self>> {
+        #[derive(Deserialize)]
+        struct ScopeRow {
+            agent_did: String,
+            requester_did: Option<String>,
+            session_id: String,
+        }
+        let escaped = escape_graphql_string(doc_id);
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ agent_did requester_did session_id }} }}"#
+            ),
+            "tool call physical scope",
+        )
+        .await?;
+        let rows: Vec<ScopeRow> = crate::graphql::rows(&response, "AgentToolCall")?;
+        let scope = match rows.as_slice() {
+            [] => return Ok(None),
+            [scope] => scope,
+            _ => anyhow::bail!("tool call document {doc_id} resolved to more than one row"),
+        };
+        Self::load_by_doc_id(
+            node.clone(),
+            doc_id,
+            &scope.agent_did,
+            &scope.session_id,
+            scope.requester_did.as_deref(),
+        )
+        .await
+    }
+
     /// Rehydrate the exact authorized bridge within its canonical session scope.
     pub async fn load_by_doc_id(
         node: Arc<EmbeddedNode>,

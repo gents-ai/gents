@@ -251,6 +251,7 @@ fn projection_descendant_edge(
         await_mode: "background".to_string(),
         cancel_policy: Some("cascade".to_string()),
         lifecycle_state: "running".to_string(),
+        stop_pending: false,
         child_lifecycle_state: Some(RequestLifecycleState::Processing),
         materialization_state,
         terminal_result_ref: None,

@@ -184,6 +184,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
     pub(crate) descendant_cursor_cases: Vec<LeanDescendantCursorCase>,
+    pub(crate) spawn_fence_cases: Vec<LeanSpawnFenceCase>,
     pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
     pub(crate) r5_scenario_cases: Vec<serde_json::Value>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -1004,6 +1005,8 @@ mod self_config;
 mod session_documents;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
+#[path = "spawn_claim_fence.rs"]
+mod spawn_claim_fence;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -1033,6 +1036,7 @@ pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
+pub(crate) use spawn_claim_fence::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -1441,6 +1445,10 @@ pub(crate) fn lean_descendant_graph_cases() -> &'static [LeanDescendantGraphCase
 
 pub(crate) fn lean_descendant_cursor_cases() -> &'static [LeanDescendantCursorCase] {
     &lean_contract_snapshot().descendant_cursor_cases
+}
+
+pub(crate) fn lean_spawn_fence_cases() -> &'static [LeanSpawnFenceCase] {
+    &lean_contract_snapshot().spawn_fence_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {

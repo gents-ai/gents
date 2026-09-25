@@ -22,6 +22,7 @@ import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.DelegatedChild
 import Proofs.Conformance.Contracts.Json.DescendantGraph
+import Proofs.Conformance.Contracts.Json.SpawnClaimFence
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
@@ -387,6 +388,8 @@ def snapshotJson : String :=
       ++ descendantGraphCasesJson ++ ","
     ++ "\"descendant_cursor_cases\":"
       ++ descendantCursorCasesJson ++ ","
+    ++ "\"spawn_fence_cases\":"
+      ++ spawnFenceCasesJson ++ ","
     ++ "\"r5_cross_principal_cases\":"
       ++ jsonArray
         (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","

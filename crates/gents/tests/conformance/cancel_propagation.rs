@@ -343,29 +343,45 @@ async fn cancel_ack_observer_reports_pending_stuck_and_acked_outcomes() {
         .await
         .stuck_since
         .is_some());
-    create_processing_request(
+    // Only a child carrying the bridge's physical lineage acknowledges it.
+    let acked_bridge_doc_id = db
+        .node
+        .execute(r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "ack-acked-bridge" } }) { _docID } }"#)
+        .await
+        .data
+        .expect("acked bridge row")["AgentToolCall"][0]["_docID"]
+        .as_str()
+        .expect("acked bridge _docID")
+        .to_owned();
+    let now = chrono::Utc::now().to_rfc3339();
+    exec(
         db.node.as_ref(),
-        "ack-acked-child",
-        "ack-acked-child-session",
-        &local_did,
-        &behavior_id,
-        "child work",
-        1,
-        Some("ack-acked-parent"),
-        Some("ack-acked-bridge"),
-        None,
+        &format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "ack-acked-child", agent_did: "{local_did}",
+                behavior_id: "{behavior_id}", session_id: "ack-acked-child-session",
+                retry_parent_request: "", retry_root_request: "ack-acked-child",
+                superseded_by_request: "", content: "child work",
+                lifecycle_state: "processing", backend_id: "",
+                execution_origin: "interactive", failure_reason: "",
+                created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 1,
+                caused_by_parent_request_id: "ack-acked-parent",
+                caused_by_parent_request_doc_id: "{acked_parent_doc_id}",
+                caused_by_parent_tool_call_id: "ack-acked-bridge",
+                caused_by_parent_tool_call_doc_id: "{acked_bridge_doc_id}"
+            }}) {{ _docID }} }}"#,
+            local_did = escape_graphql_string(&local_did),
+            behavior_id = escape_graphql_string(&behavior_id),
+        ),
+        "create acked child with bridge lineage",
     )
     .await;
-    set_request_lifecycle_state(
-        db.node.as_ref(),
-        &fetch_request(db.node.as_ref(), "ack-acked-child")
-            .await
-            .expect("acked child request")
-            .doc_id
-            .expect("acked child _docID"),
-        "failed",
-    )
-    .await;
+    let acked_child_doc_id = fetch_request(db.node.as_ref(), "ack-acked-child")
+        .await
+        .expect("acked child request")
+        .doc_id
+        .expect("acked child _docID");
+    set_request_lifecycle_state(db.node.as_ref(), &acked_child_doc_id, "failed").await;
 
     let outcomes = observe_cancel_cascade_ack(db.node.clone(), &local_did)
         .await

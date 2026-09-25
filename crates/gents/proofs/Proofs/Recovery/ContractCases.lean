@@ -299,7 +299,8 @@ def restartDispositionCase
     (theoremName : String)
     (deadlineExpired : Bool := false)
     (unclaimedExpired : Bool := false)
-    (process : ManagedExec.StopOutcome := .stopped) : RestartDispositionCase :=
+    (process : ManagedExec.StopOutcome := .stopped)
+    (childObserved : Bool := false) : RestartDispositionCase :=
   let row : RestartRow :=
     { awaitMode := awaitMode
     , cancelPolicy := cancelPolicy
@@ -308,6 +309,7 @@ def restartDispositionCase
     , deadlineExpired := deadlineExpired
     , unclaimedExpired := unclaimedExpired
     , process := process
+    , childObserved := childObserved
     }
   let disposition := restartDisposition row
   { name := name
@@ -319,6 +321,9 @@ def restartDispositionCase
   , deadlineExpired := deadlineExpired
   , unclaimedExpired := unclaimedExpired
   , processOutcome := process.toContract
+  , childObserved := childObserved
+  , bridgeCancelIntent := row.spawnFence.map (·.cancelIntent)
+  , bridgeAckPending := row.spawnFence.map (·.ackPending)
   , disposition := disposition.toContract
   , cause := disposition.causeContract
   , terminalState := disposition.terminalStateContract
@@ -401,15 +406,32 @@ def restartDispositionCases : List RestartDispositionCase :=
       .background .cascade true .live
       "Recovery.unclaimed_precedes_leave_running_exemptions"
       (unclaimedExpired := true)
+  , restartDispositionCase
+      "restart_unclaimed_observed_child_links"
+      .background .cascade true .live
+      "Recovery.unclaimed_observed_child_links"
+      (unclaimedExpired := true) (childObserved := true)
+  , restartDispositionCase
+      "restart_deadline_unobserved_child_fenced"
+      .background .cascade true .cleanlyCompleted
+      "Recovery.restart_expiry_fences_unobserved_child"
+      (deadlineExpired := true)
+  , restartDispositionCase
+      "restart_both_expired_unobserved_child_fenced"
+      .background .cascade true .live
+      "Recovery.restart_expiry_fences_unobserved_child"
+      (deadlineExpired := true) (unclaimedExpired := true)
   ]
 
-/-- The witness family covers both dispositions, including expired and
+/-- The witness family covers every disposition, including expired and
     unclaimed rows whose missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_both_dispositions :
     (restartDispositionCases.filter
         (fun witness => witness.disposition = "leave_running")).length = 8 ∧
       (restartDispositionCases.filter
-        (fun witness => witness.disposition = "terminalize")).length = 7 := by
+        (fun witness => witness.disposition = "terminalize")).length = 9 ∧
+      (restartDispositionCases.filter
+        (fun witness => witness.disposition = "link")).length = 1 := by
   native_decide
 
 /-- Every terminal native background witness with a resolvable parent owes a

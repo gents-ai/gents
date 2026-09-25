@@ -1443,7 +1443,9 @@ async fn accepted_subagent_lifecycle(
     let plan = crate::streaming::SpawnAdmissionPlan {
         tool_call_id: internal_call_id.to_string(),
         child_request_id: child_request_id.to_string(),
-        spawn_target_did: "did:test:target".to_string(),
+        // The children these tests create run as `did:test:general`; a
+        // child corroborates its bridge only under the bridge's target.
+        spawn_target_did: "did:test:general".to_string(),
         spawn_behavior_id: "general".to_string(),
         delegated_workspace: None,
         await_mode,

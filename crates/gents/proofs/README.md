@@ -607,7 +607,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | File | Contents |
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
-| `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836) |
+| `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836); stale page anchors degrade instead of failing the caller (#1808) |
+| `Proofs/SpawnClaimFence.lean` | Unclaimed-spawn deadline applies only across principals; expiry fences a late materialization or claim through a durable cancel intent and keeps the bridge unsettled until its child stops (#1807) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |

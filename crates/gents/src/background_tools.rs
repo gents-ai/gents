@@ -514,13 +514,21 @@ pub async fn handle_list_subagents(
             scope: args.scope,
             after: args.after.clone(),
             limit: crate::descendant_graph::MAX_DESCENDANT_PAGE_LIMIT,
-            include_terminal: args.status != ListStatusFilter::Running,
+            // A settled bridge still stopping its child is listed as running
+            // work, so terminal edges are filtered here by listed status.
+            include_terminal: true,
         },
     )
     .await?;
     let mut entries = page
         .edges
         .into_iter()
+        .map(|mut edge| {
+            if edge.stop_pending {
+                edge.lifecycle_state = SUBAGENT_STOPPING.to_owned();
+            }
+            edge
+        })
         .filter(|edge| list_subagent_status_matches(args.status, &edge.lifecycle_state))
         .map(|edge| -> Result<ListSubagentsEntry> {
             let created_at = parse_rfc3339(edge.created_at.as_deref())
@@ -1466,6 +1474,10 @@ fn persisted_stream_body(value: &str) -> String {
     }
 }
 
+/// Listed status of a spawn whose bridge settled while its child may still be
+/// running: the parent must wait for it rather than re-spawn the work.
+pub(crate) const SUBAGENT_STOPPING: &str = "stopping";
+
 fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool {
     match filter {
         // #593: both pending materialization and rejected physical lineage
@@ -1474,7 +1486,10 @@ fn list_subagent_status_matches(filter: ListStatusFilter, status: &str) -> bool 
         ListStatusFilter::Running => {
             matches!(
                 status,
-                "running" | AWAITING_CHILD_MATERIALIZATION | PENDING_CHILD_AUTHORIZATION
+                "running"
+                    | AWAITING_CHILD_MATERIALIZATION
+                    | PENDING_CHILD_AUTHORIZATION
+                    | SUBAGENT_STOPPING
             )
         }
         _ => list_status_matches(filter, status),
@@ -2235,37 +2250,35 @@ pub(crate) fn subagent_tool_not_allowed_payload(
     })
 }
 
+/// Model-facing result of a spawn abandoned by its unclaimed deadline. Not
+/// retryable: a host may already have claimed the child, which is being
+/// stopped, and a re-spawn would race it.
+pub(crate) fn spawn_unclaimed_payload() -> String {
+    json!({
+        "ok": false,
+        "failure_class": "spawn_unclaimed",
+        "path": "/name",
+        "message": "no host confirmed this cross-principal spawn before its unclaimed spawn \
+                    deadline. A host may still have started the child; it is being stopped. \
+                    Wait for list_subagents to stop reporting it as stopping before \
+                    re-spawning this work.",
+        "retryable": false,
+        "service_id": "subagent",
+        "tool_name": "spawn_subagent"
+    })
+    .to_string()
+}
+
 pub(crate) async fn fail_running_subagent_tool_call(
     node: &std::sync::Arc<EmbeddedNode>,
     doc_id: &str,
     result: &str,
     failure: FailureClass,
 ) -> Result<bool> {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    #[derive(Deserialize)]
-    struct ScopeRow {
-        agent_did: String,
-        requester_did: Option<String>,
-        session_id: String,
-    }
-    let response = node.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 2) {{ agent_did requester_did session_id }} }}"#
-    )).await;
-    let rows: Vec<ScopeRow> = crate::graphql::rows(&response, "AgentToolCall")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "subagent failure requires one physical tool row"
-    );
-    let scope = &rows[0];
-    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        doc_id,
-        &scope.agent_did,
-        &scope.session_id,
-        scope.requester_did.as_deref(),
-    )
-    .await?
-    .context("subagent failure physical tool row disappeared")?;
+    let mut lifecycle =
+        crate::tool_call_lifecycle::ToolCallLifecycle::load_physical(node.clone(), doc_id)
+            .await?
+            .context("subagent failure physical tool row disappeared")?;
     lifecycle
         .bridge_failure(crate::tool_call_lifecycle::ChildTerminal::Failed {
             reason: result.to_owned(),

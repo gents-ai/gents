@@ -1218,6 +1218,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_descendant_cursor_cases_page_native_edges",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_fence_cases_replay_native_owners",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/subagent_source/spawn_fence_tests.rs",
+            module_path: "trigger_engine::subagent_source::spawn_fence_tests",
+            function: "generated_spawn_fence_cases_replay_native_owners",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::unmaterialized_child_status_matches_runtime_vocabulary",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",
