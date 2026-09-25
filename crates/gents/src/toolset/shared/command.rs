@@ -424,6 +424,7 @@ pub(crate) async fn run_command(
     timeout: Duration,
     policy: &CommandExecutionPolicy,
     raw_json: bool,
+    max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
     let policy = effective_command_policy(policy);
     let cwd = context.resolve_existing_dir(cwd)?;
@@ -507,8 +508,8 @@ pub(crate) async fn run_command(
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let stderr_raw = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
-    let stdout = truncate_stream(&stdout_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
-    let stderr = truncate_stream(&stderr_raw, super::super::DEFAULT_MAX_COMMAND_CHARS);
+    let stdout = truncate_stream(&stdout_raw, max_output_chars);
+    let stderr = truncate_stream(&stderr_raw, max_output_chars);
     let status = if timed_out {
         "timeout"
     } else if exit_code == Some(0) {

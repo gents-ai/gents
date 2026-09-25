@@ -134,6 +134,7 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(600),
         Duration::from_secs(3_600),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable(),
     );
     let def = crate::llm::tool::Tool::definition(&tool, String::new()).await;
@@ -710,6 +711,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
         ToolContext::new(root.clone(), true).unwrap(),
         Duration::from_secs(5),
         Duration::from_secs(5),
+        DEFAULT_MAX_COMMAND_CHARS,
         policy.clone(),
     );
     let result =
@@ -1628,6 +1630,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+        DEFAULT_MAX_COMMAND_CHARS,
         policy,
     );
 
@@ -1788,6 +1791,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(1),
         Duration::from_secs(1),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
     let command = "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
@@ -1843,6 +1847,7 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(1),
         Duration::from_secs(1),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
     let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
@@ -2438,6 +2443,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
         Duration::from_secs(5),
         &policy,
         false,
+        DEFAULT_MAX_COMMAND_CHARS,
     )
     .await
     .unwrap_err();
@@ -2497,7 +2503,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
                         .with_mode(CommandExecutionMode::ArtifactWrite)
                         .with_network_mode(CommandNetworkMode::Disabled);
                     super::shared::run_command(&context, "bash", "/bin/sh", &["-c".into(), script],
-                        None, Duration::from_secs(10), &policy, false).await
+                        None, Duration::from_secs(10), &policy, false, DEFAULT_MAX_COMMAND_CHARS).await
                 },
             ).await
         };
@@ -2678,6 +2684,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
         ToolContext::new(root.clone(), false).unwrap(),
         Duration::from_secs(120),
         Duration::from_secs(120),
+        DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable()
             .with_mode(CommandExecutionMode::ArtifactWrite)
             .with_network_mode(CommandNetworkMode::Disabled),

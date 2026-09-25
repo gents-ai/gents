@@ -130,6 +130,15 @@ impl BackgroundToolConfig {
     }
 }
 
+/// Validated `host.bash`/`host.cli[]` `max_output_chars`. Unset entries keep
+/// the toolset default or the host CLI registration's budget.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandOutputLimits {
+    pub bash: Option<usize>,
+    /// Keyed by CLI tool name.
+    pub cli: std::collections::BTreeMap<String, usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolSelection {
     pub file_tools: FileToolMode,
@@ -137,6 +146,7 @@ pub struct ResolvedToolSelection {
     pub bash: BashMode,
     pub command_policy: Option<CommandExecutionPolicy>,
     pub cli_tool_names: Vec<String>,
+    pub command_output_limits: CommandOutputLimits,
     pub enable_meta_tools: bool,
     /// Enables the session-owned durable goal read/update tools independently
     /// of generic MCP discovery and dispatch.
@@ -178,6 +188,7 @@ impl Default for ResolvedToolSelection {
             bash: BashMode::Off,
             command_policy: None,
             cli_tool_names: Vec::new(),
+            command_output_limits: CommandOutputLimits::default(),
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_graph_tools: false,
@@ -241,6 +252,17 @@ impl ResolvedToolSelection {
         let cli_tool_names = host
             .map(|host| host.cli.iter().map(|tool| tool.name.clone()).collect())
             .unwrap_or_default();
+        let output_chars = |value: Option<i64>| value.and_then(|value| usize::try_from(value).ok());
+        let command_output_limits = CommandOutputLimits {
+            bash: bash_group.and_then(|bash| output_chars(bash.max_output_chars)),
+            cli: host
+                .into_iter()
+                .flat_map(|host| host.cli.iter())
+                .filter_map(|tool| {
+                    output_chars(tool.max_output_chars).map(|chars| (tool.name.clone(), chars))
+                })
+                .collect(),
+        };
 
         // Remote selections use explicit service ids. Any selected service needs
         // the meta dispatch wrapper to be callable, so selecting services enables
@@ -312,6 +334,7 @@ impl ResolvedToolSelection {
             bash,
             command_policy,
             cli_tool_names,
+            command_output_limits,
             enable_meta_tools,
             enable_goal_tools,
             enable_graph_tools: built_ins

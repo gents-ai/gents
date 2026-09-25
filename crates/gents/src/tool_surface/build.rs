@@ -12,6 +12,7 @@ use crate::toolset::{
 
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
 use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
+use super::selection::CommandOutputLimits;
 
 pub(super) fn downgrade_file_tools(
     behavior_name: &str,
@@ -58,6 +59,7 @@ pub(super) fn build_host_tools(
     effective_bash: &ToolPolicyBash,
     file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
+    output_limits: &CommandOutputLimits,
     enable_lsp: bool,
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
@@ -90,18 +92,23 @@ pub(super) fn build_host_tools(
 
     let command_policy =
         constrain_command_policy_to_effective_bash(command_policy, effective_bash, bash);
+    let bash_output_chars = output_limits
+        .bash
+        .unwrap_or(crate::toolset::DEFAULT_MAX_COMMAND_CHARS);
     match bash {
         BashMode::Off => {}
         BashMode::ReadOnly => {
             builder = match command_policy.clone() {
-                Some(policy) => builder.bash_read_only_with_policy_and_timeouts(
+                Some(policy) => builder.bash_read_only_with_policy_and_limits(
                     policy,
                     ceiling.command_timeout(),
                     ceiling.command_timeout_max(),
+                    bash_output_chars,
                 ),
-                None => builder.bash_read_only_with_timeouts(
+                None => builder.bash_read_only_with_limits(
                     ceiling.command_timeout(),
                     ceiling.command_timeout_max(),
+                    bash_output_chars,
                 ),
             };
         }
@@ -110,16 +117,18 @@ pub(super) fn build_host_tools(
                 .clone()
                 .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
             builder = match command_policy.clone() {
-                Some(policy) => builder.bash_unrestricted_with_policy_and_timeouts(
+                Some(policy) => builder.bash_unrestricted_with_policy_and_limits(
                     root,
                     policy,
                     ceiling.command_timeout(),
                     ceiling.command_timeout_max(),
+                    bash_output_chars,
                 ),
-                None => builder.bash_unrestricted_with_timeouts(
+                None => builder.bash_unrestricted_with_limits(
                     root,
                     ceiling.command_timeout(),
                     ceiling.command_timeout_max(),
+                    bash_output_chars,
                 ),
             };
         }
@@ -132,7 +141,13 @@ pub(super) fn build_host_tools(
         .collect::<HashMap<_, _>>();
     for tool_name in dedupe_strings(cli_tool_names.to_vec()) {
         match cli_tools.get(&tool_name) {
-            Some(tool) => builder = builder.cli_tool(tool.clone()),
+            Some(tool) => {
+                let mut tool = tool.clone();
+                if let Some(chars) = output_limits.cli.get(&tool_name) {
+                    tool.max_output_chars = *chars;
+                }
+                builder = builder.cli_tool(tool)
+            }
             None => tracing::warn!(
                 behavior_id = %behavior_name,
                 cli_tool = %tool_name,

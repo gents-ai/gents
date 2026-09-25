@@ -186,11 +186,11 @@ fn render_cli_outcome(
         if terminal_cause.is_some() {
             crate::tool_call_lifecycle::delivery::terminal_output_tail(
                 &text,
-                super::DEFAULT_MAX_COMMAND_CHARS,
+                config.max_output_chars,
             )
             .to_owned()
         } else {
-            cap_output(&text, super::DEFAULT_MAX_COMMAND_CHARS).0
+            cap_output(&text, config.max_output_chars).0
         }
     };
     let stdout = render_channel(&stdout_bytes);
@@ -242,6 +242,7 @@ mod tests {
             env_vars: HashMap::from([("GENTS_T".to_string(), "1".to_string())]),
             working_dir: None,
             timeout_secs,
+            max_output_chars: super::super::DEFAULT_MAX_COMMAND_CHARS,
         }
     }
 
@@ -300,6 +301,24 @@ mod tests {
         assert!(out.contains("exit_code: 3"), "{out}");
         assert!(out.contains("stdout:\n1"), "{out}");
         assert!(out.contains("stderr:\nerr"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn configured_output_cap_bounds_each_channel() {
+        let mut config = config(5);
+        config.max_output_chars = 7;
+        let out = run_cli_command(
+            &config,
+            &[
+                "-c".into(),
+                "printf '%20s' out; printf '%20s' err >&2".into(),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(out.contains(&format!("stdout:\n{:7}\n", "")), "{out}");
+        assert!(out.contains(&format!("stderr:\n{:7}\n", "")), "{out}");
+        assert!(out.contains("first 7 of 20 bytes"), "{out}");
     }
 
     #[tokio::test]
