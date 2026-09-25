@@ -26,9 +26,6 @@ export const spoken = (command: string): string => {
   return parts.length ? parts.join(" && ") : command.trim();
 };
 
-export const isRedacted = (value: string | null | undefined) =>
-  value === "[redacted sensitive input]" || value === "[redacted sensitive output]";
-
 export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
   added: "+",
   removed: "-",
@@ -92,13 +89,7 @@ export function toolSummary(t: RenderedToolCallView): {
     };
   switch (p.kind) {
     case "command":
-      return isRedacted(p.command)
-        ? {
-            kind: "$",
-            primary: "Command hidden: it contains a credential",
-            secondary: exit(p),
-          }
-        : { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
+      return { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
     case "fileRead":
       return {
         kind: p.operation.replace("_file", ""),
