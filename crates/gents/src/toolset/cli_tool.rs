@@ -534,6 +534,13 @@ mod tests {
                 "printf 'ok\\303'; printf '\\377\\303\\251' >&2; exit 4",
             ),
             (
+                // CRLF lines past the head budget: the head cut must stay a
+                // byte prefix of the committed output.
+                "cli-crlf-head",
+                30,
+                "i=0; while [ $i -lt 3000 ]; do printf 'line %d\\r\\n' $i; i=$((i+1)); done; exit 4",
+            ),
+            (
                 "cli-stopped",
                 1,
                 "printf '%17000s' ' '; printf 'last out'; printf 'last err' >&2; sleep 30",
@@ -563,6 +570,10 @@ mod tests {
             match outcome {
                 ToolOutcome::Completed(_) => {
                     assert!(text.contains("exit_code: 4"), "{text}");
+                    if name == "cli-crlf-head" {
+                        // JSON-encoded: the shown prefix keeps its final `\r`.
+                        assert!(text.contains(r"\r\n\n[Showing lines 1-"), "CRLF head kept");
+                    }
                     tool.complete_with_presentation(&text, Some(presentation))
                         .await
                         .unwrap();

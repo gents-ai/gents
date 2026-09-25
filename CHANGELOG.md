@@ -84,6 +84,9 @@ source consistency checks, not a separate runtime compatibility version.
 - `read_transcript_terminal_flag_tracks_child_lifecycle` no longer
   intermittently sees a `pending` child. It now waits until the child's claim
   (`processing`) is durable before reading the transcript (#1847).
+- A command whose CRLF output runs past the output limit no longer fails to
+  record its result. The shown part keeps each line's `\r`, so it is exactly
+  the start of the captured output (#1867).
 
 ## 0.19.0 - 2026-09-24
 
