@@ -54,10 +54,12 @@ every runtime you pair with to 0.19.0 together.
   `~/.gents` stay in place. `gents server` refuses such a store before
   writing its schema and exits with status 65 (67 for a store another,
   possibly newer, version extended), which systemd does not restart.
-- Tools documents can set how much command output reaches the model:
+- Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
-  and stderr, each, per call (UTF-8 bytes; default 16,000, allowed 1 to
-  1,000,000). Runtimes older than 0.19.0 reject documents that set them.
+  and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
+  Background completion notices and interrupted-call diagnostics keep their
+  fixed budgets for now (#1770). Runtimes older than 0.19.0 reject documents
+  that set them.
 
 ### Changed
 

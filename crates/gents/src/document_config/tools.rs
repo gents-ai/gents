@@ -172,9 +172,11 @@ pub struct BashTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_wait_timeout_secs: Option<i64>,
-    /// Output budget for stdout and for stderr, each, returned per command;
-    /// the rest is truncated. Counted in UTF-8 bytes, cut on a character
-    /// boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+    /// Output budget for stdout and for stderr, each, in the result a
+    /// completed foreground command returns; the rest is truncated. Counted in
+    /// UTF-8 bytes, cut on a character boundary. Unset uses 16,000. Must be
+    /// between 1 and 1,000,000. Background completion notifications and
+    /// interrupted-call diagnostics keep their fixed budgets (#1770).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_chars: Option<i64>,
@@ -194,9 +196,10 @@ pub struct CliTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
-    /// Output budget for stdout and for stderr, each, returned per call; the
-    /// rest is truncated. Counted in UTF-8 bytes, cut on a character boundary.
-    /// Unset uses 16,000. Must be between 1 and 1,000,000.
+    /// Output budget for stdout and for stderr, each, in the result a
+    /// completed call returns; the rest is truncated. Counted in UTF-8 bytes,
+    /// cut on a character boundary. Unset uses 16,000. Must be between 1 and
+    /// 1,000,000. Interrupted-call diagnostics keep the default budget (#1770).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_output_chars: Option<i64>,

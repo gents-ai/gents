@@ -56,8 +56,10 @@ wait_timeout_secs?: number | null,
  */
 max_wait_timeout_secs?: number | null,
 /**
- * Output budget for stdout and for stderr, each, returned per command;
- * the rest is truncated. Counted in UTF-8 bytes, cut on a character
- * boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+ * Output budget for stdout and for stderr, each, in the result a
+ * completed foreground command returns; the rest is truncated. Counted in
+ * UTF-8 bytes, cut on a character boundary. Unset uses 16,000. Must be
+ * between 1 and 1,000,000. Background completion notifications and
+ * interrupted-call diagnostics keep their fixed budgets (#1770).
  */
 max_output_chars?: number | null, };
