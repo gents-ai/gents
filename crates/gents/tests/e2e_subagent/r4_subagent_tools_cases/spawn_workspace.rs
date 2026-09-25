@@ -298,7 +298,7 @@ async fn spawn_background_child(
     workspace: Option<Value>,
 ) -> ChildWorkspaceRow {
     // The runtime's subagent source materializes the child after the parent's
-    // background receipt; dropping the runtime first aborts that write (#1820).
+    // background receipt; the runtime must outlive that write.
     let (result, runtime) = spawn_background_child_turn(fixture, tool_call_id, workspace).await;
     assert_eq!(result["ok"], true, "{result}");
     let child = wait_for_child_request_for_tool(

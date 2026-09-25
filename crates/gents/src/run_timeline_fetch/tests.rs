@@ -280,9 +280,9 @@ fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
     assert!(error.to_string().contains("incomplete parent tool lineage"));
 }
 
-/// Admitting one delegated call reads only its accepted message (#1807): an
-/// unrelated, unresolvable message elsewhere in the same session poisons the
-/// session-wide reader but cannot delay or fail this exact binding.
+/// Resolving one accepted call reads only its accepted message: an unrelated,
+/// unresolvable message elsewhere in the same session fails the session-wide
+/// reader but not this exact binding.
 #[tokio::test]
 async fn accepted_tool_arguments_read_only_the_accepted_message() {
     use crate::tool_call_lifecycle::admission_fixture::{

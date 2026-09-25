@@ -52,10 +52,10 @@ pub(crate) async fn load_session_tool_calls(
 }
 
 /// Canonical accepted arguments of one exact physical tool document in an
-/// authorized session scope, one entry per matching physical row. Admitting a
-/// single delegated call must not scale with the session or run transcript
-/// (#1807): the same accepted-header binding as the session timeline is
-/// applied to only the tool row and the messages at its accepted sequence.
+/// authorized session scope, one entry per matching physical row. Reads only
+/// the tool row and the messages at its accepted sequence, binding them with
+/// the session timeline's accepted-header rules, so the cost is independent of
+/// the session or run transcript. Deliveries are not resolved.
 pub(crate) async fn load_accepted_tool_arguments(
     access: &ConfigAccess,
     agent_did: &str,
@@ -73,18 +73,23 @@ pub(crate) async fn load_accepted_tool_arguments(
     .await?;
     let mut arguments = Vec::with_capacity(observations.len());
     for observation in observations {
-        let sequence = observation
-            .row
-            .message_sequence
-            .context("accepted tool lacks its accepted message sequence")?;
-        let messages = event_loaders::resolve_timeline_messages_at_sequence(
-            access,
-            agent_did,
-            session_id,
-            requester_did,
-            sequence,
-        )
-        .await?;
+        // Delegated arguments are carried on the host row itself.
+        let messages = if observation.delegated_input.is_some() {
+            Vec::new()
+        } else {
+            let sequence = observation
+                .row
+                .message_sequence
+                .context("accepted tool lacks its accepted message sequence")?;
+            event_loaders::resolve_timeline_messages_at_sequence(
+                access,
+                agent_did,
+                session_id,
+                requester_did,
+                sequence,
+            )
+            .await?
+        };
         arguments.push(event_loaders::resolve_tool_payloads(observation, &messages)?.args);
     }
     Ok(arguments)

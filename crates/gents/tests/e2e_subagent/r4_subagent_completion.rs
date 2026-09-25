@@ -1783,9 +1783,8 @@ async fn persist_unresolvable_message(node: &EmbeddedNode, request_id: &str) {
     .expect("persist unresolvable sibling message");
 }
 
-/// A spawn is admitted from its own accepted message (#1807). Reading every
-/// sibling transcript made materialization and claim scale with the run; an
-/// unresolvable sibling message now cannot delay a later child at all.
+/// A spawn is materialized and claimed from its own accepted message alone, so
+/// an unresolvable message in a sibling child's session cannot block it.
 #[tokio::test]
 async fn later_child_is_claimed_without_reading_sibling_transcripts() {
     let (db, session_id, request_id) = setup_fixture("claim_independent_of_siblings").await;
