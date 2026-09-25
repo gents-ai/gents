@@ -147,16 +147,17 @@ pub(crate) fn commit(
             let old_pack = holder.path().join("pack");
             std::fs::rename(existing, &old_pack)
                 .with_context(|| format!("moving {} aside", existing.display()))?;
-            let recheck = undeclared_entry(&old_pack);
-            if !matches!(recheck, Ok(None)) {
-                restore(
-                    existing,
-                    holder,
-                    &old_pack,
-                    "it changed while being replaced",
-                )?;
-                return match recheck {
-                    Ok(Some(extra)) => Err(anyhow::anyhow!(
+            // Whatever is aside now is what would be deleted: it must still be
+            // a pack gents eval init wrote, with nothing else in it.
+            let changed = if !is_generated_eval_pack(&old_pack) {
+                Some(anyhow::anyhow!(
+                    "refusing to replace --out {}: it stopped being a definition pack gents eval init wrote while replacing it",
+                    out.display()
+                ))
+            } else {
+                match undeclared_entry(&old_pack) {
+                    Ok(None) => None,
+                    Ok(Some(extra)) => Some(anyhow::anyhow!(
                         "refusing to replace --out {}: {} appeared while replacing it",
                         out.display(),
                         extra
@@ -165,9 +166,17 @@ pub(crate) fn commit(
                             .unwrap_or(extra)
                             .display()
                     )),
-                    Err(error) => Err(error),
-                    Ok(None) => unreachable!(),
-                };
+                    Err(error) => Some(error),
+                }
+            };
+            if let Some(error) = changed {
+                restore(
+                    existing,
+                    holder,
+                    &old_pack,
+                    "it changed while being replaced",
+                )?;
+                return Err(error);
             }
             Some((existing, holder, old_pack))
         }
