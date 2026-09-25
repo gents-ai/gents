@@ -22,10 +22,7 @@ use crate::descendant_graph::{
 pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_AUTHORIZATION};
 use crate::document_config::SubagentTargetDocument;
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{
-    drain_automated_wakeups, enqueue_steering_request, row_is_automated_wakeup, QueuePolicy,
-    QueueSource, RequestQueue,
-};
+use crate::lifecycle::queue::{enqueue_steering_request, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -1404,58 +1401,6 @@ pub(crate) async fn append_steering_request(
         interrupted_active_request_id: interrupted_request_id,
         drained_wake_up_request_ids,
     })
-}
-
-pub(crate) async fn drain_automated_wakeups_returning_ids(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    reason: &str,
-) -> Result<Vec<String>> {
-    let request_ids =
-        pending_automated_wakeup_request_ids(node, session_id, agent_did, requester_did).await?;
-    drain_automated_wakeups(node, session_id, agent_did, requester_did, reason).await?;
-    Ok(request_ids)
-}
-
-pub(crate) async fn pending_automated_wakeup_request_ids(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<String>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    {scope},
-                    lifecycle_state: {{ _eq: "pending" }}
-                }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                request_id
-                execution_origin
-                input
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query pending automated wake-ups for session {session_id} failed: {:?}",
-            response.errors
-        );
-    }
-    let rows: Vec<AgentRequestRow> = rows(response.data.as_ref(), "AgentRequest")?;
-    Ok(rows
-        .into_iter()
-        .filter(|row| {
-            row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(&row)
-        })
-        .filter_map(|row| non_empty_string(Some(&row.request_id)))
-        .collect())
 }
 
 fn child_terminal_state_name(row: &AgentRequestRow) -> Option<String> {

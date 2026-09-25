@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config_client::ConfigApplyTxn;
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::graphql::escape_graphql_string;
 use crate::watcher::AgentRequest;
 
 use super::materialize::EnqueuedAgentRequest;
@@ -34,7 +34,8 @@ pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
     parent_behavior_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
-pub use draining::drain_automated_wakeups;
+pub(crate) use draining::drain_automated_wakeups_in_txn;
+pub(crate) use draining::drain_automated_wakeups_returning_ids;
 pub(crate) use draining::drain_subagent_owned_queue;
 pub use enqueue::enqueue_local_steering_request;
 pub(crate) use enqueue::enqueue_steering_request;

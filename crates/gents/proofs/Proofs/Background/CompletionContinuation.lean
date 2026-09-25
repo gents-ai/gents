@@ -300,6 +300,7 @@ def canonicalWake : SessionQueue.QueueEntry :=
   , policy := .coalesce
   , queueKey := some 900
   , queuedAfter := some 899
+  , origin := .scheduled
   }
 
 def canonicalQueue : SessionQueue.SessionQueueState :=

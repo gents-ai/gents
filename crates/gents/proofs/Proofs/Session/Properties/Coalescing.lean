@@ -109,17 +109,37 @@ theorem pendingAfterDrain_preserves_uniqueCoalescedQueueKeys
     UniqueCoalescedQueueKeys (pendingAfterDrain source queueKey entries) := by
   induction entries with
   | nil =>
-      simp [pendingAfterDrain, UniqueCoalescedQueueKeys]
+      simp [UniqueCoalescedQueueKeys]
   | cons head tail ih =>
       simp [UniqueCoalescedQueueKeys] at h_unique
       by_cases h_match : head.matchesAutomatedWakeup source queueKey = true
-      · simp [pendingAfterDrain, h_match]
+      · simp [h_match]
         exact ih h_unique.2
-      · simp [pendingAfterDrain, h_match, UniqueCoalescedQueueKeys]
+      · simp [h_match, UniqueCoalescedQueueKeys]
         constructor
         · intro matchSource key h_head_source h_head_policy h_head_key other h_other
           exact h_unique.1 matchSource key h_head_source h_head_policy h_head_key other
             (pendingAfterDrain_mem_original h_other)
+        · exact ih h_unique.2
+
+theorem pendingAfterDrainMatching_preserves_uniqueCoalescedQueueKeys
+    {source : QueueSource} {queueKey : Option QueueKey}
+    {allowed : QueueEntry → Bool} {entries : List QueueEntry}
+    (h_unique : UniqueCoalescedQueueKeys entries) :
+    UniqueCoalescedQueueKeys
+      (pendingAfterDrainMatching source queueKey allowed entries) := by
+  induction entries with
+  | nil => simp [pendingAfterDrainMatching, UniqueCoalescedQueueKeys]
+  | cons head tail ih =>
+      simp [UniqueCoalescedQueueKeys] at h_unique
+      simp only [pendingAfterDrainMatching]
+      split
+      · exact ih h_unique.2
+      · simp only [UniqueCoalescedQueueKeys]
+        constructor
+        · intro matchSource key h_head_source h_head_policy h_head_key other h_other
+          exact h_unique.1 matchSource key h_head_source h_head_policy h_head_key other
+            (pendingAfterDrainMatching_mem_original h_other)
         · exact ih h_unique.2
 
 theorem transition_preserves_uniqueCoalescedQueueKeys
@@ -146,6 +166,9 @@ theorem transition_preserves_uniqueCoalescedQueueKeys
   | drain_automated _ h_post =>
       rw [h_post, SessionQueueState.drainAutomatedWakeups]
       exact pendingAfterDrain_preserves_uniqueCoalescedQueueKeys h_unique
+  | drain_observed_automated _ h_post =>
+      rw [h_post, SessionQueueState.drainObservedAutomatedWakeups]
+      exact pendingAfterDrainMatching_preserves_uniqueCoalescedQueueKeys h_unique
 
 theorem trace_preserves_uniqueCoalescedQueueKeys
     {pre post : SessionQueueState}
@@ -161,7 +184,7 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
 /-- Goal continuations share queue coalescing, but never collide with a
 background-completion key or participate in its notification drain. -/
 theorem goal_queue_is_separate_from_background :
-    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none⟩
+    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled⟩
     entry.coalesceWellFormed 7 ∧
     containsCoalescedQueueKey [entry] .goal 7 = true ∧
     containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧

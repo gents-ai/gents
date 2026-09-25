@@ -896,6 +896,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_recovery_sweep_cases_drive_startup_recovery_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows",
+            package: "gents",
+            source_path: "crates/gents/src/interrupt/queue_tests.rs",
+            module_path: "interrupt::queue_tests",
+            function: "generated_interrupt_queue_events_bind_to_native_rows",
+        },
+        ConformanceConsumer::RustTest {
+            id: "interrupt::queue_tests::generated_http_overlap_cases_preserve_cutoff",
+            package: "gents",
+            source_path: "crates/gents/src/interrupt/queue_tests.rs",
+            module_path: "interrupt::queue_tests",
+            function: "generated_http_overlap_cases_preserve_cutoff",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/recovery_conformance.rs",

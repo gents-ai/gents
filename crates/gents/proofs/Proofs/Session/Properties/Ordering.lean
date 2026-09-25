@@ -103,16 +103,34 @@ theorem pendingAfterDrain_preserves_createdOrdered
     CreatedOrdered (pendingAfterDrain source queueKey entries) := by
   induction entries with
   | nil =>
-      simp [pendingAfterDrain, CreatedOrdered]
+      simp [CreatedOrdered]
   | cons head tail ih =>
       simp [CreatedOrdered] at h_order
       by_cases h_match : head.matchesAutomatedWakeup source queueKey = true
-      · simp [pendingAfterDrain, h_match]
+      · simp [h_match]
         exact ih h_order.2
-      · simp [pendingAfterDrain, h_match, CreatedOrdered]
+      · simp [h_match, CreatedOrdered]
         constructor
         · intro other h_mem
           exact h_order.1 other (pendingAfterDrain_mem_original h_mem)
+        · exact ih h_order.2
+
+theorem pendingAfterDrainMatching_preserves_createdOrdered
+    {source : QueueSource} {queueKey : Option QueueKey}
+    {allowed : QueueEntry → Bool} {entries : List QueueEntry}
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered (pendingAfterDrainMatching source queueKey allowed entries) := by
+  induction entries with
+  | nil => simp [pendingAfterDrainMatching, CreatedOrdered]
+  | cons head tail ih =>
+      simp [CreatedOrdered] at h_order
+      simp only [pendingAfterDrainMatching]
+      split
+      · exact ih h_order.2
+      · simp only [CreatedOrdered]
+        constructor
+        · intro other h_mem
+          exact h_order.1 other (pendingAfterDrainMatching_mem_original h_mem)
         · exact ih h_order.2
 
 theorem transition_preserves_createdOrdered
@@ -140,6 +158,9 @@ theorem transition_preserves_createdOrdered
   | drain_automated _ h_post =>
       rw [h_post, SessionQueueState.drainAutomatedWakeups]
       exact pendingAfterDrain_preserves_createdOrdered h_order
+  | drain_observed_automated _ h_post =>
+      rw [h_post, SessionQueueState.drainObservedAutomatedWakeups]
+      exact pendingAfterDrainMatching_preserves_createdOrdered h_order
 
 theorem trace_preserves_createdOrdered
     {pre post : SessionQueueState}

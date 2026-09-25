@@ -1,21 +1,46 @@
 use super::*;
 
-pub async fn drain_automated_wakeups(
+/// Standalone queue control when there is no active request to latch. Active
+/// interruption must drain inside the latch transaction so replay cannot widen
+/// its cutoff to later completions.
+pub(crate) async fn drain_automated_wakeups_returning_ids(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
     requester_did: Option<&str>,
     reason: &str,
-) -> Result<usize> {
+) -> Result<Vec<String>> {
     drain_pending_session_requests_where(
         node,
         session_id,
         agent_did,
         requester_did,
         reason,
-        |row| row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row),
+        is_scheduled_automated_wakeup,
     )
     .await
+}
+
+pub(crate) async fn drain_automated_wakeups_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+) -> Result<Vec<String>> {
+    drain_pending_session_requests_where_in_txn(
+        txn,
+        session_id,
+        agent_did,
+        requester_did,
+        reason,
+        is_scheduled_automated_wakeup,
+    )
+    .await
+}
+
+fn is_scheduled_automated_wakeup(row: &AgentRequestRow) -> bool {
+    row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row)
 }
 
 pub(crate) async fn drain_subagent_owned_queue(
@@ -25,7 +50,7 @@ pub(crate) async fn drain_subagent_owned_queue(
     requester_did: Option<&str>,
     reason: &str,
 ) -> Result<usize> {
-    drain_pending_session_requests_where(
+    Ok(drain_pending_session_requests_where(
         node,
         session_id,
         agent_did,
@@ -33,21 +58,49 @@ pub(crate) async fn drain_subagent_owned_queue(
         reason,
         |row| row_is_subagent_owned_queue(row),
     )
-    .await
+    .await?
+    .len())
 }
 
-// SAFETY (#664): `agent_did` scopes both the pending-row scan AND the interrupt
-// mutation to the owning principal. A foreign-DID replica sharing this
-// `session_id` (P2P replication) is neither surfaced as a drain candidate nor
-// interrupted by this owner's drain. Defense in depth on the query and the write.
 async fn drain_pending_session_requests_where(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
     requester_did: Option<&str>,
     reason: &str,
-    should_drain: impl Fn(&AgentRequestRow) -> bool,
-) -> Result<usize> {
+    should_drain: fn(&AgentRequestRow) -> bool,
+) -> Result<Vec<String>> {
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "lifecycle.drain_pending_session_requests",
+        |txn| {
+            Box::pin(async move {
+                drain_pending_session_requests_where_in_txn(
+                    txn,
+                    session_id,
+                    agent_did,
+                    requester_did,
+                    reason,
+                    should_drain,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+// SAFETY (#664): `agent_did` scopes both the pending-row scan and mutation.
+// A foreign-DID replica sharing `session_id` cannot be drained by this owner.
+async fn drain_pending_session_requests_where_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+    should_drain: fn(&AgentRequestRow) -> bool,
+) -> Result<Vec<String>> {
     let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
@@ -65,25 +118,23 @@ async fn drain_pending_session_requests_where(
         }}"#
     );
 
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query pending automated wake-ups for session {session_id} failed: {:?}",
-            response.errors
-        );
-    }
-
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let response = txn.execute(&query).await?;
+    let pending = &response["data"]["AgentRequest"];
+    anyhow::ensure!(
+        pending.is_array(),
+        "pending AgentRequest query omitted rows"
+    );
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(pending.clone())?;
 
     let escaped_reason = escape_graphql_string(reason);
-    let mut drained = 0;
+    let mut drained = Vec::new();
     for row in rows.into_iter().filter(should_drain) {
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let escaped_doc_id = escape_graphql_string(
-            row.doc_id
-                .as_deref()
-                .context("pending AgentRequest row is missing _docID")?,
-        );
+        let doc_id = row
+            .doc_id
+            .as_deref()
+            .context("pending AgentRequest row is missing _docID")?;
+        let escaped_doc_id = escape_graphql_string(doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
@@ -101,19 +152,31 @@ async fn drain_pending_session_requests_where(
                 ) {{ _docID }}
             }}"#
         );
-        let response = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
-            node,
-            "drain_automated_wakeup",
-            &mutation,
-        )
-        .await?;
-        if response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents)
-        {
-            drained += 1;
+        let response = txn.execute(&mutation).await?;
+        let updated = response["data"]
+            .get("update_AgentRequest")
+            .context("pending AgentRequest drain mutation omitted affected rows")?;
+        let affected = match updated {
+            Value::Null => None,
+            Value::Array(rows) if rows.is_empty() => None,
+            Value::Array(rows) if rows.len() == 1 => Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .context("pending AgentRequest drain receipt omitted _docID")?,
+            ),
+            Value::Object(_) => Some(
+                updated["_docID"]
+                    .as_str()
+                    .context("pending AgentRequest drain receipt omitted _docID")?,
+            ),
+            _ => anyhow::bail!("pending AgentRequest drain mutation returned unexpected rows"),
+        };
+        if let Some(affected) = affected {
+            anyhow::ensure!(
+                affected == doc_id,
+                "pending AgentRequest drain mutation updated another physical request"
+            );
+            drained.push(row.request_id);
         }
     }
 

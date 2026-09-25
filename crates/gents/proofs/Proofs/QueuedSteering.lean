@@ -1,4 +1,4 @@
-import Proofs.Session.Executable
+import Proofs.Session.Interrupt
 import Proofs.Request.Executable
 import Proofs.ClientShell.Projection
 import Proofs.CanonicalOutput.Execution.Gate
@@ -68,11 +68,10 @@ def interruptBeforeClaim? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .interruptBeforeClaim
   pure { w with request }
 
-/-- Mirrors native `interrupt_request_by_doc_id`: exact physical request and
-principal/requester scope, preserving an existing latch. Queue scope represents
-the admitted request's scope here; native binding must establish that correspondence.
-Terminal state does not disqualify the selected row. ACP, lookup cardinality and
-the subsequent lifecycle transition remain with their native owners. -/
+/-- Native selection establishes the exact physical request and principal/requester
+scope before this composition. Queue scope represents the admitted request's
+scope here; ACP and lookup cardinality remain native premises. Terminal state
+does not disqualify the selected row. -/
 structure InterruptTarget where
   requestDocId : Nat
   agent : Nat
@@ -84,10 +83,15 @@ def currentInterruptTarget (w : World) : InterruptTarget :=
 
 def latchInterrupt? (w : World) (target : InterruptTarget) : Option World :=
   if target != currentInterruptTarget w then none
-  else match w.request.interruptRequestedAt with
-    | some _ => some w
-    | none => some { w with request :=
-        { w.request with interruptRequestedAt := some w.request.currentTime } }
+  else do
+    let (request, queue) ← SessionQueue.latchInterruptScoped
+      w.queue.scope w.request w.queue
+    let execution ← match w.execution with
+      | none => some none
+      | some current =>
+          if current.queue != w.queue then none
+          else some (some { current with queue })
+    pure { w with request, queue, execution }
 
 theorem mismatched_interrupt_target_rejected (w : World) (target : InterruptTarget)
     (hmismatch : target ≠ currentInterruptTarget w) :
@@ -100,10 +104,55 @@ theorem latch_interrupt_preserves_existing_stamp
     (hlatch : latchInterrupt? before target = some after) :
     after.request.interruptRequestedAt = some stamp := by
   by_cases htarget : target = currentInterruptTarget before
-  · simp [latchInterrupt?, htarget, hstamp] at hlatch
-    cases hlatch
-    exact hstamp
+  · have hscope : SessionQueue.latchInterruptScoped before.queue.scope
+        before.request before.queue = some (before.request, before.queue) := by
+      simp [SessionQueue.latchInterruptScoped,
+        SessionQueue.latchInterruptObservedScoped,
+        SessionQueue.latchInterruptObserved, hstamp]
+    simp only [latchInterrupt?, htarget, ↓reduceIte, hscope, Option.bind_some,
+      Option.map_some, id_eq] at hlatch
+    cases hexecution : before.execution with
+    | none =>
+        simp [hexecution] at hlatch
+        cases hlatch
+        exact hstamp
+    | some current =>
+        by_cases hqueue : current.queue = before.queue
+        · simp [hexecution, hqueue] at hlatch
+          cases hlatch
+          exact hstamp
+        · simp [hexecution, hqueue] at hlatch
   · simp [latchInterrupt?, htarget] at hlatch
+
+/-- Joining a native latch into an in-flight execution changes only the shared
+queue projection and durable intent; it does not manufacture a lease transition. -/
+theorem latch_interrupt_preserves_execution_join
+    {before after : World} {target : InterruptTarget}
+    (hlatch : latchInterrupt? before target = some after) :
+    (∀ execution, after.execution = some execution → execution.queue = after.queue) ∧
+      after.execution.map (·.lease) = before.execution.map (·.lease) ∧
+      after.execution.map (·.requestId) = before.execution.map (·.requestId) ∧
+      after.input = before.input ∧ after.accepted = before.accepted := by
+  unfold latchInterrupt? at hlatch
+  split at hlatch
+  · contradiction
+  · cases hscope : SessionQueue.latchInterruptScoped before.queue.scope
+        before.request before.queue with
+    | none => simp [hscope] at hlatch
+    | some result =>
+        rcases result with ⟨request, queue⟩
+        simp only [hscope, Option.bind_some, Option.map_some, id_eq] at hlatch
+        cases hexecution : before.execution with
+        | none =>
+            simp [hexecution] at hlatch
+            cases hlatch
+            simp
+        | some current =>
+            by_cases hqueue : current.queue = before.queue
+            · simp [hexecution, hqueue] at hlatch
+              cases hlatch
+              simp
+            · simp [hexecution, hqueue] at hlatch
 
 /-! A terminal decision before the owned execution starts retains the signed
 admission input. It does not fabricate a transcript header. -/
@@ -634,6 +683,47 @@ private def wrongHead : SessionQueue.QueueEntry :=
   { requestId := 12, createdAt := 9, source := .user, policy := .append,
     queueKey := none, queuedAfter := none }
 
+private def scheduledWake (requestId : RequestId) (createdAt : Time) :
+    SessionQueue.QueueEntry :=
+  { requestId, createdAt, source := .backgroundCompletion, policy := .coalesce,
+    queueKey := some 7, queuedAfter := some 11, origin := .scheduled }
+
+private def queuedWithWake? : Option World := do
+  let queued ← enqueue? (base none) entry
+  let queue ← SessionQueue.step? queued.queue (.coalescePending (scheduledWake 31 10))
+  pure { queued with queue }
+
+private def firstWakeLatched? : Option World := do
+  let queued ← queuedWithWake?
+  latchInterrupt? queued (currentInterruptTarget queued)
+
+private def repeatedWakeLatched? : Option World := do
+  let first ← firstWakeLatched?
+  let queue ← SessionQueue.step? first.queue (.coalescePending (scheduledWake 32 12))
+  let later := { first with request := { first.request with currentTime := 12 }, queue }
+  latchInterrupt? later (currentInterruptTarget later)
+
+private def ownedWakeInterrupted? : Option World := do
+  let queued ← queuedWithWake?
+  let owner ← begunOwner? queued
+  let begun ← claimAndBegin? queued 91 owner
+  let latched ← latchInterrupt? begun (currentInterruptTarget begun)
+  terminateOwnedBeforePublication? latched 1 10 91 .interruptProcessing
+
+private def ownedWakeReplayInterrupted? : Option World := do
+  let queued ← queuedWithWake?
+  let owner ← begunOwner? queued
+  let begun ← claimAndBegin? queued 91 owner
+  let first ← latchInterrupt? begun (currentInterruptTarget begun)
+  let execution ← first.execution
+  if execution.queue != first.queue then none
+  let queue ← SessionQueue.step? first.queue (.coalescePending (scheduledWake 32 12))
+  let request := { first.request with currentTime := 12 }
+  let joined := { execution with queue := queue }
+  let later := { first with request := request, queue := queue, execution := some joined }
+  let replayed ← latchInterrupt? later (currentInterruptTarget later)
+  terminateOwnedBeforePublication? replayed 1 12 91 .interruptProcessing
+
 private def firstLatched? : Option World := do
   let queued ← enqueue? (base none) entry
   latchInterrupt? queued (currentInterruptTarget queued)
@@ -743,6 +833,36 @@ theorem interrupted_publish_prefix_is_reachable :
     interruptedPublishObservation.prefixAdmitted = true := by native_decide
 theorem first_interrupt_latch_stamps_selected_request :
     firstLatched?.map (·.request.interruptRequestedAt) = some (some 10) := by native_decide
+theorem first_interrupt_drains_scheduled_wake_and_preserves_steering :
+    (firstWakeLatched?.map fun world =>
+      (world.queue.pending.map (·.requestId),
+        decide (31 ∈ world.queue.terminal), world.request.interruptRequestedAt)) =
+      some ([11], true, some 10) := by native_decide
+theorem repeated_interrupt_preserves_newer_same_key_wake :
+    (repeatedWakeLatched?.map fun world =>
+      (world.queue.pending.map (·.requestId),
+        decide (31 ∈ world.queue.terminal),
+        decide (32 ∈ world.queue.terminal), world.request.interruptRequestedAt)) =
+      some ([11, 32], true, false, some 10) := by native_decide
+theorem in_flight_latch_drain_keeps_owned_terminal_handoff_reachable :
+    (ownedWakeInterrupted?.map fun world =>
+      (world.request.state, world.queue.active,
+        decide (31 ∈ world.queue.terminal),
+        decide (world.execution.map (·.queue) = some world.queue))) =
+      some (.interrupted, none, true, true) := by native_decide
+theorem in_flight_replay_retains_later_wake_through_owned_terminal_handoff :
+    (ownedWakeReplayInterrupted?.map fun world =>
+      (world.request.state, world.request.interruptRequestedAt, world.queue.active)) =
+        some (.interrupted, some 10, none) ∧
+    (ownedWakeReplayInterrupted?.map fun world =>
+      (world.queue.pending.map (·.requestId),
+        decide (31 ∈ world.queue.terminal), decide (32 ∈ world.queue.terminal))) =
+        some ([32], true, false) ∧
+    (ownedWakeReplayInterrupted?.map fun world =>
+      decide (world.execution.map (·.queue) = some world.queue)) = some true := by
+  constructor
+  · native_decide
+  constructor <;> native_decide
 theorem repeated_interrupt_latch_preserves_original_timestamp :
     repeatedLatched?.map (·.request.interruptRequestedAt) = some (some 10) := by native_decide
 theorem mismatched_interrupt_target_cannot_latch :

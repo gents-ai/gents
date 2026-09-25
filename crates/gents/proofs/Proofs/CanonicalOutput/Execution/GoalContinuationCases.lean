@@ -24,7 +24,7 @@ def claimedRequest : ClaimedRequest :=
 
 def goalEntry : SessionQueue.QueueEntry :=
   { requestId := 20, createdAt := 5, source := .goal, policy := .coalesce
-  , queueKey := some 1, queuedAfter := some 10 }
+  , queueKey := some 1, queuedAfter := some 10, origin := .scheduled }
 
 def physicalBinding (status : Goals.Status := .active) : GoalContinuation.Binding :=
   { goalDocument := 70, goalOwner := "owner", goalSession := "session"

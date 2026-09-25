@@ -190,6 +190,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
+    pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
@@ -1526,6 +1527,51 @@ pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalEx
 pub(crate) fn lean_canonical_dispatch_observation_cases() -> &'static [LeanDispatchObservationCase]
 {
     &lean_contract_snapshot().canonical_dispatch_observation_cases
+}
+
+pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
+    &lean_contract_snapshot().interrupt_queue_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanInterruptQueueCase {
+    pub(crate) name: String,
+    pub(crate) agent_id: u64,
+    pub(crate) requester_id: Option<u64>,
+    pub(crate) session_id: u64,
+    pub(crate) active_request_id: Option<u64>,
+    pub(crate) inputs: Vec<LeanInterruptQueueInput>,
+    pub(crate) expected: LeanInterruptQueueObservation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanInterruptQueueInput {
+    Interrupt,
+    CaptureInterrupt,
+    CommitInterrupt,
+    Enqueue { entry: LeanInterruptQueueEntry },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanInterruptQueueEntry {
+    pub(crate) request_id: u64,
+    pub(crate) created_at: u64,
+    pub(crate) execution_origin: String,
+    pub(crate) source: String,
+    pub(crate) policy: String,
+    pub(crate) queue_key: Option<u64>,
+    pub(crate) queued_after: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanInterruptQueueObservation {
+    pub(crate) pending: Vec<u64>,
+    pub(crate) terminal: Vec<u64>,
+    pub(crate) latched: bool,
 }
 
 #[derive(Debug, Deserialize)]
