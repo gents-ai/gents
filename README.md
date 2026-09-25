@@ -46,6 +46,11 @@ background agent needs a user systemd session.
 Installer checksums are attached to each release as
 `SHA256SUMS-desktop-macos.txt` and `SHA256SUMS-desktop-linux.txt`.
 
+### Server / CLI
+
+For a headless runtime, download `gents-<target>.tar.gz` (Linux x86_64/aarch64,
+macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
+
 ## First run
 
 The app walks you through setup: create a local agent, review the folders and
