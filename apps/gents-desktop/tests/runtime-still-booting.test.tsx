@@ -15,10 +15,6 @@ const toast = vi.hoisted(() =>
   }),
 );
 vi.mock("sonner", () => ({ toast }));
-vi.mock("../src/lib/shellPlatform", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/lib/shellPlatform")>()),
-  supportsLocalManagedServer: () => true,
-}));
 
 import {
   installManagedServerTrayListeners,
@@ -26,7 +22,6 @@ import {
   MANAGED_SERVER_TRAY_START_EVENT,
 } from "../src/lib/managedServerTray";
 import { LocalServer } from "../src/ui/screens/agent/LocalServer";
-import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
 import type { Shell } from "../src/ui/hooks/useShell";
 
 const base: ManagedServerStatus = {
@@ -184,35 +179,5 @@ describe("runtimeStillBooting is a wait, not a failure", () => {
     render(<LocalServer shell={shell} />);
     expect(await screen.findByText("updating data")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change access…" })).toBeNull();
-  });
-
-  it("AgentsScreen create local agent continues after a still-booting start", async () => {
-    const user = userEvent.setup();
-    const onInitLocalRuntime = vi.fn(async () => ({}));
-    const api = {
-      managedServerStatus: statusSequence(base, base, updating, base),
-      startManagedServer: vi.fn(async () => {
-        throw stillBooting();
-      }),
-    } as unknown as DesktopApiAdapter;
-    const shell = {
-      api,
-      snapshot: { client: { enrollmentRequests: [] } },
-      deployments: [],
-      onInitLocalRuntime,
-      refreshSnapshot: vi.fn(),
-      selectAgent: vi.fn(),
-    } as unknown as Shell;
-    render(<AgentsScreen shell={shell} />);
-    await user.click(screen.getByRole("button", { name: /Add agent/ }));
-    const create = await screen.findByTestId("fleet-connect-local-submit");
-    await vi.waitFor(() => expect(create).toBeEnabled());
-    await user.click(create);
-    await vi.waitFor(() => expect(onInitLocalRuntime).toHaveBeenCalled(), {
-      timeout: 5_000,
-    });
-    expect(toast).not.toHaveBeenCalledWith(
-      expect.stringContaining("Couldn't create agent"),
-    );
   });
 });

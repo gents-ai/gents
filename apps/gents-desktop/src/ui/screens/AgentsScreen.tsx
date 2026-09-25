@@ -44,7 +44,6 @@ import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
-import { observeManagedServerOperation } from "../../lib/managedServerStartup";
 import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
@@ -368,13 +367,8 @@ function AddAgentDialog({
             "Complete local agent setup to review host access before adding another local agent.",
           );
         }
-        const startManagedServer = shell.api.startManagedServer;
-        if (startManagedServer) {
-          await observeManagedServerOperation(
-            shell.api,
-            () => startManagedServer(agentName),
-            () => {},
-          );
+        if (shell.api.startManagedServer) {
+          await shell.api.startManagedServer(agentName);
         }
         await shell.onInitLocalRuntime(agentName);
         toast("Local agent created");
