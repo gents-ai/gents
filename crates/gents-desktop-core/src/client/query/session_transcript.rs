@@ -364,11 +364,6 @@ async fn resolve_transcript_cursor_sequence(
         .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
 }
 
-/// Query a bounded transcript window directly from DefraDB. The cursor is a
-/// bridge item key, but is resolved to the durable sequence space before the
-/// page query so inserts at the tip cannot shift an older page. Messages and
-/// tool groups are independently overscanned because one sequence may produce
-/// both timeline items; the bridge performs the final visible-item limit.
 /// The exact requester scope under which one session's transcript is read.
 ///
 /// Transcript rows carry their session's requester scope, and a desktop
@@ -397,6 +392,11 @@ pub fn session_transcript_requester_scope(
     principal_scope.map(str::to_owned)
 }
 
+/// Query a bounded transcript window directly from DefraDB. The cursor is a
+/// bridge item key, but is resolved to the durable sequence space before the
+/// page query so inserts at the tip cannot shift an older page. Messages and
+/// tool groups are independently overscanned because one sequence may produce
+/// both timeline items; the bridge performs the final visible-item limit.
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
