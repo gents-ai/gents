@@ -384,6 +384,14 @@ fn write_files(
     bytes.push(b'\n');
     files.insert("manifest.json".to_owned(), bytes);
 
+    // Validation already refuses case ids that could not name an asset; this
+    // keeps every write inside `dir` whatever produced the name.
+    if let Some(path) = files
+        .keys()
+        .find(|path| !gents::pack::is_distributable_asset_path(path))
+    {
+        anyhow::bail!("refusing to write {path:?}: it is not a pack asset path");
+    }
     for (path, bytes) in files {
         let file = dir.join(&path);
         if let Some(parent) = file.parent() {
@@ -735,20 +743,45 @@ mod tests {
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(messages[0].contains("Canary.Quality"), "{messages:?}");
 
-        // A case id the loader cannot admit as an asset: the loader's own
-        // refusal reaches the author.
+        // A case id that cannot name an asset, if validation were skipped:
+        // the writer refuses it before writing anything.
         let mut draft = good();
         draft.cases[0]["case_id"] = json!("Train-A");
-        let messages = stage(&validated(&draft), SUMMARY, &dossier(), None)
+        let assembled = assemble(&draft, None, OWNER, SLOT).unwrap();
+        let messages = stage(&assembled, SUMMARY, &dossier(), None)
             .await
             .err()
             .unwrap();
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(
-            messages[0].contains("does not load and install")
+            messages[0].contains("not a pack asset path")
                 && messages[0].contains("cases/Train_A.json"),
             "{messages:?}"
         );
+    }
+
+    #[test]
+    fn a_case_id_that_escapes_the_pack_writes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("staging").join("pack");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut draft = good();
+        draft.cases[0]["case_id"] = json!("../../../escape");
+        let assembled = assemble(&draft, None, OWNER, SLOT).unwrap();
+        let error = write_files(
+            &dir,
+            "canary_quality",
+            &assembled,
+            SUMMARY,
+            &dossier(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("not a pack asset path"),
+            "{error:#}"
+        );
+        assert_eq!(files_under(root.path()), Vec::<String>::new());
     }
 
     #[test]

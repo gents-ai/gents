@@ -232,6 +232,15 @@ fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String>
     if unique.len() != definition.cases.len() {
         messages.insert("the draft repeats a case_id".to_owned());
     }
+    // A case's id names its sidecar file, so it is checked here, before
+    // anything is written, and not left to the pack loader afterwards.
+    for case_id in unique {
+        if !gents::pack::is_valid_pack_name(&case_id.replace('-', "_")) {
+            messages.insert(format!(
+                "case_id {case_id:?} cannot name a case file: with `-` read as `_`, it must be a lowercase letter followed by lowercase letters, digits and underscores"
+            ));
+        }
+    }
     messages
 }
 
@@ -441,6 +450,19 @@ pub(crate) mod tests {
         let message = only_message(&draft, &Floors { validation_min: 6 });
         assert!(message.contains("5 validation cases"), "{message}");
         assert!(message.contains('6'), "{message}");
+    }
+
+    #[test]
+    fn a_case_id_that_cannot_name_a_case_file_is_refused() {
+        for case_id in ["../../escape", "Train-A", "a/b", "train.a"] {
+            let mut draft = good();
+            draft.cases[0]["case_id"] = json!(case_id);
+            let message = only_message(&draft, &FLOOR_ONE);
+            assert!(
+                message.contains(&format!("{case_id:?}")) && message.contains("case file"),
+                "{message}"
+            );
+        }
     }
 
     #[test]
