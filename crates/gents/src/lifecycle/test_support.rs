@@ -16,10 +16,10 @@ pub(crate) fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identi
         .step_by(2)
         .map(|offset| u8::from_str_radix(&PIN_FIXED_KEY_HEX[offset..offset + 2], 16).unwrap())
         .collect();
-    let path = dir.join("pinning.key");
-    std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
+    let mut key_file = tempfile::NamedTempFile::new_in(dir).expect("create private fixed key");
+    std::io::Write::write_all(&mut key_file, &key_bytes).expect("write fixed pinning key");
+    let identity = crate::identity::KeyIdentity::load_existing(key_file.path(), None)
+        .expect("load fixed identity");
     assert_eq!(
         identity.did(),
         PIN_FIXED_DID,
