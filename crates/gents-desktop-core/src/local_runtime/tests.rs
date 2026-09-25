@@ -1,9 +1,9 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::{
     augment_peer_status_payload_for_desktop, dangerously_overwrite_desktop_home,
-    default_agent_home, graphql_endpoint_for_desktop_access, render_human_summary,
-    reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url, DesktopInitSummary,
-    LOCAL_STANDARD_SOURCE,
+    default_agent_home, graphql_endpoint_for_desktop_access, load_standard_runtime_identity,
+    render_human_summary, reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url,
+    DesktopInitSummary, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 
@@ -62,6 +62,52 @@ fn default_agent_home_uses_fresh_gents_home() {
         home.file_name().and_then(|name| name.to_str()),
         Some(".gents")
     );
+}
+
+#[test]
+fn configured_runtime_missing_key_is_not_created_by_desktop_read() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let key_path = tempdir.path().join("missing.key");
+    std::fs::write(
+        tempdir.path().join("init.json"),
+        serde_json::json!({
+            "agent_name": "local",
+            "agent_did": "did:key:configured",
+            "key_path": key_path,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let error = load_standard_runtime_identity(tempdir.path())
+        .err()
+        .expect("missing configured key must be rejected");
+    assert!(format!("{error:#}").contains("identity key does not exist"));
+    assert!(!key_path.exists());
+}
+
+#[test]
+fn configured_runtime_wrong_existing_key_is_preserved() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let key_path = tempdir.path().join("existing.key");
+    gents::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
+    let original = std::fs::read(&key_path).unwrap();
+    std::fs::write(
+        tempdir.path().join("init.json"),
+        serde_json::json!({
+            "agent_name": "local",
+            "agent_did": "did:key:different",
+            "key_path": key_path,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let error = load_standard_runtime_identity(tempdir.path())
+        .err()
+        .expect("wrong configured key must be rejected");
+    assert!(format!("{error:#}").contains("identity does not match configured agent DID"));
+    assert_eq!(std::fs::read(&key_path).unwrap(), original);
 }
 
 #[test]

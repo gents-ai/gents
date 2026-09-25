@@ -548,10 +548,6 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
                 .key_path
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| default_key_path(options.home, options.agent_name));
-            if let Some(parent) = key_path.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating key directory {}", parent.display()))?;
-            }
             let identity = Arc::new(
                 KeyIdentity::load_or_create(&key_path, None)
                     .context("creating or loading agent identity key")?,

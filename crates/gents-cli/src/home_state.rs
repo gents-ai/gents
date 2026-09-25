@@ -80,7 +80,7 @@ pub(crate) fn load_initialized_home_identity(
             );
         }
         Arc::new(
-            KeyIdentity::load_or_create(&key_path, None)
+            KeyIdentity::load_existing(&key_path, None)
                 .with_context(|| format!("loading identity key {}", key_path.display()))?,
         )
     } else {

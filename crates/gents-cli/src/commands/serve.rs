@@ -1287,14 +1287,13 @@ fn resolve_server_identity(
 
     let key_path = resolve_server_key_path(args, init_config, home_dir, agent_name)?;
     ensure_key_path_exists_for_initialized_did(init_config, &key_path)?;
-    if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating key directory {}", parent.display()))?;
-    }
-    let identity = Arc::new(
+    let identity = if init_config.is_some_and(|config| has_agent_did(&config.agent_did)) {
+        KeyIdentity::load_existing(&key_path, None).context("loading agent identity key")?
+    } else {
         KeyIdentity::load_or_create(&key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
+            .context("creating or loading agent identity key")?
+    };
+    let identity = Arc::new(identity);
     ensure_identity_matches_init_config(init_config, identity.did())?;
     let node_identity_did = identity.did().to_string();
     Ok(ServerIdentity {
