@@ -185,8 +185,10 @@ export function SessionContext({
 }) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
-  /* the configured window the next request runs with, so an edit to the
-     profile shows at once; the last request's window is history */
+  /* the configured window as the runtime resolves it, so an edit to the
+     profile shows at once; the last request's window is history. A window
+     the runtime rejects is reported, never shown as the one in use. */
+  const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -216,7 +218,11 @@ export function SessionContext({
               variant="ghost"
               size="icon-xs"
               data-testid="context-meter-compact"
-              aria-label={`Context ~${formatTokens(used)} of ${formatTokens(window)}`}
+              aria-label={
+                windowError
+                  ? `Context ~${formatTokens(used)}, window unavailable`
+                  : `Context ~${formatTokens(used)} of ${formatTokens(window)}`
+              }
             />
           ) : (
             <Button
@@ -230,10 +236,16 @@ export function SessionContext({
         onMouseEnter={hoverOpen}
         onMouseLeave={hoverClose}
       >
-        <ContextRing used={used} window={window} threshold={threshold} />
+        <ContextRing
+          used={windowError ? 0 : used}
+          window={window}
+          threshold={threshold}
+        />
         {!compact && (
           <span className="tabular-nums">
-            ~{formatTokens(used)} / {formatTokens(window)}
+            {windowError
+              ? `~${formatTokens(used)} / window unavailable`
+              : `~${formatTokens(used)} / ${formatTokens(window)}`}
           </span>
         )}
       </PopoverTrigger>
@@ -251,9 +263,15 @@ export function SessionContext({
             <p className="font-heading text-sm font-medium text-heading">
               Conversation context
             </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
-            </p>
+            {windowError ? (
+              <p role="alert" className="mt-1 text-sm text-destructive">
+                The configured context window can’t be used: {windowError}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
+              </p>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -265,8 +283,14 @@ export function SessionContext({
           </Button>
         </div>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-sm">
-          <dt className="text-muted-foreground">Compacts at</dt>
-          <dd className="text-right font-mono text-xs">{threshold.toLocaleString()}</dd>
+          {!windowError && (
+            <>
+              <dt className="text-muted-foreground">Compacts at</dt>
+              <dd className="text-right font-mono text-xs">
+                {threshold.toLocaleString()}
+              </dd>
+            </>
+          )}
           <dt className="text-muted-foreground">Durable transcript</dt>
           <dd className="text-right font-mono text-xs">
             {context.estimatedDurableTokens.toLocaleString()}

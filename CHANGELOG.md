@@ -199,8 +199,9 @@ source consistency checks, not a separate runtime compatibility version.
 - Desktop: a model profile's context window can be raised again. The editor
   no longer sends the profile's own saved limits as the model's advertised
   facts, which made the saved value the ceiling; limits a backend does not
-  advertise stay editable. The context meter shows the window the next request
-  runs with, resolved as the runtime resolves it (#1618).
+  advertise stay editable, bounded by an advertised maximum. The context meter
+  shows the configured window as the runtime resolves it, and reports a window
+  the runtime rejects instead of presenting it as in use (#1618).
 - Desktop onboarding shows the recommended reasoning effort as a default that
   can be changed later; the selector sits with the other adjustable settings
   and says it applies to new requests (#1618).

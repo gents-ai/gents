@@ -12,4 +12,10 @@ export type SessionContextView = {
  * True when the durable transcript/context rows were read to exhaustion.
  * False means the remaining fields describe only the bounded visible page.
  */
-transcriptTotalsExact?: boolean | null, estimatedDurableTokens: number, estimatedConversationTokens: number, contextWindow: number, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };
+transcriptTotalsExact?: boolean | null, estimatedDurableTokens: number, estimatedConversationTokens: number, contextWindow: number,
+/**
+ * Why the configured window cannot be what the next request runs with,
+ * e.g. the profile exceeds the model's advertised maximum. When set,
+ * `context_window` is only the runtime default, not a usable window.
+ */
+contextWindowError?: string | null, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };

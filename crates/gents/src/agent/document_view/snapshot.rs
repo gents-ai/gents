@@ -507,49 +507,11 @@ fn resolve_inference(
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();
-    let credential_scope = matches!(
-        backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth
-    )
-    .then_some(scope);
-    let catalog = view
-        .backend_observations
-        .get(&backend.backend_id)
-        .filter(|observation| observation.backend_id == backend.backend_id)
-        .map(|observation| observation.catalog_for(credential_scope))
-        .transpose()?
-        .flatten();
-    let advertised_model = if let Some(catalog) = catalog {
-        let mut models = catalog
-            .models
-            .iter()
-            .filter(|model| model.model_name == profile.model_name);
-        let model = models.next().ok_or_else(|| {
-            anyhow!(
-                "model {} is not advertised by backend {} in the selected credential scope",
-                profile.model_name,
-                backend.backend_id
-            )
-        })?;
-        anyhow::ensure!(
-            models.next().is_none(),
-            "ambiguous advertised model {}",
-            profile.model_name
-        );
-        if let (Some(effort), Some(supported)) =
-            (profile.reasoning_effort, model.reasoning_efforts.as_ref())
-        {
-            anyhow::ensure!(
-                supported.contains(&effort),
-                "model {} does not advertise selected reasoning effort {effort:?}",
-                profile.model_name
-            );
-        }
-        validate_advertised_context_override(&profile, model)?;
-        Some(model.clone())
-    } else {
-        None
-    };
+    let advertised_model = crate::config::advertised_model_for_profile(
+        &backend,
+        &profile,
+        view.backend_observations.get(&backend.backend_id),
+    )?;
     let resolved = crate::config::ResolvedInference {
         backend,
         profile,
@@ -575,35 +537,10 @@ fn resolve_inference(
     Ok(resolved)
 }
 
-fn validate_advertised_context_override(
-    profile: &crate::document_config::InferenceProfile,
-    model: &crate::document_config::AdvertisedModel,
-) -> Result<()> {
-    let Some(selected) = profile.context_window else {
-        return Ok(());
-    };
-    let Some(maximum) = model.max_context_window.filter(|maximum| {
-        *maximum > 0
-            && model
-                .context_window
-                .is_none_or(|default| default > 0 && default <= *maximum)
-    }) else {
-        return Ok(());
-    };
-    anyhow::ensure!(
-        selected <= maximum,
-        "profile {} context window {} exceeds model {} advertised maximum {}",
-        profile.profile_id,
-        selected,
-        profile.model_name,
-        maximum
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod advertised_context_override_tests {
     use super::*;
+    use crate::config::validate_advertised_context_override;
 
     #[test]
     fn context_override_admission_matches_lean() {

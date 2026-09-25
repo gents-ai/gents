@@ -34,4 +34,19 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent("500k");
     expect(screen.getByTestId("context-meter")).not.toHaveTextContent("128k");
   });
+
+  it("reports a window the runtime rejects instead of presenting it as in use", () => {
+    render(
+      <SessionContext
+        context={context({
+          contextWindow: 128_000,
+          contextWindowError:
+            "profile p context window 900000 exceeds model m advertised maximum 872000",
+        })}
+      />,
+    );
+    const meter = screen.getByTestId("context-meter");
+    expect(meter).toHaveTextContent("window unavailable");
+    expect(meter).not.toHaveTextContent("128k");
+  });
 });

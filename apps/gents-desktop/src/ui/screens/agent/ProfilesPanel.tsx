@@ -208,6 +208,11 @@ export function ProfileEditor({
     Set<keyof InferenceSettingsDraft>
   >(new Set());
   const deliberateSelectionRef = useRef<string | null>(null);
+  const advertisedMaxContext = (backendId: string, modelName: string) =>
+    deployment.inferenceBackends
+      .find((backend) => backend.backendId === backendId)
+      ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
+      ?.max_context_window ?? undefined;
   const d = useDraft(
     saved,
     async (next) => {
@@ -261,6 +266,11 @@ export function ProfileEditor({
 
       const contextWindow = optionalInteger("Context window", next.contextWindow, {
         min: 1,
+        // A model that advertises only its maximum has no model-aware
+        // control, but that maximum still bounds the profile's window.
+        ...(recommendation.contextWindow
+          ? {}
+          : { max: advertisedMaxContext(next.backendId, next.modelName) }),
       });
       const maxOutputTokens = optionalInteger(
         "Max output tokens",
@@ -460,10 +470,7 @@ export function ProfileEditor({
           endpoint: backend.endpoint!,
           modelName,
           displayName: advertisedModel?.display_name ?? null,
-          // Only the backend's advertised facts describe the model. The
-          // profile's own saved limits are the draft, not model facts: sent
-          // here they became the model's default and ceiling, so a saved
-          // window could only ever be lowered.
+          // Only the backend's advertised facts describe the model.
           contextWindow: advertisedModel?.context_window ?? null,
           maxContextWindow: advertisedModel?.max_context_window ?? null,
           maxOutputTokens: advertisedModel?.max_output_tokens ?? null,
@@ -706,7 +713,11 @@ export function ProfileEditor({
             <NumberRow
               id={id("context-window")}
               label="Context window"
-              description="Tokens the model accepts per request. Empty uses the runtime default."
+              description={
+                advertisedModel?.max_context_window
+                  ? `Tokens per request, up to ${advertisedModel.max_context_window.toLocaleString()}. Empty uses the runtime default.`
+                  : "Tokens the model accepts per request. Empty uses the runtime default."
+              }
               value={d.draft.contextWindow}
               onChange={(v) => d.set("contextWindow", v)}
               onCommit={d.commit}

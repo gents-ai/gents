@@ -570,3 +570,96 @@ mod tests {
         assert!(responses.contains("Responses"));
     }
 }
+
+/// Whether a profile's context window is admissible for its advertised model:
+/// a selected window may not exceed a well-formed advertised maximum (a
+/// positive maximum no smaller than the advertised default). Runtime inference
+/// resolution and any client presenting the effective window share this check.
+pub fn validate_advertised_context_override(
+    profile: &crate::document_config::InferenceProfile,
+    model: &crate::document_config::AdvertisedModel,
+) -> anyhow::Result<()> {
+    let Some(selected) = profile.context_window else {
+        return Ok(());
+    };
+    let Some(maximum) = model.max_context_window.filter(|maximum| {
+        *maximum > 0
+            && model
+                .context_window
+                .is_none_or(|default| default > 0 && default <= *maximum)
+    }) else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        selected <= maximum,
+        "profile {} context window {} exceeds model {} advertised maximum {}",
+        profile.profile_id,
+        selected,
+        profile.model_name,
+        maximum
+    );
+    Ok(())
+}
+
+/// The model catalog a backend's observation advertises in the backend's
+/// credential scope: the principal's own catalog for principal OAuth, the
+/// shared catalog otherwise. `None` when nothing has been observed; an error
+/// when the observation holds more than one catalog for that scope.
+pub fn backend_catalog<'a>(
+    backend: &crate::document_config::InferenceBackend,
+    observation: Option<&'a crate::document_config::InferenceBackendObservation>,
+) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
+    let credential_scope = matches!(
+        backend.auth,
+        crate::document_config::BackendAuth::PrincipalOAuth
+    )
+    .then_some(backend.agent_did.as_str());
+    Ok(observation
+        .filter(|observation| observation.backend_id == backend.backend_id)
+        .map(|observation| observation.catalog_for(credential_scope))
+        .transpose()?
+        .flatten())
+}
+
+/// The advertised model a profile selects on its backend, admitted against
+/// that advertisement: the model must be advertised exactly once, support the
+/// selected reasoning effort, and accept the profile's context window
+/// ([`validate_advertised_context_override`]). `None` when the backend's
+/// catalog has not been observed, in which case nothing is known about the
+/// model and nothing is admitted or rejected.
+pub fn advertised_model_for_profile(
+    backend: &crate::document_config::InferenceBackend,
+    profile: &crate::document_config::InferenceProfile,
+    observation: Option<&crate::document_config::InferenceBackendObservation>,
+) -> anyhow::Result<Option<crate::document_config::AdvertisedModel>> {
+    let Some(catalog) = backend_catalog(backend, observation)? else {
+        return Ok(None);
+    };
+    let mut models = catalog
+        .models
+        .iter()
+        .filter(|model| model.model_name == profile.model_name);
+    let model = models.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "model {} is not advertised by backend {} in the selected credential scope",
+            profile.model_name,
+            backend.backend_id
+        )
+    })?;
+    anyhow::ensure!(
+        models.next().is_none(),
+        "ambiguous advertised model {}",
+        profile.model_name
+    );
+    if let (Some(effort), Some(supported)) =
+        (profile.reasoning_effort, model.reasoning_efforts.as_ref())
+    {
+        anyhow::ensure!(
+            supported.contains(&effort),
+            "model {} does not advertise selected reasoning effort {effort:?}",
+            profile.model_name
+        );
+    }
+    validate_advertised_context_override(profile, model)?;
+    Ok(Some(model.clone()))
+}

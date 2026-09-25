@@ -13,33 +13,33 @@ fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
         .unwrap_or_default()
 }
 
-/// The window the session's next request runs with, resolved by the
-/// runtime's owner (`ResolvedInference::context_window`): the profile's
-/// value, else the backend's advertised model limit, else the default.
+/// The context window the runtime's inference resolution selects for these
+/// documents: the profile's window, else the advertised model's default
+/// window, else the runtime default (`ResolvedInference::context_window`).
+/// The advertised model is selected and admitted by the runtime's own
+/// `advertised_model_for_profile`, so a window over the advertised maximum,
+/// or a model the catalog does not advertise, is an error rather than a window
+/// in use. When this client has not observed the backend or its catalog, the
+/// result is only the profile's window or the default; it does not say the
+/// runtime will accept the request.
 fn configured_context_window(
     store: &gents_desktop_core::client::ClientStore,
     profile: Option<&gents::document_config::InferenceProfile>,
-) -> usize {
+) -> Result<usize, String> {
     let Some(profile) = profile else {
-        return gents::config::DEFAULT_CONTEXT_WINDOW;
+        return Ok(gents::config::DEFAULT_CONTEXT_WINDOW);
     };
     let Some(backend) = store
         .inference_backends
         .iter()
         .find(|row| row.backend_id == profile.backend_id && row.agent_did == profile.agent_did)
     else {
-        return profile
+        return Ok(profile
             .context_window
             .and_then(|value| usize::try_from(value).ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW);
+            .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW));
     };
-    let credential_scope = matches!(
-        backend.auth,
-        gents::document_config::BackendAuth::PrincipalOAuth
-    )
-    .then_some(backend.agent_did.as_str());
-    let advertised_model = store
+    let observation = store
         .backend_observations
         .iter()
         .enumerate()
@@ -52,14 +52,10 @@ fn configured_context_window(
                     true,
                 )
         })
-        .and_then(|(_, observation)| observation.catalog_for(credential_scope).ok().flatten())
-        .and_then(|catalog| {
-            catalog
-                .models
-                .iter()
-                .find(|model| model.model_name == profile.model_name)
-        })
-        .cloned();
+        .map(|(_, observation)| observation);
+    let advertised_model =
+        gents::config::advertised_model_for_profile(backend, profile, observation)
+            .map_err(|error| error.to_string())?;
     gents::config::ResolvedInference {
         backend: backend.clone(),
         profile: profile.clone(),
@@ -69,7 +65,7 @@ fn configured_context_window(
         advertised_model,
     }
     .context_window()
-    .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW)
+    .map_err(|error| error.to_string())
 }
 
 pub(super) fn build_session_context_view(
@@ -108,7 +104,11 @@ pub(super) fn build_session_context_view(
                 row.compaction_id == compaction_id && row.agent_did == context.agent_did
             })
         });
-    let context_window = configured_context_window(store, inference_profile);
+    let (context_window, context_window_error) =
+        match configured_context_window(store, inference_profile) {
+            Ok(window) => (window, None),
+            Err(error) => (gents::config::DEFAULT_CONTEXT_WINDOW, Some(error)),
+        };
     let compaction_threshold = compaction
         .and_then(|compaction| compaction.threshold)
         .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD);
@@ -204,6 +204,7 @@ pub(super) fn build_session_context_view(
         estimated_durable_tokens: usize_to_i64(estimated_durable_tokens),
         estimated_conversation_tokens: usize_to_i64(estimated_conversation_tokens),
         context_window: usize_to_i64(context_window),
+        context_window_error,
         compaction_threshold,
         compaction_threshold_tokens: usize_to_i64(gents::provider_budget::threshold_budget(
             context_window,

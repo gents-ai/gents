@@ -377,6 +377,12 @@ pub struct SessionContextView {
     pub estimated_durable_tokens: i64,
     pub estimated_conversation_tokens: i64,
     pub context_window: i64,
+    /// Why the configured window cannot be what the next request runs with,
+    /// e.g. the profile exceeds the model's advertised maximum. When set,
+    /// `context_window` is only the runtime default, not a usable window.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub context_window_error: Option<String>,
     pub compaction_threshold: f64,
     pub compaction_threshold_tokens: i64,
     pub compaction_strategy: String,
