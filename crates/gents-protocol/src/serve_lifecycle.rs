@@ -66,7 +66,10 @@ pub fn outdated_runtime_message(version: Option<&str>) -> String {
         || "the running agent".to_string(),
         |version| format!("the running agent (v{})", version.trim_start_matches('v')),
     );
-    format!("{running} predates this app; restart it so it runs this version")
+    format!(
+        "{running} predates this app (v{}); restart it so it runs this version",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 #[cfg(test)]
@@ -107,7 +110,10 @@ mod tests {
         );
         assert_eq!(
             outdated_runtime_message(Some("0.18.2")),
-            "the running agent (v0.18.2) predates this app; restart it so it runs this version"
+            format!(
+                "the running agent (v0.18.2) predates this app (v{}); restart it so it runs this version",
+                env!("CARGO_PKG_VERSION")
+            )
         );
     }
 }

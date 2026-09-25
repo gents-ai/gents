@@ -17,6 +17,7 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "incompatibleLocalStore",
   "pairing",
   "credentialNotSaved",
+  "runtimeStillBooting",
   "unknown",
 ]);
 

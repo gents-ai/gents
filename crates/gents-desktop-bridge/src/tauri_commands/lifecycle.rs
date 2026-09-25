@@ -183,8 +183,13 @@ async fn run_detached_client_start<R: Runtime>(
     // open, that refresh can observe no installed core while the detached
     // starter already holds the peer-directory lease, then fail trying to use
     // the offline writer for the same directory.
-    let lifecycle = Arc::clone(&state.client_lifecycle).lock_owned().await;
-    let start_result = start_client_core_async(paths, lifecycle).await;
+    let start_result =
+        match acquire_client_lifecycle(Arc::clone(&state.client_lifecycle), CLIENT_LIFECYCLE_WAIT)
+            .await
+        {
+            Ok(lifecycle) => start_client_core_async(paths, lifecycle).await,
+            Err(error) => Err(error),
+        };
 
     match start_result {
         Ok((core, _lifecycle_guard)) => {
@@ -357,6 +362,24 @@ pub async fn desktop_client_snapshot(
 }
 
 type ClientLifecycleGuard = tokio::sync::OwnedMutexGuard<()>;
+
+/// How long a start waits for the store while an earlier start that stalled
+/// is still closing it.
+const CLIENT_LIFECYCLE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+async fn acquire_client_lifecycle(
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
+    wait: std::time::Duration,
+) -> Result<ClientLifecycleGuard, BridgeError> {
+    tokio::time::timeout(wait, lifecycle.lock_owned())
+        .await
+        .map_err(|_| {
+            BridgeError::new(
+                BridgeErrorCode::ClientStartFailed,
+                "a previous desktop client start is still closing its store; try again shortly",
+            )
+        })
+}
 type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuard);
 
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
@@ -606,6 +629,22 @@ mod tests {
             .await
             .expect("init proceeds once the late core is closed")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_retry_reports_a_previous_start_that_is_still_closing() {
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let held = Arc::clone(&lifecycle).lock_owned().await;
+        let error =
+            acquire_client_lifecycle(Arc::clone(&lifecycle), std::time::Duration::from_millis(20))
+                .await
+                .expect_err("the store is still owned by the stalled start");
+        assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
+        assert!(error.message.contains("still closing"), "{}", error.message);
+        drop(held);
+        acquire_client_lifecycle(lifecycle, std::time::Duration::from_millis(20))
+            .await
+            .expect("a retry proceeds once the late core is closed");
     }
 
     #[tokio::test]

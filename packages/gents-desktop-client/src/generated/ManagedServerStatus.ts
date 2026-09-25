@@ -2,4 +2,10 @@
 import type { ManagedServerState } from "./ManagedServerState.js";
 import type { ManagedServerToolCeiling } from "./ManagedServerToolCeiling.js";
 
-export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, agentName: string | null, agentDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, approvalRequired: boolean, error: string | null, };
+export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, agentName: string | null, agentDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, approvalRequired: boolean,
+/**
+ * This home's runtime answers but has not reported ready, typically while
+ * it migrates its data after an update. Not a failure: it is waited on
+ * without a bound and is never restarted for taking long.
+ */
+runtimeBooting: boolean, error: string | null, };

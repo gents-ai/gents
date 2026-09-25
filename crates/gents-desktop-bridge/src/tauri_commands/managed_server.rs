@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::local_runtime::{
     fetch_runtime_connection_payload, init_standard_local_runtime, DesktopInitOptions,
 };
@@ -193,14 +193,26 @@ async fn observe_managed_server_status<R: Runtime>(
         if let Some(agent_home) = state.policy.agent_home.as_deref() {
             if let Some(external) = matching_external_server(agent_home).await? {
                 status = project_external_status(external, &native);
-            } else if let PortReadiness::Outdated { version } =
-                observe_port_readiness(agent_home).await?
-            {
-                // Our own job is restarted at launch and reports starting
-                // meanwhile. An external one never becomes ready: say so now.
-                if !native.job_loaded {
-                    status.state = ManagedServerState::Failed;
-                    status.error = Some(outdated_runtime_message(version.as_deref()));
+            } else {
+                match observe_port_readiness(agent_home).await? {
+                    // Our own job is restarted at launch and reports starting
+                    // meanwhile. An external one never becomes ready: say so.
+                    PortReadiness::Outdated { version }
+                        if !native.job_loaded && !state.managed_server.lock().await.starting =>
+                    {
+                        status.state = ManagedServerState::Failed;
+                        status.error = Some(outdated_runtime_message(version.as_deref()));
+                    }
+                    PortReadiness::Booting => {
+                        status.runtime_booting = true;
+                        if matches!(
+                            status.state,
+                            ManagedServerState::Stopped | ManagedServerState::Disabled
+                        ) {
+                            status.state = ManagedServerState::Starting;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -728,7 +740,15 @@ where
     if token.is_cancelled() {
         return Err(cancelled());
     }
-    let typed_error = error.downcast_ref::<BridgeError>().cloned();
+    let still_booting = error.is::<RuntimeStillBooting>();
+    let typed_error = if still_booting {
+        Some(BridgeError::new(
+            BridgeErrorCode::RuntimeStillBooting,
+            error.to_string(),
+        ))
+    } else {
+        error.downcast_ref::<BridgeError>().cloned()
+    };
     let mut message = format!("{error:#}");
     let _lifecycle = match lifecycle {
         Some(lifecycle) => lifecycle,
@@ -741,7 +761,10 @@ where
         }
     }
     finish_start_wait(state, token).await;
-    state.managed_server.lock().await.last_error = Some(message.clone());
+    // A runtime still booting is observed as starting, not as a failure.
+    if !still_booting {
+        state.managed_server.lock().await.last_error = Some(message.clone());
+    }
     Ok((message, typed_error))
 }
 
@@ -1953,38 +1976,55 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
+    let status = fetch_managed_runtime_status(&target.graphql, cancel)
+        .await
+        .map_err(|error| {
+            if cancel.is_cancelled() {
+                PairingFailure::Cancelled
+            } else {
+                PairingFailure::classify(format!(
+                    "loading managed runtime enrollment offer: {error}"
+                ))
+            }
+        })?;
+    if cancel.is_cancelled() {
+        return Err(PairingFailure::Cancelled);
+    }
+    let live_peer = live_server_peer(&status);
     // Each /status mints a fresh offer, so authoring again would leave the
     // earlier request pending where it could still be approved. A request
     // stays in use until it expires or is denied.
-    let request_id = match live_managed_request(&core, target).await {
-        Some(request_id) => request_id,
-        None => {
-            let status = fetch_managed_runtime_status(&target.graphql, cancel)
+    let request_id = resolve_managed_request(
+        || async {
+            core.active_status_enrollment_requests()
                 .await
-                .map_err(|error| {
-                    if cancel.is_cancelled() {
-                        PairingFailure::Cancelled
-                    } else {
-                        PairingFailure::classify(format!(
-                            "loading managed runtime enrollment offer: {error}"
-                        ))
-                    }
-                })?;
-            if cancel.is_cancelled() {
-                return Err(PairingFailure::Cancelled);
+                .map(|requests| {
+                    select_managed_request(requests, &target.agent_did, live_peer.as_deref())
+                })
+                .map_err(|error| format!("{error:#}"))
+        },
+        |request_id| {
+            let core = Arc::clone(&core);
+            async move {
+                core.resend_status_enrollment(&request_id)
+                    .await
+                    .map_err(|error| format!("{error:#}"))
             }
-            // Authoring installs and unwinds bootstrap replication state, so
-            // it is not interrupted; cancellation is observed once it returns.
+        },
+        // Authoring installs and unwinds bootstrap replication state, so it
+        // is not interrupted; cancellation is observed once it returns.
+        || async {
             core.request_status_enrollment_with_label(&status, Some(&target.agent_name))
                 .await
+                .map(|request| request.request_id)
                 .map_err(|error| {
                     PairingFailure::classify(format!(
                         "requesting managed runtime enrollment: {error:#}"
                     ))
-                })?
-                .request_id
-        }
-    };
+                })
+        },
+    )
+    .await?;
 
     await_managed_pairing_approval(
         cancel,
@@ -2036,20 +2076,72 @@ async fn ensure_managed_runtime_pairing(
     Ok(())
 }
 
-/// This desktop's unexpired, undenied request to pair with the runtime.
-async fn live_managed_request(core: &ClientCore, target: &ManagedPairingTarget) -> Option<String> {
-    match core.active_status_enrollment_requests().await {
-        Ok(requests) => requests
-            .into_iter()
-            .find(|request| request.owner_agent == target.agent_did)
-            .map(|request| request.request_id),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                error = %format!("{error:#}"),
-                "could not read this desktop's enrollment requests"
-            );
-            None
+/// The peer serving the live runtime's enrollment offer, falling back to the
+/// peer its status reports. Used only to select among this desktop's own
+/// requests; each was authenticated against its server when authored.
+fn live_server_peer(status: &serde_json::Value) -> Option<String> {
+    status
+        .pointer("/enrollment/token")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|token| gents_protocol::enrollment::decode_offer(token).ok())
+        .map(|offer| offer.server_peer)
+        .or_else(|| {
+            status
+                .get("p2p_peer_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|peer| !peer.trim().is_empty())
+}
+
+/// This desktop's newest unexpired, undenied request to pair with the runtime
+/// serving from `live_peer`.
+fn select_managed_request(
+    requests: Vec<EnrollmentRequestResult>,
+    agent_did: &str,
+    live_peer: Option<&str>,
+) -> Option<EnrollmentRequestResult> {
+    let live_peer = live_peer?;
+    requests
+        .into_iter()
+        .filter(|request| request.owner_agent == agent_did && request.server_peer == live_peer)
+        .max_by(|left, right| {
+            left.expires_at
+                .cmp(&right.expires_at)
+                .then_with(|| left.request_id.cmp(&right.request_id))
+        })
+}
+
+/// Reuses a live request, pushing a pending one to the server again since its
+/// earlier push may have failed. Authors a new one only after a lookup that
+/// succeeded and found none.
+async fn resolve_managed_request<L, LF, R, RF, A, AF>(
+    lookup: L,
+    resend: R,
+    author: A,
+) -> Result<String, PairingFailure>
+where
+    L: FnOnce() -> LF,
+    LF: Future<Output = Result<Option<EnrollmentRequestResult>, String>>,
+    R: FnOnce(String) -> RF,
+    RF: Future<Output = Result<(), String>>,
+    A: FnOnce() -> AF,
+    AF: Future<Output = Result<String, PairingFailure>>,
+{
+    match lookup().await {
+        Err(error) => Err(PairingFailure::Transient(format!(
+            "reading this desktop's enrollment requests: {error}"
+        ))),
+        Ok(None) => author().await,
+        Ok(Some(request)) => {
+            if request.state == "pending_approval" {
+                resend(request.request_id.clone()).await.map_err(|error| {
+                    PairingFailure::classify(format!(
+                        "resending managed runtime enrollment: {error}"
+                    ))
+                })?;
+            }
+            Ok(request.request_id)
         }
     }
 }
@@ -2151,6 +2243,7 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
         approval_required: false,
+        runtime_booting: false,
         error: None,
     }
 }
@@ -2495,6 +2588,7 @@ fn status_from(
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
         approval_required,
+        runtime_booting: false,
         error: crashed.or_else(|| managed.last_error.clone()),
     }
 }
@@ -2794,6 +2888,7 @@ mod tests {
                 suggested_tool_root: Some("/Users/test".to_string()),
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &gents_server::native_service::NativeServiceStatus {
@@ -2844,6 +2939,7 @@ mod tests {
                 suggested_tool_root: None,
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &native,
@@ -2873,6 +2969,7 @@ mod tests {
                 suggested_tool_root: None,
                 pairing_ready: false,
                 approval_required: false,
+                runtime_booting: false,
                 error: None,
             },
             &native,
@@ -3028,6 +3125,7 @@ mod tests {
             suggested_tool_root: None,
             pairing_ready: false,
             approval_required: false,
+            runtime_booting: false,
             error: None,
         };
         let error = validate_ready_runtime(&missing_authority, &authority, temp.path())
@@ -3177,6 +3275,7 @@ mod tests {
             suggested_tool_root: None,
             pairing_ready: false,
             approval_required: false,
+            runtime_booting: false,
             error: None,
         }
     }
@@ -3389,6 +3488,121 @@ mod tests {
         assert!(
             error.contains("offer_mint_failed") && error.contains("3 attempts"),
             "{error}"
+        );
+    }
+
+    fn managed_request(
+        request_id: &str,
+        server_peer: &str,
+        state: &str,
+        expires_at: &str,
+    ) -> EnrollmentRequestResult {
+        EnrollmentRequestResult {
+            request_id: request_id.to_string(),
+            network_id: "network".to_string(),
+            admin_did: "did:key:admin".to_string(),
+            server_peer: server_peer.to_string(),
+            owner_agent: "did:key:managed".to_string(),
+            state: state.to_string(),
+            expires_at: expires_at.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_request_lookup_never_authors_another_request() {
+        let authored = std::sync::atomic::AtomicU32::new(0);
+        let failure = resolve_managed_request(
+            || async { Err("decoding persisted enrollment request".to_string()) },
+            |_| async { Ok(()) },
+            || async {
+                authored.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok("enroll-new".to_string())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(failure, PairingFailure::Transient(_)), "{failure}");
+        assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_request_whose_push_failed_is_pushed_again_when_reused() {
+        let store = std::sync::Mutex::new(None::<EnrollmentRequestResult>);
+        let (resent, authored) = (
+            std::sync::Mutex::new(Vec::<String>::new()),
+            std::sync::atomic::AtomicU32::new(0),
+        );
+        let attempt = || {
+            resolve_managed_request(
+                || async { Ok(store.lock().unwrap().clone()) },
+                |request_id| {
+                    resent.lock().unwrap().push(request_id);
+                    async { Ok(()) }
+                },
+                || async {
+                    authored.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // Written locally, then the push to the server fails.
+                    *store.lock().unwrap() = Some(managed_request(
+                        "enroll-1",
+                        "peer-a",
+                        "pending_approval",
+                        "2026-09-24T12:00:00Z",
+                    ));
+                    Err(PairingFailure::Transient(
+                        "pushing enrollment request".to_string(),
+                    ))
+                },
+            )
+        };
+        assert!(attempt().await.is_err());
+        assert_eq!(attempt().await.unwrap(), "enroll-1");
+        assert_eq!(authored.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*resent.lock().unwrap(), vec!["enroll-1".to_string()]);
+
+        // An approved request needs no push.
+        *store.lock().unwrap() = Some(managed_request(
+            "enroll-1",
+            "peer-a",
+            "approved",
+            "2026-09-24T12:00:00Z",
+        ));
+        assert_eq!(attempt().await.unwrap(), "enroll-1");
+        assert_eq!(resent.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_newest_request_for_the_live_server_peer_is_reused() {
+        let requests = vec![
+            managed_request(
+                "enroll-old",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T10:00:00Z",
+            ),
+            managed_request(
+                "enroll-new",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T11:00:00Z",
+            ),
+            managed_request(
+                "enroll-other",
+                "peer-b",
+                "pending_approval",
+                "2026-09-24T12:00:00Z",
+            ),
+        ];
+        let selected = select_managed_request(requests.clone(), "did:key:managed", Some("peer-a"));
+        assert_eq!(selected.unwrap().request_id, "enroll-new");
+        assert!(
+            select_managed_request(requests.clone(), "did:key:managed", Some("peer-c")).is_none()
+        );
+        assert!(
+            select_managed_request(requests.clone(), "did:key:other", Some("peer-a")).is_none()
+        );
+        assert!(
+            select_managed_request(requests, "did:key:managed", None).is_none(),
+            "without the live peer no request is reused"
         );
     }
 
@@ -3722,6 +3936,38 @@ mod tests {
             1
         );
         assert_eq!(launch.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_start_still_booting_is_reported_as_booting_not_failed() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let (_, typed) = settle_launch_failure(
+            &state,
+            &token,
+            LaunchFailure {
+                error: RuntimeStillBooting {
+                    waited: Duration::from_secs(300),
+                }
+                .into(),
+                attempted_start: false,
+                lifecycle: Some(lifecycle),
+            },
+            || async { panic!("a booting runtime is not rolled back") },
+        )
+        .await
+        .expect("settled");
+        assert_eq!(
+            typed.expect("typed").code,
+            BridgeErrorCode::RuntimeStillBooting
+        );
+        let managed = state.managed_server.lock().await;
+        assert!(
+            managed.last_error.is_none(),
+            "status keeps reporting it starting"
+        );
+        assert!(!managed.starting);
     }
 
     #[tokio::test]

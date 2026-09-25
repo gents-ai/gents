@@ -34,6 +34,10 @@ pub enum BridgeErrorCode {
     /// agent's configuration failed. The bridge holds the credential in memory
     /// so the save can be retried without signing in again.
     CredentialNotSaved,
+    /// The managed runtime was started and answers, but had not reported
+    /// ready when the wait ended; it keeps starting, typically migrating its
+    /// data. Callers keep observing it rather than failing or restarting it.
+    RuntimeStillBooting,
     /// Catch-all for failures whose producer has not assigned a typed code.
     Unknown,
 }
@@ -54,6 +58,7 @@ impl BridgeErrorCode {
             Self::IncompatibleLocalStore => "incompatibleLocalStore",
             Self::Pairing => "pairing",
             Self::CredentialNotSaved => "credentialNotSaved",
+            Self::RuntimeStillBooting => "runtimeStillBooting",
             Self::Unknown => "unknown",
         }
     }
