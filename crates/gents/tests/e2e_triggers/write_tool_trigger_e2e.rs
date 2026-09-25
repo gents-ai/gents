@@ -111,7 +111,7 @@ where
     }
 }
 
-fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
+pub(super) fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
     snapshot.process_state == "ready"
         && snapshot.reconcile_phase == "idle"
         && snapshot.active_generation > generation
