@@ -594,6 +594,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.invalid_tool_progress_cases,
         ),
         (
+            "repeated_tool_failure_cases",
+            "RepeatedToolFailureCases",
+            &snapshot.repeated_tool_failure_cases,
+        ),
+        (
             "workspace_path_alias_cases",
             "WorkspacePathAliasCases",
             &snapshot.workspace_path_alias_cases,

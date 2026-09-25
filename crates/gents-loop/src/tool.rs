@@ -69,6 +69,8 @@ impl std::fmt::Display for UnparseableArgsKind {
 
 pub trait Tool: Sized + Send + Sync {
     const NAME: &'static str;
+    /// See [`ToolDyn::emits_command_envelope`].
+    const EMITS_COMMAND_ENVELOPE: bool = false;
     type Error: std::error::Error + Send + Sync + 'static;
     type Args: for<'a> Deserialize<'a> + Send + Sync;
     type Output: Serialize;
@@ -96,6 +98,14 @@ pub trait ToolDyn: Send + Sync {
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>>;
+
+    /// True only for the built-in command runner, whose results render
+    /// [`crate::live_output::COMMAND_OUTPUT_META_PREFIX`] metadata with
+    /// [`crate::live_output::COMMAND_OUTPUT_VOLATILE_FIELDS`]. Any other tool's
+    /// text is its own, even when it has the same shape.
+    fn emits_command_envelope(&self) -> bool {
+        false
+    }
 }
 
 fn serialize_tool_output(output: impl Serialize) -> serde_json::Result<String> {
@@ -108,6 +118,10 @@ fn serialize_tool_output(output: impl Serialize) -> serde_json::Result<String> {
 impl<T: Tool> ToolDyn for T {
     fn name(&self) -> String {
         Tool::name(self)
+    }
+
+    fn emits_command_envelope(&self) -> bool {
+        T::EMITS_COMMAND_ENVELOPE
     }
 
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {

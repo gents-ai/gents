@@ -301,10 +301,10 @@ pub fn classify_request_outcome(
     if terminal_state == RequestLifecycleState::Completed {
         return None;
     }
-    let budget_exhausted = evidence
-        .failure_reason
-        .as_deref()
-        .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted"));
+    let budget_exhausted = evidence.failure_reason.as_deref().is_some_and(|reason| {
+        reason.contains("invalid_tool_call_budget_exhausted")
+            || reason.contains(crate::agent::loop_stream::REPEATED_TOOL_FAILURE_PREFIX)
+    });
     if budget_exhausted {
         return Some("tool");
     }
@@ -495,6 +495,19 @@ mod tests {
             ),
             Some("tool"),
             "budget exhaustion wins when inference and tool also failed"
+        );
+        assert_eq!(
+            classify_request_outcome(
+                S::Failed,
+                false,
+                &evidence(
+                    true,
+                    true,
+                    Some("repeated_tool_failure: tool=config, identical_failures=3")
+                )
+            ),
+            Some("tool"),
+            "a repeated identical tool failure is a tool outcome"
         );
         let mut status_only = evidence(false, false, None);
         status_only.tool_calls.push(ToolCallEvidence {

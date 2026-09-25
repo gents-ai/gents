@@ -7,6 +7,14 @@ use anyhow::Context;
 use gents_protocol::output::{PayloadPresentation, PresentationPart};
 use tokio::sync::Mutex;
 
+/// Compact command-runner output starts with this prefix and one metadata
+/// JSON object on its own line, followed by the captured streams.
+pub const COMMAND_OUTPUT_META_PREFIX: &str = "gents_exec: ";
+
+/// Command metadata fields that differ between runs of the same command:
+/// wall-clock duration, and the foreground-timeout hint rendered from it.
+pub const COMMAND_OUTPUT_VOLATILE_FIELDS: [&str; 2] = ["duration_ms", "hint"];
+
 /// Rendered between stdout and stderr when a live buffer's combined stream
 /// starts carrying stderr bytes. Matches the finished-result renderer in
 /// `gents::background_tools`, which imports this same constant.
@@ -214,7 +222,7 @@ impl LiveToolOutputRegistry {
         } else {
             push_literal(
                 &mut parts,
-                format!("gents_exec: {metadata_json}\nstdout:\n"),
+                format!("{COMMAND_OUTPUT_META_PREFIX}{metadata_json}\nstdout:\n"),
             );
             append_plain_channel(&mut parts, &stdout, &state.receipts[0])?;
             push_literal(&mut parts, "\nstderr:\n".to_owned());

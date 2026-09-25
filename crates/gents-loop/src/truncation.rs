@@ -127,10 +127,7 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
             }
 
             if line_count == 0 && exceeds_bytes && limits.max_lines > 0 {
-                let mut end = limits.max_bytes.min(original_bytes);
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
+                let end = floor_char_boundary(text, limits.max_bytes.min(original_bytes));
                 let result = &text[..end];
                 return TextTruncation {
                     text: format!(
@@ -177,10 +174,8 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
             }
 
             if included == 0 && exceeds_bytes && limits.max_lines > 0 {
-                let mut start = original_bytes.saturating_sub(limits.max_bytes);
-                while !text.is_char_boundary(start) {
-                    start += 1;
-                }
+                let start =
+                    ceil_char_boundary(text, original_bytes.saturating_sub(limits.max_bytes));
                 let result = &text[start..];
                 return TextTruncation {
                     text: format!(
@@ -217,6 +212,24 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
         original_bytes,
         returned_bytes,
     }
+}
+
+/// The largest UTF-8 boundary of `text` at or below `index`.
+pub fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// The smallest UTF-8 boundary of `text` at or above `index`.
+pub fn ceil_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 pub fn truncate_text(

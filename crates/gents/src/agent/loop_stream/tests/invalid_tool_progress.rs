@@ -77,40 +77,50 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             owned_config(64),
         );
         let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let name = case["name"].as_str().unwrap();
+        let actions = case["composed_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| action.as_str().unwrap())
+            .collect::<Vec<_>>();
+        let ending = case["composed_ending"].as_str();
         let error = collected.error.as_deref();
-        let exhausted = case["expected_exhausted"].as_bool().unwrap();
-        assert_eq!(error.is_some(), exhausted, "{}: {error:?}", case["name"]);
-        if let Some(error) = error {
-            assert!(
-                error.contains("invalid_tool_call_budget_exhausted:"),
-                "{error}"
-            );
+        assert_eq!(error.is_some(), ending.is_some(), "{name}: {error:?}");
+        match (ending, error) {
+            (Some("invalidExhausted"), Some(error)) => {
+                assert!(error.contains("invalid_tool_call_budget_exhausted:"), "{error}")
+            }
+            (Some("repeatedFailure"), Some(error)) => {
+                assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}")
+            }
+            (None, None) => {}
+            other => panic!("{name}: unexpected ending {other:?}"),
         }
-        let observed = case["expected_observed_outcomes"].as_u64().unwrap() as usize;
+        let answered = actions.iter().filter(|action| **action != "stop").count();
         assert_eq!(
             collected.tool_results.len(),
-            observed,
-            "{} must emit the last result before failing",
-            case["name"]
+            answered,
+            "{name} must emit the last result before failing"
         );
         assert_eq!(
             model.seen_requests().await.len(),
-            observed + usize::from(!exhausted),
-            "{} must not dispatch a suffix",
-            case["name"]
+            actions.len() + usize::from(ending.is_none()),
+            "{name} must not dispatch a suffix"
         );
-        let response = node
-            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let data = response.data.unwrap();
-        let rows = data["AgentToolCall"].as_array().unwrap();
-        assert_eq!(rows.len(), observed, "{} durable outcomes", case["name"]);
-        assert!(rows.iter().all(|row| matches!(
+        let rows = tool_call_rows(&node).await;
+        let answered_rows = (0..answered)
+            .map(|index| {
+                rows.iter()
+                    .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
+                    .unwrap_or_else(|| panic!("{name}: missing durable row {index}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(answered_rows.iter().all(|row| matches!(
             row["lifecycle_state"].as_str(),
             Some("completed" | "failed")
         )));
-        let charged = rows
+        let charged = answered_rows
             .iter()
             .filter(|row| {
                 matches!(
@@ -121,15 +131,10 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             .count();
         assert_eq!(
             charged as u64,
-            case["expected_invalid_used"].as_u64().unwrap(),
-            "{} typed outcome mapping",
-            case["name"]
+            case["composed_invalid_used"].as_u64().unwrap(),
+            "{name} typed outcome mapping"
         );
-        for index in 0..observed {
-            let row = rows
-                .iter()
-                .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
-                .unwrap_or_else(|| panic!("{}: missing durable row {index}", case["name"]));
+        for (index, row) in answered_rows.iter().enumerate() {
             let output = crate::background_tools::canonical_tool_output(
                 &node,
                 row["_docID"].as_str().unwrap(),
@@ -142,8 +147,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             .unwrap();
             assert!(
                 !output.is_empty(),
-                "{}: canonical output for {index} must not be empty",
-                case["name"]
+                "{name}: canonical output for {index} must not be empty"
             );
         }
         node.shutdown().await;

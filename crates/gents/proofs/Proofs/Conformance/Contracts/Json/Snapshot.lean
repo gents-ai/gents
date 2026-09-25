@@ -3,6 +3,7 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
@@ -397,6 +398,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
+    ++ "\"repeated_tool_failure_cases\":"
+      ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"

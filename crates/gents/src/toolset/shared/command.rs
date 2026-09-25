@@ -20,7 +20,7 @@ pub use gents_loop::tool_policy::{
     WorkspaceAuthority,
 };
 
-const OUTPUT_META_PREFIX: &str = "gents_exec: ";
+use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";

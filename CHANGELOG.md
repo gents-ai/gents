@@ -29,6 +29,10 @@ source consistency checks, not a separate runtime compatibility version.
   start or completion, and any inference call's start or end for that request,
   so the age no longer jumps back to `claimed_at` when a tool call finishes
   (#1782).
+- The agent loop stops re-running a tool call that failed three times in a row
+  with the same arguments and error. The next identical call returns a notice
+  instead of running, and repeating it again ends the request with a
+  `repeated_tool_failure` reason instead of spinning to the turn cap (#1734).
 
 ## 0.19.0 - 2026-09-24
 
