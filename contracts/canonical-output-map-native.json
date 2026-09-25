@@ -10,7 +10,7 @@
       "generated_groups": ["canonical_dispatch_observation_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents/src/hook/persistence/prompt_hook.rs", "crates/gents/src/hook.rs", "crates/gents/src/tool_call_lifecycle/transition/native.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs"],
       "native_status": "pending",
       "required_cases": [
         "lost_receipt_then_replay preserves Running without either observation granting invocation authority",

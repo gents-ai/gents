@@ -375,6 +375,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
                     },
                     rollback_on_drop: Some(rollback_on_drop),
                     affected_documents: std::sync::atomic::AtomicU64::new(0),
+                    operation: Some(operation.as_str()),
                 })
             })
         },

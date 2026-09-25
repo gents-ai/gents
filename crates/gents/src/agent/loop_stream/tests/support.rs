@@ -615,6 +615,17 @@ pub(super) async fn owned_test_hook() -> (
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
+    owned_test_hook_with_policy(FailurePolicy::default()).await
+}
+
+pub(super) async fn owned_test_hook_with_policy(
+    policy: FailurePolicy,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+) {
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -667,7 +678,7 @@ pub(super) async fn owned_test_hook() -> (
         "general",
         "did:test:test",
         None,
-        FailurePolicy::default(),
+        policy,
     )
     .await
     .unwrap();
