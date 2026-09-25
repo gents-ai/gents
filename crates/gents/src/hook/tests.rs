@@ -21,6 +21,9 @@ mod background_panic;
 #[path = "tests/background_budget.rs"]
 mod background_budget;
 
+#[path = "tests/wait_settlement.rs"]
+mod wait_settlement;
+
 #[path = "tests/process_control_scope.rs"]
 mod process_control_scope;
 
