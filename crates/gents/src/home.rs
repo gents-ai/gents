@@ -147,9 +147,8 @@ pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
 
 /// A store lock this process could not take because another holder has it.
 ///
-/// `holder_pid` is absent when the lock file does not carry a parseable pid,
-/// which happens if the holder was killed between creating the file and
-/// writing to it.
+/// `holder_pid` is absent when no pid can be read or parsed from the lock
+/// file.
 #[derive(Debug)]
 pub struct StoreLockHeld {
     pub home: PathBuf,
