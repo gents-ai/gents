@@ -138,7 +138,6 @@ export function ToolsEditor({
         if (effectiveMaximum < effective)
           throw new Error(`${label} maximum must be at least its default`);
       };
-      positiveSeconds("File timeout", advanced.host?.files?.timeout_secs);
       for (const [label, value] of [
         ["Bash timeout", advanced.host?.bash?.timeout_secs],
         ["Maximum bash timeout", advanced.host?.bash?.max_timeout_secs],
@@ -149,14 +148,11 @@ export function ToolsEditor({
           "Subagent spawn timeout",
           advanced.subagents?.cross_principal_spawn_timeout_secs,
         ],
-        ["Subagent wait timeout", advanced.subagents?.wait_timeout_secs],
-        ["Maximum subagent wait timeout", advanced.subagents?.max_wait_timeout_secs],
         ["Language server timeout", advanced.integrations?.lsp?.timeout_secs],
         [
           "Maximum language server timeout",
           advanced.integrations?.lsp?.max_timeout_secs,
         ],
-        ["Language server RPC timeout", advanced.integrations?.lsp?.rpc_timeout_secs],
       ] as const)
         positiveSeconds(label, value);
       boundedSeconds(
@@ -169,13 +165,6 @@ export function ToolsEditor({
         "Bash wait timeout",
         advanced.host?.bash?.wait_timeout_secs,
         advanced.host?.bash?.max_wait_timeout_secs,
-        TOOL_LIMIT_DEFAULTS.waitTimeout,
-        TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
-      );
-      boundedSeconds(
-        "Subagent wait timeout",
-        advanced.subagents?.wait_timeout_secs,
-        advanced.subagents?.max_wait_timeout_secs,
         TOOL_LIMIT_DEFAULTS.waitTimeout,
         TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
       );

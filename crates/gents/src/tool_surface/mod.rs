@@ -6,6 +6,7 @@ mod policy;
 mod root_admission;
 mod runtime_context;
 mod selection;
+mod timeouts;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use build::measured_mcp_services_for_access;
@@ -27,6 +28,7 @@ pub use root_admission::{
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};
+pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

@@ -1512,6 +1512,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "callback_transition_cases".into(),
         "CallbackTransitionCases".into(),
     ));
+    assert!(["foreground", "cli", "background", "wait", "lsp"]
+        .iter()
+        .all(|family| snapshot.tool_timeout_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())));
+    emitted.insert(("tool_timeout_cases".into(), "ToolTimeoutCases".into()));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

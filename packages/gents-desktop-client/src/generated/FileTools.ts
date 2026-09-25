@@ -3,10 +3,8 @@ import type { FileToolMode } from "./FileToolMode.js";
 
 /**
  * File access. The mode owns enablement; there is no separate enable flag.
+ * File operations are bounded by the enclosing request deadline. There is no
+ * per-operation timer: a write cannot be abandoned mid-flight without
+ * misreporting whether it landed.
  */
-export type FileTools = { mode?: FileToolMode | null,
-/**
- * Optional execution cap per file operation. Unset retains the enclosing
- * tool-call/request deadline without adding an independent file timer.
- */
-timeout_secs?: number | null, };
+export type FileTools = { mode?: FileToolMode | null, };

@@ -2031,6 +2031,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                                 tool_name: admission.operation.clone(),
                                 deadline_at: native.fixture_time(admission.deadline)?,
+                                selected_tool_identity: None,
                             },
                             native.fixture_time(*now)?,
                         )

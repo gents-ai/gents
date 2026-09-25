@@ -257,11 +257,13 @@ fn native_tool_backgroundable_capability_is_explicit() {
 fn background_tool_names_are_gated_by_allowlist() {
     let disabled = BackgroundToolConfig {
         allowlist: Vec::new(),
+        timeouts: Default::default(),
     };
     assert!(background_tool_names(&disabled).is_empty());
 
     let enabled = BackgroundToolConfig {
         allowlist: vec!["bash".to_string()],
+        timeouts: Default::default(),
     };
     assert_eq!(
         background_tool_names(&enabled),

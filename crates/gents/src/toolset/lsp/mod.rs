@@ -37,6 +37,14 @@ use actions::ActionRequest;
 use config::apply_overrides;
 
 pub const LSP_TOOL_NAME: &str = "lsp";
+/// Action timeout, including indexing retries, when neither the call nor
+/// `integrations.lsp.timeout_secs` sets one.
+pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
+/// Ceiling on any action timeout, configured or requested. Language servers
+/// that need longer are indexing, not answering; the call should fail and retry.
+pub const MAX_ACTION_TIMEOUT_SECS: u64 = 300;
+/// A model-requested action shorter than this cannot finish indexing retries.
+pub const MIN_REQUESTED_ACTION_TIMEOUT_SECS: u64 = 5;
 
 /// Shared acceptance semantics for persisted LSP results. Keep demo-pack and
 /// live-test qualification on the same definition so ordinary hover text such
@@ -81,6 +89,8 @@ pub struct LspToolConfig {
     pub diagnostics_on_edit: bool,
     pub diagnostics_deduplicate: bool,
     pub idle_timeout: Duration,
+    /// Resolved `integrations.lsp.timeout_secs` / `max_timeout_secs`.
+    pub action_timeout: crate::tool_surface::BoundedTimeout,
 }
 
 pub fn constraints_from_effective_policy(
@@ -250,9 +260,9 @@ impl Tool for LspTool {
                     },
                     "timeout": {
                         "type": "integer",
-                        "minimum": 5,
-                        "maximum": 300,
-                        "description": "Request timeout in seconds. This bounds the entire indexing-retry loop; linter fallback is also bounded and cancellable (default 20)."
+                        "minimum": MIN_REQUESTED_ACTION_TIMEOUT_SECS.min(self.config.action_timeout.maximum.as_secs()),
+                        "maximum": self.config.action_timeout.maximum.as_secs(),
+                        "description": format!("Request timeout in seconds. This bounds the entire indexing-retry loop; linter fallback is also bounded and cancellable (default {}).", self.config.action_timeout.default.as_secs())
                     }
                 },
                 "required": ["action"]
@@ -379,7 +389,15 @@ impl Tool for LspTool {
                 new_name: args.new_name,
                 apply: args.apply,
                 payload: args.payload,
-                timeout: args.timeout,
+                timeout: Some(
+                    u32::try_from(
+                        self.config
+                            .action_timeout
+                            .action_for(args.timeout.map(u64::from))
+                            .as_secs(),
+                    )
+                    .unwrap_or(u32::MAX),
+                ),
             },
         )
         .await

@@ -156,6 +156,17 @@ pub(crate) async fn load_document_runtime_view(
     Ok(view)
 }
 
+/// A stored document that no longer decodes (for example, one carrying a
+/// field this runtime removed) names itself, so the operator can find and
+/// fix it; the principal's whole view still fails closed.
+pub(super) fn decode_record<T: DeserializeOwned>(
+    name: &str,
+    id: &str,
+    canonical: serde_json::Value,
+) -> Result<T> {
+    serde_json::from_value(canonical).with_context(|| format!("decoding {name} {id:?}"))
+}
+
 /// Select desired fields through the shared canonical serde codec. JSON groups
 /// stay bare selections; observations never enter a strict authored document.
 async fn load_records<T: DeserializeOwned>(
@@ -198,7 +209,7 @@ async fn load_records<T: DeserializeOwned>(
             .with_context(|| format!("{name} missing logical key"))?
             .to_owned();
         let (_, canonical) = config_projection(collection, Some(&row))?;
-        let value = serde_json::from_value(canonical.context("missing canonical config")?)?;
+        let value = decode_record(name, &id, canonical.context("missing canonical config")?)?;
         anyhow::ensure!(
             result
                 .insert(id.clone(), DocumentRecord { doc_id, value })

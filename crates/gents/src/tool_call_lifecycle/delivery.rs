@@ -338,6 +338,7 @@ impl ToolCallLifecycle {
         let parent_tool_call_id = self.tool_call_id.clone();
         let deadline_at = admission.deadline_at;
         let tool_name = admission.tool_name;
+        let persisted_selected = admission.selected_tool_identity;
         let stable_id = format!("spawned:{parent_doc_id}");
         let stable_key = format!("{parent_doc_id}:spawned-background");
         let persisted_parent_doc_id = parent_doc_id.clone();
@@ -367,6 +368,7 @@ impl ToolCallLifecycle {
                 let tool_name = persisted_tool_name.clone();
                 let stable_id = persisted_stable_id.clone();
                 let stable_key = persisted_stable_key.clone();
+                let selected = persisted_selected.clone();
                 let fixture_now = fixture_now.clone();
                 Box::pin(async move {
                     let parent = escape_graphql_string(&parent_doc_id);
@@ -380,7 +382,8 @@ impl ToolCallLifecycle {
                         spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
                         session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter}
                     }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name message_sequence
-                        lifecycle_state await_mode cancel_policy child_request_id spawned_by_tool_call_doc_id deadline_at }} }}"#)).await?;
+                        lifecycle_state await_mode cancel_policy child_request_id spawned_by_tool_call_doc_id deadline_at
+                        selected_service_id selected_tool_name }} }}"#)).await?;
                     let rows = existing["data"]["AgentToolCall"].as_array()
                         .context("spawned admission lookup omitted rows")?;
                     anyhow::ensure!(rows.len() <= 1, "accepted spawn_process already has ambiguous background children");
@@ -397,6 +400,10 @@ impl ToolCallLifecycle {
                                 && child["await_mode"].as_str() == Some("background")
                                 && child["cancel_policy"].as_str() == Some("cascade")
                                 && child["child_request_id"].is_null()
+                                && child["selected_service_id"].as_str()
+                                    == selected.as_ref().map(|(service, _)| service.as_str())
+                                && child["selected_tool_name"].as_str()
+                                    == selected.as_ref().map(|(_, tool)| tool.as_str())
                                 && persisted_deadline == deadline_at,
                             "spawned admission replay conflicts with immutable parent provenance"
                         );
@@ -457,13 +464,19 @@ impl ToolCallLifecycle {
                     let request_id = request_row["request_id"].as_str()
                         .filter(|id| !id.trim().is_empty()).context("spawned admission request lacks logical identity")?;
                     let deadline = escape_graphql_string(&deadline_at.to_rfc3339_opts(SecondsFormat::Nanos, true));
+                    let selected_fields = match &selected {
+                        Some((service, tool)) => format!(
+                            r#"selected_service_id: "{}", selected_tool_name: "{}","#,
+                            escape_graphql_string(service), escape_graphql_string(tool)),
+                        None => String::new(),
+                    };
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
                         tool_call_key: "{}", request_id: "{}", request_doc_id: "{request}",
                         session_id: "{session}", agent_did: "{agent}", {}
                         message_sequence: {message_sequence}, tool_name: "{}", tool_call_id: "{}",
                         lifecycle_state: "pending", status: "pending", deadline_at: "{deadline}",
                         await_mode: "background", cancel_policy: "cascade", child_request_id: null,
-                        spawned_by_tool_call_doc_id: "{parent}"
+                        {selected_fields} spawned_by_tool_call_doc_id: "{parent}"
                     }}) {{ _docID }} }}"#,
                         escape_graphql_string(&stable_key), escape_graphql_string(request_id),
                         crate::session::requester_did_create_field(requester_did.as_deref()),
@@ -2150,6 +2163,7 @@ mod spawned_background_tests {
         SpawnedBackgroundToolAdmission {
             tool_name: "background_worker".into(),
             deadline_at,
+            selected_tool_identity: None,
         }
     }
 

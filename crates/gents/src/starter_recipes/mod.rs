@@ -400,10 +400,7 @@ fn workspace_tools(
         display_name: Some(format!("{display_name} starter tools")),
         host: Some(HostTools {
             root,
-            files: Some(FileTools {
-                mode: file_mode,
-                timeout_secs: None,
-            }),
+            files: Some(FileTools { mode: file_mode }),
             bash: bash.map(|(mode, execution_mode)| BashTools {
                 mode,
                 execution_mode: Some(execution_mode),

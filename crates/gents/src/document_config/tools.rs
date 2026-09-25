@@ -1,11 +1,16 @@
 //! Canonical tool configuration with typed nested capability groups.
 //!
-//! Optional timeout fields use the documented owner default when unset. Configured
+//! Every field here takes effect at runtime; a setting with no owner does not
+//! exist. Optional timeouts use the documented owner default when unset.
+//! Configured durations must be positive, and configurable maxima must not be
+//! below defaults. The host then narrows admitted values: a value above a host
+//! ceiling is clamped to it, never rejected, so one document stays valid on
+//! every host (`ToolPolicy.effectiveBashForeground` and its siblings).
 //! Tool enable/allow/background flags default false; presence or references alone
-//! do not enable those flags. Configured durations must be positive, and configurable maxima must not be below defaults.
-//! Foreground execution remains bounded by the enclosing deadline and deployment
-//! ceilings. Background executions retain their own lifetime and cancellation owner.
-//! Wait timeouts return a running snapshot; they do not cancel the underlying work.
+//! do not enable those flags. Foreground execution remains bounded by the
+//! enclosing request deadline. Background executions retain their own lifetime
+//! and cancellation owner. Wait timeouts return a running snapshot; they do not
+//! cancel the underlying work.
 
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +91,9 @@ pub struct HostTools {
 }
 
 /// File access. The mode owns enablement; there is no separate enable flag.
+/// File operations are bounded by the enclosing request deadline. There is no
+/// per-operation timer: a write cannot be abandoned mid-flight without
+/// misreporting whether it landed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -97,11 +105,6 @@ pub struct FileTools {
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<FileToolMode>", optional = nullable))]
     pub mode: FileToolMode,
-    /// Optional execution cap per file operation. Unset retains the enclosing
-    /// tool-call/request deadline without adding an independent file timer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub timeout_secs: Option<i64>,
 }
 
 /// Bash capability and command execution constraints.
@@ -152,23 +155,32 @@ pub struct BashTools {
     #[serde(skip_serializing_if = "is_default")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub background_enabled: bool,
-    /// Foreground default when a call omits timeout_secs; current default 120s.
+    /// Foreground timeout when a call omits `timeout_secs`. Unset uses the
+    /// host's `--command-timeout-secs` (120s unless the host sets it). Clamped
+    /// to the effective maximum below.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
-    /// Maximum foreground timeout a call can request. Unset follows timeout_secs.
+    /// Longest foreground timeout a call can request. Unset follows
+    /// `timeout_secs` when that is set, otherwise the host's maximum. Clamped
+    /// to the host's `--command-timeout-max-secs` (which defaults to its
+    /// `--command-timeout-secs`).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_timeout_secs: Option<i64>,
-    /// Separate background lifetime ceiling; current default 36,000s (10 hours).
+    /// Lifetime of a bash run started with `spawn_process`; the run is timed
+    /// out when it expires. Unset uses 36,000s (10 hours); larger values are
+    /// clamped to 36,000s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub background_timeout_secs: Option<i64>,
-    /// Default wait duration for a background process; current default 30s.
+    /// `wait_process` wait on a bash run when the call omits `timeout_secs`.
+    /// Unset uses 30s. Clamped to the wait maximum. Waiting never stops the run.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub wait_timeout_secs: Option<i64>,
-    /// Maximum requested wait duration; current default 600s. Does not kill work.
+    /// Longest `wait_process` wait a call can request on a bash run. Unset
+    /// uses 600s; larger values are clamped to 600s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_wait_timeout_secs: Option<i64>,
@@ -191,8 +203,10 @@ pub struct BashTools {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CliTool {
     pub name: String,
-    /// Execution timeout. Unset uses the existing host registration's timeout
-    /// (10s for the runtime's default CLI registration), within deployment limits.
+    /// Execution timeout. Unset keeps the host registration's timeout (10s for
+    /// every built-in registration). A set value replaces it, clamped to the
+    /// host's foreground maximum (`--command-timeout-max-secs`, which defaults
+    /// to `--command-timeout-secs`).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
@@ -298,16 +312,19 @@ pub struct RemoteServiceTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stale_timeout_secs: Option<i64>,
-    /// Background lifetime ceiling; current process default 36,000s. The service
-    /// call timeout still applies; backgrounding does not bypass either limit.
+    /// Lifetime of a call to this service started with `spawn_process`. Unset
+    /// uses 36,000s; larger values are clamped to 36,000s. The per-call
+    /// `timeout_secs` still applies inside it; backgrounding bypasses neither.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub background_timeout_secs: Option<i64>,
-    /// Default observation wait for background work; current default 30s.
+    /// `wait_process` wait on a background call to this service when the call
+    /// omits `timeout_secs`. Unset uses 30s. Clamped to the wait maximum.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub wait_timeout_secs: Option<i64>,
-    /// Maximum requested observation wait; current default 600s.
+    /// Longest `wait_process` wait a call can request on a background call to
+    /// this service. Unset uses 600s; larger values are clamped to 600s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_wait_timeout_secs: Option<i64>,
@@ -343,19 +360,12 @@ pub struct SubagentTools {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub allow_cross_principal: Option<bool>,
     /// Time for a peer to claim a remote spawn, not its execution lifetime.
-    /// Current default 60s.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub cross_principal_spawn_timeout_secs: Option<i64>,
-    /// Default observation wait for a background child; current default 30s.
+    /// Current default 60s. `wait_subagent` has no timer of its own: it
+    /// returns when the child finishes or the caller's request deadline passes.
     /// Child execution lifetime remains owned by its request/inference settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub wait_timeout_secs: Option<i64>,
-    /// Maximum requested observation wait; current default 600s. Does not cancel child.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub max_wait_timeout_secs: Option<i64>,
+    pub cross_principal_spawn_timeout_secs: Option<i64>,
 }
 
 /// Agent runtime capabilities independent of host access or external integrations.
@@ -385,11 +395,6 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_context_budget: Option<bool>,
-    /// Optional execution cap per tool call. Unset retains the existing enclosing
-    /// tool-call/request deadline without introducing an independent timer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub timeout_secs: Option<i64>,
 }
 
 /// Schema-bounded access to the DefraDB datastore.
@@ -416,11 +421,6 @@ pub struct DatastoreTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub datastore_tool_surface_ids: Option<Vec<String>>,
-    /// Optional execution cap per tool call. Unset retains the existing enclosing
-    /// tool-call/request deadline without introducing an independent timer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub timeout_secs: Option<i64>,
 }
 
 /// Domain-specific external integrations. Extension design remains to be settled.
@@ -453,19 +453,16 @@ pub struct LspTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub config: Option<String>,
-    /// Default action timeout, including indexing retries; current default 20s.
+    /// Action timeout, including indexing retries, when a call omits
+    /// `timeout`. Unset uses 20s. Clamped to the maximum below.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
-    /// Maximum model-requested action timeout; current maximum 300s.
+    /// Longest action timeout a call can request; calls ask for at least 5s.
+    /// Unset uses 300s; larger values are clamped to 300s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_timeout_secs: Option<i64>,
-    /// Lower-level LSP request timeout; current default 30s. Action deadlines
-    /// can shorten it. Idle and per-server warmup limits remain in config.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub rpc_timeout_secs: Option<i64>,
 }
 
 /// Existing self-configuration controls, grouped for a separate design review.
@@ -500,11 +497,6 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_pack_install: Option<bool>,
-    /// Optional execution cap per tool call. Unset retains the existing enclosing
-    /// tool-call/request deadline without introducing an independent timer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub timeout_secs: Option<i64>,
 }
 
 impl Tools {
@@ -564,9 +556,6 @@ impl Tools {
         }
         let mut errors = Vec::new();
         if let Some(host) = &self.host {
-            if let Some(files) = &host.files {
-                positive(&mut errors, "host.files.timeout_secs", files.timeout_secs);
-            }
             if let Some(bash) = &host.bash {
                 bounded(
                     &mut errors,
@@ -581,8 +570,8 @@ impl Tools {
                     "host.bash.wait_timeout_secs",
                     bash.wait_timeout_secs,
                     bash.max_wait_timeout_secs,
-                    30,
-                    Some(600),
+                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
                 positive(
                     &mut errors,
@@ -688,8 +677,8 @@ impl Tools {
                     &format!("{field}.wait_timeout_secs"),
                     service.wait_timeout_secs,
                     service.max_wait_timeout_secs,
-                    30,
-                    Some(600),
+                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
             }
         }
@@ -705,14 +694,6 @@ impl Tools {
                 "subagents.cross_principal_spawn_timeout_secs",
                 subagents.cross_principal_spawn_timeout_secs,
             );
-            bounded(
-                &mut errors,
-                "subagents.wait_timeout_secs",
-                subagents.wait_timeout_secs,
-                subagents.max_wait_timeout_secs,
-                30,
-                Some(600),
-            );
             match subagents.default_await_mode.as_deref() {
                 None | Some("foreground") => {}
                 Some("background") if subagents.background_enabled.unwrap_or(false) => {}
@@ -725,19 +706,7 @@ impl Tools {
                 ),
             }
         }
-        if let Some(built_ins) = &self.built_ins {
-            positive(
-                &mut errors,
-                "built_ins.timeout_secs",
-                built_ins.timeout_secs,
-            );
-        }
         if let Some(datastore) = &self.datastore {
-            positive(
-                &mut errors,
-                "datastore.timeout_secs",
-                datastore.timeout_secs,
-            );
             names(
                 &mut errors,
                 "datastore.defra_query_collections",
@@ -776,13 +745,8 @@ impl Tools {
                     "integrations.lsp.timeout_secs",
                     lsp.timeout_secs,
                     lsp.max_timeout_secs,
-                    20,
-                    Some(300),
-                );
-                positive(
-                    &mut errors,
-                    "integrations.lsp.rpc_timeout_secs",
-                    lsp.rpc_timeout_secs,
+                    crate::toolset::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
+                    Some(crate::toolset::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
                 if let Err(error) =
                     crate::toolset::lsp::LspConfigDocument::parse_operator(lsp.config.as_deref())
@@ -792,11 +756,6 @@ impl Tools {
             }
         }
         if let Some(self_config) = &self.self_config {
-            positive(
-                &mut errors,
-                "self_config.timeout_secs",
-                self_config.timeout_secs,
-            );
             names(
                 &mut errors,
                 "self_config.self_config_categories",
@@ -987,7 +946,6 @@ mod tests {
     #[test]
     fn every_configured_tool_timeout_rejects_zero_and_negative_values() {
         let cases = [
-            ("host.files", vec!["timeout_secs"]),
             (
                 "host.bash",
                 vec![
@@ -998,21 +956,8 @@ mod tests {
                     "max_wait_timeout_secs",
                 ],
             ),
-            ("built_ins", vec!["timeout_secs"]),
-            ("datastore", vec!["timeout_secs"]),
-            (
-                "subagents",
-                vec![
-                    "cross_principal_spawn_timeout_secs",
-                    "wait_timeout_secs",
-                    "max_wait_timeout_secs",
-                ],
-            ),
-            (
-                "integrations.lsp",
-                vec!["timeout_secs", "max_timeout_secs", "rpc_timeout_secs"],
-            ),
-            ("self_config", vec!["timeout_secs"]),
+            ("subagents", vec!["cross_principal_spawn_timeout_secs"]),
+            ("integrations.lsp", vec!["timeout_secs", "max_timeout_secs"]),
         ];
         for (path, fields) in cases {
             for field in fields {
@@ -1063,7 +1008,6 @@ mod tests {
         for value in [
             json!({"host":{"bash":{"max_timeout_secs":5}}}),
             json!({"host":{"bash":{"wait_timeout_secs":601}}}),
-            json!({"subagents":{"max_wait_timeout_secs":5}}),
             json!({"remote":{"services":[{"mcp_service_id":"remote","max_wait_timeout_secs":5}]}}),
             json!({"integrations":{"lsp":{"max_timeout_secs":5}}}),
         ] {

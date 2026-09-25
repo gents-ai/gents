@@ -36,23 +36,32 @@ read_only_commands?: Array<string> | null,
  */
 background_enabled?: boolean | null,
 /**
- * Foreground default when a call omits timeout_secs; current default 120s.
+ * Foreground timeout when a call omits `timeout_secs`. Unset uses the
+ * host's `--command-timeout-secs` (120s unless the host sets it). Clamped
+ * to the effective maximum below.
  */
 timeout_secs?: number | null,
 /**
- * Maximum foreground timeout a call can request. Unset follows timeout_secs.
+ * Longest foreground timeout a call can request. Unset follows
+ * `timeout_secs` when that is set, otherwise the host's maximum. Clamped
+ * to the host's `--command-timeout-max-secs` (which defaults to its
+ * `--command-timeout-secs`).
  */
 max_timeout_secs?: number | null,
 /**
- * Separate background lifetime ceiling; current default 36,000s (10 hours).
+ * Lifetime of a bash run started with `spawn_process`; the run is timed
+ * out when it expires. Unset uses 36,000s (10 hours); larger values are
+ * clamped to 36,000s.
  */
 background_timeout_secs?: number | null,
 /**
- * Default wait duration for a background process; current default 30s.
+ * `wait_process` wait on a bash run when the call omits `timeout_secs`.
+ * Unset uses 30s. Clamped to the wait maximum. Waiting never stops the run.
  */
 wait_timeout_secs?: number | null,
 /**
- * Maximum requested wait duration; current default 600s. Does not kill work.
+ * Longest `wait_process` wait a call can request on a bash run. Unset
+ * uses 600s; larger values are clamped to 600s.
  */
 max_wait_timeout_secs?: number | null,
 /**

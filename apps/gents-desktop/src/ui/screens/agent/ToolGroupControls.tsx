@@ -204,22 +204,12 @@ export function ToolGroupControls({
           }
         />
         {seconds(
-          "tools-files-timeout",
-          "File operation timeout seconds",
-          groups.host?.files?.timeout_secs,
-          (timeout_secs) =>
-            update("host", {
-              files: { ...groups.host?.files, timeout_secs },
-            }),
-          "Request deadline",
-        )}
-        {seconds(
           "tools-bash-timeout",
           "Bash timeout seconds",
           groups.host?.bash?.timeout_secs,
           (timeout_secs) =>
             update("host", { bash: { ...groups.host?.bash, timeout_secs } }),
-          String(TOOL_LIMIT_DEFAULTS.bashTimeout),
+          `Host default (${TOOL_LIMIT_DEFAULTS.bashTimeout})`,
         )}
         {seconds(
           "tools-bash-max-timeout",
@@ -227,7 +217,7 @@ export function ToolGroupControls({
           groups.host?.bash?.max_timeout_secs,
           (max_timeout_secs) =>
             update("host", { bash: { ...groups.host?.bash, max_timeout_secs } }),
-          "Bash timeout",
+          "Bash timeout, else host maximum",
         )}
         {seconds(
           "tools-bash-background-timeout",
@@ -267,20 +257,6 @@ export function ToolGroupControls({
           (cross_principal_spawn_timeout_secs) =>
             update("subagents", { cross_principal_spawn_timeout_secs }),
           "60",
-        )}
-        {seconds(
-          "tools-subagent-wait-timeout",
-          "Background wait seconds",
-          groups.subagents?.wait_timeout_secs,
-          (wait_timeout_secs) => update("subagents", { wait_timeout_secs }),
-          String(TOOL_LIMIT_DEFAULTS.waitTimeout),
-        )}
-        {seconds(
-          "tools-subagent-max-wait-timeout",
-          "Maximum background wait seconds",
-          groups.subagents?.max_wait_timeout_secs,
-          (max_wait_timeout_secs) => update("subagents", { max_wait_timeout_secs }),
-          String(TOOL_LIMIT_DEFAULTS.maxWaitTimeout),
         )}
       </Group>
       <Group title="Runtime tools">
@@ -665,16 +641,6 @@ export function ToolGroupControls({
                   lsp: { ...groups.integrations?.lsp, max_timeout_secs },
                 }),
               String(TOOL_LIMIT_DEFAULTS.maxLspTimeout),
-            )}
-            {seconds(
-              "tools-lsp-rpc-timeout",
-              "Language server RPC timeout seconds",
-              groups.integrations.lsp.rpc_timeout_secs,
-              (rpc_timeout_secs) =>
-                update("integrations", {
-                  lsp: { ...groups.integrations?.lsp, rpc_timeout_secs },
-                }),
-              "30",
             )}
           </>
         )}

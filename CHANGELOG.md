@@ -8,6 +8,22 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Breaking
 
+- Tools document timeouts now take effect, and the ones that could not are
+  gone (#1768). `host.bash` `timeout_secs` and `max_timeout_secs` set the
+  foreground default and maximum, clamped to the host's
+  `--command-timeout-secs` / `--command-timeout-max-secs`.
+  `host.cli[].timeout_secs` replaces the CLI registration's timeout, clamped
+  the same way. `background_timeout_secs` on `host.bash` and each remote
+  service sets a `spawn_process` lifetime (at most 36,000s).
+  `wait_timeout_secs` and `max_wait_timeout_secs` there set `wait_process`
+  waits on that kind of handle (at most 600s). `integrations.lsp`
+  `timeout_secs` and `max_timeout_secs` set LSP action timeouts (at most
+  300s). Values above a ceiling are clamped, not rejected. Removed, and now
+  rejected: `host.files.timeout_secs`, `built_ins.timeout_secs`,
+  `datastore.timeout_secs`, `self_config.timeout_secs`,
+  `subagents.wait_timeout_secs`, `subagents.max_wait_timeout_secs` and
+  `integrations.lsp.rpc_timeout_secs`. Delete them from stored Tools
+  documents before upgrading.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).

@@ -8,8 +8,10 @@
  */
 export type CliTool = { name: string,
 /**
- * Execution timeout. Unset uses the existing host registration's timeout
- * (10s for the runtime's default CLI registration), within deployment limits.
+ * Execution timeout. Unset keeps the host registration's timeout (10s for
+ * every built-in registration). A set value replaces it, clamped to the
+ * host's foreground maximum (`--command-timeout-max-secs`, which defaults
+ * to `--command-timeout-secs`).
  */
 timeout_secs?: number | null,
 /**

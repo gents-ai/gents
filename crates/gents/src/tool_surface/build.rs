@@ -13,6 +13,7 @@ use crate::toolset::{
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
 use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
 use super::selection::CommandOutputLimits;
+use super::timeouts::{effective_bash_foreground, effective_cli_timeout_secs, ToolTimeouts};
 
 pub(super) fn downgrade_file_tools(
     behavior_name: &str,
@@ -60,12 +61,14 @@ pub(super) fn build_host_tools(
     file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
     output_limits: &CommandOutputLimits,
+    timeouts: &ToolTimeouts,
     enable_lsp: bool,
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
     // Per-request IsolatedWorkspace roots overlay into TOOL_RUNTIME_SCOPE
     // at claim time. Do not bake workspace_id paths into this ToolSet.
-    let mut builder = ToolSetBuilder::default();
+    let mut builder =
+        ToolSetBuilder::default().background_lifetime(timeouts.background.bash.lifetime);
     let needs_file_tool_root = !matches!(file_tools, FileToolMode::Off)
         || !matches!(bash, BashMode::Off)
         || !cli_tool_names.is_empty()
@@ -95,19 +98,25 @@ pub(super) fn build_host_tools(
     let bash_output_chars = output_limits
         .bash
         .unwrap_or(crate::toolset::DEFAULT_MAX_COMMAND_CHARS);
+    let (bash_timeout, bash_timeout_max) = effective_bash_foreground(
+        ceiling.command_timeout(),
+        ceiling.command_timeout_max(),
+        timeouts.bash_timeout_secs,
+        timeouts.bash_max_timeout_secs,
+    );
     match bash {
         BashMode::Off => {}
         BashMode::ReadOnly => {
             builder = match command_policy.clone() {
                 Some(policy) => builder.bash_read_only_with_policy_and_limits(
                     policy,
-                    ceiling.command_timeout(),
-                    ceiling.command_timeout_max(),
+                    bash_timeout,
+                    bash_timeout_max,
                     bash_output_chars,
                 ),
                 None => builder.bash_read_only_with_limits(
-                    ceiling.command_timeout(),
-                    ceiling.command_timeout_max(),
+                    bash_timeout,
+                    bash_timeout_max,
                     bash_output_chars,
                 ),
             };
@@ -120,14 +129,14 @@ pub(super) fn build_host_tools(
                 Some(policy) => builder.bash_unrestricted_with_policy_and_limits(
                     root,
                     policy,
-                    ceiling.command_timeout(),
-                    ceiling.command_timeout_max(),
+                    bash_timeout,
+                    bash_timeout_max,
                     bash_output_chars,
                 ),
                 None => builder.bash_unrestricted_with_limits(
                     root,
-                    ceiling.command_timeout(),
-                    ceiling.command_timeout_max(),
+                    bash_timeout,
+                    bash_timeout_max,
                     bash_output_chars,
                 ),
             };
@@ -146,6 +155,11 @@ pub(super) fn build_host_tools(
                 if let Some(chars) = output_limits.cli.get(&tool_name) {
                     tool.max_output_chars = *chars;
                 }
+                tool.timeout_secs = effective_cli_timeout_secs(
+                    ceiling.command_timeout_max(),
+                    tool.timeout_secs,
+                    timeouts.cli_timeout_secs.get(&tool_name).copied(),
+                );
                 builder = builder.cli_tool(tool)
             }
             None => tracing::warn!(

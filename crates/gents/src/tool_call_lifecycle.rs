@@ -322,6 +322,9 @@ struct SelectedToolIdentity {
 pub(crate) struct SpawnedBackgroundToolAdmission {
     pub(crate) tool_name: String,
     pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+    /// `(service_id, tool_name)` of a remote target. Written at creation, so
+    /// later observers resolve the service's configured wait policy.
+    pub(crate) selected_tool_identity: Option<(String, String)>,
 }
 
 impl ToolCallLifecycle {
@@ -666,6 +669,13 @@ impl ToolCallLifecycle {
 
     pub(crate) fn tool_name(&self) -> &str {
         &self.tool_name
+    }
+
+    /// MCP service a remote call was dispatched to, when recorded.
+    pub(crate) fn selected_service_id(&self) -> Option<&str> {
+        self.selected_tool_identity
+            .as_ref()
+            .map(|selected| selected.service_id.as_str())
     }
 
     pub(crate) fn tool_call_id(&self) -> &str {

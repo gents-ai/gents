@@ -44,6 +44,7 @@ pub struct BehaviorToolConfig {
     ceiling_policy: ToolPolicySurface,
     static_policy: ToolPolicySurface,
     lsp_config: Option<String>,
+    lsp_action_timeout: super::BoundedTimeout,
 }
 
 impl BehaviorToolConfig {
@@ -89,6 +90,7 @@ impl BehaviorToolConfig {
             ),
             static_policy: behavior_policy,
             lsp_config: None,
+            lsp_action_timeout: super::BoundedTimeout::lsp_action(None, None),
         }
     }
 
@@ -202,6 +204,7 @@ impl BehaviorToolConfig {
             command_policy,
             cli_tool_names,
             command_output_limits,
+            timeouts,
             enable_meta_tools: _,
             enable_goal_tools: _,
             enable_graph_tools,
@@ -241,6 +244,7 @@ impl BehaviorToolConfig {
             file_tool_root.as_deref(),
             &cli_tool_names,
             &command_output_limits,
+            &timeouts,
             static_policy.lsp,
             ceiling,
         )?;
@@ -347,6 +351,7 @@ impl BehaviorToolConfig {
             },
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
+                timeouts: timeouts.background.clone(),
             },
             custom_tools,
             enable_memory: static_policy.memory && enable_memory,
@@ -381,6 +386,7 @@ impl BehaviorToolConfig {
             ceiling_policy,
             static_policy,
             lsp_config,
+            lsp_action_timeout: timeouts.lsp_action,
         })
     }
 
@@ -598,6 +604,7 @@ impl BehaviorToolConfig {
                     diagnostics_on_edit: doc.diagnostics_on_edit.unwrap_or(false),
                     diagnostics_deduplicate: doc.diagnostics_deduplicate.unwrap_or(false),
                     idle_timeout: doc.idle_timeout(),
+                    action_timeout: self.lsp_action_timeout,
                 }
             }),
         }

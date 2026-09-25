@@ -14,15 +14,8 @@ target_ids?: Array<string> | null, spawn_enabled?: boolean | null, steering_enab
 default_await_mode?: string | null, allow_cross_principal?: boolean | null,
 /**
  * Time for a peer to claim a remote spawn, not its execution lifetime.
- * Current default 60s.
- */
-cross_principal_spawn_timeout_secs?: number | null,
-/**
- * Default observation wait for a background child; current default 30s.
+ * Current default 60s. `wait_subagent` has no timer of its own: it
+ * returns when the child finishes or the caller's request deadline passes.
  * Child execution lifetime remains owned by its request/inference settings.
  */
-wait_timeout_secs?: number | null,
-/**
- * Maximum requested observation wait; current default 600s. Does not cancel child.
- */
-max_wait_timeout_secs?: number | null, };
+cross_principal_spawn_timeout_secs?: number | null, };

@@ -99,6 +99,7 @@ fn sample_config(
         diagnostics_on_edit: false,
         diagnostics_deduplicate: false,
         idle_timeout: std::time::Duration::from_secs(300),
+        action_timeout: crate::tool_surface::BoundedTimeout::lsp_action(None, None),
     }
 }
 
