@@ -15,6 +15,8 @@ use crate::document_config::WriteToolDecl;
 
 mod input;
 
+pub(crate) use input::can_hold_canonical_count;
+
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
 #[derive(Debug)]

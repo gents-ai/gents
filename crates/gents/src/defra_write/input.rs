@@ -30,6 +30,37 @@ pub(super) fn parameters(schema: &str) -> Result<Value> {
     Ok(shape)
 }
 
+/// An output obligation's expected count is read from the durable arguments of
+/// a completed call, not from the stored document, and parsed by
+/// `graphql::canonical_positive_count`, which accepts a JSON number or its
+/// canonical decimal spelling. A field can carry such a count only when the
+/// argument schema generated for its type admits a number or a string.
+///
+/// `schema` is a GraphQL type spelling from either vocabulary that names one:
+/// `FieldKind::graphql_type_name`, as `BoundedWriteTool::field_types` resolves
+/// it, or `defra_query::schema::SchemaField::type_name`, as introspection
+/// reports it. They agree on every scalar; introspection reports a list as its
+/// `LIST` kind and a relation as the target collection's name, neither of which
+/// [`parameters`] accepts.
+///
+/// Admitting a type is not a claim that a count reaches the field. `DateTime`
+/// admits a string, but no all-digit string is RFC3339, so DefraDB rejects the
+/// mutation and no write completes. `JSON` admits any value, so the obligation
+/// can still fail at completion for the reason it would have without this rule.
+/// `Float32`/`Float64` carry a count only when the model emits a bare integer,
+/// since `as_u64` rejects a float-parsed `3.0`.
+pub(crate) fn can_hold_canonical_count(schema: &str) -> bool {
+    parameters(schema).is_ok_and(|shape| match shape.get("type") {
+        Some(Value::Array(kinds)) => kinds.iter().any(admits_count),
+        Some(kind) => admits_count(kind),
+        None => false,
+    })
+}
+
+fn admits_count(kind: &Value) -> bool {
+    matches!(kind.as_str(), Some("integer" | "number" | "string"))
+}
+
 pub(super) fn validate_input(
     schema: &str,
     required: bool,

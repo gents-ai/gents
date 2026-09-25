@@ -318,6 +318,86 @@ async fn validate_advertised_profiles(
         .await?;
         crate::config::advertised_model_for_profile(&backend, &profile, observation.as_ref())?;
     }
+    validate_output_obligation_count_fields(txn, plan).await
+}
+
+/// The runtime reads an obligation's expected count from the durable arguments
+/// of each completed write, not from the stored document, so whether a count it
+/// can parse could ever reach `expected_count_field` follows from that field's
+/// GraphQL type as `defra_query::schema` reports it;
+/// [`crate::defra_write::can_hold_canonical_count`] owns that question. A field
+/// it refuses would fail the obligation only at completion, after the work ran.
+/// The target collection's schema is observable here, inside the publishing
+/// transaction; the structural owner
+/// (`WriteToolDecl::output_obligation_is_well_formed`) has no schema access.
+async fn validate_output_obligation_count_fields(
+    txn: &ConfigApplyTxn<'_>,
+    plan: &DesiredStateApplyPlan,
+) -> Result<()> {
+    let mut introspected: BTreeMap<String, Option<BTreeMap<String, String>>> = BTreeMap::new();
+    for document in plan.documents() {
+        if document.collection != Collection::DatastoreToolSurface {
+            continue;
+        }
+        let surface: crate::document_config::DatastoreToolSurfaceDocument =
+            serde_json::from_value(document.update.clone())?;
+        let surface_id = surface.surface_id;
+        for entry in surface.entries.unwrap_or_default() {
+            let crate::document_config::SurfaceToolDecl::Create(decl) = entry else {
+                continue;
+            };
+            let Some(field) = decl
+                .output_obligation
+                .as_ref()
+                .and_then(|obligation| obligation.expected_count_field.as_deref())
+            else {
+                continue;
+            };
+            // A malformed collection name is the structural owner's diagnostic,
+            // not an introspection failure.
+            let Ok(query) = crate::defra_query::schema::introspection_query(&decl.collection)
+            else {
+                continue;
+            };
+            if !introspected.contains_key(&decl.collection) {
+                let response = txn.execute(&query).await?;
+                let fields = crate::defra_query::schema::parse_collection_schema(
+                    response.get("data"),
+                )
+                .map(|schema| {
+                    schema
+                        .fields
+                        .into_iter()
+                        .map(|field| (field.name, field.type_name))
+                        .collect::<BTreeMap<_, _>>()
+                });
+                introspected.insert(decl.collection.clone(), fields);
+            }
+            // Introspection cannot see a collection that does not exist yet,
+            // and publishing a surface ahead of its schema is legitimate.
+            // Nothing revalidates the obligation when that schema arrives, so a
+            // surface published in that order is never checked here. A package
+            // that installs the target collection's own schema takes this path
+            // in its preflight, because `ensure_package_schemas` runs after it;
+            // only the publishing transaction sees the installed schema.
+            let Some(fields) = introspected[&decl.collection].as_ref() else {
+                continue;
+            };
+            match fields.get(field).map(String::as_str) {
+                Some(reported) if crate::defra_write::can_hold_canonical_count(reported) => {}
+                Some(reported) => anyhow::bail!(
+                    "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} names a {reported} field of {}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the call argument",
+                    decl.tool_name,
+                    decl.collection,
+                ),
+                None => anyhow::bail!(
+                    "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} does not exist on {}",
+                    decl.tool_name,
+                    decl.collection,
+                ),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -607,6 +687,7 @@ pub async fn apply_desired_state_plan(
     plan: &DesiredStateApplyPlan,
 ) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
+    validate_output_obligation_count_fields(txn, plan).await?;
     let mut counts = DesiredStateApplyCounts::default();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;

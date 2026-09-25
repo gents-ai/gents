@@ -398,3 +398,45 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     assert!(super::input::literal("JSON", &json!([])).is_err());
     assert!(super::input::literal("JSON", &json!({"nested": [1, []]})).is_err());
 }
+
+#[test]
+fn can_hold_canonical_count_over_every_field_type_spelling() {
+    for schema in [
+        "Int",
+        "Int!",
+        "String",
+        "String!",
+        "ID",
+        "DateTime",
+        "DateTime!",
+        "Blob",
+        "Float32",
+        "Float64",
+        "Float64!",
+        "Float",
+        "JSON",
+        "JSON!",
+    ] {
+        assert!(
+            super::can_hold_canonical_count(schema),
+            "{schema} admits a number or a string"
+        );
+    }
+    for schema in [
+        "Boolean",
+        "Boolean!",
+        "[String]",
+        "[String!]",
+        "[Int]",
+        "LIST",
+        "NON_NULL",
+        "Object",
+        "ObligationOutcome",
+        "",
+    ] {
+        assert!(
+            !super::can_hold_canonical_count(schema),
+            "{schema} cannot carry a canonical count"
+        );
+    }
+}
