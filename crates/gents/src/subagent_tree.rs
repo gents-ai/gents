@@ -20,8 +20,8 @@ use serde::Deserialize;
 
 use crate::config_client::ConfigAccess;
 use crate::descendant_graph::{
-    resolve_descendant_graph, DescendantEdge, DescendantGraphAccess, DescendantQuery,
-    MAX_DESCENDANT_PAGE_LIMIT,
+    resolve_descendant_graph, resolve_principal_descendant_graph, DescendantEdge,
+    DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use crate::graphql::escape_graphql_string;
 
@@ -99,6 +99,7 @@ struct RootRequestEnvelope {
 pub async fn build_local_subagent_tree(
     node: Arc<EmbeddedNode>,
     root_request_id: &str,
+    agent_did: Option<&str>,
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTree> {
@@ -108,6 +109,7 @@ pub async fn build_local_subagent_tree(
             access: ConfigAccess::Local(node),
         }],
         root_request_id,
+        agent_did,
         include_terminal,
         max_depth,
     )
@@ -118,9 +120,16 @@ pub async fn build_local_subagent_tree(
 /// access is recorded in `partial_errors` (once) and skipped rather than
 /// failing the whole walk, so a live tree still renders when a peer
 /// deployment is unreachable.
+///
+/// With `agent_did`, the root is the request with this logical id owned by
+/// that principal on each access, and descendants are walked from that exact
+/// document; a request of another principal that reuses the id is never the
+/// root. Without it, a logical id that names more than one request fails
+/// that access instead of picking one.
 pub async fn build_subagent_tree(
     accesses: &[SubagentTreeAccess],
     root_request_id: &str,
+    agent_did: Option<&str>,
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTree> {
@@ -129,7 +138,7 @@ pub async fn build_subagent_tree(
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
 
     for (index, entry) in accesses.iter().enumerate() {
-        match fetch_root_request(&entry.access, root_request_id).await {
+        match fetch_root_request(&entry.access, root_request_id, agent_did).await {
             Ok(Some(root)) => {
                 let mut node = request_row_into_node(root);
                 node.resolved_via = entry.label.clone();
@@ -156,16 +165,18 @@ pub async fn build_subagent_tree(
         }
         let mut after = None;
         loop {
-            let page = match resolve_descendant_graph(
-                DescendantGraphAccess::Config(&entry.access),
-                &DescendantQuery {
-                    after: after.clone(),
-                    limit: MAX_DESCENDANT_PAGE_LIMIT,
-                    ..DescendantQuery::all(root_request_id)
-                },
-            )
-            .await
-            {
+            let query = DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(root_request_id)
+            };
+            let access = DescendantGraphAccess::Config(&entry.access);
+            let page = match match agent_did {
+                Some(agent_did) => {
+                    resolve_principal_descendant_graph(access, &query, agent_did).await
+                }
+                None => resolve_descendant_graph(access, &query).await,
+            } {
                 Ok(page) => page,
                 Err(error) => {
                     record_dead_access(
@@ -289,13 +300,24 @@ fn request_row_into_node(row: AgentRequestRow) -> SubagentTreeNode {
 async fn fetch_root_request(
     access: &ConfigAccess,
     root_request_id: &str,
+    agent_did: Option<&str>,
 ) -> Result<Option<AgentRequestRow>> {
     let escaped = escape_graphql_string(root_request_id);
+    let principal = agent_did
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+        .map(|did| {
+            format!(
+                r#", agent_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{escaped}" }}{principal} }},
+                limit: 2
             ) {{
                 request_id
                 session_id
@@ -311,6 +333,10 @@ async fn fetch_root_request(
     );
     let envelope: RootRequestEnvelope =
         execute_access_query(access, &query, "root request lookup").await?;
+    anyhow::ensure!(
+        envelope.requests.len() <= 1,
+        "root request {root_request_id} is ambiguous across AgentRequest documents"
+    );
     Ok(envelope.requests.into_iter().next())
 }
 

@@ -841,19 +841,18 @@ async fn list_subagent_tree_response(
     if root_request_id.is_empty() {
         anyhow::bail!("rootRequestId is required");
     }
-    if request
+    let agent_did = request
         .agent_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_none()
-        && core.selected_agent_did().is_none()
-    {
-        anyhow::bail!("no agent selected; pass agentDid explicitly");
-    }
+        .map(str::to_owned)
+        .or_else(|| core.selected_agent_did())
+        .context("no agent selected; pass agentDid explicitly")?;
     let tree = build_local_subagent_tree(
         core.node_arc(),
         root_request_id,
+        Some(&agent_did),
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )

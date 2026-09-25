@@ -83,6 +83,7 @@ pub(crate) async fn subagent_tree_handler(
     match load_subagent_tree_snapshot(
         &state.graphql,
         &root_request_id,
+        Some(state.agent_did.as_str()).filter(|did| !did.trim().is_empty()),
         include_terminal,
         max_depth,
     )
@@ -106,6 +107,7 @@ pub(crate) async fn subagent_tree_handler(
 pub(crate) async fn load_subagent_tree_snapshot(
     graphql: &str,
     root_request_id: &str,
+    agent_did: Option<&str>,
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTreeSnapshot> {
@@ -114,7 +116,14 @@ pub(crate) async fn load_subagent_tree_snapshot(
         label: None,
         access: ConfigAccess::Graphql(graphql.to_string()),
     }];
-    let tree = build_subagent_tree(&accesses, root_request_id, include_terminal, max_depth).await?;
+    let tree = build_subagent_tree(
+        &accesses,
+        root_request_id,
+        agent_did,
+        include_terminal,
+        max_depth,
+    )
+    .await?;
     if !tree.partial_errors.is_empty() {
         anyhow::bail!(tree.partial_errors.join("; "));
     }
@@ -533,7 +542,7 @@ mod tests {
     async fn tree_walks_cross_deployment_bridge_and_carries_await_mode_metadata(
     ) -> anyhow::Result<()> {
         let (graphql, queries) = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
-        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
+        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", None, false, 4).await?;
 
         assert_eq!(snapshot.root_request_id, "req-root");
         assert!(!snapshot.truncated, "shallow tree should not be truncated");
@@ -683,7 +692,7 @@ mod tests {
             canonical_messages_empty(),
         ]);
         let (graphql, _queries) = spawn_mock_graphql(responses).await?;
-        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", true, 1).await?;
+        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", None, true, 1).await?;
         assert!(snapshot.truncated, "max_depth=1 should set truncated");
         assert_eq!(snapshot.nodes.len(), 2);
         assert_eq!(snapshot.edges.len(), 1);
@@ -829,7 +838,7 @@ mod tests {
             canonical_messages_empty(),
         ]);
         let (graphql, _queries) = spawn_mock_graphql(responses).await?;
-        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
+        let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", None, false, 4).await?;
         let request_ids = snapshot
             .nodes
             .iter()

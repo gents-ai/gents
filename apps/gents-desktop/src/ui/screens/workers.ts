@@ -15,6 +15,7 @@ import type {
   SubagentTreeView,
 } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
+import { isLive } from "@/lib/live";
 
 export type WorkerState = {
   /* the child session, when the runtime told us which one */
@@ -38,29 +39,27 @@ const EMPTY: Workers = {
   loaded: false,
 };
 
-/* A transcript names at most this many lineage roots at once; the most
-   recent win. Each is one bridge call, so the bound is the call bound. */
+/* A transcript asks for at most this many lineage roots at once; the most
+   recent win. This bounds the bridge calls, not the size of each root's
+   graph walk. */
 export const MAX_LINEAGE_ROOTS = 16;
 
 const isWorker = (t: RenderedToolCallView) =>
   t.presentation.kind === "subagent" ||
   (t.presentation.kind === "process" && t.awaitMode === "background");
 
-/* The requests in this transcript that own worker rows, each with the
-   statuses of its rows: a root is asked again only when its own rows change.
-   A row that does not name its request (an older bridge) is attributed to
-   the session's latest request, as the transcript did before rows named it. */
+/* The requests in this transcript that own subagent rows, each with the
+   statuses of its rows. Only subagent rows have lineage edges, and a row
+   that names no request has no lineage root: it is shown without one. */
 export function lineageRoots(
   items: readonly RenderedTimelineItem[] | undefined,
-  latestRequestId: string | null,
 ): Map<string, string> {
   const statuses = new Map<string, string[]>();
   for (const item of items ?? []) {
     if (item.kind !== "toolGroup") continue;
     for (const tool of item.tools) {
-      if (!isWorker(tool)) continue;
-      const root = tool.requestId ?? latestRequestId;
-      if (!root) continue;
+      if (tool.presentation.kind !== "subagent" || !tool.requestId) continue;
+      const root = tool.requestId;
       const seen = statuses.get(root);
       /* re-inserting keeps the map in order of each root's latest row */
       statuses.delete(root);
@@ -71,9 +70,16 @@ export function lineageRoots(
   return new Map(recent.map(([root, s]) => [root, s.join()]));
 }
 
+/* A tree whose nodes or edges are still in flight can change without the
+   parent's rows changing: a background spawn row settles when its receipt
+   arrives, long before the child finishes. */
+export const treeInFlight = (tree: SubagentTreeView) =>
+  tree.nodes.some((n) => isLive(n.lifecycleState)) ||
+  tree.edges.some((e) => isLive(e.lifecycleState));
+
 export function useWorkers(shell: Shell): Workers {
   const session = shell.selectedSession;
-  const latestRequestId = session?.latestRequestId ?? null;
+  const sessionId = session?.sessionId ?? null;
   const agentDid = shell.selectedDeployment?.agentDid ?? null;
   const sessions = shell.selectedDeployment?.sessions;
   const [trees, setTrees] = useState<ReadonlyMap<string, SubagentTreeView>>(
@@ -86,63 +92,87 @@ export function useWorkers(shell: Shell): Workers {
   const cue = session?.timelineItems
     .flatMap((i) => (i.kind === "toolGroup" ? i.tools.map((t) => t.statusKind) : []))
     .join();
+  /* the session list changes when a child session on this or another
+     deployment moves; its value, not its identity, is the cue */
+  const sessionsCue = (sessions ?? [])
+    .map((s) => `${s.sessionId}:${s.turnState ?? ""}:${s.updatedAt ?? ""}`)
+    .join();
   const roots = useMemo(
-    () => lineageRoots(session?.timelineItems, latestRequestId),
-    [session?.timelineItems, latestRequestId],
+    () => lineageRoots(session?.timelineItems),
+    [session?.timelineItems],
   );
-  /* only a transcript with worker rows needs the lineage and the operations
-     snapshot; a plain session never asks the bridge for them */
-  const hasWorkers =
-    session?.timelineItems.some(
-      (i) => i.kind === "toolGroup" && i.tools.some(isWorker),
-    ) ?? false;
-  const rootsKey = JSON.stringify([...roots]);
-  /* per root, the row statuses its current tree was asked for; a root whose
-     rows are unchanged keeps its tree */
+  const rootsKey = useMemo(
+    () => [...roots].map((entry) => entry.join("\u0001")).join("\u0002"),
+    [roots],
+  );
+  const rootsRef = useRef(roots);
+  rootsRef.current = roots;
+  /* subagent and background process rows both have operations facts; only
+     subagent rows have lineage */
+  const hasWorkers = useMemo(
+    () =>
+      session?.timelineItems.some(
+        (i) => i.kind === "toolGroup" && i.tools.some(isWorker),
+      ) ?? false,
+    [session?.timelineItems],
+  );
+  /* trees belong to one agent's session */
+  const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}`;
+  const scoped = useRef(scope);
+  /* per root: the row statuses its tree was asked for, and the ask in flight */
   const asked = useRef(new Map<string, string>());
-  const askedFor = useRef(agentDid);
+  const pending = useRef(new Map<string, number>());
+  const generation = useRef(0);
+  const treesRef = useRef(trees);
+  treesRef.current = trees;
   useEffect(() => {
-    if (askedFor.current !== agentDid) {
-      askedFor.current = agentDid;
+    if (scoped.current !== scope) {
+      scoped.current = scope;
       asked.current = new Map();
+      pending.current = new Map();
+      treesRef.current = new Map();
       setTrees(new Map());
     }
     if (!agentDid) return;
-    const wanted = new Map(JSON.parse(rootsKey) as [string, string][]);
-    const current = (root: string, statuses: string) =>
-      askedFor.current === agentDid && asked.current.get(root) === statuses;
+    const wanted = rootsRef.current;
     for (const root of [...asked.current.keys()]) {
-      if (!wanted.has(root)) asked.current.delete(root);
+      if (!wanted.has(root)) {
+        asked.current.delete(root);
+        pending.current.delete(root);
+      }
     }
     setTrees((held) => {
       const kept = [...held].filter(([root]) => wanted.has(root));
       return kept.length === held.size ? held : new Map(kept);
     });
     for (const [root, statuses] of wanted) {
-      if (asked.current.get(root) === statuses) continue;
+      if (pending.current.has(root)) continue;
+      const held = treesRef.current.get(root);
+      /* unchanged rows keep a settled tree; a tree still in flight is asked
+         again on the next transcript or session-list change */
+      if (asked.current.get(root) === statuses && held && !treeInFlight(held)) continue;
+      const ask = ++generation.current;
       asked.current.set(root, statuses);
+      pending.current.set(root, ask);
+      const settle = () => {
+        if (pending.current.get(root) !== ask) return false;
+        pending.current.delete(root);
+        return true;
+      };
       /* the transcript is history: finished workers stay in the lineage */
       void shell.api
         .listSubagentTree({ rootRequestId: root, agentDid, includeTerminal: true })
         .then(
           (tree) => {
-            if (current(root, statuses))
-              setTrees((held) => new Map(held).set(root, tree));
+            if (settle()) setTrees((prev) => new Map(prev).set(root, tree));
           },
           () => {
-            if (!current(root, statuses)) return;
-            /* asked again on the next change to this root's rows */
-            asked.current.delete(root);
-            setTrees((held) => {
-              if (!held.has(root)) return held;
-              const next = new Map(held);
-              next.delete(root);
-              return next;
-            });
+            /* the last known tree stays; asked again on the next change */
+            if (settle() && !treesRef.current.has(root)) asked.current.delete(root);
           },
         );
     }
-  }, [shell.api, agentDid, rootsKey]);
+  }, [shell.api, agentDid, scope, rootsKey, cue, sessionsCue]);
   useEffect(() => {
     if (!hasWorkers || !agentDid) {
       setOps(null);

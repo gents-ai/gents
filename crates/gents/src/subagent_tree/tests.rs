@@ -419,7 +419,7 @@ async fn tree_aggregates_labeled_accesses_and_records_partial_error_for_dead_pee
         },
     ];
 
-    let tree = build_subagent_tree(&accesses, "req-root", false, 4).await?;
+    let tree = build_subagent_tree(&accesses, "req-root", None, false, 4).await?;
 
     assert_eq!(
         tree.nodes.len(),
@@ -515,8 +515,14 @@ async fn build_local_subagent_tree_resolves_the_root_from_the_embedded_node() ->
     )
     .await;
 
-    let tree =
-        build_local_subagent_tree(node, "req-root", true, DEFAULT_SUBAGENT_TREE_MAX_DEPTH).await?;
+    let tree = build_local_subagent_tree(
+        node,
+        "req-root",
+        None,
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
 
     assert_eq!(tree.root_request_id, "req-root");
     assert!(tree.partial_errors.is_empty());
@@ -529,5 +535,68 @@ async fn build_local_subagent_tree_resolves_the_root_from_the_embedded_node() ->
     assert_eq!(root.behavior_id.as_deref(), Some("amy-general"));
     assert_eq!(root.resolved_via, None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn subagent_tree_root_is_bound_to_the_requested_principal() -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-amy",
+        "did:test:amy",
+        "amy-general",
+    )
+    .await;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-bob",
+        "did:test:bob",
+        "bob-general",
+    )
+    .await;
+
+    let amy = build_local_subagent_tree(
+        node.clone(),
+        "req-root",
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(amy.partial_errors.is_empty(), "{:?}", amy.partial_errors);
+    assert_eq!(amy.nodes.len(), 1);
+    assert_eq!(amy.nodes[0].agent_did.as_deref(), Some("did:test:amy"));
+    assert_eq!(amy.nodes[0].session_id.as_deref(), Some("sess-amy"));
+
+    let carol = build_local_subagent_tree(
+        node.clone(),
+        "req-root",
+        Some("did:test:carol"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        carol.nodes.is_empty(),
+        "another principal's request with the same id is never the root: {:?}",
+        carol.nodes
+    );
+
+    let unscoped = build_local_subagent_tree(
+        node,
+        "req-root",
+        None,
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        unscoped.nodes.is_empty() && !unscoped.partial_errors.is_empty(),
+        "an ambiguous logical id fails closed instead of picking one: {unscoped:?}"
+    );
     Ok(())
 }

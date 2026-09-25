@@ -75,7 +75,10 @@ const edge = (
 
 /* the runtime's lineage: each root's children, with the handler's rule that
    terminal children are left out unless the caller asks for them */
-function lineage(children: Record<string, [string, string][]>) {
+function lineage(
+  children: Record<string, [string, string][]>,
+  rootState = "processing",
+) {
   return vi.fn(
     async (request: DesktopListSubagentTreeRequest): Promise<SubagentTreeView> => {
       const root = request.rootRequestId;
@@ -84,7 +87,7 @@ function lineage(children: Record<string, [string, string][]>) {
       );
       return {
         rootRequestId: root,
-        nodes: [node(root, "processing"), ...kept.map(([c, s]) => node(c, s))],
+        nodes: [node(root, rootState), ...kept.map(([c, s]) => node(c, s))],
         edges: kept.map(([c, s]) => edge(root, c, s)),
         truncated: false,
         partialErrors: [],
@@ -97,11 +100,12 @@ function shellFor(
   api: Shell["api"],
   latestRequestId: string,
   timelineItems: RenderedTimelineItem[],
+  { sessionId = "parent-session", sessions = [] as unknown[] } = {},
 ): Shell {
   return {
     api,
-    selectedSession: { sessionId: "parent-session", latestRequestId, timelineItems },
-    selectedDeployment: { agentDid: AGENT, sessions: [] },
+    selectedSession: { sessionId, latestRequestId, timelineItems },
+    selectedDeployment: { agentDid: AGENT, sessions },
   } as unknown as Shell;
 }
 
@@ -160,10 +164,13 @@ describe("transcript worker lineage", () => {
   });
 
   it("keeps workers from an earlier request after a new request becomes latest", async () => {
-    const tree = lineage({
-      "req-1": [["child-early", "completed"]],
-      "req-2": [["child-late", "processing"]],
-    });
+    const tree = lineage(
+      {
+        "req-1": [["child-early", "completed"]],
+        "req-2": [["child-late", "processing"]],
+      },
+      "completed",
+    );
     const api = apiWith(tree);
     const first = [group(spawn("req-1", "child-early"))];
     const { result, rerender } = renderHook(
@@ -186,17 +193,21 @@ describe("transcript worker lineage", () => {
     const early = result.current.byChildRequest("child-early");
     expect(early?.node?.lifecycleState).toBe("completed");
     expect(early?.edge?.parentRequestId).toBe("req-1");
-    /* the earlier root's rows did not change, so it was not asked again */
+    /* the earlier root's rows did not change and its tree is settled, so it
+       was not asked again */
     const roots = tree.mock.calls.map(([r]) => r.rootRequestId);
     expect(roots.filter((r) => r === "req-1")).toHaveLength(1);
     expect(roots.filter((r) => r === "req-2")).toHaveLength(1);
   });
 
-  it("asks a root again only when its own rows change", async () => {
-    const tree = lineage({
-      "req-1": [["child-a", "processing"]],
-      "req-2": [["child-b", "processing"]],
-    });
+  it("asks a root with a settled tree again only when its own rows change", async () => {
+    const tree = lineage(
+      {
+        "req-1": [["child-a", "completed"]],
+        "req-2": [["child-b", "completed"]],
+      },
+      "completed",
+    );
     const api = apiWith(tree);
     const a = (status: string) => group(spawn("req-1", "child-a", status));
     const b = group(spawn("req-2", "child-b", "running"));
@@ -213,26 +224,100 @@ describe("transcript worker lineage", () => {
   });
 });
 
-describe("lineage roots", () => {
-  it("names each worker-owning request once, in order of its latest row", () => {
-    const roots = lineageRoots(
-      [group(spawn("req-1", "a"), spawn("req-2", "b")), group(spawn("req-1", "c"))],
-      "req-9",
+describe("worker lineage freshness", () => {
+  it("does not keep another session's tree for the same root and rows", async () => {
+    const tree = lineage({ "req-1": [["child-a", "completed"]] }, "completed");
+    const api = apiWith(tree);
+    const items = [group(spawn("req-1", "child-a"))];
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string }) =>
+        useWorkers(shellFor(api, "req-1", items, { sessionId })),
+      { initialProps: { sessionId: "session-a" } },
     );
+    await waitFor(() =>
+      expect(result.current.byChildRequest("child-a")?.node).toBeTruthy(),
+    );
+    tree.mockImplementationOnce(async () => ({
+      rootRequestId: "req-1",
+      nodes: [node("req-1", "completed"), node("child-b", "completed")],
+      edges: [edge("req-1", "child-b", "completed")],
+      truncated: false,
+      partialErrors: [],
+    }));
+    rerender({ sessionId: "session-b" });
+    await waitFor(() =>
+      expect(result.current.byChildRequest("child-b")?.node).toBeTruthy(),
+    );
+    expect(tree).toHaveBeenCalledTimes(2);
+    expect(result.current.byChildRequest("child-a")?.node ?? null).toBeNull();
+  });
+
+  it("refreshes a child that finishes after its spawn row settled, and keeps the last tree on a failed ask", async () => {
+    const children: Record<string, [string, string][]> = {
+      "req-1": [["child-late", "processing"]],
+    };
+    const tree = lineage(children, "completed");
+    const api = apiWith(tree);
+    const items = [group(spawn("req-1", "child-late", "success"))];
+    const { result, rerender } = renderHook(
+      ({ sessions }: { sessions: unknown[] }) =>
+        useWorkers(shellFor(api, "req-1", items, { sessions })),
+      { initialProps: { sessions: [] as unknown[] } },
+    );
+    await waitFor(() =>
+      expect(result.current.byChildRequest("child-late")?.node?.lifecycleState).toBe(
+        "processing",
+      ),
+    );
+
+    tree.mockRejectedValueOnce(new Error("peer unreachable"));
+    rerender({ sessions: [{ sessionId: "other", turnState: "running" }] });
+    await waitFor(() => expect(tree).toHaveBeenCalledTimes(2));
+    expect(result.current.byChildRequest("child-late")?.node?.lifecycleState).toBe(
+      "processing",
+    );
+
+    children["req-1"] = [["child-late", "completed"]];
+    rerender({ sessions: [{ sessionId: "other", turnState: "completed" }] });
+    await waitFor(() =>
+      expect(result.current.byChildRequest("child-late")?.node?.lifecycleState).toBe(
+        "completed",
+      ),
+    );
+
+    rerender({ sessions: [{ sessionId: "other", turnState: "idle" }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(tree).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("lineage roots", () => {
+  it("names each subagent-owning request once, in order of its latest row", () => {
+    const roots = lineageRoots([
+      group(spawn("req-1", "a"), spawn("req-2", "b")),
+      group(spawn("req-1", "c")),
+    ]);
     expect([...roots.keys()]).toEqual(["req-2", "req-1"]);
   });
 
-  it("attributes a row that names no request to the latest request", () => {
-    expect([...lineageRoots([group(spawn(null, "a"))], "req-9").keys()]).toEqual([
-      "req-9",
-    ]);
+  it("gives a row that names no request no lineage root", () => {
+    expect([...lineageRoots([group(spawn(null, "a"))]).keys()]).toEqual([]);
+  });
+
+  it("does not treat background process rows as lineage roots", () => {
+    const process = {
+      ...spawn("req-1", "p"),
+      toolName: "bash",
+      presentation: { kind: "process" },
+    } as unknown as RenderedToolCallView;
+    expect([...lineageRoots([group(process)]).keys()]).toEqual([]);
   });
 
   it("bounds the roots to the most recent requests", () => {
     const items = Array.from({ length: MAX_LINEAGE_ROOTS + 4 }, (_, i) =>
       group(spawn(`req-${i}`, `child-${i}`)),
     );
-    const roots = [...lineageRoots(items, null).keys()];
+    const roots = [...lineageRoots(items).keys()];
     expect(roots).toHaveLength(MAX_LINEAGE_ROOTS);
     expect(roots[0]).toBe("req-4");
     expect(roots.at(-1)).toBe(`req-${MAX_LINEAGE_ROOTS + 3}`);

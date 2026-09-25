@@ -322,11 +322,33 @@ pub async fn resolve_descendant_graph(
     access: DescendantGraphAccess<'_>,
     query: &DescendantQuery,
 ) -> Result<DescendantPage> {
+    resolve_root_descendant_graph(access, query, None).await
+}
+
+/// [`resolve_descendant_graph`] with the root bound to one principal: the root
+/// is the unique request with this logical id owned by `agent_did`, so another
+/// principal's request reusing the id is never walked. Descendants then follow
+/// that root's physical document identity as usual.
+pub async fn resolve_principal_descendant_graph(
+    access: DescendantGraphAccess<'_>,
+    query: &DescendantQuery,
+    agent_did: &str,
+) -> Result<DescendantPage> {
+    resolve_root_descendant_graph(access, query, Some(agent_did)).await
+}
+
+async fn resolve_root_descendant_graph(
+    access: DescendantGraphAccess<'_>,
+    query: &DescendantQuery,
+    agent_did: Option<&str>,
+) -> Result<DescendantPage> {
     let root_id = nonempty(Some(query.root_request_id.as_str()))
         .context("descendant graph root_request_id is required")?;
-    let root = load_unique_request(&access, root_id)
-        .await?
-        .with_context(|| format!("root AgentRequest {root_id} not found"))?;
+    let root = match agent_did {
+        None => load_unique_request(&access, root_id).await?,
+        Some(agent_did) => load_unique_principal_request(&access, root_id, agent_did).await?,
+    }
+    .with_context(|| format!("root AgentRequest {root_id} not found"))?;
     let edges = collect_descendant_edges(&access, root, query.scope).await?;
     page_descendant_edges(query, edges)
 }
@@ -1111,6 +1133,30 @@ async fn load_unique_request(
         1 => Ok(rows.into_iter().next()),
         count => anyhow::bail!(
             "request_id {request_id} is ambiguous across {count} AgentRequest documents"
+        ),
+    }
+}
+
+async fn load_unique_principal_request(
+    access: &DescendantGraphAccess<'_>,
+    request_id: &str,
+    agent_did: &str,
+) -> Result<Option<AgentRequestRow>> {
+    let agent_did = nonempty(Some(agent_did)).context("principal agent_did is required")?;
+    let rows = load_requests_filtered(
+        access,
+        format!(
+            r#"request_id:{{_eq:"{}"}}, agent_did:{{_eq:"{}"}}"#,
+            escape_graphql_string(request_id),
+            escape_graphql_string(agent_did)
+        ),
+    )
+    .await?;
+    match rows.len() {
+        0 => Ok(None),
+        1 => Ok(rows.into_iter().next()),
+        count => anyhow::bail!(
+            "request_id {request_id} is ambiguous across {count} AgentRequest documents of {agent_did}"
         ),
     }
 }

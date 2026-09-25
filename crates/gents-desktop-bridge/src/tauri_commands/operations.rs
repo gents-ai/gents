@@ -223,6 +223,14 @@ pub async fn desktop_list_subagent_tree(
     }
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
+    let agent_did = request
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| core.selected_agent_did())
+        .ok_or_else(|| BridgeError::untyped("no agent selected; pass agentDid explicitly"))?;
 
     let mut accesses = vec![SubagentTreeAccess {
         label: None,
@@ -246,6 +254,7 @@ pub async fn desktop_list_subagent_tree(
     let tree = build_subagent_tree(
         &accesses,
         root_request_id,
+        Some(&agent_did),
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )
