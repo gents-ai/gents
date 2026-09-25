@@ -1006,9 +1006,11 @@ async fn retire_incompatible_home<R: Runtime>(
         HomeResetDisposition::Delete => None,
     };
 
-    // The store lock every runtime takes while it has this home's store
-    // open; held (and left in place) until the entries are retired, so no
-    // runtime of any version can open the store meanwhile.
+    // The store lock this version's runtime and `init` take before opening
+    // or creating this home's store. It is taken whether or not the store
+    // exists and held (never moved) until the entries are retired, so neither
+    // can open or create the store meanwhile. Older runtimes do not take it;
+    // the service stop and endpoint check above cover them.
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
             // The service definition names this home; a fresh setup installs
@@ -1019,14 +1021,7 @@ async fn retire_incompatible_home<R: Runtime>(
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
             ensure_home_not_served(home).await?;
-            let data = gents::home::default_data_dir(home);
-            if present(&data)? {
-                Some(gents::home::lock_store(home, &data).map_err(|error| {
-                    BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}"))
-                })?)
-            } else {
-                None
-            }
+            Some(lock_home_for_retirement(home)?)
         }
         None => None,
     };
@@ -1207,6 +1202,11 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
     let parent = std::fs::canonicalize(key.parent()?).ok()?;
     let name = key.file_name()?;
     (parent == keys).then(|| keys.join(name))
+}
+
+fn lock_home_for_retirement(home: &Path) -> Result<gents::home::StoreLock, BridgeError> {
+    gents::home::lock_home_store(home)
+        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}")))
 }
 
 fn is_store_lock(path: &Path) -> bool {
@@ -3999,6 +3999,73 @@ mod tests {
             .retired_paths
             .iter()
             .any(|path| path.ends_with("data.lock")));
+    }
+
+    /// A home refused only for an insecure key may have no store. The reset
+    /// still holds the home's store lock, so an opener that creates the
+    /// store (init or serve taking `lock_store`) cannot run while `init.json`
+    /// and `keys/` are retired, and a store it creates afterwards is not.
+    #[tokio::test]
+    async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
+        use std::sync::Arc;
+        let temp = tempfile::tempdir().unwrap();
+        let temp = std::fs::canonicalize(temp.path()).unwrap();
+        let (home, desktop) = dirty_home(&temp);
+        std::fs::remove_dir_all(home.join("data")).unwrap();
+        let refused = refused_runtime_store(
+            &home,
+            Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey),
+        );
+
+        let lock = lock_home_for_retirement(&home).unwrap();
+        let plan = plan_home_reset(
+            Some(&home),
+            Some(refused),
+            None,
+            &desktop,
+            not_the_user_home(),
+        )
+        .unwrap();
+        let preview = plan.preview();
+        assert!(!preview
+            .planned_paths
+            .iter()
+            .any(|path| path.ends_with("/data")));
+
+        // An opener races the retirement: it creates the store and takes the
+        // store lock, as `gents init` and `gents server` do.
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let opener = {
+            let barrier = Arc::clone(&barrier);
+            let home = home.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                std::fs::create_dir_all(home.join("data")).unwrap();
+                gents::home::lock_store(&home, &home.join("data")).is_ok()
+            })
+        };
+        barrier.wait().await;
+        let opened = opener.await.unwrap();
+        let reset = plan
+            .retire(
+                HomeResetDisposition::Archive,
+                Some(&plan.backup_path("20260924T000000.000Z").unwrap()),
+            )
+            .unwrap();
+
+        assert!(!opened, "the opener met the reset's lock");
+        assert!(!reset
+            .retired_paths
+            .iter()
+            .any(|path| path.ends_with("data.lock") || path.ends_with("/data")));
+        assert!(!home.join("init.json").exists());
+        assert!(!home.join("keys").exists());
+        assert!(
+            home.join("data").is_dir(),
+            "a store created under the lock is not retired"
+        );
+        drop(lock);
+        assert!(gents::home::lock_store(&home, &home.join("data")).is_ok());
     }
 
     #[test]

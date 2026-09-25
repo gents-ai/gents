@@ -58,6 +58,9 @@ pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 /// these entries through this module, and retiring a home (after an upgrade
 /// that cannot open it) moves or deletes exactly these names; anything else
 /// in the home is left in place. A new top-level entry belongs here first.
+///
+/// The test `runtime_writers_name_home_entries_only_from_the_inventory` is a
+/// syntactic ratchet over writers, not complete enforcement (see its docs).
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
@@ -95,8 +98,6 @@ impl StoreLock {
 /// so every path that aliases the store (symlinks, `.`) takes the same lock.
 /// It records the holder's process id. `data_dir` must exist.
 pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
-    use std::io::{Read as _, Seek as _, Write as _};
-
     let canonical = fs::canonicalize(data_dir)
         .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
     let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
@@ -105,7 +106,38 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
             canonical.display()
         );
     };
-    let path = parent.join(format!("{}.lock", name.to_string_lossy()));
+    lock_path(
+        home_dir,
+        parent.join(format!("{}.lock", name.to_string_lossy())),
+    )
+}
+
+/// Takes the store lock of a home's default data directory whether or not
+/// that directory exists yet, without creating it. With the directory
+/// present this is [`lock_store`]; without it, the lock sits where
+/// [`lock_store`] will look once the directory is created under the
+/// canonical home, so a runtime or `init` that creates the store afterwards
+/// is excluded by the same lock.
+pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
+    let data_dir = default_data_dir(home_dir);
+    match fs::symlink_metadata(&data_dir) {
+        Ok(_) => lock_store(home_dir, &data_dir),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The lock file is deliberately not a runtime home entry: a
+            // reset leaves it in place while held.
+            let lock_dir = fs::canonicalize(home_dir)
+                .with_context(|| format!("resolving home {}", home_dir.display()))?;
+            lock_path(home_dir, lock_dir.join(format!("{DATA_DIR_NAME}.lock")))
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("inspecting data directory {}", data_dir.display()))
+        }
+    }
+}
+
+fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
+    use std::io::{Read as _, Seek as _, Write as _};
+
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     // Never follow a planted symlink: truncating below would clobber its
@@ -560,6 +592,30 @@ mod tests {
     }
 
     #[test]
+    fn a_home_lock_without_a_store_excludes_the_store_created_later() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join(".gents");
+        fs::create_dir_all(&home).unwrap();
+        let held = lock_home_store(&home).unwrap();
+        assert!(
+            !default_data_dir(&home).exists(),
+            "locking creates no store"
+        );
+
+        fs::create_dir(default_data_dir(&home)).unwrap();
+        assert!(
+            lock_store(&home, &default_data_dir(&home)).is_err(),
+            "an opener that creates the store meets the same lock"
+        );
+        assert_eq!(
+            held.path(),
+            fs::canonicalize(&home).unwrap().join("data.lock")
+        );
+        drop(held);
+        lock_store(&home, &default_data_dir(&home)).unwrap();
+    }
+
+    #[test]
     fn home_entries_own_only_the_runtime_inventory() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join(".gents");
@@ -644,11 +700,15 @@ mod tests {
         }
     }
 
-    /// Every top-level name a runtime writes in its home is named through
-    /// this module, so retiring a home cannot miss one. Scans every crate's
-    /// production sources for joins onto a home path: a literal must be in
-    /// the inventory, a constant must resolve to an inventory name, and a
-    /// computed (`format!`) top-level name is refused outright.
+    /// A syntactic ratchet, not complete writer enforcement: it scans every
+    /// crate's production sources line by line for `.join(...)` onto the
+    /// receiver names `home`, `home_dir`, `agent_home`, `gents_home` and
+    /// `home_path`, stopping at a file's first `#[cfg(test)]`. There, a
+    /// literal must be in the inventory, a constant (resolved by unqualified
+    /// name, so duplicate names resolve by directory order) must name an
+    /// inventory entry, and a computed (`format!`) name is refused. Joins
+    /// split across lines or onto other receiver names are not seen, so it
+    /// catches the common ways a new top-level entry appears, not all.
     #[test]
     fn runtime_writers_name_home_entries_only_from_the_inventory() {
         /// Crates whose `home` is not a Gents home (a fixture plugin's own
