@@ -29,7 +29,7 @@ function Entry({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const live = tool.statusKind === "running" || tool.statusKind === "held";
+  const live = tool.statusKind === "running";
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2.5 py-2 text-left text-sm">
@@ -41,11 +41,6 @@ function Entry({
           withIcon
           className={cn("min-w-0 flex-1", live && "font-medium")}
         />
-        {tool.statusKind === "held" && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            awaiting approval
-          </span>
-        )}
         {tool.statusKind === "cancelled" && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             canceled

@@ -106,7 +106,7 @@ import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 const stepStatus = (kind: string): ToolStepStatus =>
   kind === "completed" || kind === "failed" || kind === "cancelled" || kind === "error"
     ? "done"
-    : kind === "running" || kind === "held"
+    : kind === "running"
       ? "running"
       : "pending";
 
@@ -544,9 +544,7 @@ function Step({ tool, workers }: { tool: RenderedToolCallView; workers: Workers 
       icon={<ToolIcon tool={tool} />}
       status={stepStatus(tool.statusKind)}
     >
-      {tool.statusKind !== "running" && tool.statusKind !== "held" ? (
-        <ToolBody tool={tool} />
-      ) : undefined}
+      {tool.statusKind !== "running" ? <ToolBody tool={tool} /> : undefined}
     </ToolStep>
   );
 }
