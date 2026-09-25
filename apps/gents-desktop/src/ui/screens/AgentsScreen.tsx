@@ -40,6 +40,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
 import { inferenceIsConfigured, isLocalAgent } from "@/lib/firstRun";
+import type { ManagedServerStatus } from "@source-inc/gents-desktop-client";
+import { observeManagedServerOperation } from "../../lib/managedServerStartup";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
@@ -320,7 +322,10 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   );
 }
 
-/* Add a local agent (desktop) or enrol with a remote server. */
+/* Reconnect this computer's local agent, or enrol with a remote server.
+   A desktop runs one managed local agent home, and provisioning never
+   renames an initialized home, so this dialog does not offer to create a
+   second, differently named local agent. */
 function AddAgentDialog({
   shell,
   open,
@@ -335,43 +340,69 @@ function AddAgentDialog({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
-  const [name, setName] = useState("Forge");
   const [busy, setBusy] = useState(false);
-  const [localAuthorityReviewed, setLocalAuthorityReviewed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [localStatus, setLocalStatus] = useState<ManagedServerStatus | null>(null);
+  const bootstrap = shell.snapshot?.bootstrap;
+  const localName =
+    localStatus?.agentName?.trim() || bootstrap?.initAgentName?.trim() || null;
+  const localDid = localStatus?.agentDid ?? bootstrap?.initAgentDid ?? null;
+  const localListed = shell.deployments.some((deployment) =>
+    isLocalAgent(deployment, localDid),
+  );
+  const localReviewed = Boolean(localStatus?.effectiveToolCeiling);
+  const localAvailable = localReviewed && localName !== null && !localListed;
   useEffect(() => {
-    if (!open || !allowLocal) return;
+    if (!open) return;
+    setError(null);
+    if (!allowLocal) return;
     const pending = shell.api.managedServerStatus?.();
-    if (!pending) return;
-    void pending.then(
-      (status) => {
-        const reviewed = Boolean(status.effectiveToolCeiling);
-        setLocalAuthorityReviewed(reviewed);
-        if (!reviewed) setWhere("remote");
-      },
-      () => {
-        setLocalAuthorityReviewed(false);
-        setWhere("remote");
-      },
-    );
+    if (!pending) {
+      setWhere("remote");
+      return;
+    }
+    void pending.then(setLocalStatus, () => {
+      setLocalStatus(null);
+      setWhere("remote");
+    });
   }, [allowLocal, open, shell.api]);
-  const ready =
-    where === "local" ? localAuthorityReviewed && /\S/.test(name) : /\S/.test(address);
+  useEffect(() => {
+    if (localStatus && !localAvailable) setWhere("remote");
+  }, [localStatus, localAvailable]);
+  const ready = where === "local" ? localAvailable : /\S/.test(address);
+  const localHint = !localReviewed
+    ? "Complete local agent setup to review host access first"
+    : localListed
+      ? `${localName ?? "The local agent"} already runs on this computer. Each desktop runs one local agent.`
+      : `Reconnect ${localName}, the agent that runs on this computer`;
   const submit = async () => {
     setBusy(true);
+    setError(null);
     try {
       if (where === "local") {
-        const agentName = name.trim() || "Local Agent";
-        const status = await shell.api.managedServerStatus?.();
-        if (!status?.effectiveToolCeiling) {
+        if (!localName)
+          throw new Error("This computer has no local agent to reconnect.");
+        const start = shell.api.startManagedServer;
+        const status = start
+          ? await observeManagedServerOperation(
+              shell.api,
+              () => start(localName),
+              () => {},
+            )
+          : null;
+        const name = status?.agentName?.trim() || localName;
+        const summary = await shell.onInitLocalRuntime(name);
+        const snapshot = await shell.api.fetchDesktopSnapshot();
+        const listed = snapshot.client?.deployments.some(
+          (deployment) => deployment.agentDid === summary.agentDid,
+        );
+        if (!listed) {
           throw new Error(
-            "Complete local agent setup to review host access before adding another local agent.",
+            `${name} started, but it does not appear in the agent list. Try again.`,
           );
         }
-        if (shell.api.startManagedServer) {
-          await shell.api.startManagedServer(agentName);
-        }
-        await shell.onInitLocalRuntime(agentName);
-        toast("Local agent created");
+        await shell.refreshSnapshot();
+        toast(`${name} reconnected`);
       } else {
         const r = await shell.api.requestStatusEnrollment(address.trim());
         await shell.refreshSnapshot();
@@ -380,10 +411,11 @@ function AddAgentDialog({
       setAddress("");
       onClose();
     } catch (e) {
-      toast(
+      const reason = e instanceof Error ? e.message : String(e);
+      setError(
         where === "local"
-          ? `Couldn't create agent: ${String(e)}`
-          : `Couldn't request enrolment: ${String(e)}`,
+          ? `Couldn't reconnect the local agent: ${reason}`
+          : `Couldn't request enrolment: ${reason}`,
       );
     } finally {
       setBusy(false);
@@ -410,7 +442,7 @@ function AddAgentDialog({
               type="button"
               role="radio"
               aria-checked={where === "local"}
-              disabled={!localAuthorityReviewed}
+              disabled={!localAvailable}
               onClick={() => setWhere("local")}
               className={cn(
                 "flex w-full items-center gap-3 rounded-2xl border bg-raised px-4 py-3 text-left",
@@ -422,11 +454,7 @@ function AddAgentDialog({
               <Server className="size-4 shrink-0" />
               <span>
                 <span className="block text-sm font-medium">Local agent</span>
-                <span className="block text-xs text-muted-foreground">
-                  {localAuthorityReviewed
-                    ? "Create one with your reviewed host access"
-                    : "Complete local agent setup to review host access first"}
-                </span>
+                <span className="block text-xs text-muted-foreground">{localHint}</span>
               </span>
             </button>
             <button
@@ -459,19 +487,10 @@ function AddAgentDialog({
           }}
         >
           {where === "local" ? (
-            <>
-              <label htmlFor="local-agent-name" className="text-sm">
-                Name
-              </label>
-              <Input
-                id="local-agent-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Forge"
-                disabled={busy}
-                autoFocus
-              />
-            </>
+            <p className="text-sm text-muted-foreground">
+              Starts {localName} if it is stopped and adds it back to this desktop. Its
+              identity, data and reviewed host access are unchanged.
+            </p>
           ) : (
             <>
               <label htmlFor="enrol-address" className="text-sm">
@@ -490,6 +509,11 @@ function AddAgentDialog({
             </>
           )}
         </form>
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
@@ -503,7 +527,7 @@ function AddAgentDialog({
             }
           >
             {busy ? <Spinner /> : null}{" "}
-            {busy ? "Working…" : where === "local" ? "Create" : "Request enrolment"}
+            {busy ? "Working…" : where === "local" ? "Reconnect" : "Request enrolment"}
           </Button>
         </DialogFooter>
       </DialogContent>
