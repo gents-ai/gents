@@ -624,7 +624,9 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
 }
 
 pub mod authority;
+pub mod executor;
 pub mod store;
+pub mod tool;
 
 /// A plugin's authority: files, network, environment and the rest.
 pub use afterburner_core::manifold::Manifold;

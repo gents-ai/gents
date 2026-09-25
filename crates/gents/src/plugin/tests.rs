@@ -640,3 +640,5 @@ fn narrow_manifold_always_forces_listen_to_none() {
         "a plugin is called, never a server, whatever either side asked for"
     );
 }
+
+mod executor;

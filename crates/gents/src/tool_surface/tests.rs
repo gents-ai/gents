@@ -89,6 +89,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root.clone()),
@@ -167,6 +168,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root.clone()),
@@ -228,6 +230,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ceiling,
@@ -279,6 +282,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ceiling,
@@ -329,6 +333,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root),
@@ -378,6 +383,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readonly_at(operator_root),
@@ -427,6 +433,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::meta_only(),
@@ -474,6 +481,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readonly(),
@@ -519,6 +527,7 @@ fn selection_without_root_inherits_operator_root() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root.clone()),
@@ -577,6 +586,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root),
@@ -632,6 +642,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ceiling,
@@ -690,6 +701,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::meta_only(),
@@ -823,6 +835,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readonly(),
@@ -869,6 +882,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readonly(),
@@ -923,6 +937,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             remote_tools: None,
         },
         &ToolCeiling::readwrite(operator_root),
@@ -2507,4 +2522,38 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         .tool_names
         .contains(&crate::meta_tools::flat_tool_name("denied", "write")));
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
+}
+
+#[test]
+fn plugin_tools_come_from_the_tools_document_and_are_named_after_the_plugin() {
+    let selection = ResolvedToolSelection::from_document(&tools_document(serde_json::json!({
+        "agent_did": "did:key:zPlugins",
+        "integrations": {"plugins": [{"plugin": "team/lint_diff"}]},
+    })))
+    .unwrap();
+    let config =
+        BehaviorToolConfig::from_selection("ops", selection, &ToolCeiling::meta_only(), Vec::new())
+            .unwrap();
+    assert!(config
+        .static_policy()
+        .plugin_tools
+        .permits(&"lint_diff".to_string()));
+    assert!(!config
+        .static_policy()
+        .plugin_tools
+        .permits(&"other".to_string()));
+}
+
+#[test]
+fn a_tools_document_naming_two_plugins_the_same_is_refused() {
+    let tools = tools_document(serde_json::json!({
+        "agent_did": "did:key:zPlugins",
+        "integrations": {"plugins": [{"plugin": "a/lint"}, {"plugin": "b/lint"}]},
+    }));
+    assert!(tools.validate().is_err());
+    let tools = tools_document(serde_json::json!({
+        "agent_did": "did:key:zPlugins",
+        "integrations": {"plugins": [{"plugin": "a/lint", "digest": "sha256:nope"}]},
+    }));
+    assert!(tools.validate().is_err());
 }

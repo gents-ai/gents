@@ -174,6 +174,9 @@ pub struct DocumentRuntimeOptions {
     pub startup_build_failure_observer:
         Option<Arc<dyn crate::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
+    /// The gents home whose installed plugins this runtime's tools can call.
+    /// Absent means no plugins are installed.
+    pub plugin_home: Option<PathBuf>,
     #[cfg(test)]
     pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
@@ -212,6 +215,7 @@ pub struct Gents {
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
     operator_tool_root: Option<PathBuf>,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
 impl Gents {
@@ -290,6 +294,9 @@ impl Gents {
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
+            plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
+                options.plugin_home,
+            )),
         })
     }
 
@@ -351,6 +358,10 @@ impl Gents {
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
         self.document_runtime_context.as_ref()
+    }
+
+    pub(crate) fn plugins(&self) -> &Arc<crate::plugin::executor::PluginExecutor> {
+        &self.plugins
     }
 
     pub(crate) fn operator_tool_root(&self) -> Option<&std::path::Path> {

@@ -398,7 +398,8 @@ async fn run_agent_owned(
         agent.local_subnet.clone(),
         agent.agent_did().to_string(),
         Some(agent.principal_arc().identity.clone()),
-    );
+    )
+    .with_plugins(agent.plugins().clone());
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
 
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {

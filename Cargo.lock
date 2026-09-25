@@ -4599,6 +4599,7 @@ dependencies = [
  "jsonschema",
  "k256",
  "keyring",
+ "kovan-map",
  "libc",
  "memmap2",
  "minijinja",

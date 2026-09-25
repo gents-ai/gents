@@ -103,7 +103,9 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"eth_query_methods_kind\":" ++ jsonString v.ethQueryMethodsKind ++ ","
     ++ "\"eth_query_methods_keys\":" ++ jsonStringArray v.ethQueryMethodsKeys ++ ","
     ++ "\"eth_call_tools_kind\":" ++ jsonString v.ethCallToolsKind ++ ","
-    ++ "\"eth_call_tools_keys\":" ++ jsonStringArray v.ethCallToolsKeys
+    ++ "\"eth_call_tools_keys\":" ++ jsonStringArray v.ethCallToolsKeys ++ ","
+    ++ "\"plugin_tools_kind\":" ++ jsonString v.pluginToolsKind ++ ","
+    ++ "\"plugin_tools_keys\":" ++ jsonStringArray v.pluginToolsKeys
   ++ "}"
 
 def toolPolicyCaseJson (c : Case) : String :=

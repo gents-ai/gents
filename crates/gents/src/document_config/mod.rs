@@ -77,8 +77,8 @@ pub use surface_tool::{
 };
 pub use tools::{
     BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools, IntegrationTools,
-    LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
-    Tools,
+    LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools,
+    SubagentTools, Tools,
 };
 pub use write_tool::{
     is_reserved_builtin_tool_name, OutputObligationDecision, WriteToolDecl, WriteToolField,
