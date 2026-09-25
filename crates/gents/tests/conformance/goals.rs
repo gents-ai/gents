@@ -15,15 +15,16 @@ use crate::lean_vocab_test::{
     lean_task_goal_recovery_cases, lean_vocabulary_values,
 };
 
-fn goal_decision_name(decision: GoalDecision) -> &'static str {
-    match decision {
-        GoalDecision::None => "none",
-        GoalDecision::Continue => "continue",
-        GoalDecision::Retry => "retry",
-        GoalDecision::Pause => "pause",
-        GoalDecision::Wrapup => "wrapup",
-        GoalDecision::AbandonWrapup => "abandon_wrapup",
-    }
+fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
+    Some(match name {
+        "none" => GoalDecision::None,
+        "continue" => GoalDecision::Continue,
+        "retry" => GoalDecision::Retry,
+        "pause" => GoalDecision::Pause,
+        "wrapup" => GoalDecision::Wrapup,
+        "abandon_wrapup" => GoalDecision::AbandonWrapup,
+        _ => return None,
+    })
 }
 
 #[test]
@@ -62,15 +63,12 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
             case.wrapup_requested,
             case.wrapup_completed,
         );
-        let expected = match case.expected_decision.as_str() {
-            "none" => GoalDecision::None,
-            "continue" => GoalDecision::Continue,
-            "retry" => GoalDecision::Retry,
-            "pause" => GoalDecision::Pause,
-            "wrapup" => GoalDecision::Wrapup,
-            "abandon_wrapup" => GoalDecision::AbandonWrapup,
-            other => panic!("unknown decision {other:?} in Lean case {}", case.name),
-        };
+        let expected = parse_goal_decision(&case.expected_decision).unwrap_or_else(|| {
+            panic!(
+                "unknown decision {:?} in Lean case {}",
+                case.expected_decision, case.name
+            )
+        });
         assert_eq!(actual, expected, "Lean case {}", case.name);
     }
 }
@@ -78,10 +76,12 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
 #[test]
 fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
     let cases = lean_goal_readiness_gate_cases();
-    assert_eq!(cases.len(), 18, "the goal readiness gate matrix drifted");
+    assert_eq!(cases.len(), 20, "the goal readiness gate matrix drifted");
     for case in cases {
         let observation = match case.observation.as_str() {
-            "ready" => GoalBehaviorObservation::Ready,
+            "ready" => GoalBehaviorObservation::Ready {
+                newer_than_terminal: case.newer_than_terminal,
+            },
             "backend_recovering" => GoalBehaviorObservation::BackendRecovering,
             "unavailable" => GoalBehaviorObservation::Unavailable,
             "unassigned" => GoalBehaviorObservation::Unassigned,
@@ -118,13 +118,16 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
         };
-        let gated = gate_goal_continuation(readiness, cause, &facts);
-        let gate_name = match gated {
-            GoalGatedDecision::Decided(decision) => goal_decision_name(decision),
-            GoalGatedDecision::AwaitReadiness => "await_readiness",
-            GoalGatedDecision::BehaviorUnavailable => "behavior_unavailable",
+        let gated = gate_goal_continuation(observation, case.settled, cause, &facts);
+        let expected = match case.expected_gate.as_str() {
+            "await_readiness" => GoalGatedDecision::AwaitReadiness,
+            "behavior_unavailable" => GoalGatedDecision::BehaviorUnavailable,
+            other => GoalGatedDecision::Decided(
+                parse_goal_decision(other)
+                    .unwrap_or_else(|| panic!("unknown gate {other:?} in Lean case {}", case.name)),
+            ),
         };
-        assert_eq!(gate_name, case.expected_gate, "Lean case {}", case.name);
+        assert_eq!(gated, expected, "Lean case {}", case.name);
         assert_eq!(
             next_goal_infrastructure_retries(cause, &facts, gated),
             case.expected_retries,

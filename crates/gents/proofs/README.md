@@ -1601,12 +1601,14 @@ WorkspaceBindingPending remains an unfinished request: a resume cannot
 duplicate work that already waits for workspace placement.
 
 `GoalAutomation/ReadinessGate.lean` gates the existing `Goals.decide` on the
-canonical behavior-readiness projection. A publishing decision waits while the
-behavior is not ready and ends automatic continuation only once reconciliation
-has settled; a pre-claim readiness rejection is decided as a completed turn.
-The theorems prove that only an attempt against a ready behavior can spend the
-retry budget and that every scan trace stays within it. Eighteen generated
-cases drive the Rust gate and retry accounting.
+canonical behavior-readiness projection. A publishing decision, and a claimed
+child awaiting materialization, wait while the behavior is not ready; automatic
+continuation ends only once reconciliation has settled. A pre-claim readiness
+rejection is decided as a completed turn, but only against readiness written
+after the rejection. The theorems prove that only an attempt against a ready
+behavior spends the retry budget, that every scan trace stays within it, and
+that uncharged re-issues never outnumber readiness publications. Twenty
+generated cases drive the Rust gate and retry accounting.
 
 `GoalAutomation/RequestHead.lean` preserves canonical request ordering among
 causal heads while excluding an authenticated continuation's physical parent.

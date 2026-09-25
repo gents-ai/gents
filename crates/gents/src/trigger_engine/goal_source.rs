@@ -20,10 +20,12 @@ use crate::goal::publish_claimed_continuation;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_goal_continuation,
     goal_continuation_materialization_step, goal_failure_cause, load_goal_by_id,
-    load_goals_for_session, next_goal_infrastructure_retries, observe_goal_behavior,
-    refresh_goal_usage, update_goal_fields_if_status, GoalAction, GoalContinuationAction,
-    GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision,
-    GoalRequestTerminal, GoalStatus, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    load_goals_for_session, may_materialize_claimed_goal_continuation,
+    next_goal_infrastructure_retries, observe_goal_behavior, refresh_goal_usage,
+    update_goal_fields_if_status, GoalAction, GoalContinuationAction, GoalContinuationFacts,
+    GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision, GoalRequestTerminal,
+    GoalStatus, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND,
+    MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
@@ -219,8 +221,21 @@ impl GoalSource {
             }
             return Ok(None);
         }
+        let behavior = observe_goal_behavior(
+            &self.node,
+            &goal.agent_did,
+            latest.behavior_id.as_deref(),
+            latest.terminalized_at.as_deref(),
+        )
+        .await?;
         if persisted_phase == GoalContinuationPhase::Claimed {
             if reconciled_phase != GoalContinuationPhase::ChildPresent {
+                return Ok(None);
+            }
+            // The claim is durable and already advanced the sequence, so the
+            // child waits for readiness without touching the Goal: the retry
+            // prompt below is reconstructed from `last_failure`.
+            if !may_materialize_claimed_goal_continuation(behavior.observation, behavior.settled) {
                 return Ok(None);
             }
             // A crash may leave the durable claim without its child. Decision
@@ -310,9 +325,6 @@ impl GoalSource {
         let has_activity = terminal != GoalRequestTerminal::Completed
             || self.request_has_activity(&latest).await?;
         let cause = goal_failure_cause(&latest);
-        let behavior =
-            observe_goal_behavior(&self.node, &goal.agent_did, latest.behavior_id.as_deref())
-                .await?;
         let facts =
             |goal: &GoalDocument, status: GoalStatus, budget_reached: bool| GoalContinuationFacts {
                 status,
@@ -334,11 +346,13 @@ impl GoalSource {
             .token_budget
             .is_some_and(|budget| goal.tokens_used.unwrap_or_default() >= budget);
         if gate_goal_continuation(
-            behavior.readiness,
+            behavior.observation,
+            behavior.settled,
             cause,
             &facts(&goal, status, persisted_budget_reached),
         ) == GoalGatedDecision::AwaitReadiness
         {
+            self.record_readiness_wait(&goal, status, &behavior).await?;
             return Ok(None);
         }
         let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
@@ -359,11 +373,14 @@ impl GoalSource {
             .parsed_status()
             .context("refreshed Goal candidate has an unknown status")?;
         let facts = facts(&goal, status, budget_reached);
-        let gated = gate_goal_continuation(behavior.readiness, cause, &facts);
+        let gated = gate_goal_continuation(behavior.observation, behavior.settled, cause, &facts);
         let next_retries = next_goal_infrastructure_retries(cause, &facts, gated);
         let decision = match gated {
             GoalGatedDecision::Decided(decision) => decision,
-            GoalGatedDecision::AwaitReadiness => return Ok(None),
+            GoalGatedDecision::AwaitReadiness => {
+                self.record_readiness_wait(&goal, status, &behavior).await?;
+                return Ok(None);
+            }
             GoalGatedDecision::BehaviorUnavailable => {
                 self.stop_for_unavailable_behavior(&goal, status, &behavior.reason)
                     .await?;
@@ -398,23 +415,20 @@ impl GoalSource {
                 ))
             }
             GoalDecision::AbandonWrapup => {
-                let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                if !update_goal_fields_if_status(
-                    &self.node,
+                self.abandon_wrapup(
                     &goal,
                     status,
-                    &format!(
-                        r#"wrapup_completed: true, last_failure: "wrap-up {terminal_name} after {MAX_INFRASTRUCTURE_RETRIES} retries", updated_at: "{updated_at}""#
-                    ),
+                    &format!("wrap-up {terminal_name} after {MAX_INFRASTRUCTURE_RETRIES} retries"),
                 )
-                .await?
-                {
-                    return Ok(None);
-                }
+                .await?;
                 return Ok(None);
             }
             GoalDecision::Continue | GoalDecision::Wrapup => {
-                if next_retries != goal.infrastructure_retry_count.unwrap_or_default() {
+                let waited = goal
+                    .last_failure
+                    .as_deref()
+                    .is_some_and(|reason| reason.starts_with(GOAL_READINESS_WAIT_PREFIX));
+                if waited || next_retries != goal.infrastructure_retry_count.unwrap_or_default() {
                     let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
                     if !update_goal_fields_if_status(
                         &self.node,
@@ -429,6 +443,7 @@ impl GoalSource {
                         return Ok(None);
                     }
                     goal.infrastructure_retry_count = Some(next_retries);
+                    goal.last_failure = None;
                 }
                 None
             }
@@ -610,7 +625,7 @@ impl GoalSource {
                 }}
             }}"#,
             signed_fields = format!(
-                "{} failure_reason",
+                "{} failure_reason terminalized_at",
                 crate::request_admission::SIGNED_REQUEST_FIELDS
             ),
         );
@@ -773,8 +788,18 @@ impl GoalSource {
             "durable goal stopped because its behavior is unavailable"
         );
         if action == GoalAction::Pause {
-            return self.pause_goal(goal, status, reason).await;
+            self.pause_goal(goal, status, reason).await
+        } else {
+            self.abandon_wrapup(goal, status, reason).await
         }
+    }
+
+    async fn abandon_wrapup(
+        &self,
+        goal: &GoalDocument,
+        status: GoalStatus,
+        reason: &str,
+    ) -> Result<bool> {
         let reason = escape_graphql_string(reason);
         let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
         update_goal_fields_if_status(
@@ -786,6 +811,30 @@ impl GoalSource {
             ),
         )
         .await
+    }
+
+    /// Records why an unclaimed continuation waits. Every Goal write wakes
+    /// this source, so an unchanged reason must not be rewritten.
+    async fn record_readiness_wait(
+        &self,
+        goal: &GoalDocument,
+        status: GoalStatus,
+        behavior: &ObservedGoalBehavior,
+    ) -> Result<()> {
+        let waiting = behavior.waiting_reason();
+        if goal.last_failure.as_deref() == Some(waiting.as_str()) {
+            return Ok(());
+        }
+        let reason = escape_graphql_string(&waiting);
+        let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
+        update_goal_fields_if_status(
+            &self.node,
+            goal,
+            status,
+            &format!(r#"last_failure: "{reason}", updated_at: "{updated_at}""#),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn pause_goal(

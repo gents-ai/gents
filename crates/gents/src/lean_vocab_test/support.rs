@@ -537,6 +537,7 @@ pub(crate) struct LeanGoalDecisionCase {
 pub(crate) struct LeanGoalReadinessGateCase {
     pub(crate) name: String,
     pub(crate) observation: String,
+    pub(crate) newer_than_terminal: bool,
     pub(crate) settled: bool,
     pub(crate) cause: String,
     pub(crate) status: String,

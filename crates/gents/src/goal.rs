@@ -15,10 +15,11 @@ mod request_head;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
 pub use readiness_gate::{
-    gate_goal_continuation, goal_behavior_observation, goal_failure_cause, goal_reconcile_settled,
+    gate_goal_continuation, goal_behavior_observation, goal_failure_cause,
+    goal_readiness_newer_than_terminal, may_materialize_claimed_goal_continuation,
     next_goal_infrastructure_retries, observe_goal_behavior, observe_goal_behavior_readiness,
     GoalBehaviorObservation, GoalBehaviorReadiness, GoalContinuationFacts, GoalFailureCause,
-    GoalGatedDecision, ObservedGoalBehavior,
+    GoalGatedDecision, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX,
 };
 pub(crate) use request_head::{
     authenticated_goal_request_members, goal_session_is_idle, latest_authenticated_session_request,

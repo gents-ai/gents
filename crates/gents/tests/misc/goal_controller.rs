@@ -3192,10 +3192,33 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
                 .is_err(),
             "{process:?}/{reason:?}/{phase}: an unready behavior must not receive a continuation"
         );
+        let waiting = canonical_goal_json(&db).await;
+        assert!(
+            waiting["last_failure"]
+                .as_str()
+                .is_some_and(|reason| reason.starts_with(gents::goal::GOAL_READINESS_WAIT_PREFIX)),
+            "{process:?}/{reason:?}/{phase}: the wait must be recorded: {waiting}"
+        );
+        for field in [
+            "status",
+            "continuation_sequence",
+            "infrastructure_retry_count",
+            "tokens_used",
+        ] {
+            assert_eq!(
+                waiting[field], before[field],
+                "{process:?}/{reason:?}/{phase}: {field}"
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+                .await
+                .is_err()
+        );
         assert_eq!(
             canonical_goal_json(&db).await,
-            before,
-            "{process:?}/{reason:?}/{phase}: waiting must not write the Goal"
+            waiting,
+            "{process:?}/{reason:?}/{phase}: an unchanged wait must not rewrite the Goal"
         );
         assert!(goal_children(&db).await.is_empty());
     }
@@ -3223,6 +3246,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(goal.continuation_sequence(), 1);
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert_eq!(goal.last_failure, None);
 
     drop(source);
     let (mut restarted, _restart_tx) = self::source(&db).await;
@@ -3308,10 +3332,46 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         publish_reconcile_phase(&db, "idle").await;
     }
 
+    // Readiness that still says Ready from before a rejection (lagging or
+    // failing publication) must not re-issue: only a later write can.
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after the final race")
         .expect("goal continuation intent");
+    let children = goal_children(&db).await;
+    let pending = children
+        .iter()
+        .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
+        .expect("pending goal child");
+    reject_before_claim(
+        &db,
+        &pending.doc_id,
+        Reason::RuntimeConfigurationInvalid.public_message(),
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err(),
+        "stale readiness must not re-issue a rejected child"
+    );
+    assert_eq!(goal_children(&db).await.len(), children.len());
+    let waiting = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert!(waiting
+        .last_failure
+        .as_deref()
+        .is_some_and(|reason| reason.contains("not been republished since its rejection")));
+    publish_behavior_readiness(&db, Process::Ready, None).await;
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after readiness was republished")
+        .expect("goal continuation intent");
+    assert_eq!(goal_children(&db).await.len(), children.len() + 1);
     let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .unwrap()
@@ -3363,4 +3423,53 @@ async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     assert_eq!(goal.continuation_sequence(), 0);
     assert!(goal_children(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn claimed_continuation_waits_for_readiness_before_materializing() {
+    use gents_protocol::row::BehaviorReadinessProcessState as Process;
+    let db = test_db("goal-claimed-readiness").await;
+    seed_completed_request(&db, "parent-claimed-waits").await;
+    let goal = set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Hold a durable claim until the behavior is ready"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    assert!(
+        claim_continuation(db.node.as_ref(), &goal, "parent-claimed-waits")
+            .await
+            .expect("claim continuation")
+    );
+    publish_behavior_readiness(&db, Process::Recovering, None).await;
+    let claimed = canonical_goal_json(&db).await;
+    let (mut source, _tx) = unready_source(&db);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err(),
+        "a claimed child must not be published to an unready behavior"
+    );
+    assert!(goal_children(&db).await.is_empty());
+    assert_eq!(
+        canonical_goal_json(&db).await,
+        claimed,
+        "waiting must leave the durable claim untouched"
+    );
+
+    publish_behavior_readiness(&db, Process::Ready, None).await;
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after readiness recovered")
+        .expect("claimed continuation");
+    let children = goal_children(&db).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].caused_by_parent_request_id.as_deref(),
+        Some("parent-claimed-waits")
+    );
 }

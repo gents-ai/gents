@@ -1,6 +1,7 @@
 //! Executable mirror of `proofs/Proofs/GoalAutomation/ReadinessGate.lean` and
 //! its native adapters over the canonical behavior-readiness row.
 use super::*;
+use crate::runtime_status::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
     is_behavior_unavailable_rejection, project_behavior_readiness, AgentBehaviorReadinessRow,
     AgentRequestRow, BehaviorReadinessUnavailableReason, BehaviorReadinessUnknownReason,
@@ -9,11 +10,22 @@ use gents_protocol::row::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalBehaviorObservation {
-    Ready,
+    Ready { newer_than_terminal: bool },
     BackendRecovering,
     Unavailable,
     Unassigned,
     Unknown,
+}
+
+impl GoalBehaviorObservation {
+    pub fn newer_than_terminal(self) -> bool {
+        match self {
+            Self::Ready {
+                newer_than_terminal,
+            } => newer_than_terminal,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +69,7 @@ pub fn observe_goal_behavior_readiness(
     settled: bool,
 ) -> GoalBehaviorReadiness {
     match observation {
-        GoalBehaviorObservation::Ready => GoalBehaviorReadiness::Ready,
+        GoalBehaviorObservation::Ready { .. } => GoalBehaviorReadiness::Ready,
         GoalBehaviorObservation::BackendRecovering | GoalBehaviorObservation::Unknown => {
             GoalBehaviorReadiness::Waiting
         }
@@ -109,7 +121,8 @@ fn publishes(decision: GoalDecision) -> bool {
 
 /// Mirror of `ReadinessGate.gate`.
 pub fn gate_goal_continuation(
-    readiness: GoalBehaviorReadiness,
+    observation: GoalBehaviorObservation,
+    settled: bool,
     cause: GoalFailureCause,
     facts: &GoalContinuationFacts,
 ) -> GoalGatedDecision {
@@ -117,11 +130,25 @@ pub fn gate_goal_continuation(
     if !publishes(base) {
         return GoalGatedDecision::Decided(base);
     }
-    match readiness {
+    match observe_goal_behavior_readiness(observation, settled) {
+        GoalBehaviorReadiness::Ready
+            if cause == GoalFailureCause::BehaviorUnavailable
+                && !observation.newer_than_terminal() =>
+        {
+            GoalGatedDecision::AwaitReadiness
+        }
         GoalBehaviorReadiness::Ready => GoalGatedDecision::Decided(base),
         GoalBehaviorReadiness::Waiting => GoalGatedDecision::AwaitReadiness,
         GoalBehaviorReadiness::Unavailable => GoalGatedDecision::BehaviorUnavailable,
     }
+}
+
+/// Mirror of `ReadinessGate.mayMaterializeClaimed`.
+pub fn may_materialize_claimed_goal_continuation(
+    observation: GoalBehaviorObservation,
+    settled: bool,
+) -> bool {
+    observe_goal_behavior_readiness(observation, settled) == GoalBehaviorReadiness::Ready
 }
 
 /// Mirror of `ReadinessGate.nextRetries`: the persisted
@@ -161,11 +188,16 @@ pub fn goal_failure_cause(request: &AgentRequestRow) -> GoalFailureCause {
     }
 }
 
+/// `newer_than_terminal` compares the row's write time with the terminal
+/// request's; a missing or unparseable time is never newer.
 pub fn goal_behavior_observation(
     projected: &ProjectedBehaviorReadiness,
+    newer_than_terminal: bool,
 ) -> GoalBehaviorObservation {
     match projected {
-        ProjectedBehaviorReadiness::Ready => GoalBehaviorObservation::Ready,
+        ProjectedBehaviorReadiness::Ready => GoalBehaviorObservation::Ready {
+            newer_than_terminal,
+        },
         ProjectedBehaviorReadiness::Unavailable(
             BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
         ) => GoalBehaviorObservation::BackendRecovering,
@@ -177,24 +209,47 @@ pub fn goal_behavior_observation(
     }
 }
 
-/// `AgentRuntime` reports settled reconciliation as an idle phase whose last
-/// reconcile did not fail.
-pub fn goal_reconcile_settled(reconcile_phase: Option<&str>, last_result: Option<&str>) -> bool {
-    reconcile_phase == Some("idle") && last_result != Some("error")
+pub fn goal_readiness_newer_than_terminal(
+    readiness_updated_at: Option<&str>,
+    terminalized_at: Option<&str>,
+) -> bool {
+    let parse =
+        |value: Option<&str>| value.and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+    match (parse(readiness_updated_at), parse(terminalized_at)) {
+        (Some(readiness), Some(terminal)) => readiness > terminal,
+        _ => false,
+    }
 }
+
+pub(crate) fn goal_reconcile_settled(
+    reconcile_phase: Option<&str>,
+    last_result: Option<&str>,
+) -> bool {
+    reconcile_phase == Some(ReconcilePhase::Idle.as_str())
+        && last_result != Some(ReconcileResult::Error.as_str())
+}
+
+pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for behavior readiness: ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedGoalBehavior {
     pub observation: GoalBehaviorObservation,
-    pub readiness: GoalBehaviorReadiness,
-    /// Presentation-safe reason recorded when the Goal stops on it.
+    pub settled: bool,
+    /// Presentation-safe reason recorded when the Goal waits or stops on it.
     pub reason: String,
+}
+
+impl ObservedGoalBehavior {
+    pub fn waiting_reason(&self) -> String {
+        format!("{GOAL_READINESS_WAIT_PREFIX}{}", self.reason)
+    }
 }
 
 pub async fn observe_goal_behavior(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: Option<&str>,
+    terminalized_at: Option<&str>,
 ) -> Result<ObservedGoalBehavior> {
     let escaped_did = escape_graphql_string(agent_did);
     let query = format!(
@@ -222,6 +277,10 @@ pub async fn observe_goal_behavior(
                 .and_then(|value| value.as_str()),
         )
     });
+    let newer_than_terminal = goal_readiness_newer_than_terminal(
+        readiness_row.as_ref().map(|row| row.updated_at.as_str()),
+        terminalized_at,
+    );
     let behavior_id = behavior_id.map(str::trim).filter(|id| !id.is_empty());
     let projected = match behavior_id {
         Some(behavior_id) => project_behavior_readiness(
@@ -240,7 +299,7 @@ pub async fn observe_goal_behavior(
             ProjectedBehaviorReadiness::Unknown(BehaviorReadinessUnknownReason::BehaviorNotAssigned)
         }
     };
-    let observation = goal_behavior_observation(&projected);
+    let observation = goal_behavior_observation(&projected, newer_than_terminal);
     let label = behavior_id.unwrap_or("<none>");
     let reason = match projected {
         ProjectedBehaviorReadiness::Unavailable(reason) => {
@@ -254,13 +313,16 @@ pub async fn observe_goal_behavior(
         ) => {
             format!("behavior {label} is not assigned to this runtime")
         }
-        ProjectedBehaviorReadiness::Ready | ProjectedBehaviorReadiness::Unknown(_) => {
-            format!("behavior {label} readiness is not established")
+        ProjectedBehaviorReadiness::Ready => {
+            format!("behavior {label} readiness has not been republished since its rejection")
+        }
+        ProjectedBehaviorReadiness::Unknown(reason) => {
+            format!("behavior {label} readiness is unknown ({reason:?})")
         }
     };
     Ok(ObservedGoalBehavior {
         observation,
-        readiness: observe_goal_behavior_readiness(observation, settled),
+        settled,
         reason,
     })
 }
@@ -274,13 +336,16 @@ mod tests {
         use BehaviorReadinessUnavailableReason as Reason;
         use BehaviorReadinessUnknownReason as Unknown;
         assert_eq!(
-            goal_behavior_observation(&ProjectedBehaviorReadiness::Ready),
-            GoalBehaviorObservation::Ready
+            goal_behavior_observation(&ProjectedBehaviorReadiness::Ready, false),
+            GoalBehaviorObservation::Ready {
+                newer_than_terminal: false
+            }
         );
         assert_eq!(
-            goal_behavior_observation(&ProjectedBehaviorReadiness::Unavailable(
-                Reason::BackendTemporarilyUnavailable
-            )),
+            goal_behavior_observation(
+                &ProjectedBehaviorReadiness::Unavailable(Reason::BackendTemporarilyUnavailable),
+                true
+            ),
             GoalBehaviorObservation::BackendRecovering
         );
         for reason in [
@@ -295,15 +360,16 @@ mod tests {
             Reason::ExecutorStartFailed,
         ] {
             assert_eq!(
-                goal_behavior_observation(&ProjectedBehaviorReadiness::Unavailable(reason)),
+                goal_behavior_observation(&ProjectedBehaviorReadiness::Unavailable(reason), true),
                 GoalBehaviorObservation::Unavailable,
                 "{reason:?}"
             );
         }
         assert_eq!(
-            goal_behavior_observation(&ProjectedBehaviorReadiness::Unknown(
-                Unknown::BehaviorNotAssigned
-            )),
+            goal_behavior_observation(
+                &ProjectedBehaviorReadiness::Unknown(Unknown::BehaviorNotAssigned),
+                true
+            ),
             GoalBehaviorObservation::Unassigned
         );
         for reason in [
@@ -315,11 +381,37 @@ mod tests {
             Unknown::RouterGenerationStale,
         ] {
             assert_eq!(
-                goal_behavior_observation(&ProjectedBehaviorReadiness::Unknown(reason)),
+                goal_behavior_observation(&ProjectedBehaviorReadiness::Unknown(reason), true),
                 GoalBehaviorObservation::Unknown,
                 "{reason:?}"
             );
         }
+    }
+
+    #[test]
+    fn only_readiness_written_after_the_terminal_is_newer() {
+        let terminal = Some("2026-09-25T10:00:00+00:00");
+        assert!(goal_readiness_newer_than_terminal(
+            Some("2026-09-25T10:00:01Z"),
+            terminal
+        ));
+        assert!(!goal_readiness_newer_than_terminal(
+            Some("2026-09-25T10:00:00Z"),
+            terminal
+        ));
+        assert!(!goal_readiness_newer_than_terminal(
+            Some("2026-09-25T09:59:59Z"),
+            terminal
+        ));
+        assert!(!goal_readiness_newer_than_terminal(None, terminal));
+        assert!(!goal_readiness_newer_than_terminal(
+            Some("2026-09-25T10:00:01Z"),
+            None
+        ));
+        assert!(!goal_readiness_newer_than_terminal(
+            Some("not a time"),
+            terminal
+        ));
     }
 
     #[test]
