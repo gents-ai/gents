@@ -193,6 +193,9 @@ source consistency checks, not a separate runtime compatibility version.
   "Interrupt requested" notification. Like a direct Stop, it shows
   "Stopping…" until the request is terminal and then the stopped notice;
   only a failure is announced, in plain language (#1616).
+- Desktop: finished subagents keep their details in the session transcript,
+  and workers spawned by earlier requests stay visible after a new message is
+  sent. Rendered tool calls now name the request that issued them (#1784).
 
 ## 0.19.0 - 2026-09-24
 

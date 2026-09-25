@@ -80,10 +80,15 @@ export function useParentWork(shell: Shell): ParentWork {
       return;
     }
     let live = true;
-    void shell.api.listSubagentTree({ rootRequestId: parentRequestId }).then(
-      (t) => live && setTree(t),
-      () => live && setTree(null),
-    );
+    void shell.api
+      .listSubagentTree({
+        rootRequestId: parentRequestId,
+        includeTerminal: true,
+      })
+      .then(
+        (t) => live && setTree(t),
+        () => live && setTree(null),
+      );
     return () => {
       live = false;
     };

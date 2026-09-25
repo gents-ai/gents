@@ -37,6 +37,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         item_key: tool.tool_call_key.clone(),
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
         status_kind: tool_status_kind(tool.lifecycle_state.as_deref()),
+        request_id: tool.request_id.clone(),
         child_request_id: tool.child_request_id.clone(),
         await_mode: tool.await_mode.clone(),
         cancel_policy: tool.cancel_policy.clone(),
@@ -335,6 +336,7 @@ mod tests {
         let rendered = render_tool_call(tool.clone());
 
         assert_eq!(rendered.tool_name, "spawn_subagent");
+        assert_eq!(rendered.request_id.as_deref(), Some("parent-1"));
         assert_eq!(
             rendered.child_request_id.as_deref(),
             Some("child-request-1")

@@ -189,6 +189,12 @@ pub struct RenderedToolCallView {
     pub item_key: String,
     pub tool_name: String,
     pub status_kind: String,
+    /// Request that issued this call, in the same logical identity as
+    /// `child_request_id` and a subagent lineage root. A session transcript
+    /// spans several requests; this is how a row names the one it belongs to.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub child_request_id: Option<String>,
