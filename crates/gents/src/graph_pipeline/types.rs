@@ -48,7 +48,22 @@ pub enum StageTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         digest: Option<String>,
+        /// How many times a failed call may run in all; absent is once. A
+        /// retry never follows a call whose results were written.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        max_attempts: Option<u32>,
     },
+}
+
+impl StageTarget {
+    /// The attempts a plugin node's call gets in all.
+    pub fn max_attempts(&self) -> u32 {
+        match self {
+            Self::Plugin { max_attempts, .. } => crate::plugin::attempts_allowed(*max_attempts),
+            Self::Task { .. } => 1,
+        }
+    }
 }
 
 impl StageTarget {

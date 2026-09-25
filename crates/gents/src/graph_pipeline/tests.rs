@@ -550,6 +550,7 @@ fn with_plugin_extract(digest: Option<&str>) -> Vec<StageCapability> {
     capabilities[0].target = StageTarget::Plugin {
         plugin: "team/extract".to_owned(),
         digest: digest.map(str::to_owned),
+        max_attempts: None,
     };
     capabilities
 }
@@ -564,6 +565,7 @@ fn a_plugin_node_chains_into_an_agent_node_and_carries_its_outputs() {
         StageTarget::Plugin {
             plugin: "team/extract".to_owned(),
             digest: Some(digest),
+            max_attempts: None,
         }
     );
     assert_eq!(extract.output_ports, catalog()[0].output_ports);

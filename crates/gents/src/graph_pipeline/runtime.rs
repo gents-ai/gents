@@ -1020,7 +1020,11 @@ async fn planned_route_documents(
                 "created_at": now, "updated_at": now,
             }),
         )],
-        StageTarget::Plugin { plugin, digest } => {
+        StageTarget::Plugin {
+            plugin,
+            digest,
+            max_attempts,
+        } => {
             let digest = digest
                 .as_deref()
                 .with_context(|| format!("plugin {plugin} is not pinned to an artifact digest"))?;
@@ -1054,6 +1058,7 @@ async fn planned_route_documents(
                         "handler": {
                             "kind": "plugin", "plugin": plugin, "digest": digest,
                             "correlation_field": correlation_field, "outputs": outputs,
+                            "max_attempts": max_attempts,
                         },
                     }),
                 ),

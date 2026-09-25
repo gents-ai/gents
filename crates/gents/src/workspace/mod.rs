@@ -54,7 +54,9 @@ pub use instructions::{
     instruction_body_for_request, instruction_context_section, live_instruction_context_section,
     InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS,
 };
-pub use journal::{action_journal_prefix_legal, ActionJournalEntry, ActionJournalState};
+pub use journal::{
+    action_journal_prefix_legal, retry_allowed, ActionJournalEntry, ActionJournalState,
+};
 pub use path_capability::WorkspacePathCapability;
 pub use quickstart::provision_read_only_workspace;
 pub use runtime::cleanup_workspace;

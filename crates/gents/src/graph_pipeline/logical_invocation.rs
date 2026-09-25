@@ -50,7 +50,7 @@ async fn plugin_invocations(
         .execute_graph_query(&format!(
             r#"{{ CallbackInvocation(filter: {{ owner_agent_did: {{ _eq: "{}" }},
         caused_by_correlation: {{ _eq: "{}" }}, callback_id: {{ _in: {} }} }}) {{
-            invocation_id callback_id lifecycle_state error }} }}"#,
+            invocation_id callback_id lifecycle_state error attempts action_journal }} }}"#,
             escape_graphql_string(owner_did),
             escape_graphql_string(correlation),
             graphql_string_list_literal(&plugin_routes),
@@ -61,14 +61,31 @@ async fn plugin_invocations(
         .map(|row| {
             let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or_default();
             let state = field("lifecycle_state");
+            let node_id = routes.get(field("callback_id")).cloned();
+            let max_attempts = node_id
+                .as_deref()
+                .and_then(|id| plan.nodes.iter().find(|node| node.node_id == id))
+                .map_or(1, |node| node.target.max_attempts());
+            let attempts = row
+                .get("attempts")
+                .and_then(Value::as_u64)
+                .and_then(|attempts| u32::try_from(attempts).ok())
+                .unwrap_or(0);
+            // An unreadable journal cannot prove the call is safe to repeat.
+            let journal: Option<Vec<crate::workspace::ActionJournalEntry>> =
+                serde_json::from_str(field("action_journal")).ok();
             let succeeded = state == crate::callback::LIFECYCLE_SUCCEEDED;
+            // A failure that will be retried is still work in progress.
             let terminal = succeeded
-                || state == crate::callback::LIFECYCLE_FAILED
-                || state == crate::callback::LIFECYCLE_DENIED;
+                || state == crate::callback::LIFECYCLE_DENIED
+                || (state == crate::callback::LIFECYCLE_FAILED
+                    && !journal.is_some_and(|journal| {
+                        crate::workspace::retry_allowed(state, &journal, attempts, max_attempts)
+                    }));
             GraphRunRequestView {
                 request_id: field("invocation_id").to_owned(),
                 session_id: None,
-                node_id: routes.get(field("callback_id")).cloned(),
+                node_id,
                 behavior_id: String::new(),
                 lifecycle_state: Some(state.to_owned()),
                 failure_reason: Some(field("error").to_owned()).filter(|error| !error.is_empty()),

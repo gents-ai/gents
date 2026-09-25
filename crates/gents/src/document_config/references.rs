@@ -399,6 +399,7 @@ impl ConfigReferences {
                     digest,
                     correlation_field,
                     outputs,
+                    ..
                 } => crate::callback::plugin::validate_handler(
                     &plugin,
                     &digest,

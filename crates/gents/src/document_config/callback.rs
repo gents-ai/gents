@@ -64,6 +64,10 @@ pub enum CallbackHandler {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
         correlation_field: Option<String>,
+        /// How many times a failed call may run in all; absent is once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        max_attempts: Option<u32>,
         /// Where the result is written. Empty writes nothing.
         #[serde(
             default,

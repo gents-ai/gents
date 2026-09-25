@@ -402,6 +402,7 @@ async fn execute_running_invocation(
         digest,
         correlation_field,
         outputs,
+        ..
     } = &callback.handler
     {
         let handler = super::plugin::PluginHandler {
@@ -720,6 +721,71 @@ pub async fn recover_local_invocations(
                 invocation_id = %invocation.invocation_id,
                 %error,
                 "callback recovery run failed"
+            );
+        }
+    }
+    retry_failed_plugin_invocations(node, agent_did, ceiling, plugins).await
+}
+
+/// Runs a failed plugin invocation again once its backoff has passed, while
+/// its callback allows more attempts and nothing it did could repeat.
+async fn retry_failed_plugin_invocations(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
+) -> Result<()> {
+    let now = chrono::Utc::now();
+    for failed in super::documents::list_recent_failed(node, agent_did).await? {
+        let Some(callback) =
+            load_callback(node, &failed.callback_id, &failed.owner_agent_did).await?
+        else {
+            continue;
+        };
+        let crate::document_config::CallbackHandler::Plugin { max_attempts, .. } =
+            &callback.handler
+        else {
+            continue;
+        };
+        let attempts = u32::try_from(failed.attempts.unwrap_or(0)).unwrap_or(0);
+        let journal = decode_journal(failed.action_journal.as_deref())?;
+        if !crate::workspace::retry_allowed(
+            &failed.lifecycle_state,
+            &journal,
+            attempts,
+            crate::plugin::attempts_allowed(*max_attempts),
+        ) {
+            continue;
+        }
+        let last_claim = failed
+            .claimed_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
+        let due = last_claim.is_none_or(|at| {
+            now.signed_duration_since(at).to_std().unwrap_or_default()
+                >= crate::plugin::retry_backoff(attempts)
+        });
+        if !due {
+            continue;
+        }
+        let mut pending = failed.clone();
+        pending.lifecycle_state = super::LIFECYCLE_PENDING.to_owned();
+        pending.action_journal = Some("[]".to_owned());
+        pending.error = None;
+        if !update_invocation(node, &pending, Some(LIFECYCLE_FAILED)).await? {
+            continue;
+        }
+        tracing::info!(
+            invocation_id = %pending.invocation_id,
+            attempt = attempts + 1,
+            "retrying a failed plugin invocation"
+        );
+        if let Err(error) = run_owned_invocation(node, &pending, &callback, ceiling, plugins).await
+        {
+            tracing::warn!(
+                invocation_id = %pending.invocation_id,
+                %error,
+                "callback plugin retry failed"
             );
         }
     }

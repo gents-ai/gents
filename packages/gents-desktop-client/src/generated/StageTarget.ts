@@ -13,4 +13,9 @@ plugin: string,
  * `sha256:<hex>` of the artifact that runs. A pack's own plugin is
  * pinned when the pack is loaded; compiling an unpinned one fails.
  */
-digest?: string | null, } };
+digest?: string | null,
+/**
+ * How many times a failed call may run in all; absent is once. A
+ * retry never follows a call whose results were written.
+ */
+max_attempts?: number | null, } };

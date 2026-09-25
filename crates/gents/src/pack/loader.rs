@@ -141,7 +141,7 @@ fn pin_pack_plugin(
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
     capability: &mut crate::graph_pipeline::StageCapability,
 ) -> Result<()> {
-    let crate::graph_pipeline::StageTarget::Plugin { plugin, digest } = &mut capability.target
+    let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
     else {
         return Ok(());
     };

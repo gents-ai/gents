@@ -22,7 +22,7 @@ fn port(name: &str, collection: &str) -> PortSpec {
     }
 }
 
-fn echo_plan(digest: &str) -> GraphPlan {
+fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
     let at = |port: &str| PortRef {
         node_id: "echo".to_owned(),
         port: port.to_owned(),
@@ -69,6 +69,7 @@ fn echo_plan(digest: &str) -> GraphPlan {
             target: StageTarget::Plugin {
                 plugin: "team/plugin".to_owned(),
                 digest: Some(digest.to_owned()),
+                max_attempts,
             },
             input_ports: vec![port("input", "EchoInput")],
             output_ports: vec![port("echoed", "EchoOutput")],
@@ -100,7 +101,7 @@ async fn run_echo_graph(
     .await
     .unwrap();
 
-    let plan = echo_plan(digest.unwrap_or(&record.digest));
+    let plan = echo_plan(digest.unwrap_or(&record.digest), None);
     let materialized = materialize_graph_revision(&node, None, graph_test_owner(), &plan)
         .await
         .unwrap();
@@ -205,5 +206,112 @@ async fn a_plugin_node_that_cannot_run_fails_the_run_with_its_reason() {
     assert!(rows(&node, "{ EchoOutput { payload } }", "EchoOutput")
         .await
         .is_empty());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
+    let (home, record) = crate::plugin::tests::executor::installed_echo();
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema(
+        "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
+         type EchoOutput { graph_run_id: String @index payload: String }",
+    )
+    .await
+    .unwrap();
+    // With its artifact gone from the store, the first attempt cannot run
+    // and fails; putting it back lets the retry succeed.
+    let artifact = home.path().join(format!(
+        "plugins/store/{}.afb",
+        record.digest.strip_prefix("sha256:").unwrap()
+    ));
+    let bytes = std::fs::read(&artifact).unwrap();
+    std::fs::remove_file(&artifact).unwrap();
+    let plan = echo_plan(&record.digest, Some(2));
+    materialize_graph_revision(&node, None, graph_test_owner(), &plan)
+        .await
+        .unwrap();
+    // The engine runs before the revision is activated, as it does in a
+    // runtime, so it has discovered the plugin node's route by the time the
+    // run's first document is written.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let engine = tokio::spawn(crate::callback::run_callback_engine(
+        node.clone(),
+        graph_test_owner().to_owned(),
+        None,
+        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        ))),
+        cancel.clone(),
+    ));
+    activate_graph_revision(
+        &node,
+        None,
+        graph_test_owner(),
+        "echo-pipeline",
+        &plan.digest,
+        None,
+    )
+    .await
+    .unwrap();
+    let run = start_graph_run(
+        &node,
+        None,
+        graph_test_owner(),
+        "echo-pipeline",
+        None,
+        "input",
+        json!({ "payload": "hello" }),
+    )
+    .await
+    .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let failed = loop {
+        let invocations = rows(
+            &node,
+            "{ CallbackInvocation { lifecycle_state attempts } }",
+            "CallbackInvocation",
+        )
+        .await;
+        if invocations
+            .first()
+            .is_some_and(|row| row["lifecycle_state"] == "failed")
+            || Instant::now() >= deadline
+        {
+            break invocations;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(failed[0]["lifecycle_state"], "failed", "{failed:?}");
+    let waiting = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        waiting.status, "running",
+        "a failure that will be retried does not fail the run"
+    );
+
+    std::fs::write(&artifact, &bytes).unwrap();
+    let view = loop {
+        let view = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+            .await
+            .unwrap();
+        if view.status != "running" || Instant::now() >= deadline {
+            break view;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    cancel.cancel();
+    let _ = engine.await;
+    assert_eq!(view.status, "succeeded", "{view:#?}");
+    let invocation = &rows(
+        &node,
+        "{ CallbackInvocation { lifecycle_state attempts } }",
+        "CallbackInvocation",
+    )
+    .await[0];
+    assert_eq!(invocation["attempts"], 2, "the second attempt succeeded");
     node.shutdown().await;
 }

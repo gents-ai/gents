@@ -17,6 +17,10 @@ digest: string,
  */
 correlation_field?: string | null,
 /**
+ * How many times a failed call may run in all; absent is once.
+ */
+max_attempts?: number | null,
+/**
  * Where the result is written. Empty writes nothing.
  */
 outputs?: Array<PortSpec> | null, };

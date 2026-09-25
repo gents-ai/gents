@@ -624,6 +624,19 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
 }
 
 pub mod authority;
+
+/// The attempts a plugin call gets in all when its caller configured
+/// `max_attempts`: absent, or zero, is one.
+pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {
+    max_attempts.unwrap_or(1).max(1)
+}
+
+/// How long a failed plugin call waits before its next attempt: one second,
+/// doubling per attempt, at most a minute.
+pub fn retry_backoff(attempts: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << attempts.saturating_sub(1).min(6))
+        .min(std::time::Duration::from_secs(60))
+}
 pub mod executor;
 pub mod store;
 pub mod tool;

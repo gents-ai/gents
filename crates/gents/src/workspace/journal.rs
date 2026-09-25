@@ -52,6 +52,25 @@ pub fn action_journal_prefix_legal(entries: &[ActionJournalEntry]) -> bool {
     true
 }
 
+/// Whether a failed invocation may run again: it has attempts left, and no
+/// action observed its effect or wrote results, so running it again cannot
+/// repeat anything.
+pub fn retry_allowed(
+    state: &str,
+    journal: &[ActionJournalEntry],
+    attempts: u32,
+    max_attempts: u32,
+) -> bool {
+    state == "failed"
+        && attempts < max_attempts
+        && journal.iter().all(|entry| {
+            !matches!(
+                entry.state,
+                ActionJournalState::EffectObserved | ActionJournalState::ResultDocsWritten
+            )
+        })
+}
+
 pub(crate) fn current_state(
     journal: &[ActionJournalEntry],
     index: u32,

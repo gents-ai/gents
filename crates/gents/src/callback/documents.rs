@@ -513,6 +513,39 @@ async fn list_recent_succeeded_missing_result(
     Ok(succeeded_missing_result(succeeded, &results))
 }
 
+/// Recently failed invocations, which a retry may pick up again. Bounded by
+/// the same window and page as the succeeded-without-result repair.
+pub async fn list_recent_failed(
+    node: &EmbeddedNode,
+    owner_agent_did: &str,
+) -> Result<Vec<CallbackInvocationDoc>> {
+    let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
+    let query = format!(
+        r#"{{
+            CallbackInvocation(
+                filter: {{
+                    owner_agent_did: {{ _eq: "{owner}" }},
+                    lifecycle_state: {{ _eq: "failed" }},
+                    created_at: {{ _ge: "{cutoff}" }}
+                }},
+                order: {{ created_at: DESC }},
+                limit: {limit}
+            ) {{ {INVOCATION_FIELDS} }}
+        }}"#,
+        owner = escape_graphql_string(owner_agent_did),
+        cutoff = escape_graphql_string(&cutoff),
+        limit = SUCCEEDED_REPAIR_LIMIT,
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query recent failed CallbackInvocation failed: {:?}",
+            response.errors
+        );
+    }
+    rows(&response, "CallbackInvocation")
+}
+
 pub(crate) fn succeeded_repair_cutoff(now: chrono::DateTime<chrono::Utc>) -> String {
     let start = now
         - chrono::Duration::from_std(SUCCEEDED_REPAIR_WINDOW)

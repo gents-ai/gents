@@ -642,3 +642,20 @@ fn narrow_manifold_always_forces_listen_to_none() {
 }
 
 pub(crate) mod executor;
+
+#[test]
+fn a_plugin_call_gets_one_attempt_unless_configured() {
+    assert_eq!(crate::plugin::attempts_allowed(None), 1);
+    assert_eq!(crate::plugin::attempts_allowed(Some(0)), 1);
+    assert_eq!(crate::plugin::attempts_allowed(Some(4)), 4);
+}
+
+#[test]
+fn retry_backoff_doubles_and_is_capped() {
+    use std::time::Duration;
+    assert_eq!(crate::plugin::retry_backoff(0), Duration::from_secs(1));
+    assert_eq!(crate::plugin::retry_backoff(1), Duration::from_secs(1));
+    assert_eq!(crate::plugin::retry_backoff(2), Duration::from_secs(2));
+    assert_eq!(crate::plugin::retry_backoff(4), Duration::from_secs(8));
+    assert_eq!(crate::plugin::retry_backoff(40), Duration::from_secs(60));
+}

@@ -273,6 +273,7 @@ fn a_plugin_node_runs_the_packs_own_artifact() {
         crate::graph_pipeline::StageTarget::Plugin {
             plugin: "team/lint".into(),
             digest: Some(shipped_digest()),
+            max_attempts: None,
         }
     );
     // An author's pin that matches the shipped artifact is kept.
@@ -295,6 +296,7 @@ fn a_plugin_node_the_pack_cannot_run_is_refused() {
         crate::graph_pipeline::StageTarget::Plugin {
             plugin: "other/tool".into(),
             digest: None,
+            max_attempts: None,
         }
     );
 }
