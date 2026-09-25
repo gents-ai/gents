@@ -15,8 +15,15 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use gents::default_behavior_id_for_agent;
+use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
+use gents_desktop_core::client::canonical_output::{
+    project_canonical_message, CanonicalMessageProjection,
+};
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_protocol::output::{MessageRole, TerminalOutput};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
@@ -45,9 +52,12 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-enroll-{}", Uuid::new_v4().simple());
-    let reply_token = format!("ENROLL_LIVE_{}", Uuid::new_v4().simple());
+    // The nonce only makes the runtime request findable by prompt. Reply
+    // content is model-chosen: a live model may decline to echo a token, so
+    // replication is asserted against the runtime's own terminal output.
     let prompt = format!(
-        "This is an enrollment pairing smoke test. Reply with only the exact token {reply_token} and nothing else."
+        "Enrollment check {}: in one short sentence, say hello to the newly paired desktop.",
+        Uuid::new_v4().simple()
     );
 
     let init = run_init_json(
@@ -176,19 +186,21 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
 
             let (request_id, runtime_session, _) =
                 wait_for_runtime_agent_request(&graphql, core.node(), &agent_did, &prompt).await?;
-            let runtime_text = wait_for_complete_agent_response(
+            let runtime_reply = wait_for_complete_agent_response(
                 &graphql,
                 &request_id,
                 &runtime_session,
                 Duration::from_secs(240),
             )
             .await?;
-            anyhow::ensure!(
-                runtime_text.contains(&reply_token),
-                "live inference response missing {reply_token}: {runtime_text}"
-            );
-
-            wait_for_client_complete_response(&core, &session_id, &agent_did, &request_id, &reply_token).await?;
+            wait_for_client_complete_response(
+                &core,
+                &session_id,
+                &agent_did,
+                &request_id,
+                &runtime_reply,
+            )
+            .await?;
 
             let runtime_principals = graphql_query(
                 &graphql,
@@ -407,7 +419,7 @@ async fn wait_for_complete_agent_response(
     request_id: &str,
     session: &str,
     timeout: Duration,
-) -> Result<String> {
+) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
     loop {
@@ -489,7 +501,15 @@ async fn wait_for_complete_agent_response(
                     _ => None,
                 };
                 if let Some(visible) = visible.filter(|text| !text.trim().is_empty()) {
-                    return Ok(visible);
+                    let Some(TerminalOutput::Message { message_doc_id }) =
+                        request.terminal_output.clone()
+                    else {
+                        bail!("terminal message output lost its header identity for {request_id}: {row}");
+                    };
+                    return Ok(RuntimeTerminalReply {
+                        header_doc_id: message_doc_id,
+                        text: visible,
+                    });
                 }
                 if empty_terminal_since
                     .get_or_insert_with(Instant::now)
@@ -511,12 +531,53 @@ async fn wait_for_complete_agent_response(
     }
 }
 
+/// The runtime-selected terminal header (`AgentRequest.terminal_output`) and
+/// its presented text.
+#[derive(Debug, Clone)]
+struct RuntimeTerminalReply {
+    header_doc_id: String,
+    text: String,
+}
+
+/// The presented text of the exact terminal header the runtime selected, once
+/// the client holds the completed request selecting that header and the header
+/// reconstructs Ready. No other message of the request (the user prompt, an
+/// earlier assistant turn) can stand in for it.
+fn client_selected_reply(
+    requests: &[AgentRequestRow],
+    messages: &[TranscriptMessageRow],
+    segments: &[OutputSegmentRow],
+    request_id: &str,
+    header_doc_id: &str,
+) -> Option<String> {
+    let request = requests.iter().find(|row| {
+        row.request_id == request_id
+            && row.lifecycle_state == Some(RequestLifecycleState::Completed)
+            && matches!(
+                &row.terminal_output,
+                Some(TerminalOutput::Message { message_doc_id }) if message_doc_id == header_doc_id
+            )
+    })?;
+    let header = messages.iter().find(|row| {
+        row.doc_id == header_doc_id
+            && row.message.role == MessageRole::Assistant
+            && row.message.request_doc_id.is_some()
+            && row.message.request_doc_id == request.doc_id
+    })?;
+    match project_canonical_message(header, segments, &[], &[]) {
+        CanonicalMessageProjection::Ready(message) => {
+            Some(gents_protocol::transcript::present_message(&message).body_markdown)
+        }
+        _ => None,
+    }
+}
+
 async fn wait_for_client_complete_response(
     core: &ClientCore,
     session_id: &str,
     agent_did: &str,
     request_id: &str,
-    token: &str,
+    runtime_reply: &RuntimeTerminalReply,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -535,40 +596,14 @@ async fn wait_for_client_complete_response(
         )
         .await?;
         let snapshot = core.store().snapshot();
-        let message_text = page
-            .store
-            .transcript_messages
-            .iter()
-            .filter(|row| {
-                row.message.request_doc_id.as_deref().is_some_and(|doc| {
-                    snapshot.requests.iter().any(|request| {
-                        request.doc_id.as_deref() == Some(doc) && request.request_id == request_id
-                    })
-                })
-            })
-            .filter_map(|row| {
-                match gents_desktop_core::client::canonical_output::project_canonical_message(
-                    row,
-                    &page.store.output_segments,
-                    &[],
-                    &[],
-                ) {
-                    gents_desktop_core::client::canonical_output::CanonicalMessageProjection::Ready(message) => {
-                        Some(message)
-                    }
-                    _ => None,
-                }
-            })
-            .map(|message| gents_protocol::transcript::present_message(&message).body_markdown)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let complete = snapshot.requests.iter().any(|row| {
-            row.request_id == request_id
-                && row
-                    .lifecycle_state
-                    .is_some_and(|state| state.as_str() == "completed")
-        });
-        if complete && message_text.contains(token) {
+        let client_reply = client_selected_reply(
+            &snapshot.requests,
+            &page.store.transcript_messages,
+            &page.store.output_segments,
+            request_id,
+            &runtime_reply.header_doc_id,
+        );
+        if client_reply.as_deref() == Some(runtime_reply.text.as_str()) {
             return Ok(());
         }
         if snapshot.requests.iter().any(|row| {
@@ -584,7 +619,7 @@ async fn wait_for_client_complete_response(
         }
         if Instant::now() >= deadline {
             bail!(
-                "client never received the complete live response for {request_id} containing {token}; requests={:?}; transcript_messages={:?}",
+                "client never reconstructed the runtime-selected terminal header for {request_id} ({runtime_reply:?}); client_reply={client_reply:?}; requests={:?}; transcript_messages={:?}",
                 snapshot.requests,
                 snapshot.transcript_messages
             );
@@ -694,4 +729,136 @@ async fn query_collection_dids(
                 .map(str::to_owned)
         })
         .collect())
+}
+
+/// Negative control for `client_selected_reply`: with the reply text also
+/// present in the user prompt and an earlier assistant turn of the same
+/// request, only the runtime-selected header of the completed request counts.
+#[test]
+fn client_reply_requires_the_runtime_selected_terminal_header() {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
+        PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+    const REQUEST_DOC: &str = "bae-request";
+    const TEXT: &str = "hello";
+    let segment = |doc_id: &str, key: &str| OutputSegmentRow {
+        doc_id: doc_id.into(),
+        segment: OutputSegment {
+            agent_did: "did:key:agent".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: REQUEST_DOC.into(),
+            source: OutputSource::Authored { key: key.into() },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: TEXT.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: TEXT.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![TEXT.len() as u64],
+            }),
+            created_at: "2026-09-25T00:00:00Z".into(),
+        },
+    };
+    let header =
+        |doc_id: &str, close_doc_id: &str, sequence: u32, role: MessageRole| TranscriptMessageRow {
+            doc_id: doc_id.into(),
+            message: TranscriptMessage {
+                message_key: format!("session:{sequence}"),
+                session_id: "session".into(),
+                agent_did: "did:key:agent".into(),
+                requester_did: None,
+                request_doc_id: Some(REQUEST_DOC.into()),
+                publication: MessagePublication::RequestExecution {
+                    execution_generation: "generation".into(),
+                },
+                outcome: OutputOutcome::Complete,
+                sequence,
+                role,
+                native_id: None,
+                blocks: vec![MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: close_doc_id.into(),
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }],
+                created_at: "2026-09-25T00:00:00Z".into(),
+            },
+        };
+    let request = |state: RequestLifecycleState, terminal: Option<&str>| AgentRequestRow {
+        doc_id: Some(REQUEST_DOC.into()),
+        request_id: "request".into(),
+        lifecycle_state: Some(state),
+        terminal_output: terminal.map(|message_doc_id| TerminalOutput::Message {
+            message_doc_id: message_doc_id.into(),
+        }),
+        ..Default::default()
+    };
+    let prompt = header("bae-prompt", "bae-prompt-close", 1, MessageRole::User);
+    let earlier = header(
+        "bae-earlier",
+        "bae-earlier-close",
+        2,
+        MessageRole::Assistant,
+    );
+    let selected = header(
+        "bae-selected",
+        "bae-selected-close",
+        3,
+        MessageRole::Assistant,
+    );
+    let segments = vec![
+        segment("bae-prompt-close", "prompt"),
+        segment("bae-earlier-close", "earlier"),
+        segment("bae-selected-close", "selected"),
+    ];
+    let completed = [request(
+        RequestLifecycleState::Completed,
+        Some("bae-selected"),
+    )];
+    let replicated_prefix = [prompt.clone(), earlier.clone()];
+    for (label, requests, messages) in [
+        (
+            "prompt and earlier turn only",
+            &completed[..],
+            &replicated_prefix[..],
+        ),
+        (
+            "request not yet completed",
+            &[request(RequestLifecycleState::Processing, None)][..],
+            &[prompt.clone(), earlier.clone(), selected.clone()][..],
+        ),
+    ] {
+        assert_eq!(
+            client_selected_reply(requests, messages, &segments, "request", "bae-selected"),
+            None,
+            "{label} must not satisfy the client wait"
+        );
+    }
+    let all = [prompt, earlier, selected];
+    assert_eq!(
+        client_selected_reply(&completed, &all, &segments[..2], "request", "bae-selected"),
+        None,
+        "the selected header must reconstruct Ready, not just exist"
+    );
+    assert_eq!(
+        client_selected_reply(&completed, &all, &segments, "request", "bae-selected").as_deref(),
+        Some(TEXT)
+    );
 }
