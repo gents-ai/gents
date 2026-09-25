@@ -95,6 +95,32 @@ async fn close_received_auxiliary_after_error(error: anyhow::Error) -> anyhow::E
     }
 }
 
+async fn finish_one_shot_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        // A persistence failure already attempted cleanup. Preserve that
+        // failure without an unauthorized retry of the canonical writer.
+        Err(error) if error.is::<AuxiliaryPersistenceFailure>() => Err(error),
+        Err(error) => {
+            match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
+                Ok(_) => Err(error),
+                Err(close_error) => Err(persistence_failure(
+                    "error cleanup",
+                    close_error.context(format!("original one-shot error: {error:#}")),
+                )),
+            }
+        }
+    }
+}
+
+fn ensure_auxiliary_identity(
+    active: Option<(CaptureScope, usize, u32)>,
+    observed: (CaptureScope, usize, u32),
+) -> anyhow::Result<()> {
+    anyhow::ensure!(active == Some(observed), "auxiliary audit changed source");
+    Ok(())
+}
+
 async fn flush_auxiliary_at_deadline(
     sink: &AuxiliaryOutputSink,
     identity: (CaptureScope, usize, u32),
@@ -113,6 +139,21 @@ async fn flush_auxiliary_at_deadline(
 /// sink, when installed, owns its canonical output without publishing a
 /// session transcript; otherwise this remains a nonpersistent one-shot.
 pub async fn run_loop_to_text<M>(
+    model: M,
+    prompt: Message,
+    history: Vec<Message>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    config: LoopConfig,
+) -> anyhow::Result<String>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: 'static,
+{
+    finish_one_shot_result(run_loop_to_text_inner(model, prompt, history, tools, config).await)
+        .await
+}
+
+async fn run_loop_to_text_inner<M>(
     model: M,
     prompt: Message,
     history: Vec<Message>,
@@ -205,10 +246,7 @@ where
                     observation.turn,
                     observation.attempt,
                 );
-                anyhow::ensure!(
-                    active_auxiliary == Some(identity),
-                    "auxiliary audit changed source"
-                );
+                ensure_auxiliary_identity(active_auxiliary, identity)?;
                 emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event)).await?;
             }
             LoopStreamItem::AuthoredInputReady { .. } => {
@@ -441,6 +479,7 @@ mod tests {
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     #[tokio::test]
@@ -536,6 +575,103 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn changed_audit_identity_closes_received_prefix_before_error() {
+        let captured: Arc<Mutex<Vec<AuxiliaryOutputEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&captured);
+        let sink = AuxiliaryOutputSink {
+            observe: Arc::new(move |observation| {
+                observed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(observation.event);
+                Box::pin(async { Ok(()) })
+            }),
+            next_flush_deadline: Arc::new(|_, _, _| Box::pin(async { Ok(None) })),
+            flush_pending: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+        };
+        let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let mut scope = RequestCaptureScope::new(
+            RenderedRequestContext {
+                request_doc_id: "doc-identity".into(),
+                request_commit_cid: "bafy-identity".into(),
+                request_id: "req-identity".into(),
+                agent_did: "did:key:agent".into(),
+                requester_did: String::new(),
+                behavior_id: "behavior".into(),
+                session_id: "session".into(),
+                model_name: "claude".into(),
+            },
+            capture_sink,
+        );
+        scope.set_auxiliary_output_sink(sink);
+        scope_request(Arc::new(scope), async {
+            let label = arm(
+                CaptureScopeKind::Compaction,
+                0,
+                0,
+                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+            )
+            .unwrap();
+            claim_pending().expect("armed auxiliary attempt");
+            let identity = (label.parse().expect("capture scope"), 0, 0);
+            emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
+                .await
+                .unwrap();
+            let sender = current_audit_sender().expect("claimed audit sender");
+            let mut reservation = sender.reserve().await.expect("audit capacity");
+            reservation
+                .emit(ClaudeAuditEvent::BlockStart {
+                    index: 0,
+                    kind: ClaudeBlockKind::Thinking,
+                })
+                .unwrap();
+            reservation
+                .emit(ClaudeAuditEvent::ThinkingText {
+                    index: 0,
+                    fragment: "reasoning".into(),
+                })
+                .unwrap();
+            reservation
+                .emit(ClaudeAuditEvent::Signature {
+                    index: 0,
+                    fragment: "received".into(),
+                })
+                .unwrap();
+            drop(reservation);
+
+            let error = ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1))
+                .expect_err("changed identity must fail closed");
+            let error = finish_one_shot_result::<String>(Err(error))
+                .await
+                .expect_err("identity error must remain visible");
+            assert!(error.to_string().contains("auxiliary audit changed source"));
+            let events = captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
+            assert!(matches!(
+                events[1],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+            ));
+            assert!(matches!(
+                &events[2],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::ThinkingText { fragment, .. })
+                    if fragment == "reasoning"
+            ));
+            assert!(matches!(
+                &events[3],
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { fragment, .. })
+                    if fragment == "received"
+            ));
+            assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
+            assert_eq!(events.len(), 5);
+            drop(events);
+            assert!(!flush_received_auxiliary_partial().await.unwrap());
+        })
+        .await;
+    }
+
     #[test]
     fn only_observed_attempt_failure_classifies_provider_error() {
         let stream_error =
@@ -562,12 +698,15 @@ mod tests {
             .is_none());
     }
 
-    #[tokio::test]
-    async fn failed_auxiliary_cleanup_dominates_provider_error() {
+    async fn assert_failed_auxiliary_cleanup(provider_error: bool) {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let observed_closes = Arc::clone(&closes);
         let sink = AuxiliaryOutputSink {
-            observe: Arc::new(|observation| {
+            observe: Arc::new(move |observation| {
+                let closes = Arc::clone(&observed_closes);
                 Box::pin(async move {
                     if matches!(observation.event, AuxiliaryOutputEvent::ClosePartial) {
+                        closes.fetch_add(1, Ordering::SeqCst);
                         anyhow::bail!("mock close failure");
                     }
                     Ok(())
@@ -604,15 +743,37 @@ mod tests {
             emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
                 .await
                 .unwrap();
-            let provider = missing_final_failure(Some(InferenceError::TransientFailure {
-                reason: "provider failed".into(),
-            }));
-            let error = close_received_auxiliary_after_error(provider).await;
+            let error = if provider_error {
+                close_received_auxiliary_after_error(missing_final_failure(Some(
+                    InferenceError::TransientFailure {
+                        reason: "provider failed".into(),
+                    },
+                )))
+                .await
+            } else {
+                let identity_error =
+                    ensure_auxiliary_identity(Some(identity), (identity.0, 0, 1)).unwrap_err();
+                finish_one_shot_result::<String>(Err(identity_error))
+                    .await
+                    .expect_err("cleanup failure must dominate identity error")
+            };
             assert!(error
                 .downcast_ref::<AuxiliaryPersistenceFailure>()
                 .is_some());
             assert!(format!("{error:#}").contains("mock close failure"));
+            assert_eq!(closes.load(Ordering::SeqCst), 1);
+            let error = finish_one_shot_result::<String>(Err(error.context("outer caller")))
+                .await
+                .expect_err("wrapped persistence failure remains fatal");
+            assert!(error.is::<AuxiliaryPersistenceFailure>());
+            assert_eq!(closes.load(Ordering::SeqCst), 1);
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn failed_auxiliary_cleanup_dominates_provider_and_identity_errors_without_retry() {
+        assert_failed_auxiliary_cleanup(true).await;
+        assert_failed_auxiliary_cleanup(false).await;
     }
 }
