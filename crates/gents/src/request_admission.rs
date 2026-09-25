@@ -979,23 +979,21 @@ async fn verify_exact_parent_tool_call(
         name: Option<String>,
     }
     let access = crate::config_client::ConfigAccess::Local(node.clone());
-    let matching = crate::run_timeline_fetch::load_session_tool_calls(
+    let matching = crate::run_timeline_fetch::load_accepted_tool_arguments(
         &access,
         parent_agent_did,
         parent_session_id,
         parent_requester_did,
+        tool_doc_id,
     )
     .await
     .context("load canonical runtime source tool-call arguments")
-    .map_err(AgentRequestAdmissionError::unavailable)?
-    .into_iter()
-    .filter(|candidate| candidate.doc_id.as_deref() == Some(tool_doc_id))
-    .collect::<Vec<_>>();
+    .map_err(AgentRequestAdmissionError::unavailable)?;
     deny_if(
         matching.len() == 1,
         "canonical runtime source tool-call binding is missing or ambiguous",
     )?;
-    let args_json = matching[0].args.as_str();
+    let args_json = matching[0].as_str();
     deny_if(
         !args_json.trim().is_empty(),
         "canonical runtime source tool-call has no arguments",
