@@ -124,7 +124,8 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         },
     )
     .await
-    .expect("build recovery crash worker runtime");
+    .expect("build recovery crash worker runtime")
+    .with_background_process_records(db.data_path().join("background-processes"));
     let _runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     let tool_call_id = wait_for_running_tool(db.node.as_ref(), session_id).await;
     let parent = db
@@ -268,6 +269,15 @@ async fn load_wakes(
         .unwrap_or_default()
 }
 
+/// Whether `pid` names a process that has not exited. The orphan is
+/// reparented to init after its runtime's crash, which reaps it promptly.
+#[cfg(unix)]
+fn process_alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks existence of this test's own child.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     if let Some(ready_path) = std::env::var_os(CRASH_WORKER_READY) {
@@ -327,11 +337,45 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
             .expect("reopen crashed recovery store"),
     );
     gents::ensure_runtime_schemas(&node).await.unwrap();
-    let report =
-        gents::tool_call_lifecycle::ToolCallLifecycle::recover_all(&node, &ready.agent_did)
-            .await
-            .unwrap();
+    // The crashed worker's `sleep` leads its own process group and survived
+    // the SIGKILL. Its durable record is the restarted runtime's only proof
+    // of ownership.
+    let records = ready.data_path.join("background-processes");
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::fs::read_dir(&records)
+                .expect("crashed worker left a process record")
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+                .expect("process record file"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let orphan_pid = record["identity"]["pid"].as_i64().unwrap() as i32;
+    assert!(
+        process_alive(orphan_pid),
+        "the spawned process must survive its runtime's crash"
+    );
+    let executions = gents::BackgroundExecutionRegistry::default().with_process_records(records);
+    let report = gents::tool_call_lifecycle::ToolCallLifecycle::recover_all_with_executions(
+        &node,
+        &ready.agent_did,
+        &executions,
+    )
+    .await
+    .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while process_alive(orphan_pid) {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await;
+    assert!(
+        stopped.is_ok(),
+        "restart recovery must stop the owned orphan"
+    );
 
     let row = load_tool_call(node.as_ref(), &ready.tool_call_id).await;
     assert_eq!(

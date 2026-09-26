@@ -293,6 +293,8 @@ def snapshotJson : String :=
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
+    ++ "\"process_stop_cases\":"
+      ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"tool_preflight_cases\":"
       ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
     ++ "\"tool_retry_cases\":"

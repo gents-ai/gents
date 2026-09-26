@@ -95,6 +95,7 @@ def r6RestartCase : R6BackgroundingCase :=
     , parent := .live
     , deadlineExpired := false
     , unclaimedExpired := false
+    , process := .stopped
     }
   let disposition := Recovery.restartDisposition row
   let notification := row.notification

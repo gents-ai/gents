@@ -245,6 +245,29 @@ impl ToolCallLifecycle {
         failure: super::FailureClass,
         presentation: Option<gents_protocol::output::PayloadPresentation>,
     ) -> Result<bool> {
+        self.fail_owned_inner(result, failure, presentation, None)
+            .await
+    }
+
+    /// Running → Failed for a native row whose background completion
+    /// notification must carry `completion_reason`.
+    pub(crate) async fn fail_owned_with_completion_reason(
+        &mut self,
+        result: &str,
+        failure: super::FailureClass,
+        completion_reason: &str,
+    ) -> Result<bool> {
+        self.fail_owned_inner(result, failure, None, Some(completion_reason))
+            .await
+    }
+
+    async fn fail_owned_inner(
+        &mut self,
+        result: &str,
+        failure: super::FailureClass,
+        presentation: Option<gents_protocol::output::PayloadPresentation>,
+        completion_reason: Option<&str>,
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
@@ -258,7 +281,7 @@ impl ToolCallLifecycle {
                     failure: Some(failure),
                     cancel: None,
                     remote_cancel_intent_at: None,
-                    completion_reason: None,
+                    completion_reason,
                 },
                 result,
                 presentation,

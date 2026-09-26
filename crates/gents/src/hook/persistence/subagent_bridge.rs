@@ -1131,12 +1131,18 @@ impl DefraSessionHook {
         }
     }
 
+    /// Returns the lifecycle, whether this call won the terminal compare, and
+    /// the host stop verdict when it did.
     pub(super) async fn cancel_background_tool_lifecycle(
         &self,
         mut lifecycle: ToolCallLifecycle,
         cause: CancelCause,
         completion_reason: &str,
-    ) -> anyhow::Result<(ToolCallLifecycle, bool)> {
+    ) -> anyhow::Result<(
+        ToolCallLifecycle,
+        bool,
+        Option<crate::managed_exec::ProcessStopOutcome>,
+    )> {
         let won_terminal_compare = if lifecycle.is_running() {
             lifecycle
                 .cancel_during_run_owned(cause, completion_reason)
@@ -1147,12 +1153,20 @@ impl DefraSessionHook {
         // Persist the explicit cancellation before waking the worker. If the
         // token fires first, the worker can win the same running-state compare
         // and replace the user's specific cause with generic `interrupted`.
-        if won_terminal_compare {
-            self.background_executions
-                .cancel(lifecycle.tool_call_id())
-                .await;
-        }
-        Ok((lifecycle, won_terminal_compare))
+        let process = if won_terminal_compare {
+            let doc_id = lifecycle
+                .doc_id()
+                .context("cancelled background lifecycle lacks physical identity")?
+                .to_owned();
+            Some(
+                self.background_executions
+                    .stop_execution(lifecycle.tool_call_id(), &doc_id)
+                    .await,
+            )
+        } else {
+            None
+        };
+        Ok((lifecycle, won_terminal_compare, process))
     }
 
     pub(super) async fn background_tool_envelope(

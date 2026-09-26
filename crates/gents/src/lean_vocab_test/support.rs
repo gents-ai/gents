@@ -136,6 +136,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) pairing_reconcile_sweep_scheduling_cases:
         Vec<LeanPairingReconcileSweepSchedulingCase>,
     pub(crate) managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
+    pub(crate) process_stop_cases: Vec<LeanProcessStopCase>,
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
@@ -1276,6 +1277,10 @@ pub(crate) fn lean_pairing_reconcile_sweep_retry_boundary_cases(
 pub(crate) fn lean_pairing_reconcile_sweep_scheduling_cases(
 ) -> &'static [LeanPairingReconcileSweepSchedulingCase] {
     &lean_contract_snapshot().pairing_reconcile_sweep_scheduling_cases
+}
+
+pub(crate) fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
+    &lean_contract_snapshot().process_stop_cases
 }
 
 pub(crate) fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {

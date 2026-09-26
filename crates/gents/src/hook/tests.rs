@@ -2710,7 +2710,18 @@ async fn interruption_cascades_only_to_exact_parent_background_workers() {
         .await;
         lifecycle.start_running().await.unwrap();
         let token = CancellationToken::new();
-        reservations.push(hook.background_executions.reserve(id.into(), token.clone()));
+        let reservation = hook.background_executions.reserve(id.into(), token.clone());
+        if detached {
+            reservations.push(reservation);
+        } else {
+            // Like its worker, the owned execution releases once signalled;
+            // cancellation is counted only after that release.
+            let signalled = token.clone();
+            tokio::spawn(async move {
+                signalled.cancelled().await;
+                drop(reservation);
+            });
+        }
         tokens.push(token);
     }
     let unrelated_hook = DefraSessionHook::with_identity(

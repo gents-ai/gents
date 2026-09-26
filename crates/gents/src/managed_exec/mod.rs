@@ -5,11 +5,13 @@
 //! handling can stop native traversal work instead of only dropping an awaiter.
 
 mod output;
+pub(crate) mod ownership;
 mod process;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use output::ManagedExecOutcome;
+pub use ownership::{CancelProcessReply, ProcessStopOutcome};
 pub(crate) use process::{
     active_executor_snapshots, run_managed_exec, spawn_managed_process, ManagedExecKind,
     ManagedExecRequest, ManagedProcess, SpawnManagedProcessRequest,

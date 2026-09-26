@@ -683,7 +683,7 @@ Semantic submodules:
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
-| `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed` |
+| `Proofs.ManagedExec` | `State`, `Transition`, `Executable`, `Properties`, `Composed`, `Ownership` |
 | `Proofs.BackendHealth` | `State`, `Transition`, `Properties`, `Executable` |
 | `Proofs.Fleet` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.CompletionRetry` | `State`, `Transition`, `Executable`, `Properties` |
@@ -753,6 +753,13 @@ managed-exec unit tests and `state_machine_conformance`. A generated native
 subprocess inventory also requires `managedExecProcessGroupBoundary`,
 process-tree termination, and bounded output drain for `list_files`, `glob`,
 `grep`, `bash`, and `bash_unrestricted`.
+
+`ManagedExec.Ownership` models host process ownership after the volatile
+worker is gone: a durable host record's pid and start identity prove
+ownership, a signal is admissible only for a proven-owned running group, and
+a cancellation is reported only for an observed stop. `process_stop_cases`
+carry every observation pair; the restart and orphan classifiers take the
+resulting verdict as input and settle an unobserved stop as `processLost`.
 
 The Lean `pendingSpawn` state is intentionally one step finer than the Rust
 registry surface: Rust records an active executor only after `Command::spawn`

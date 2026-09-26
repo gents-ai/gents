@@ -405,6 +405,18 @@ structure ManagedExecLivenessCase where
   killSignalRequired : Bool
   deriving Repr
 
+/-- Host stop verdict witness: the owner's observation before and
+    after its signal, and the verdict, signal admissibility and cancel reply
+    computed by `ManagedExec`. -/
+structure ProcessStopCase where
+  name : String
+  before : String
+  after : String
+  mayTerminate : Bool
+  outcome : String
+  cancelReply : String
+  deriving Repr
+
 structure LifecycleTransitionCase where
   name : String
   domain : String
@@ -459,6 +471,8 @@ structure RecoverySweepCase where
   parentInterrupted : Option Bool := none
   parentTerminal : Option Bool := none
   executionRegistered : Option Bool := none
+  processOutcome : Option String := none
+  ownerTaskDeleted : Option Bool := none
   recoveryCause : Option String := none
   notificationReason : Option String := none
   deriving DecidableEq, Repr
@@ -477,6 +491,7 @@ structure RestartDispositionCase where
   parentObservation : String
   deadlineExpired : Bool
   unclaimedExpired : Bool
+  processOutcome : String
   disposition : String
   cause : Option String
   terminalState : Option String

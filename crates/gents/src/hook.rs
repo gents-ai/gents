@@ -151,9 +151,127 @@ impl BackgroundLiveOutputState {
 pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
+    process_records: crate::managed_exec::ownership::ProcessRecordStore,
 }
 
+/// Bound on waiting for a signalled live worker to release its execution.
+const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl BackgroundExecutionRegistry {
+    /// Keep durable host records of spawned background processes in `dir`,
+    /// which must belong to this runtime's exclusively locked store. Records
+    /// are otherwise volatile: a restarted runtime cannot prove it owns a
+    /// surviving process and settles its row as lost.
+    pub fn with_process_records(mut self, dir: PathBuf) -> Self {
+        self.process_records = crate::managed_exec::ownership::ProcessRecordStore::Durable(dir);
+        self
+    }
+
+    /// Recorder installed around one background execution. Each spawned
+    /// process replaces the execution's record.
+    pub(crate) fn process_recorder(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> crate::managed_exec::ownership::ProcessRecorder {
+        let store = self.process_records.clone();
+        let tool_call_id = tool_call_id.to_owned();
+        let tool_call_doc_id = tool_call_doc_id.to_owned();
+        crate::managed_exec::ownership::ProcessRecorder::new(move |identity| {
+            let record = crate::managed_exec::ownership::ProcessRecord {
+                tool_call_id: tool_call_id.clone(),
+                tool_call_doc_id: tool_call_doc_id.clone(),
+                identity,
+            };
+            if let Err(error) = store.write(&record) {
+                tracing::warn!(
+                        tool_call_id = %record.tool_call_id,
+                        %error,
+                    "failed to record background process ownership; a runtime restart will settle it as lost"
+                );
+            }
+        })
+    }
+
+    pub(crate) fn process_record(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> Option<crate::managed_exec::ownership::ProcessRecord> {
+        self.process_records
+            .read(tool_call_id)
+            .filter(|record| record.tool_call_doc_id == tool_call_doc_id)
+    }
+
+    pub(crate) fn process_record_list(&self) -> Vec<crate::managed_exec::ownership::ProcessRecord> {
+        self.process_records.list()
+    }
+
+    /// Forgets a finished execution's record once its leader is observed
+    /// gone. A leader that outlives its execution keeps the record so a later
+    /// sweep can stop it.
+    pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
+        if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
+            let observed = record
+                .identity
+                .await_leader_exit(crate::managed_exec::ownership::KILL_GRACE)
+                .await;
+            if observed == crate::managed_exec::ownership::ProcessObservation::Running {
+                tracing::warn!(
+                    tool_call_id,
+                    pid = record.identity.pid,
+                    "background process outlived its execution; keeping its record"
+                );
+                return;
+            }
+        }
+        self.process_records.remove(tool_call_id);
+    }
+
+    pub(crate) fn forget_process_record(&self, tool_call_id: &str) {
+        self.process_records.remove(tool_call_id);
+    }
+
+    /// Stops one background execution through its owner and reports the
+    /// verdict (Lean `ManagedExec.stopOutcome`). A live worker in this
+    /// runtime is proven ownership: it is signalled and must release its
+    /// execution, and any recorded group must then be observed empty. With
+    /// no live worker, only a durable record whose leader matches proves
+    /// ownership. The caller persists the row's terminal state first.
+    pub(crate) async fn stop_execution(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> crate::managed_exec::ProcessStopOutcome {
+        use crate::managed_exec::ownership::ProcessObservation;
+        use crate::managed_exec::ProcessStopOutcome;
+        let record = self.process_record(tool_call_id, tool_call_doc_id);
+        if self.cancel(tool_call_id).await {
+            let released = tokio::time::timeout(
+                LIVE_STOP_RELEASE_WAIT,
+                self.wait_for_completion(tool_call_id),
+            )
+            .await
+            .is_ok();
+            let after = if !released {
+                ProcessObservation::Running
+            } else if let Some(record) = record {
+                record
+                    .identity
+                    .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
+                    .await
+            } else {
+                ProcessObservation::Exited
+            };
+            return ProcessStopOutcome::from_observations(ProcessObservation::Running, after);
+        }
+        let Some(record) = record else {
+            return ProcessStopOutcome::NotOwned;
+        };
+        let (before, after) = record.identity.stop().await;
+        ProcessStopOutcome::from_observations(before, after)
+    }
+
     /// Authorized observation of the runtime-owned output buffer. Adapters
     /// use the same output and identity boundary as read_process, but read one
     /// complete retained snapshot without changing the model's page budget.

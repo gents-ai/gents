@@ -159,6 +159,18 @@ pub(crate) struct LeanManagedExecLivenessCase {
     pub(crate) kill_signal_required: bool,
 }
 
+/// Host stop verdict witness (Lean `ManagedExec.Ownership`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanProcessStopCase {
+    pub(crate) name: String,
+    pub(crate) before: String,
+    pub(crate) after: String,
+    pub(crate) may_terminate: bool,
+    pub(crate) outcome: String,
+    pub(crate) cancel_reply: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanToolPreflightCase {
     pub(crate) name: String,

@@ -51,4 +51,24 @@ def managedExecLivenessCases : List ManagedExecLivenessCase :=
     }
   ]
 
+/-- Every (before, after) observation pair, with its verdict computed by the
+    ownership model rather than written by hand. -/
+def processStopCases : List ProcessStopCase :=
+  ManagedExec.ProcessObservation.all.flatMap fun before =>
+    ManagedExec.ProcessObservation.all.map fun after =>
+      let outcome := ManagedExec.stopOutcome before after
+      { name := "process_" ++ before.toContract ++ "_then_" ++ after.toContract
+      , before := before.toContract
+      , after := after.toContract
+      , mayTerminate := ManagedExec.mayTerminate before
+      , outcome := outcome.toContract
+      , cancelReply := (ManagedExec.cancelReply outcome).toContract
+      }
+
+theorem processStopCases_cancelled_only_after_observed_stop :
+    ∀ witness ∈ processStopCases,
+      witness.cancelReply = "cancelled" →
+        witness.before = "running" ∧ witness.after = "exited" := by
+  native_decide
+
 end Conformance.ContractCases

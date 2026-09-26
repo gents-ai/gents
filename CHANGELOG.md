@@ -81,6 +81,17 @@ source consistency checks, not a separate runtime compatibility version.
 - A running command's live output in the desktop transcript stays on its
   newest line unless you scroll up, and multi-line command output says how many
   lines it holds (#1620).
+- A `spawn_process` process no longer outlives a runtime crash unnoticed, and
+  `cancel_process` no longer reports `cancelled` for a process it did not
+  stop. The runtime records each spawned process (pid, process group and OS
+  start time) in its store directory; after a restart it stops a surviving
+  process it can prove it owns, and settles the row as `failed` with reason
+  `process_lost` when it cannot, instead of leaving it `running`.
+  `cancel_process` returns `cancelled` only once the process is observed
+  gone, `lost` when this runtime could not prove it owned the process, and
+  `unverified` when the process is still running after the signal. Deleting
+  the task or trigger that started a run stops that run's background
+  processes (reason `task_deleted`) (#1858).
 - CLI integration tests recover from a port taken between allocation and the
   server's bind, instead of failing the run (#1641).
 - A runtime with one permanently invalid behavior it is not using now settles

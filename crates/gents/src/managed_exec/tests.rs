@@ -598,3 +598,132 @@ async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_
         other => panic!("expected direct-child exited outcome, got {other:?}"),
     }
 }
+
+#[test]
+fn rust_process_stop_outcome_vocabulary_matches_lean_model() {
+    let values = ownership::ProcessStopOutcome::ALL
+        .iter()
+        .copied()
+        .map(ownership::ProcessStopOutcome::as_str)
+        .collect::<Vec<_>>();
+    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+        domain: "ProcessStopOutcome",
+        rust_source: "ProcessStopOutcome::ALL",
+        rust_values: &values,
+    });
+}
+
+#[test]
+fn rust_cancel_process_reply_vocabulary_matches_lean_model() {
+    let values = ownership::CancelProcessReply::ALL
+        .iter()
+        .copied()
+        .map(ownership::CancelProcessReply::as_str)
+        .collect::<Vec<_>>();
+    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
+        domain: "CancelProcessReply",
+        rust_source: "CancelProcessReply::ALL",
+        rust_values: &values,
+    });
+}
+
+/// Every generated observation pair is checked against the native verdict
+/// mapping; the reachable observations are then produced by a real
+/// test-owned process group and the owner's own stop.
+#[cfg(unix)]
+#[tokio::test]
+async fn generated_process_stop_cases_drive_host_owner() {
+    use ownership::test_support::OwnedTestProcess;
+    use ownership::{ProcessIdentity, ProcessObservation, ProcessStopOutcome};
+
+    let observation = |name: &str| {
+        ProcessObservation::ALL
+            .into_iter()
+            .find(|observation| observation.as_str() == name)
+            .unwrap_or_else(|| panic!("unknown Lean process observation {name}"))
+    };
+    let cases = crate::lean_vocab_test::lean_process_stop_cases();
+    assert_eq!(cases.len(), 9);
+    for case in cases {
+        let before = observation(&case.before);
+        let after = observation(&case.after);
+        let outcome = ProcessStopOutcome::from_observations(before, after);
+        assert_eq!(outcome.as_str(), case.outcome, "{}", case.name);
+        assert_eq!(before.may_terminate(), case.may_terminate, "{}", case.name);
+        assert_eq!(
+            outcome.cancel_reply().as_str(),
+            case.cancel_reply,
+            "{}",
+            case.name
+        );
+    }
+    let case = |before: ProcessObservation, after: ProcessObservation| {
+        cases
+            .iter()
+            .find(|case| case.before == before.as_str() && case.after == after.as_str())
+            .expect("generated observation pair")
+    };
+
+    // A recorded running group is proven owned; the owner's stop observes it
+    // exit, which is the only verdict reported as cancelled.
+    let process = OwnedTestProcess::spawn(None).await;
+    assert_eq!(process.identity.observe(), ProcessObservation::Running);
+    let (before, after) = process.identity.stop().await;
+    let stopped = case(before, after);
+    assert_eq!(stopped.outcome, "stopped");
+    assert_eq!(stopped.cancel_reply, "cancelled");
+    assert_eq!(process.identity.observe(), ProcessObservation::Exited);
+
+    // The same record after the group ended: nothing is signalled and the
+    // result is lost, not cancelled.
+    let (before, after) = process.identity.stop().await;
+    let exited = case(before, after);
+    assert_eq!(exited.outcome, "alreadyExited");
+    assert!(!exited.may_terminate);
+    process.finish().await;
+
+    // A live pid whose start identity differs (a reused pid) is not owned
+    // and must survive the owner's stop.
+    let process = OwnedTestProcess::spawn(None).await;
+    let reused = ProcessIdentity {
+        start: format!("{}-reused", process.identity.start),
+        ..process.identity.clone()
+    };
+    let (before, after) = reused.stop().await;
+    let unowned = case(before, after);
+    assert_eq!(unowned.outcome, "notOwned");
+    assert_eq!(unowned.cancel_reply, "lost");
+    assert_eq!(
+        process.identity.observe(),
+        ProcessObservation::Running,
+        "an unproven identity must not be signalled"
+    );
+    process.finish().await;
+}
+
+/// The durable record written by the recorder names the exact spawned
+/// group, and a fresh store over the same directory reads it back, as a
+/// restarted runtime does.
+#[cfg(unix)]
+#[tokio::test]
+async fn durable_process_record_survives_a_fresh_store() {
+    use ownership::test_support::OwnedTestProcess;
+    use ownership::{ProcessObservation, ProcessRecordStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let registry = crate::hook::BackgroundExecutionRegistry::default()
+        .with_process_records(dir.path().to_path_buf());
+    let process =
+        OwnedTestProcess::spawn(Some(registry.process_recorder("spawned:tool", "tool-doc"))).await;
+    let restarted = ProcessRecordStore::Durable(dir.path().to_path_buf());
+    let record = restarted.read("spawned:tool").expect("durable record");
+    assert_eq!(record.tool_call_doc_id, "tool-doc");
+    assert_eq!(record.identity, process.identity);
+    assert_eq!(record.identity.observe(), ProcessObservation::Running);
+    assert!(registry
+        .process_record("spawned:tool", "other-doc")
+        .is_none());
+    restarted.remove("spawned:tool");
+    assert!(restarted.list().is_empty());
+    process.finish().await;
+}

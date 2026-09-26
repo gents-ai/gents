@@ -183,12 +183,32 @@ enum RecoveryOutcome {
     Failed,
     BackgroundInterrupted,
     UnclaimedCrossDeploymentSpawn,
+    ProcessLost,
+    TaskDeleted,
 }
 
 impl super::ToolCallLifecycle {
+    /// Startup recovery without host process records: a surviving native
+    /// background process cannot be proven owned, so its row settles as lost.
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
+    ) -> Result<ToolCallRecoveryReport> {
+        Self::recover_all_with_executions(
+            node,
+            agent_did,
+            &crate::hook::BackgroundExecutionRegistry::default(),
+        )
+        .await
+    }
+
+    /// Startup recovery. Native background rows go through the host process
+    /// owner in `executions`, which stops a proven-owned surviving process
+    /// before its row is settled.
+    pub async fn recover_all_with_executions(
+        node: &std::sync::Arc<EmbeddedNode>,
+        agent_did: &str,
+        executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
         let materialized_children = recover_orphan_subagent_children(node, agent_did).await?;
         if materialized_children > 0 {
@@ -198,7 +218,10 @@ impl super::ToolCallLifecycle {
             );
         }
 
-        let tool_calls_recovered = recover_stuck_running_tool_calls(node, agent_did).await?;
+        let tool_calls_recovered = recover_stuck_running_tool_calls(node, agent_did).await?
+            + Self::reconcile_orphaned_background_tools(node, agent_did, executions)
+                .await?
+                .tool_calls_terminalized;
         let notifications_repaired =
             Self::reconcile_background_completion_side_effects(node, agent_did)
                 .await?
@@ -442,10 +465,14 @@ impl super::ToolCallLifecycle {
         Ok(report)
     }
 
-    /// Periodic repair for a durable native-background row whose volatile
-    /// process owner is absent. Live workers are skipped by registry identity;
-    /// an empty registry after restart (or panic cleanup) re-applies the same
-    /// classifier used by startup recovery.
+    /// Native background rows (Lean `orphanedBackgroundToolSweep`), on the
+    /// periodic tick and at startup. A row whose live worker is registered in
+    /// `executions` belongs to that worker unless its task was deleted, in
+    /// which case the cancellation is persisted first and the worker stopped.
+    /// Without a live worker, the host process owner stops a proven-owned
+    /// surviving process before the row is settled; a stop it cannot observe
+    /// settles the row as lost, and a group it still observes running keeps
+    /// the row running for a later tick.
     pub async fn reconcile_orphaned_background_tools(
         node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
@@ -453,55 +480,151 @@ impl super::ToolCallLifecycle {
     ) -> Result<OrphanedBackgroundToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
         let mut report = OrphanedBackgroundToolReport::default();
+        let mut running_background = std::collections::HashSet::new();
 
         for row in rows {
-            if row.agent_did.as_deref() != Some(agent_did)
-                || !is_background_tool_row(&row)
-                || executions.contains(&row.tool_call_id).await
-            {
+            if row.agent_did.as_deref() != Some(agent_did) || !is_background_tool_row(&row) {
                 continue;
             }
+            running_background.insert(row.tool_call_id.clone());
+            let registered = executions.contains(&row.tool_call_id).await;
             let parent = match row.request_id.as_deref().filter(|id| !id.is_empty()) {
                 Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
                 None => None,
             };
+            // An unresolvable parent is an incomplete owner observation; it
+            // licenses neither a signal nor a write.
+            let Some(parent) = parent else {
+                if unresolved_parent_warning_due(&row.doc_id) {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        "background tool's parent request is unresolved; leaving it running"
+                    );
+                }
+                continue;
+            };
+            let task_deleted = owner_task_deleted(node, agent_did, &parent).await?;
+            if registered && !task_deleted {
+                continue;
+            }
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
-            let Some(outcome) = classify_running_tool_recovery(&row, parent.as_ref(), Utc::now())
+
+            if registered {
+                // Persist the cause before signalling, as an explicit cancel
+                // does, so the worker's own terminal write loses the compare.
+                let updated = match recover_tool_call_row(
+                    node,
+                    &row,
+                    deadline_at,
+                    RecoveryOutcome::TaskDeleted,
+                    true,
+                    None,
+                )
+                .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to cancel background tool of a deleted task"
+                        );
+                        continue;
+                    }
+                };
+                let process = executions
+                    .stop_execution(&row.tool_call_id, &row.doc_id)
+                    .await;
+                if process != crate::managed_exec::ProcessStopOutcome::Stopped {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        process = process.as_str(),
+                        "background process of a deleted task was not observed to stop"
+                    );
+                }
+                if updated {
+                    append_recovered_background_tool_completion(
+                        node,
+                        &row,
+                        RecoveryOutcome::TaskDeleted,
+                    )
+                    .await;
+                    report.tool_calls_terminalized += 1;
+                }
+                continue;
+            }
+
+            let process = executions
+                .stop_execution(&row.tool_call_id, &row.doc_id)
+                .await;
+            let Some(outcome) =
+                classify_orphaned_background_tool(&row, &parent, process, task_deleted, Utc::now())
             else {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    tool_call_id = %row.tool_call_id,
+                    process = process.as_str(),
+                    "orphaned background process is still running; leaving its row running"
+                );
                 continue;
             };
 
-            let updated = match recover_tool_call_row(
-                node,
-                &row,
-                deadline_at,
-                outcome,
-                parent.is_some(),
-                None,
-            )
-            .await
-            {
-                Ok(updated) => updated,
-                Err(error) => {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        session_id = %row.session_id,
-                        tool_call_id = %row.tool_call_id,
-                        error = %error,
-                        "failed to reconcile orphaned background tool"
-                    );
-                    continue;
-                }
-            };
+            let updated =
+                match recover_tool_call_row(node, &row, deadline_at, outcome, true, None).await {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            request_id = row.request_id.as_deref().unwrap_or(""),
+                            session_id = %row.session_id,
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to reconcile orphaned background tool"
+                        );
+                        continue;
+                    }
+                };
+            executions.forget_process_record(&row.tool_call_id);
             if !updated {
                 continue;
             }
 
-            if parent.is_some() {
-                append_recovered_background_tool_completion(node, &row, outcome).await;
-            }
+            append_recovered_background_tool_completion(node, &row, outcome).await;
             report.tool_calls_terminalized += 1;
+            tracing::info!(
+                doc_id = %row.doc_id,
+                tool_call_id = %row.tool_call_id,
+                process = process.as_str(),
+                lifecycle_state = %outcome.lifecycle_state().as_str(),
+                "reconciled orphaned background tool"
+            );
+        }
+
+        // A record whose execution is neither live here nor running is left
+        // from a crash after settlement, or from a group that outlived its
+        // settled row. Stop what is still proven owned, then forget it.
+        for record in executions.process_record_list() {
+            if running_background.contains(&record.tool_call_id)
+                || executions.contains(&record.tool_call_id).await
+            {
+                continue;
+            }
+            let (before, after) = record.identity.stop().await;
+            if crate::managed_exec::ProcessStopOutcome::from_observations(before, after)
+                == crate::managed_exec::ProcessStopOutcome::StillRunning
+            {
+                tracing::warn!(
+                    tool_call_id = %record.tool_call_id,
+                    pid = record.identity.pid,
+                    "settled background execution still has a running process"
+                );
+                continue;
+            }
+            executions.forget_process_record(&record.tool_call_id);
         }
 
         if !report.is_noop() {
@@ -511,6 +634,85 @@ impl super::ToolCallLifecycle {
             );
         }
         Ok(report)
+    }
+
+    /// Explicit cancellation of a running native background row that has no
+    /// live worker in this runtime. The host process owner stops the process
+    /// only if a durable record proves ownership. An observed stop settles
+    /// the row as cancelled with `cause`; an unobserved one settles it as
+    /// lost; a group still observed running leaves the row running. Returns
+    /// the verdict and whether this call won the row's terminal compare.
+    pub(crate) async fn cancel_unowned_background_tool(
+        node: &std::sync::Arc<EmbeddedNode>,
+        lifecycle: &mut ToolCallLifecycle,
+        executions: &crate::hook::BackgroundExecutionRegistry,
+        cause: CancelCause,
+        completion_reason: &str,
+    ) -> Result<(crate::managed_exec::ProcessStopOutcome, bool)> {
+        use crate::managed_exec::ProcessStopOutcome;
+        let doc_id = lifecycle
+            .doc_id()
+            .context("background cancellation requires physical tool identity")?
+            .to_owned();
+        let tool_call_id = lifecycle.tool_call_id().to_owned();
+        let process = executions.stop_execution(&tool_call_id, &doc_id).await;
+        let (won, status, reason) = match process {
+            ProcessStopOutcome::StillRunning => return Ok((process, false)),
+            ProcessStopOutcome::Stopped => (
+                lifecycle
+                    .cancel_during_run_owned(cause, completion_reason)
+                    .await?,
+                "cancelled",
+                completion_reason,
+            ),
+            ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
+                let outcome = RecoveryOutcome::ProcessLost;
+                let result = outcome.result_text(None);
+                let class = outcome.failure_class().unwrap_or(FailureClass::External);
+                let won = if lifecycle.is_bridge() {
+                    lifecycle
+                        .bridge_failure_with_completion_reason(
+                            ChildTerminal::Failed {
+                                reason: result,
+                                failure_class: class,
+                            },
+                            outcome.notification_reason(),
+                        )
+                        .await?
+                } else {
+                    lifecycle
+                        .fail_owned_with_completion_reason(
+                            &result,
+                            class,
+                            outcome.notification_reason(),
+                        )
+                        .await?
+                };
+                (won, "failed", outcome.notification_reason())
+            }
+        };
+        executions.forget_process_record(&tool_call_id);
+        if won {
+            if let Err(error) = crate::background_completion::append_background_tool_completion(
+                node,
+                lifecycle.session_id(),
+                lifecycle.request_id(),
+                &doc_id,
+                lifecycle.tool_name(),
+                status,
+                "",
+                Some(reason),
+            )
+            .await
+            {
+                tracing::warn!(
+                    tool_call_id,
+                    error = %error,
+                    "failed to append cancelled background tool notification"
+                );
+            }
+        }
+        Ok((process, won))
     }
 
     /// Redrive the idempotent notification + session wake after the lifecycle
@@ -973,6 +1175,116 @@ mod tests {
         );
     }
 
+    /// Every native restart and orphan witness, including the still-running
+    /// verdict no test host can construct, through the native classifier.
+    #[test]
+    fn generated_native_process_verdicts_match_orphan_classifier() {
+        use crate::managed_exec::ProcessStopOutcome;
+        let verdict = |name: &str| match name {
+            "stopped" => ProcessStopOutcome::Stopped,
+            "alreadyExited" => ProcessStopOutcome::AlreadyExited,
+            "stillRunning" => ProcessStopOutcome::StillRunning,
+            "notOwned" => ProcessStopOutcome::NotOwned,
+            other => panic!("unknown Lean stop outcome {other}"),
+        };
+        let row = |deadline: bool, unclaimed: bool| -> RunningToolCallRow {
+            serde_json::from_value(serde_json::json!({
+                "_docID": "tool-doc",
+                "session_id": "session",
+                "tool_call_id": "spawned:parent",
+                "await_mode": "background",
+                "deadline_at": if deadline { "2020-01-01T00:00:00Z" } else { "2999-01-01T00:00:00Z" },
+                "unclaimed_deadline_at": if unclaimed { Some("2020-01-01T00:00:00Z") } else { None },
+            }))
+            .unwrap()
+        };
+        let parent = |state: RequestLifecycleState| AgentRequestRow {
+            request_id: "parent".to_string(),
+            lifecycle_state: Some(state),
+            ..Default::default()
+        };
+        let lean_cause = |outcome: RecoveryOutcome| match outcome {
+            RecoveryOutcome::TimedOut => "deadlineExceeded",
+            RecoveryOutcome::Cancelled => "parentInterrupted",
+            RecoveryOutcome::Failed => "parentTerminal",
+            RecoveryOutcome::BackgroundInterrupted => "TerminalizeBackgroundedAsInterrupted",
+            RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "unclaimedCrossPrincipalSpawn",
+            RecoveryOutcome::ProcessLost => "processLost",
+            RecoveryOutcome::TaskDeleted => "taskDeleted",
+        };
+        let mut checked = 0;
+        for case in crate::lean_vocab_test::lean_restart_disposition_cases() {
+            let parent_state = match case.parent_observation.as_str() {
+                "live" => RequestLifecycleState::Processing,
+                "interrupted" => RequestLifecycleState::Interrupted,
+                "cleanlyCompleted" => RequestLifecycleState::Completed,
+                "otherTerminal" => RequestLifecycleState::Failed,
+                _ => continue,
+            };
+            if case.await_mode != "background" || case.child_linked {
+                continue;
+            }
+            let outcome = classify_orphaned_background_tool(
+                &row(case.deadline_expired, case.unclaimed_expired),
+                &parent(parent_state),
+                verdict(&case.process_outcome),
+                false,
+                Utc::now(),
+            );
+            assert_eq!(
+                outcome.map(lean_cause),
+                case.cause.as_deref(),
+                "{}",
+                case.name
+            );
+            if let Some(outcome) = outcome {
+                assert_eq!(
+                    Some(outcome.notification_reason()),
+                    case.notification_reason.as_deref(),
+                    "{}",
+                    case.name
+                );
+            }
+            checked += 1;
+        }
+        for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
+            let (Some(process), Some(false), Some(task_deleted)) = (
+                case.process_outcome.as_deref(),
+                case.execution_registered,
+                case.owner_task_deleted,
+            ) else {
+                continue;
+            };
+            let parent_state = if case.parent_live == Some(true) {
+                RequestLifecycleState::Processing
+            } else if case.parent_interrupted == Some(true) {
+                RequestLifecycleState::Interrupted
+            } else if case.parent_terminal == Some(true) {
+                RequestLifecycleState::Completed
+            } else {
+                continue;
+            };
+            let outcome = classify_orphaned_background_tool(
+                &row(
+                    case.deadline_expired == Some(true),
+                    case.unclaimed_expired == Some(true),
+                ),
+                &parent(parent_state),
+                verdict(process),
+                task_deleted,
+                Utc::now(),
+            );
+            assert_eq!(
+                outcome.map(lean_cause),
+                case.recovery_cause.as_deref(),
+                "{}",
+                case.name
+            );
+            checked += 1;
+        }
+        assert!(checked >= 12, "only {checked} generated native witnesses");
+    }
+
     #[test]
     fn interrupted_parent_is_cancel_worthy_terminal_but_not_cleanly_completed() {
         let interrupted = AgentRequestRow {
@@ -1394,7 +1706,9 @@ async fn recover_stuck_running_tool_calls(
 
     let mut recovered = 0;
     for row in rows {
-        if row.agent_did.as_deref() != Some(agent_did) {
+        // Native background rows need the host process owner; the orphan
+        // sweep settles them after this pass.
+        if row.agent_did.as_deref() != Some(agent_did) || is_background_tool_row(&row) {
             continue;
         }
 
@@ -1515,10 +1829,13 @@ async fn append_recovered_background_tool_completion(
         return;
     };
     let status = match outcome {
-        RecoveryOutcome::Cancelled | RecoveryOutcome::BackgroundInterrupted => "cancelled",
+        RecoveryOutcome::Cancelled
+        | RecoveryOutcome::BackgroundInterrupted
+        | RecoveryOutcome::TaskDeleted => "cancelled",
         RecoveryOutcome::TimedOut
         | RecoveryOutcome::Failed
-        | RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "failed",
+        | RecoveryOutcome::UnclaimedCrossDeploymentSpawn
+        | RecoveryOutcome::ProcessLost => "failed",
     };
     let reason = outcome.notification_reason();
     if let Err(error) = crate::background_completion::append_background_tool_completion(
@@ -1732,6 +2049,7 @@ async fn lookup_parent_request(
                 request_id
                 agent_did
                 lifecycle_state
+                caused_by_trigger_id
                 subagent_depth
                 workspace_id
                 workspace_authority
@@ -2386,7 +2704,9 @@ async fn recover_tool_call_row(
     let result = outcome.result_text(deadline_at);
     match outcome {
         RecoveryOutcome::TimedOut => lifecycle.timeout().await,
-        RecoveryOutcome::Cancelled | RecoveryOutcome::BackgroundInterrupted => {
+        RecoveryOutcome::Cancelled
+        | RecoveryOutcome::BackgroundInterrupted
+        | RecoveryOutcome::TaskDeleted => {
             lifecycle
                 .cancel_during_run_from_recovery(
                     outcome
@@ -2397,19 +2717,27 @@ async fn recover_tool_call_row(
                 )
                 .await
         }
-        RecoveryOutcome::Failed | RecoveryOutcome::UnclaimedCrossDeploymentSpawn => {
+        RecoveryOutcome::Failed
+        | RecoveryOutcome::UnclaimedCrossDeploymentSpawn
+        | RecoveryOutcome::ProcessLost => {
             let failure_class = outcome.failure_class().unwrap_or(FailureClass::External);
-            if is_background_tool_row(row) || child_request_id(row).is_some() {
-                // Background native tools and linked children are bridge-owned
-                // rows. Their terminal write must use the bridge transition;
-                // `fail_owned` deliberately rejects them so a native executor
-                // cannot bypass the bridge owner.
+            if lifecycle.is_bridge() {
+                // Bridge-owned rows must use the bridge transition; `fail_owned`
+                // rejects them so a native executor cannot bypass that owner.
                 lifecycle
                     .bridge_failure_with_completion_reason(
                         ChildTerminal::Failed {
                             reason: result,
                             failure_class,
                         },
+                        outcome.notification_reason(),
+                    )
+                    .await
+            } else if lifecycle.is_spawned_background() {
+                lifecycle
+                    .fail_owned_with_completion_reason(
+                        &result,
+                        failure_class,
                         outcome.notification_reason(),
                     )
                     .await
@@ -2441,8 +2769,9 @@ pub fn deadline_is_expired(now: DateTime<Utc>, deadline_at: Option<&str>) -> boo
     deadline_at_is_expired(now, parse_datetime(deadline_at))
 }
 
-/// Shared startup/periodic classifier. Branch order is Lean-fenced by
-/// `restartDisposition` and `orphanedBackgroundToolCause`.
+/// Startup classifier for every row except native background rows, which
+/// `classify_orphaned_background_tool` settles with the host stop verdict.
+/// Branch order is Lean-fenced by `restartDisposition`.
 fn classify_running_tool_recovery(
     row: &RunningToolCallRow,
     parent: Option<&AgentRequestRow>,
@@ -2452,13 +2781,131 @@ fn classify_running_tool_recovery(
         Some(RecoveryOutcome::TimedOut)
     } else if deadline_is_expired(now, row.unclaimed_deadline_at.as_deref()) {
         Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
-    } else if is_background_tool_row(row)
-        && parent.is_some_and(|parent| !request_is_terminal(parent))
-    {
-        Some(RecoveryOutcome::BackgroundInterrupted)
     } else {
         parent.and_then(|parent| classify_terminal_parent_tool_recovery(row, parent))
     }
+}
+
+/// The orphan sweep runs every few seconds; warn about one row's unresolved
+/// parent at most once per interval.
+fn unresolved_parent_warning_due(doc_id: &str) -> bool {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+    static WARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    let mut warned = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = std::time::Instant::now();
+    warned.retain(|_, at| now.duration_since(*at) < INTERVAL);
+    if warned.contains_key(doc_id) {
+        return false;
+    }
+    warned.insert(doc_id.to_owned(), now);
+    true
+}
+
+/// Lean `orphanedBackgroundToolCause` for a row without a live worker whose
+/// parent resolved: the host stop verdict precedes every other cause.
+fn classify_orphaned_background_tool(
+    row: &RunningToolCallRow,
+    parent: &AgentRequestRow,
+    process: crate::managed_exec::ProcessStopOutcome,
+    task_deleted: bool,
+    now: DateTime<Utc>,
+) -> Option<RecoveryOutcome> {
+    use crate::managed_exec::ProcessStopOutcome;
+    match process {
+        ProcessStopOutcome::StillRunning => None,
+        ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
+            Some(RecoveryOutcome::ProcessLost)
+        }
+        ProcessStopOutcome::Stopped => {
+            if deadline_is_expired(now, row.deadline_at.as_deref()) {
+                Some(RecoveryOutcome::TimedOut)
+            } else if deadline_is_expired(now, row.unclaimed_deadline_at.as_deref()) {
+                Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
+            } else if task_deleted {
+                Some(RecoveryOutcome::TaskDeleted)
+            } else if !request_is_terminal(parent) {
+                Some(RecoveryOutcome::BackgroundInterrupted)
+            } else if request_is_interrupted(parent) {
+                Some(RecoveryOutcome::Cancelled)
+            } else {
+                Some(RecoveryOutcome::Failed)
+            }
+        }
+    }
+}
+
+/// Whether the trigger that started `parent`, or that trigger's task, is
+/// observed deleted. A missing document is not a deletion: it may not have
+/// replicated here.
+async fn owner_task_deleted(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    parent: &AgentRequestRow,
+) -> Result<bool> {
+    let Some(trigger_id) = non_empty(parent.caused_by_trigger_id.as_deref()) else {
+        return Ok(false);
+    };
+    let agent_did = escape_graphql_string(agent_did);
+    let trigger_id = escape_graphql_string(trigger_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, trigger_id: {{ _eq: "{trigger_id}" }} }}, showDeleted: true) {{ _deleted task_id }} }}"#
+        ),
+        "tool_call.recovery.owner_trigger",
+    )
+    .await?;
+    let triggers = deletion_rows(&response, "Trigger")?;
+    if triggers.is_empty() {
+        return Ok(false);
+    }
+    let Some(task_id) = triggers
+        .iter()
+        .find(|row| !row.deleted)
+        .map(|row| row.task_id.clone())
+    else {
+        return Ok(true);
+    };
+    let Some(task_id) = non_empty(task_id.as_deref()) else {
+        return Ok(false);
+    };
+    let task_id = escape_graphql_string(task_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ Task(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, task_id: {{ _eq: "{task_id}" }} }}, showDeleted: true) {{ _deleted }} }}"#
+        ),
+        "tool_call.recovery.owner_task",
+    )
+    .await?;
+    let tasks = deletion_rows(&response, "Task")?;
+    Ok(!tasks.is_empty() && tasks.iter().all(|row| row.deleted))
+}
+
+#[derive(Debug, Deserialize)]
+struct DeletionRow {
+    #[serde(rename = "_deleted", default)]
+    deleted: bool,
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+fn deletion_rows(
+    response: &defra_node::QueryResponse,
+    collection: &str,
+) -> Result<Vec<DeletionRow>> {
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(collection))
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
+    serde_json::from_value(value).with_context(|| format!("decode {collection} deletion rows"))
 }
 
 /// Parent-driven recovery cause for a running tool call whose parent has
@@ -2610,22 +3057,28 @@ impl RecoveryOutcome {
             Self::Failed => "parent_terminal",
             Self::BackgroundInterrupted => "interrupted_on_restart",
             Self::UnclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout",
+            Self::ProcessLost => "process_lost",
+            Self::TaskDeleted => "task_deleted",
         }
     }
 
     fn lifecycle_state(self) -> ToolCallState {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,
-            Self::Cancelled | Self::BackgroundInterrupted => ToolCallState::Cancelled,
-            Self::Failed | Self::UnclaimedCrossDeploymentSpawn => ToolCallState::Failed,
+            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => {
+                ToolCallState::Cancelled
+            }
+            Self::Failed | Self::UnclaimedCrossDeploymentSpawn | Self::ProcessLost => {
+                ToolCallState::Failed
+            }
         }
     }
 
     fn failure_class(self) -> Option<FailureClass> {
         match self {
-            Self::TimedOut | Self::Failed => Some(FailureClass::External),
+            Self::TimedOut | Self::Failed | Self::ProcessLost => Some(FailureClass::External),
             Self::UnclaimedCrossDeploymentSpawn => Some(FailureClass::ServiceUnavailable),
-            Self::Cancelled | Self::BackgroundInterrupted => None,
+            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => None,
         }
     }
 
@@ -2652,6 +3105,13 @@ impl RecoveryOutcome {
             Self::UnclaimedCrossDeploymentSpawn => {
                 "no peer claimed subagent spawn before the unclaimed spawn deadline".to_string()
             }
+            Self::ProcessLost => "background process lost: its runtime restarted and could \
+                 not prove it owned the process, or the process ended while no runtime \
+                 observed its result"
+                .to_string(),
+            Self::TaskDeleted => {
+                "background process stopped because its task was deleted".to_string()
+            }
         }
     }
 
@@ -2660,8 +3120,10 @@ impl RecoveryOutcome {
             .and_then(CancelCause::from_persisted)
             .or(match self {
                 Self::TimedOut => Some(CancelCause::Deadline),
-                Self::Cancelled | Self::BackgroundInterrupted => Some(CancelCause::Interrupted),
-                Self::Failed | Self::UnclaimedCrossDeploymentSpawn => None,
+                Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => {
+                    Some(CancelCause::Interrupted)
+                }
+                Self::Failed | Self::UnclaimedCrossDeploymentSpawn | Self::ProcessLost => None,
             })
     }
 }
