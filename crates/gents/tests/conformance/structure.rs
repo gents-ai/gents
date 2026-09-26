@@ -53,6 +53,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("DurableLineage", Module("conformance/background.rs")),
         ("DescendantGraph", Module("misc/descendant_graph.rs")),
+        (
+            "SpawnClaimFence",
+            WorkspaceTest("crates/gents/src/trigger_engine/subagent_source/spawn_fence_tests.rs"),
+        ),
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),

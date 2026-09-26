@@ -60,16 +60,11 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
         tool.child_request_id.as_deref(),
         Some(child_request_id.as_str())
     );
-    let unclaimed_deadline_at = tool
-        .unclaimed_deadline_at
-        .as_deref()
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .expect("background spawn should set unclaimed_deadline_at");
-    let delta = (unclaimed_deadline_at - chrono::Utc::now()).num_seconds();
+    // #1807: a same-principal child is materialized by this runtime, so a
+    // queued one has not failed and carries no unclaimed deadline.
     assert!(
-        (45..=75).contains(&delta),
-        "unclaimed_deadline_at should be about 60s out, got {delta}s"
+        tool.unclaimed_deadline_at.is_none(),
+        "same-principal background spawn must not set unclaimed_deadline_at"
     );
 
     let claim_deadline = tokio::time::Instant::now() + Duration::from_secs(5);

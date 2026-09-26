@@ -587,3 +587,79 @@ async fn fan_out_with_every_child_unclaimed_leaves_parent_able_to_report() {
             .is_some_and(|text| text.contains("no materialized row")));
     }
 }
+
+#[tokio::test]
+async fn late_local_child_materializes_attached_to_its_bridge() {
+    // #1807: a same-principal spawn carries no unclaimed deadline, so a child
+    // this runtime materializes late is still its bridge's child.
+    let db = setup_db_without_subagent_source("r4c-late-local-child").await;
+    let agent_did = db.node_identity.did().to_string();
+    let hook = create_parent_hook(&db, "parent-late-local", "session-late-local").await;
+    let child_request_id = spawn_unclaimed_background_child(&hook, "spawn-late-local").await;
+    let response = db
+        .node
+        .execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "model-spawn-late-local" } }) { unclaimed_deadline_at } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert!(response.data.unwrap()["AgentToolCall"][0]["unclaimed_deadline_at"].is_null());
+
+    let outcomes = gents::background_completion::reconcile_unclaimed_cross_deployment_spawns(
+        db.node.clone(),
+        &agent_did,
+    )
+    .await
+    .unwrap();
+    assert!(outcomes.is_empty(), "{outcomes:?}");
+
+    let _source = spawn_subagent_source(
+        db.node.clone(),
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+    wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
+    let listed = list_subagents(&hook, "list-late-local", json!({"status": "all"})).await;
+    let entry = &listed["entries"][0];
+    assert_eq!(entry["child_request_id"], child_request_id.as_str());
+    assert_eq!(entry["status"], "running", "{entry}");
+    assert_eq!(
+        entry["materialization_state"], "materialized_local",
+        "{entry}"
+    );
+}
+
+#[tokio::test]
+async fn abandoned_spawn_lists_as_stopping_until_its_child_stops() {
+    // #1807: a fenced spawn may have a child that already won its claim; the
+    // parent sees it as stopping, not as a retryable failure to re-spawn over.
+    let db = setup_db_without_subagent_source("r4c-list-stopping").await;
+    let session_id = "session-stopping";
+    let hook = create_parent_hook(&db, "parent-stopping", session_id).await;
+    spawn_unclaimed_background_child(&hook, "spawn-stopping").await;
+    let mut lifecycle =
+        ToolCallLifecycle::load(db.node.clone(), session_id, "model-spawn-stopping")
+            .await
+            .expect("load lifecycle")
+            .expect("bridge lifecycle should exist");
+    assert!(lifecycle
+        .abandon_unclaimed_spawn(&crate::background_tools::spawn_unclaimed_payload())
+        .await
+        .expect("abandon unclaimed spawn"));
+
+    let running = list_subagents(&hook, "list-stopping-running", json!({})).await;
+    let entries = running["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 1, "{running}");
+    assert_eq!(entries[0]["status"], "stopping");
+    let terminal = list_subagents(
+        &hook,
+        "list-stopping-terminal",
+        json!({"status": "terminal"}),
+    )
+    .await;
+    assert!(
+        terminal["entries"].as_array().unwrap().is_empty(),
+        "{terminal}"
+    );
+}

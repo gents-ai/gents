@@ -1318,6 +1318,11 @@ def caseCoverage : List CoverageEntry :=
       "DescendantCursorCases"
       "descendant_graph::tests::generated_descendant_cursor_cases_page_native_edges")
       "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "spawn_fence_cases"
+      "SpawnFenceCases"
+      "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_fence_cases_replay_native_owners")
+      "background-tools" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"

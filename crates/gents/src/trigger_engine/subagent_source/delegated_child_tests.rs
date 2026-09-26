@@ -10,7 +10,10 @@ use crate::{Collection, KeyIdentity};
 use gents_protocol::output::{DelegatedToolInput, DelegatedWorkspace, PayloadRef};
 use serde_json::{json, Value};
 
-fn receiver_snapshot(identity: Arc<dyn AgentIdentity>, behavior_id: &str) -> ActiveRuntimeSnapshot {
+pub(super) fn receiver_snapshot(
+    identity: Arc<dyn AgentIdentity>,
+    behavior_id: &str,
+) -> ActiveRuntimeSnapshot {
     let did = identity.did().to_owned();
     let principal = Arc::new(RuntimePrincipal {
         agent_did: did.clone(),
@@ -69,7 +72,11 @@ fn receiver_snapshot(identity: Arc<dyn AgentIdentity>, behavior_id: &str) -> Act
     }
 }
 
-async fn install_cross_deployment_behavior(node: &EmbeddedNode, did: &str, behavior_id: &str) {
+pub(super) async fn install_cross_deployment_behavior(
+    node: &EmbeddedNode,
+    did: &str,
+    behavior_id: &str,
+) {
     crate::test_support::install_test_behavior(node, did, behavior_id).await;
     let tools = json!({
         "agent_did": did,

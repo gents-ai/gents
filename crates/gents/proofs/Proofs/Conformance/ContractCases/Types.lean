@@ -492,9 +492,14 @@ structure RestartDispositionCase where
   deadlineExpired : Bool
   unclaimedExpired : Bool
   processOutcome : String
+  childObserved : Bool
   disposition : String
   cause : Option String
   terminalState : Option String
+  /-- `SpawnClaimFence` projection of the settlement: whether the terminal
+      write carries a cancel intent and leaves the acknowledgement pending. -/
+  bridgeCancelIntent : Option Bool
+  bridgeAckPending : Option Bool
   notificationReason : Option String
   queueSource : Option String
   queueKeyPrefix : Option String

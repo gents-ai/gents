@@ -184,6 +184,43 @@ async fn fetch_interrupt_and_ttl(
     Ok((interrupt, valid))
 }
 
+/// Lean `SpawnClaimFence.claim`: a subagent child whose physical spawn bridge
+/// carries a durable cancel intent is refused at claim, without waiting for
+/// the cancel mirror to latch the child's own interrupt. Only the bridge this
+/// child's lineage names, and that names this child back, is consulted.
+async fn spawn_bridge_cancel_intent(
+    node: &EmbeddedNode,
+    request: &crate::watcher::AgentRequest,
+) -> Result<Option<String>> {
+    let Some(bridge_doc_id) = request
+        .caused_by_parent_tool_call_doc_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let bridge = escape_graphql_string(bridge_doc_id);
+    let child = escape_graphql_string(&request.request_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{bridge}" }},
+                child_request_id: {{ _eq: "{child}" }} }}, limit: 1) {{ cancel_cascade_intent_at }} }}"#
+        ),
+        "claim spawn bridge cancel intent",
+    )
+    .await?;
+    #[derive(serde::Deserialize)]
+    struct IntentRow {
+        cancel_cascade_intent_at: Option<String>,
+    }
+    Ok(
+        crate::graphql::first_row::<IntentRow>(&response, "AgentToolCall")?
+            .and_then(|row| row.cancel_cascade_intent_at)
+            .filter(|at| !at.trim().is_empty()),
+    )
+}
+
 impl RequestLifecycle {
     pub async fn claim(&mut self) -> Result<ClaimOutcome> {
         self.claim_inner(false).await
@@ -208,6 +245,10 @@ impl RequestLifecycle {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let (interrupt_requested_at, valid_until) =
             fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
+        let interrupt_requested_at = match interrupt_requested_at {
+            Some(interrupt_at) => Some(interrupt_at),
+            None => spawn_bridge_cancel_intent(&self.node, &self.request).await?,
+        };
         if let Some(interrupt_at) = interrupt_requested_at {
             self.transition_pending_to_interrupted(&interrupt_at)
                 .await?;

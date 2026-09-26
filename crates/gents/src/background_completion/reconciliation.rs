@@ -7,7 +7,6 @@ struct UnclaimedBridgeRow {
     request_id: String,
     request_doc_id: Option<String>,
     tool_call_id: String,
-    child_request_id: String,
     started_at: Option<String>,
     deadline_at: Option<String>,
 }
@@ -17,9 +16,9 @@ struct CancelPendingBridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
+    lifecycle_state: Option<String>,
     request_doc_id: Option<String>,
     tool_call_id: String,
-    child_request_id: String,
     cancel_cascade_intent_at: Option<String>,
     stuck_since: Option<String>,
 }
@@ -92,35 +91,59 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
             continue;
         }
 
-        if child_request_exists_locally(node.as_ref(), &row.child_request_id).await? {
-            clear_unclaimed_deadline_at(node.as_ref(), &row.doc_id).await?;
-            outcomes.push(UnclaimedSpawnReconcileOutcome::Linked {
-                parent_tool_call_id: row.tool_call_id,
-                parent_request_id: row.request_id,
-            });
-            continue;
+        match settle_unclaimed_spawn(&node, &row.doc_id).await? {
+            UnclaimedSpawnSettlement::Linked => {
+                outcomes.push(UnclaimedSpawnReconcileOutcome::Linked {
+                    parent_tool_call_id: row.tool_call_id,
+                    parent_request_id: row.request_id,
+                });
+            }
+            UnclaimedSpawnSettlement::Abandoned => {
+                outcomes.push(UnclaimedSpawnReconcileOutcome::Failed {
+                    parent_tool_call_id: row.tool_call_id,
+                    parent_request_id: row.request_id,
+                });
+            }
+            UnclaimedSpawnSettlement::AlreadySettled => {}
         }
-
-        let payload = subagent_tool_not_allowed_payload(
-            "spawn_subagent",
-            "/behavior_id",
-            "<unknown>",
-            "no_peer_claimed_spawn: no paired peer claimed the cross-deployment spawn within unclaimed_spawn_timeout_seconds",
-            &[],
-        );
-        fail_running_subagent_tool_call(
-            &node,
-            &row.doc_id,
-            &payload,
-            FailureClass::ServiceUnavailable,
-        )
-        .await?;
-        outcomes.push(UnclaimedSpawnReconcileOutcome::Failed {
-            parent_tool_call_id: row.tool_call_id,
-            parent_request_id: row.request_id,
-        });
     }
     Ok(outcomes)
+}
+
+pub(crate) enum UnclaimedSpawnSettlement {
+    Linked,
+    Abandoned,
+    AlreadySettled,
+}
+
+/// The one owner of an expired unclaimed-spawn deadline (Lean
+/// `SpawnClaimFence.expire`), shared by the periodic reconciler and restart
+/// recovery. Only a child row that corroborates this exact bridge's physical
+/// lineage and target principal counts as observed: that child links the
+/// bridge and keeps running. Otherwise the bridge is abandoned with a durable
+/// cancel intent. A bridge a concurrent writer already settled is left alone,
+/// so repeats are no-ops.
+pub(crate) async fn settle_unclaimed_spawn(
+    node: &Arc<EmbeddedNode>,
+    bridge_doc_id: &str,
+) -> Result<UnclaimedSpawnSettlement> {
+    let Some(mut lifecycle) = ToolCallLifecycle::load_physical(node.clone(), bridge_doc_id).await?
+    else {
+        return Ok(UnclaimedSpawnSettlement::AlreadySettled);
+    };
+    if !lifecycle.is_running() {
+        return Ok(UnclaimedSpawnSettlement::AlreadySettled);
+    }
+    if lifecycle.unobserved_child_fence().await?.is_none() {
+        clear_unclaimed_deadline_at(node.as_ref(), bridge_doc_id).await?;
+        return Ok(UnclaimedSpawnSettlement::Linked);
+    }
+    let payload = crate::background_tools::spawn_unclaimed_payload();
+    Ok(if lifecycle.abandon_unclaimed_spawn(&payload).await? {
+        UnclaimedSpawnSettlement::Abandoned
+    } else {
+        UnclaimedSpawnSettlement::AlreadySettled
+    })
 }
 
 pub async fn observe_cancel_cascade_ack(
@@ -132,6 +155,7 @@ pub async fn observe_cancel_cascade_ack(
         AgentToolCall(filter: { cancel_pending_remote_ack: { _eq: true } }) {
             _docID
             request_id
+            lifecycle_state
             request_doc_id
             tool_call_id
             child_request_id
@@ -166,10 +190,38 @@ pub async fn observe_cancel_cascade_ack(
             continue;
         }
 
-        let probe = load_child_ack_probe(node.as_ref(), &row.child_request_id).await?;
-        let child_done = probe
-            .as_ref()
-            .is_some_and(|p| request_terminal_or_interrupted(p));
+        // Only the child that corroborates this bridge's physical lineage can
+        // acknowledge its cancel intent; a row reusing the logical id cannot.
+        let probe = match crate::descendant_graph::resolve_physical_bridge_child(
+            crate::descendant_graph::DescendantGraphAccess::Local(node.as_ref()),
+            request_doc_id,
+            &row.doc_id,
+        )
+        .await
+        {
+            Ok(probe) => probe,
+            Err(error) => {
+                tracing::warn!(
+                    tool_call_doc_id = %row.doc_id,
+                    %error,
+                    "cancel-ack observer could not corroborate the bridge child; ack stays pending"
+                );
+                None
+            }
+        };
+        // A cancelled bridge's intent is acknowledged by its host's interrupt
+        // latch. A spawn fence (a failed or timed-out bridge; Lean
+        // `SpawnClaimFence.observeAck`) waits for the child to be terminal: a latched child that already won its claim may
+        // still be running, and the parent must not re-spawn over it.
+        let spawn_fence = matches!(row.lifecycle_state.as_deref(), Some("failed" | "timedOut"));
+        let child_done = probe.as_ref().is_some_and(|p| {
+            if !spawn_fence {
+                request_terminal_or_interrupted(p)
+            } else {
+                p.lifecycle_state
+                    .is_some_and(RequestLifecycleState::is_terminal)
+            }
+        });
 
         if child_done {
             clear_cancel_pending_ack(node.as_ref(), &row.doc_id).await?;
@@ -203,14 +255,6 @@ pub async fn observe_cancel_cascade_ack(
     Ok(outcomes)
 }
 
-async fn child_request_exists_locally(node: &EmbeddedNode, child_request_id: &str) -> Result<bool> {
-    Ok(
-        crate::request_binding::resolve_request_doc_id(node, child_request_id)
-            .await?
-            .is_some(),
-    )
-}
-
 async fn clear_unclaimed_deadline_at(node: &EmbeddedNode, doc_id: &str) -> Result<()> {
     let escaped = escape_graphql_string(doc_id);
     let datetime_fields =
@@ -230,42 +274,6 @@ async fn clear_unclaimed_deadline_at(node: &EmbeddedNode, doc_id: &str) -> Resul
     )
     .await?;
     Ok(())
-}
-
-async fn load_child_ack_probe(
-    node: &EmbeddedNode,
-    child_request_id: &str,
-) -> Result<Option<AgentRequestRow>> {
-    let Some(child_request_doc_id) =
-        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
-    else {
-        return Ok(None);
-    };
-    let escaped = escape_graphql_string(&child_request_doc_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                lifecycle_state
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("child ack probe failed: {:?}", response.errors);
-    }
-    let value = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .context("AgentRequest field missing from child ack probe")?;
-    let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(value.clone()).context("decode child ack AgentRequest rows")?;
-    Ok(rows.into_iter().next())
 }
 
 fn request_terminal_or_interrupted(row: &AgentRequestRow) -> bool {

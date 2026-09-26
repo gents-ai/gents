@@ -1,0 +1,276 @@
+import Proofs.Basic
+import Mathlib.Tactic.SplitIfs
+
+/-!
+# Unclaimed spawn fence (#1807)
+
+A background `spawn_subagent` bridge names its child before any host has
+materialized or claimed it. The parent observes the child only through a
+replicated child row that corroborates the bridge's exact physical lineage, and
+the host observes the bridge only through its replicated copy, so each side
+acts on a possibly stale view of the other.
+
+A spawn deadline (the unclaimed-spawn deadline or the bridge's ordinary tool
+deadline, whichever settles the bridge first) gives up on a child the parent
+has not observed. Giving up must not create a worker nobody supervises: the
+same terminal write records a durable cancel intent on the bridge. Once the
+bridge replicates to the host, the host refuses to materialize the child, the
+claim gate refuses to claim it, and the cancel mirror latches the interrupt of
+a child already running. Until the child is observed terminal the bridge's
+acknowledgement stays pending, so the parent never treats a child that may
+have already won its claim as stopped.
+-/
+
+namespace SpawnClaimFence
+
+inductive Route where
+  | samePrincipal
+  | crossPrincipal
+  deriving DecidableEq, Repr
+
+/-- A same-principal child is materialized by this runtime's own subagent
+    source, so a queued child has not failed: its bridge keeps awaiting
+    materialization with no fixed unclaimed failure. Only a cross-principal
+    spawn waits on a peer that may never answer. -/
+def unclaimedDeadlineApplies : Route → Bool
+  | .samePrincipal => false
+  | .crossPrincipal => true
+
+inductive Bridge where
+  /-- Running; the parent has not observed the child. -/
+  | awaiting
+  /-- Running; the parent observed the child and cleared the unclaimed deadline. -/
+  | linked
+  /-- Failed `spawnUnclaimed` with a durable cancel intent. -/
+  | abandoned
+  /-- Timed out on its ordinary deadline with a durable cancel intent. -/
+  | expired
+  /-- Timed out after the parent observed its child. That child's stop belongs
+      to the child-liveness owners, not to this fence. -/
+  | settledObserved
+  deriving DecidableEq, Repr
+
+/-- A bridge settled without having observed its child. -/
+def Bridge.fenced : Bridge → Bool
+  | .abandoned | .expired => true
+  | .awaiting | .linked | .settledObserved => false
+
+inductive Child where
+  | absent
+  | pending
+  | running
+  | interrupted
+  | finished
+  deriving DecidableEq, Repr
+
+def Child.terminal : Child → Bool
+  | .interrupted | .finished => true
+  | .absent | .pending | .running => false
+
+structure World where
+  bridge : Bridge
+  child : Child
+  /-- A child row corroborating the bridge's physical lineage has replicated
+      to the parent's host. -/
+  childVisible : Bool
+  /-- Durable cancel intent recorded on the bridge. -/
+  cancelIntent : Bool
+  /-- The bridge's cancel intent has replicated to the child's host. -/
+  hostSeesIntent : Bool
+  /-- The child's host latched `interrupt_requested_at` on the child. -/
+  interruptLatched : Bool
+  /-- The bridge still awaits evidence that its child stopped. -/
+  ackPending : Bool
+  deriving DecidableEq, Repr
+
+def World.initial : World :=
+  { bridge := .awaiting, child := .absent, childVisible := false
+  , cancelIntent := false, hostSeesIntent := false, interruptLatched := false
+  , ackPending := false }
+
+inductive Action where
+  /-- Parent: the unclaimed-spawn deadline expired. -/
+  | expire
+  /-- Parent: the bridge's ordinary tool deadline expired. -/
+  | deadline
+  /-- Host: create the child against its current view of the bridge. -/
+  | materialize
+  /-- The child row replicates to the parent. -/
+  | publishChild
+  /-- The bridge replicates to the child's host. -/
+  | replicateBridge
+  /-- Host: latch the interrupt of a live child whose bridge carries an intent. -/
+  | mirror
+  /-- Host: a worker claims the child through the pre-claim gates. -/
+  | claim
+  /-- The running child stops: interrupted if latched, else it finishes. -/
+  | stop
+  /-- Parent: clear the pending acknowledgement once the child is terminal. -/
+  | observeAck
+  deriving DecidableEq, Repr
+
+/-- Settle an awaiting bridge without an observed child: the terminal write
+    carries the durable cancel intent and leaves the acknowledgement pending,
+    because a missing child row is not proof that the child will never
+    materialize or has not already won its claim. -/
+def fence (w : World) (settled : Bridge) : World :=
+  { w with bridge := settled, cancelIntent := true, ackPending := true }
+
+/-- Unclaimed expiry. An observed child links the bridge and keeps running.
+    Re-running expiry on a settled bridge is a no-op. -/
+def expire (w : World) : World :=
+  match w.bridge with
+  | .awaiting => if w.childVisible then { w with bridge := .linked } else fence w .abandoned
+  | .linked | .abandoned | .expired | .settledObserved => w
+
+/-- Ordinary deadline expiry composes with the fence: whichever deadline fires
+    first, an unobserved child is fenced in the same terminal write. -/
+def deadline (w : World) : World :=
+  match w.bridge with
+  | .awaiting =>
+      if w.childVisible then { w with bridge := .settledObserved } else fence w .expired
+  | .linked => { w with bridge := .settledObserved }
+  | .abandoned | .expired | .settledObserved => w
+
+def step (w : World) : Action → World
+  | .expire => expire w
+  | .deadline => deadline w
+  | .materialize =>
+      if w.child == .absent && !w.hostSeesIntent then { w with child := .pending } else w
+  | .publishChild => if w.child != .absent then { w with childVisible := true } else w
+  | .replicateBridge => { w with hostSeesIntent := w.cancelIntent }
+  | .mirror =>
+      if w.hostSeesIntent && (w.child == .pending || w.child == .running) then
+        { w with interruptLatched := true }
+      else w
+  | .claim =>
+      if w.child == .pending then
+        { w with child :=
+            if w.interruptLatched || w.hostSeesIntent then .interrupted else .running }
+      else w
+  | .stop =>
+      if w.child == .running then
+        { w with child := if w.interruptLatched then .interrupted else .finished }
+      else w
+  | .observeAck =>
+      if w.ackPending && w.child.terminal then { w with ackPending := false } else w
+
+/-- Unclaimed expiry is only enabled on routes that carry that deadline. -/
+def enabled (route : Route) : Action → Bool
+  | .expire => unclaimedDeadlineApplies route
+  | _ => true
+
+inductive Reachable (route : Route) : World → Prop where
+  | initial : Reachable route World.initial
+  | step (w : World) (action : Action) :
+      Reachable route w → enabled route action = true → Reachable route (step w action)
+
+/-- An orphan is a live child of a fenced bridge whose stop is no longer
+    awaited. -/
+def orphan (w : World) : Bool :=
+  w.bridge.fenced && !w.child.terminal && !(w.cancelIntent && w.ackPending)
+
+/-- Invariant: a fenced bridge carries its cancel intent and keeps its
+    acknowledgement pending until its child is terminal; the host only ever
+    sees an intent the bridge carries; a latch only exists on a child row. -/
+def fenceInvariant (w : World) : Bool :=
+  (!w.hostSeesIntent || w.cancelIntent) &&
+    (!w.interruptLatched || w.child != .absent) &&
+    (!w.bridge.fenced || (w.cancelIntent && (w.ackPending || w.child.terminal)))
+
+theorem expire_idempotent (w : World) : expire (expire w) = expire w := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  cases b <;> cases v <;> simp [expire, fence]
+
+theorem deadline_idempotent (w : World) : deadline (deadline w) = deadline w := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  cases b <;> cases v <;> simp [deadline, fence]
+
+/-- Both deadlines already expired at restart: the ordinary deadline settles
+    the bridge and the later unclaimed expiry is a no-op. -/
+theorem expire_after_deadline_is_noop (w : World) :
+    expire (deadline w) = deadline w := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  cases b <;> cases v <;> simp [expire, deadline, fence]
+
+theorem step_preserves_fenceInvariant (w : World) (action : Action)
+    (h : fenceInvariant w = true) : fenceInvariant (step w action) = true := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  revert h
+  cases action <;> cases b <;> cases c <;> cases v <;> cases ci <;> cases hs <;>
+    cases il <;> cases ap <;> decide
+
+theorem reachable_fenceInvariant (route : Route) (w : World) (h : Reachable route w) :
+    fenceInvariant w = true := by
+  induction h with
+  | initial => decide
+  | step w action _ _ ih => exact step_preserves_fenceInvariant w action ih
+
+/-- A late materialization or claim never leaves a live child of a fenced
+    bridge unsupervised: its stop is still awaited. -/
+theorem reachable_never_orphan (route : Route) (w : World) (h : Reachable route w) :
+    orphan w = false := by
+  have hf := reachable_fenceInvariant route w h
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  revert hf
+  cases b <;> cases c <;> cases v <;> cases ci <;> cases hs <;> cases il <;>
+    cases ap <;> decide
+
+/-- A host that sees the bridge's intent refuses to materialize its child. -/
+theorem materialize_after_visible_intent_is_refused (w : World)
+    (h : w.hostSeesIntent = true) : (step w .materialize).child = w.child := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  simp at h
+  subst h
+  simp [step]
+
+/-- The claim gate reads the bridge's intent itself; it does not wait for the
+    cancel mirror to latch the child. -/
+theorem claim_after_visible_intent_is_refused (w : World)
+    (hpending : w.child = .pending) (h : w.hostSeesIntent = true) :
+    (step w .claim).child = .interrupted := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  simp at hpending h
+  subst hpending h
+  simp [step]
+
+/-- A fenced bridge's acknowledgement clears only on a terminal child. -/
+theorem fenced_ack_requires_terminal_child (w : World) (h : w.child.terminal = false) :
+    (step w .observeAck).ackPending = w.ackPending := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  cases c <;> simp_all [step, Child.terminal]
+
+theorem step_keeps_bridge (w : World) (action : Action)
+    (h : action ≠ .expire) (h' : action ≠ .deadline) :
+    (step w action).bridge = w.bridge := by
+  cases action <;> simp at h h' <;> simp only [step] <;> (try split_ifs) <;> rfl
+
+/-- A same-principal spawn is never abandoned by the unclaimed deadline. -/
+theorem same_principal_never_abandoned (w : World)
+    (h : Reachable .samePrincipal w) : w.bridge ≠ .abandoned := by
+  induction h with
+  | initial => simp [World.initial]
+  | step w action _ henabled ih =>
+      by_cases hd : action = .deadline
+      · subst hd
+        rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+        simp at ih
+        cases b <;> cases v <;> simp_all [step, deadline, fence]
+      · have hne : action ≠ .expire := by
+          intro hexp
+          subst hexp
+          simp [enabled, unclaimedDeadlineApplies] at henabled
+        rw [step_keeps_bridge w action hne hd]
+        exact ih
+
+/-- Neither expiry treats a child that already won its claim as stopped. -/
+theorem expiry_keeps_live_child_unsettled (w : World) (hawait : w.bridge = .awaiting) :
+    (expire w).child = w.child ∧ (deadline w).child = w.child ∧
+      ((expire w).bridge = .linked ∨ (expire w).ackPending = true) ∧
+      ((deadline w).bridge = .settledObserved ∨ (deadline w).ackPending = true) := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  simp at hawait
+  subst hawait
+  cases v <;> simp [expire, deadline, fence]
+
+end SpawnClaimFence

@@ -20,13 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::{
     child_request_completed, child_terminal_reason, child_terminal_status,
-    fail_running_subagent_tool_call, load_authorized_child_edge, load_child_final_response,
-    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
-    subagent_tool_not_allowed_payload, ChildEdge,
+    load_authorized_child_edge, load_child_final_response, load_child_terminal_row,
+    load_parent_subagent_context, project_child_terminal, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
-use crate::tool_call_lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
+use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
@@ -103,6 +102,7 @@ pub(crate) use projection::ensure_background_subagent_completion_side_effects;
 pub use projection::project_background_subagent_completion;
 pub(crate) use reconciliation::AgentToolCallDateTimeRow;
 pub use reconciliation::{observe_cancel_cascade_ack, reconcile_unclaimed_cross_deployment_spawns};
+pub(crate) use reconciliation::{settle_unclaimed_spawn, UnclaimedSpawnSettlement};
 
 use datetime_fields::{
     agent_tool_call_datetime_update_fragment, clear_cancel_pending_ack, set_stuck_since,

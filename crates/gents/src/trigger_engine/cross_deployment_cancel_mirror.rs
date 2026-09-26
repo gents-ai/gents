@@ -140,15 +140,13 @@ impl CrossDeploymentCancelMirror {
         else {
             return Ok(());
         };
-        let Some(child_request_id) = row
+        if row
             .child_request_id
             .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-        else {
+            .is_none_or(|value| value.trim().is_empty())
+        {
             return Ok(());
-        };
+        }
 
         let dedupe_key = format!("{}:{intent_at}", row.tool_call_id);
         if self.mirrored.contains(&dedupe_key) {
@@ -184,7 +182,15 @@ impl CrossDeploymentCancelMirror {
 
         let snapshot = self.snapshot_rx.borrow().clone();
 
-        let Some(child) = self.load_child_request(&child_request_id).await? else {
+        // Only the child that corroborates this bridge receipt's physical
+        // lineage and target principal is interrupted; a row that merely
+        // reuses the logical child id is never touched.
+        let Some(child) = crate::descendant_graph::resolve_bridge_receipt_child(
+            crate::descendant_graph::DescendantGraphAccess::Local(self.node.as_ref()),
+            doc_id,
+        )
+        .await?
+        else {
             return Ok(());
         };
         if child.agent_did.as_deref() != Some(snapshot.local_did.as_str()) {
@@ -199,8 +205,15 @@ impl CrossDeploymentCancelMirror {
             return Ok(());
         }
 
-        write_child_interrupt_requested_at(self.node.as_ref(), &child_request_id, &intent_at)
-            .await?;
+        write_child_interrupt_requested_at(
+            self.node.as_ref(),
+            child
+                .doc_id
+                .as_deref()
+                .context("corroborated child omitted _docID")?,
+            &intent_at,
+        )
+        .await?;
         self.mirrored.insert(dedupe_key);
         Ok(())
     }
@@ -273,33 +286,6 @@ impl CrossDeploymentCancelMirror {
         Ok(rows.into_iter().next().and_then(|row| row.agent_did))
     }
 
-    async fn load_child_request(&self, child_request_id: &str) -> Result<Option<AgentRequestRow>> {
-        let escaped = escape_graphql_string(child_request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                    limit: 1
-                ) {{
-                    request_id
-                    agent_did
-                    lifecycle_state
-                    interrupt_requested_at
-                }}
-            }}"#
-        );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "cancel mirror child load").await?;
-        let value = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .context("AgentRequest field missing from cancel mirror child query")?;
-        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
-            .context("decode child AgentRequest rows for cancel mirror")?;
-        Ok(rows.into_iter().next())
-    }
-
     async fn resolve_collection_name(&mut self, collection_id: &str) -> Option<String> {
         if let Some(name) = self.collection_id_to_name.get(collection_id) {
             return Some(name.clone());
@@ -361,15 +347,15 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 
 async fn write_child_interrupt_requested_at(
     node: &EmbeddedNode,
-    child_request_id: &str,
+    child_doc_id: &str,
     when: &str,
 ) -> Result<()> {
-    let escaped_id = escape_graphql_string(child_request_id);
+    let escaped_id = escape_graphql_string(child_doc_id);
     let escaped_when = escape_graphql_string(when);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_id}" }} }},
                 input: {{ interrupt_requested_at: "{escaped_when}" }}
             ) {{ _docID }}
         }}"#
@@ -453,6 +439,7 @@ mod tests {
                 create_AgentToolCall(input: {
                     tool_call_key: "parent-request:spawn",
                     request_id: "parent-request",
+                    request_doc_id: "parent-request-doc",
                     session_id: "parent-session",
                     agent_did: "did:test:parent",
                     message_sequence: 1,
@@ -468,6 +455,7 @@ mod tests {
                     await_mode: "background",
                     cancel_policy: "cascade",
                     child_request_id: "child-request",
+                    spawn_target_did: "did:test:child",
                     cancel_cascade_intent_at: "2026-05-15T00:01:00Z",
                     cancel_pending_remote_ack: true
                 }) { _docID }
@@ -476,10 +464,19 @@ mod tests {
         .await;
     }
 
+    /// The child carries the bridge receipt's full physical lineage; the
+    /// mirror interrupts only a child that corroborates it.
     async fn write_child_request(node: &EmbeddedNode) {
+        let response = node
+            .execute(r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "spawn" } }) { _docID } }"#)
+            .await;
+        let bridge_doc_id = response.data.unwrap()["AgentToolCall"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         exec(
             node,
-            r#"mutation {
+            &r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "child-request",
                     agent_did: "did:test:child",
@@ -490,9 +487,12 @@ mod tests {
                     lifecycle_state: "processing",
                     created_at: "2026-05-15T00:00:30Z",
                     caused_by_parent_request_id: "parent-request",
-                    caused_by_parent_tool_call_id: "spawn"
+                    caused_by_parent_request_doc_id: "parent-request-doc",
+                    caused_by_parent_tool_call_id: "spawn",
+                    caused_by_parent_tool_call_doc_id: "BRIDGE_DOC"
                 }) { _docID }
-            }"#,
+            }"#
+            .replace("BRIDGE_DOC", &bridge_doc_id),
         )
         .await;
     }

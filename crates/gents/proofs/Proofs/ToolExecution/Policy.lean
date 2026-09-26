@@ -81,6 +81,9 @@ inductive FailureClass where
   | toolReturnedError
   | policyDenied
   | external
+  /-- No host claimed a cross-principal spawn before its unclaimed deadline
+      (#1807). A scheduling outcome, not an unavailable service. -/
+  | spawnUnclaimed
   deriving DecidableEq, Repr
 
 namespace FailureClass
@@ -92,6 +95,7 @@ def toDefraDB : FailureClass → String
   | .toolReturnedError => "toolReturnedError"
   | .policyDenied => "policyDenied"
   | .external => "external"
+  | .spawnUnclaimed => "spawnUnclaimed"
 
 def all : List FailureClass :=
   [ .argumentInvalid
@@ -100,6 +104,7 @@ def all : List FailureClass :=
   , .toolReturnedError
   , .policyDenied
   , .external
+  , .spawnUnclaimed
   ]
 
 end FailureClass

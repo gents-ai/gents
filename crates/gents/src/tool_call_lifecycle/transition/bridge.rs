@@ -197,6 +197,69 @@ impl ToolCallLifecycle {
         Ok(true)
     }
 
+    /// Running -> Failed(`SpawnUnclaimed`) for a cross-principal spawn whose
+    /// child the parent has not observed (Lean `SpawnClaimFence.expire`). A
+    /// missing child row is not proof the child will never materialize or has
+    /// not already won its claim, so the same terminal write records the
+    /// durable cancel intent its host mirrors onto the child's interrupt latch,
+    /// and leaves the remote acknowledgement pending until the child is
+    /// observed terminal. Returns false when a concurrent writer settled first.
+    pub(crate) async fn abandon_unclaimed_spawn(&mut self, result: &str) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::Running], "abandon_unclaimed_spawn")?;
+        if !self.is_bridge() {
+            return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
+        }
+        let fields = super::super::delivery::TerminalFields {
+            state: ToolCallState::Failed,
+            failure: Some(FailureClass::SpawnUnclaimed),
+            cancel: None,
+            remote_cancel_intent_at: Some(chrono::Utc::now()),
+            completion_reason: Some("unclaimed_spawn_timeout"),
+        };
+        let updated = self
+            .terminalize_bridge_with_delivery(
+                ToolCallState::Running,
+                fields,
+                result,
+                "tool_call.abandon_unclaimed_spawn_delivery",
+            )
+            .await?;
+        if !updated {
+            self.sync_after_lost_running_compare("abandon_unclaimed_spawn")
+                .await?;
+        }
+        Ok(updated)
+    }
+
+    /// Lean `SpawnClaimFence`: the durable cancel intent a terminal write of
+    /// this spawn bridge must carry because no child row corroborating its
+    /// exact physical lineage and target principal is visible. `None` when the
+    /// row is not a spawn bridge or its child is observed. A lineage that
+    /// cannot be resolved fences conservatively: a missing or unverifiable
+    /// child row is not proof that no child will run.
+    pub(crate) async fn unobserved_child_fence(
+        &self,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        if !self.is_subagent_bridge() {
+            return Ok(None);
+        }
+        let (Some(parent), Some(bridge)) = (self.request_doc_id.as_deref(), self.doc_id.as_deref())
+        else {
+            return Ok(Some(chrono::Utc::now()));
+        };
+        let observed = crate::descendant_graph::resolve_physical_bridge_child(
+            crate::descendant_graph::DescendantGraphAccess::Local(&self.node),
+            parent,
+            bridge,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(bridge_doc_id = bridge, %error, "spawn bridge child lineage unresolved; fencing");
+            None
+        });
+        Ok(observed.is_none().then(chrono::Utc::now))
+    }
+
     /// Lean parity: bridge_cancel_cascade. Pure — returns the action that should
     /// be taken on the child AgentRequest. Caller (typically R3's daemon
     /// interrupt dispatcher) performs the actual write to set

@@ -364,11 +364,14 @@ impl ToolCallLifecycle {
             "tool call deadline exceeded at {}",
             self.deadline_at.to_rfc3339()
         );
+        // Lean `SpawnClaimFence.deadline`: whichever deadline settles a spawn
+        // bridge first, an unobserved child is fenced in this same write.
+        let remote_cancel_intent_at = self.unobserved_child_fence().await?;
         let fields = super::super::delivery::TerminalFields {
             state: ToolCallState::TimedOut,
             failure: Some(FailureClass::External),
             cancel: Some(CancelCause::Deadline),
-            remote_cancel_intent_at: None,
+            remote_cancel_intent_at,
             completion_reason: None,
         };
         let updated = match presented {

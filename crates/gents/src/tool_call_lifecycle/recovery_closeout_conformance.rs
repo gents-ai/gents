@@ -201,6 +201,9 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
     for name in [
         "restart_subagent_missing_parent_left_running",
         "restart_unclaimed_spawn_expired_fails",
+        "restart_unclaimed_observed_child_links",
+        "restart_deadline_unobserved_child_fenced",
+        "restart_both_expired_unobserved_child_fenced",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert!(case.child_linked, "{name}");
@@ -232,6 +235,14 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
             // Only the fixture's exact request document is removed.
             remove_parent(&admission.node, admission.tool.request_doc_id().unwrap()).await;
         }
+        if case.parent_observation == "cleanlyCompleted" {
+            update_request(
+                &admission.node,
+                admission.tool.request_doc_id().unwrap(),
+                r#"lifecycle_state: "completed""#,
+            )
+            .await;
+        }
         if case.unclaimed_expired {
             update(
                 &admission.node,
@@ -240,6 +251,45 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
             )
             .await;
         }
+        if case.deadline_expired {
+            update(
+                &admission.node,
+                &tool_doc_id,
+                r#"deadline_at: "2020-01-01T00:00:00Z""#,
+            )
+            .await;
+        }
+        if case.child_observed {
+            // A child row corroborating this exact bridge lineage and target.
+            let parent_doc =
+                crate::graphql::escape_graphql_string(admission.tool.request_doc_id().unwrap());
+            let parent = admission
+                .node
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{parent_doc}" }} }}) {{ request_id }} }}"#
+                ))
+                .await;
+            let parent_request_id = parent.data.unwrap()["AgentRequest"][0]["request_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_request_id_and_workspace(
+                &admission.node,
+                format!("child-{name}"),
+                parent_request_id,
+                admission.tool.request_doc_id().unwrap().to_owned(),
+                "bridge-native-tool".into(),
+                tool_doc_id.clone(),
+                0,
+                admission.agent_did.clone(),
+                "general".into(),
+                "observed child".into(),
+                None,
+                None,
+            )
+            .await
+            .expect("create corroborating child");
+        }
         let result = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
             .await
             .expect("recover accepted restart bridge");
@@ -247,7 +297,7 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
         let response = admission
             .node
             .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state cancel_cause tool_failure_class }} }}"#
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state cancel_cause tool_failure_class unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack }} }}"#
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
@@ -260,6 +310,11 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
                 assert!(row["cancel_cause"].is_null(), "{name}");
                 assert!(row["tool_failure_class"].is_null(), "{name}");
             }
+            "link" => {
+                assert_eq!(result.tool_calls_recovered, 0, "{name}");
+                assert_eq!(row["lifecycle_state"], "running", "{name}");
+                assert!(row["unclaimed_deadline_at"].is_null(), "{name}");
+            }
             "terminalize" => {
                 assert_eq!(result.tool_calls_recovered, 1, "{name}");
                 assert_eq!(
@@ -267,10 +322,24 @@ async fn generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn
                     case.terminal_state.as_deref().unwrap(),
                     "{name}"
                 );
-                assert_eq!(row["tool_failure_class"], "serviceUnavailable", "{name}");
+                if case.cause.as_deref() == Some("unclaimedCrossPrincipalSpawn") {
+                    // Lean `closeAction .unclaimedCrossPrincipalSpawn`.
+                    assert_eq!(row["tool_failure_class"], "spawnUnclaimed", "{name}");
+                }
             }
             other => panic!("unexpected restart disposition {other}"),
         }
+        // `SpawnClaimFence` projection of the settlement, derived by Lean.
+        assert_eq!(
+            row["cancel_cascade_intent_at"].is_string(),
+            case.bridge_cancel_intent.unwrap_or(false),
+            "{name}: cancel intent"
+        );
+        assert_eq!(
+            row["cancel_pending_remote_ack"] == true,
+            case.bridge_ack_pending.unwrap_or(false),
+            "{name}: ack pending"
+        );
         let second = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
             .await
             .expect("repeat restart recovery");
@@ -1032,7 +1101,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
                 assert_eq!(row["tool_failure_class"], "external", "{name}");
             }
             Some("unclaimedCrossPrincipalSpawn") => {
-                assert_eq!(row["tool_failure_class"], "serviceUnavailable", "{name}");
+                assert_eq!(row["tool_failure_class"], "spawnUnclaimed", "{name}");
             }
             Some("TerminalizeBackgroundedAsInterrupted" | "parentInterrupted") => {
                 assert_eq!(row["cancel_cause"], "interrupted", "{name}");
@@ -1367,17 +1436,25 @@ async fn generated_unclaimed_remote_spawn_uses_accepted_bridge() {
     let tool_doc_id = crate::graphql::escape_graphql_string(&tool_doc_id);
     let response = node
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool_doc_id}" }} }}) {{ lifecycle_state status tool_failure_class cancel_cascade_intent_at }} }}"#
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool_doc_id}" }} }}) {{ lifecycle_state status tool_failure_class cancel_cascade_intent_at cancel_pending_remote_ack }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = &response.data.unwrap()["AgentToolCall"][0];
     assert_eq!(row["lifecycle_state"], case.terminal_state.as_str());
     assert_eq!(row["status"], "completed");
-    assert_eq!(row["tool_failure_class"], "serviceUnavailable");
-    assert!(
-        row["cancel_cascade_intent_at"].is_null(),
-        "unclaimed expiry must suppress cascade"
+    assert_eq!(row["tool_failure_class"], "spawnUnclaimed");
+    let fence = crate::lean_vocab_test::lean_restart_disposition_cases()
+        .iter()
+        .find(|case| case.name == "restart_unclaimed_spawn_expired_fails")
+        .unwrap();
+    assert_eq!(
+        row["cancel_cascade_intent_at"].is_string(),
+        fence.bridge_cancel_intent.unwrap()
+    );
+    assert_eq!(
+        row["cancel_pending_remote_ack"] == true,
+        fence.bridge_ack_pending.unwrap()
     );
     node.shutdown().await;
     std::fs::remove_dir_all(path).expect("remove exact remote recovery fixture");

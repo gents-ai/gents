@@ -182,7 +182,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         22
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 54);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 63);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
@@ -1360,6 +1360,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "descendant_cursor_cases".to_string(),
             "DescendantCursorCases".to_string(),
+        ));
+    }
+    if !lean_spawn_fence_cases().is_empty() {
+        emitted.insert((
+            "spawn_fence_cases".to_string(),
+            "SpawnFenceCases".to_string(),
         ));
     }
     if !lean_goal_decision_cases().is_empty() {

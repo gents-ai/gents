@@ -21,16 +21,19 @@ pub enum FailureClass {
     ToolReturnedError,
     PolicyDenied,
     External,
+    /// No host claimed a cross-principal spawn before its unclaimed deadline.
+    SpawnUnclaimed,
 }
 
 impl FailureClass {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ArgumentInvalid,
         Self::ServiceUnavailable,
         Self::Transport,
         Self::ToolReturnedError,
         Self::PolicyDenied,
         Self::External,
+        Self::SpawnUnclaimed,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -41,6 +44,7 @@ impl FailureClass {
             Self::ToolReturnedError => "toolReturnedError",
             Self::PolicyDenied => "policyDenied",
             Self::External => "external",
+            Self::SpawnUnclaimed => "spawnUnclaimed",
         }
     }
 
@@ -52,6 +56,7 @@ impl FailureClass {
             "toolReturnedError" => Some(Self::ToolReturnedError),
             "policyDenied" => Some(Self::PolicyDenied),
             "external" => Some(Self::External),
+            "spawnUnclaimed" => Some(Self::SpawnUnclaimed),
             _ => None,
         }
     }
