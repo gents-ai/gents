@@ -789,7 +789,26 @@ impl ToolCallLifecycle {
                 && !self.is_spawned_background(),
             "background receipt requires an accepted background bridge"
         );
-        let binding = BackgroundReceiptBinding {
+        let binding = self.background_receipt_binding()?;
+        let receipt = text.to_owned();
+        ConfigAccess::transact_local_idempotent(
+            &self.node,
+            None,
+            IdempotentTransactionRetry::Standard,
+            "tool_call.publish_background_receipt",
+            move |txn| {
+                let binding = binding.clone();
+                let receipt = receipt.clone();
+                Box::pin(
+                    async move { publish_background_receipt_in_txn(txn, &binding, &receipt).await },
+                )
+            },
+        )
+        .await
+    }
+
+    fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
+        Ok(BackgroundReceiptBinding {
             tool_doc_id: self
                 .doc_id
                 .clone()
@@ -817,22 +836,7 @@ impl ToolCallLifecycle {
             call_id: self.call_id.clone(),
             tool_name: self.tool_name.clone(),
             message_sequence: self.message_sequence,
-        };
-        let receipt = text.to_owned();
-        ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            IdempotentTransactionRetry::Standard,
-            "tool_call.publish_background_receipt",
-            move |txn| {
-                let binding = binding.clone();
-                let receipt = receipt.clone();
-                Box::pin(
-                    async move { publish_background_receipt_in_txn(txn, &binding, &receipt).await },
-                )
-            },
-        )
-        .await
+        })
     }
 
     /// Keep a running subagent bridge as background work: an awaited bridge
@@ -840,30 +844,71 @@ impl ToolCallLifecycle {
     /// published unless an invocation reply already exists. Returns whether
     /// the bridge is running in background afterwards.
     pub(crate) async fn retain_in_background(&mut self, receipt: &str) -> Result<bool> {
-        if self.state == ToolCallState::Running && self.await_mode == super::AwaitMode::Foreground {
-            self.background().await?;
-        }
-        if self.state != ToolCallState::Running || self.await_mode != super::AwaitMode::Background {
+        if self.state != ToolCallState::Running {
             return Ok(false);
         }
-        let doc_id = self
-            .doc_id
-            .clone()
-            .context("retained bridge has no physical document")?;
-        // A bridge may already carry its immutable invocation reply; it must
-        // never be rewritten with a different presentation.
-        let existing = super::query::load_tool_call_presentation(
-            &ConfigAccess::Local(self.node.clone()),
-            &doc_id,
-            &self.agent_did,
-            &self.session_id,
-            self.requester_did.as_deref(),
+        anyhow::ensure!(
+            self.is_subagent_bridge() && !self.is_spawned_background(),
+            "background retention requires an accepted subagent bridge"
+        );
+        let binding = self.background_receipt_binding()?;
+        let started_at = self
+            .started_at
+            .context("retained bridge has no start time")?;
+        let flip_fragment = Self::background_flip_unclaimed_fragment(
+            self.spawn_target_did.as_deref(),
+            self.agent_did(),
+        );
+        let drop_unclaimed_bound = !flip_fragment.is_empty();
+        let unclaimed_deadline_fragment = if drop_unclaimed_bound {
+            flip_fragment.to_owned()
+        } else {
+            self.resupply_unclaimed_deadline_fragment()
+        };
+        let started_at = escape_graphql_string(&started_at.to_rfc3339());
+        let deadline_at = escape_graphql_string(&self.deadline_at.to_rfc3339());
+        let receipt = receipt.to_owned();
+        let retained = ConfigAccess::transact_local_idempotent(
+            &self.node,
+            None,
+            IdempotentTransactionRetry::Standard,
+            "tool_call.retain_in_background",
+            move |txn| {
+                let binding = binding.clone();
+                let receipt = receipt.clone();
+                let unclaimed_deadline_fragment = unclaimed_deadline_fragment.clone();
+                let started_at = started_at.clone();
+                let deadline_at = deadline_at.clone();
+                Box::pin(async move {
+                    retain_background_receipt_in_txn(
+                        txn,
+                        &binding,
+                        &receipt,
+                        &started_at,
+                        &deadline_at,
+                        &unclaimed_deadline_fragment,
+                    )
+                    .await
+                })
+            },
         )
         .await?;
-        if existing.result.is_none() {
-            self.publish_background_receipt(receipt).await?;
+        match retained {
+            RetentionWrite::Flipped => {
+                self.await_mode = super::AwaitMode::Background;
+                if drop_unclaimed_bound {
+                    self.unclaimed_deadline_at = None;
+                }
+            }
+            RetentionWrite::AlreadyBackground | RetentionWrite::NotRunning => {
+                self.sync_after_lost_mode_compare(
+                    "retain_in_background",
+                    super::AwaitMode::Background,
+                )
+                .await?;
+            }
         }
-        Ok(true)
+        Ok(self.state == ToolCallState::Running && self.await_mode == super::AwaitMode::Background)
     }
 
     /// Atomically close a direct tool's sole native-output stream, terminalize
@@ -3067,6 +3112,90 @@ pub(crate) struct BackgroundReceiptBinding {
     pub(crate) call_id: Option<String>,
     pub(crate) tool_name: String,
     pub(crate) message_sequence: u32,
+}
+
+/// The mode flip and immutable invocation receipt share one commit. A failed
+/// receipt publication rolls back the foreground row, including its unclaimed
+/// deadline; replay of an already-background row only ensures its receipt.
+#[derive(Clone, Copy)]
+enum RetentionWrite {
+    Flipped,
+    AlreadyBackground,
+    NotRunning,
+}
+
+async fn retain_background_receipt_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    binding: &BackgroundReceiptBinding,
+    receipt: &str,
+    started_at: &str,
+    deadline_at: &str,
+    unclaimed_deadline_fragment: &str,
+) -> Result<RetentionWrite> {
+    let tool = escape_graphql_string(&binding.tool_doc_id);
+    let request = escape_graphql_string(&binding.request_doc_id);
+    let agent = escape_graphql_string(&binding.agent_did);
+    let session = escape_graphql_string(&binding.session_id);
+    let tool_call_id = escape_graphql_string(&binding.tool_call_id);
+    let tool_name = escape_graphql_string(&binding.tool_name);
+    let requester_filter = binding
+        .requester_did
+        .as_deref()
+        .map(|value| {
+            format!(
+                r#", requester_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
+    let scope = format!(
+        r#"_docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{tool_call_id}" }}, tool_name: {{ _eq: "{tool_name}" }}, message_sequence: {{ _eq: {} }}{requester_filter}"#,
+        binding.message_sequence
+    );
+    let response = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope} }}, limit: 2) {{ _docID lifecycle_state await_mode child_request_id spawned_by_tool_call_doc_id }} }}"#)).await?;
+    let rows = response["data"]["AgentToolCall"]
+        .as_array()
+        .context("retained bridge lookup omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "retained bridge physical row is ambiguous");
+    let Some(row) = rows.first() else {
+        return Ok(RetentionWrite::NotRunning);
+    };
+    anyhow::ensure!(
+        row["child_request_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+            && row["spawned_by_tool_call_doc_id"].is_null(),
+        "retained row is not a child-linked bridge"
+    );
+    if row["lifecycle_state"] != "running" {
+        return Ok(RetentionWrite::NotRunning);
+    }
+    let write = match row["await_mode"].as_str() {
+        Some("foreground") => {
+            let update = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{ {scope}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "foreground" }} }}, input: {{ await_mode: "background", started_at: "{started_at}", deadline_at: "{deadline_at}"{unclaimed_deadline_fragment} }}) {{ _docID }} }}"#)).await?;
+            anyhow::ensure!(
+                update["data"]["update_AgentToolCall"]
+                    .as_array()
+                    .is_some_and(|rows| rows.len() == 1),
+                "retained bridge lost foreground mode compare"
+            );
+            RetentionWrite::Flipped
+        }
+        Some("background") => RetentionWrite::AlreadyBackground,
+        _ => anyhow::bail!("retained bridge has unknown await mode"),
+    };
+    let existing = super::query::load_tool_call_read_in_txn(
+        txn,
+        &binding.tool_doc_id,
+        &binding.agent_did,
+        &binding.session_id,
+        binding.requester_did.as_deref(),
+    )
+    .await?;
+    if existing.result.is_none() {
+        publish_background_receipt_in_txn(txn, binding, receipt).await?;
+    }
+    Ok(write)
 }
 
 /// The receipt is authored by the physical bridge document and fenced on the

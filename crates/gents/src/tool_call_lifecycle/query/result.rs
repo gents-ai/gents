@@ -5,8 +5,8 @@ use crate::graphql::escape_graphql_string;
 use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
-    MessageBlock, MessagePublication, MessageRole, OutputSource, StreamPayload, ToolResultPart,
-    TranscriptMessage,
+    MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter, StreamPayload,
+    ToolResultPart, TranscriptMessage,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -63,7 +63,8 @@ pub(crate) struct CanonicalToolCallRead {
     pub(crate) lifecycle_state: ToolCallState,
     pub(crate) arguments: String,
     pub(crate) result: Option<Message>,
-    /// Exact persisted ToolOutput bytes behind the verified invocation reply.
+    /// Exact unbounded ToolCall-source bytes behind a direct invocation reply.
+    /// An authored background receipt is a reply, not continuing tool output.
     /// Only populated by the transaction reader; rendered `result` may be bounded.
     pub(crate) raw_result: Option<String>,
 }
@@ -277,13 +278,34 @@ async fn load_tool_call_read_source(
     let raw_result = if let (ReadSource::Txn(txn), [ToolResultPart::Text { text }]) =
         (source, parts.as_slice())
     {
+        let receipt_key = format!("{session_id}:background-receipt:{tool_call_doc_id}");
+        let is_background_receipt = header.message_key == receipt_key;
+        if is_background_receipt {
+            anyhow::ensure!(
+                call.tool_name == crate::toolset::SPAWN_SUBAGENT_TOOL_NAME
+                    && call.spawned_by_tool_call_doc_id.is_none()
+                    && call
+                        .child_request_id
+                        .as_deref()
+                        .is_some_and(|id| !id.is_empty()),
+                "background invocation receipt lacks a retained bridge binding"
+            );
+        }
+        let expected_source = if is_background_receipt {
+            OutputSource::Authored { key: receipt_key }
+        } else {
+            OutputSource::ToolCall {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            }
+        };
         let stream = crate::session::load_canonical_payload_in_txn(
             txn,
             &expected_request_doc_id,
             agent_did,
             requester_did,
             &text.output,
-            &OutputSource::ToolCall {
+            &expected_source,
+            &OutputWriter::ToolExecution {
                 tool_call_doc_id: tool_call_doc_id.to_owned(),
             },
         )
@@ -292,7 +314,7 @@ async fn load_tool_call_read_source(
             matches!(stream.declaration.payload, StreamPayload::ToolOutput),
             "invocation reply for tool_call_doc_id={tool_call_doc_id} references another output source"
         );
-        Some(stream.text)
+        (!is_background_receipt).then_some(stream.text)
     } else {
         None
     };
@@ -599,6 +621,7 @@ struct ToolCallIdentityRow {
     message_sequence: u32,
     request_doc_id: Option<String>,
     spawned_by_tool_call_doc_id: Option<String>,
+    child_request_id: Option<String>,
     lifecycle_state: String,
 }
 
@@ -617,7 +640,7 @@ async fn load_tool_call_identity(
                 filter: {{ {scope}, _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 2
             ) {{
-                _docID agent_did requester_did session_id tool_call_id tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id lifecycle_state
+                _docID agent_did requester_did session_id tool_call_id tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id child_request_id lifecycle_state
             }}
         }}"#,
         scope = scope,
@@ -965,5 +988,128 @@ mod tests {
         .unwrap();
         node.shutdown().await;
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transaction_reader_rejects_forged_background_receipt_source_or_writer() {
+        use crate::session::canonical_rows::{
+            decode_output_segment_row, output_segment_create_variables,
+            transcript_message_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
+            CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        use crate::tool_call_lifecycle::admission_fixture::published_background_bridge;
+
+        for wrong_source in [true, false] {
+            let name = if wrong_source {
+                "forged-receipt-source"
+            } else {
+                "forged-receipt-writer"
+            };
+            let (node, path, mut tool) = published_background_bridge(name).await;
+            let tool_doc_id = tool.doc_id().unwrap().to_owned();
+            let agent_did = tool.agent_did().to_owned();
+            let session_id = tool.session_id().to_owned();
+            let requester_did = tool.requester_did().map(str::to_owned);
+            tool.publish_background_receipt("canonical receipt")
+                .await
+                .unwrap();
+            ConfigAccess::transact_local(node.as_ref(), None, "tool_result.forged_receipt", |txn| {
+                Box::pin(async {
+                    let headers = scoped_canonical_headers(
+                        ReadSource::Txn(txn),
+                        &agent_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await?;
+                    let original = headers
+                        .iter()
+                        .find(|row| {
+                            row.message.message_key
+                                == format!("{session_id}:background-receipt:{tool_doc_id}")
+                        })
+                        .context("canonical receipt fixture header")?;
+                    let mut forged_header = original.message.clone();
+                    let [MessageBlock::ToolResult { parts, .. }] =
+                        forged_header.blocks.as_mut_slice()
+                    else {
+                        anyhow::bail!("receipt fixture omitted one ToolResult block");
+                    };
+                    let [ToolResultPart::Text { text }] = parts.as_mut_slice() else {
+                        anyhow::bail!("receipt fixture omitted one native text part");
+                    };
+                    let original_close = escape_graphql_string(&text.output.close_doc_id);
+                    let response = txn
+                        .execute(&format!(
+                            r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{original_close}" }} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+                        ))
+                        .await?;
+                    let rows = response["data"]["AgentOutputSegment"]
+                        .as_array()
+                        .context("receipt fixture segment lookup omitted rows")?;
+                    anyhow::ensure!(rows.len() == 1, "receipt fixture close is ambiguous");
+                    let mut forged_segment = decode_output_segment_row(&rows[0])?.segment;
+                    if wrong_source {
+                        forged_segment.source = OutputSource::ToolCall {
+                            tool_call_doc_id: tool_doc_id.clone(),
+                        };
+                    } else {
+                        forged_segment.writer = OutputWriter::RequestExecution {
+                            execution_generation: "forged".to_owned(),
+                        };
+                    }
+                    let original_header = escape_graphql_string(&original.doc_id);
+                    let deleted = txn
+                        .execute(&format!(
+                            r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{original_header}" }} }}) {{ _docID }} }}"#
+                        ))
+                        .await?;
+                    anyhow::ensure!(
+                        deleted["data"]["delete_AgentMessage"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1),
+                        "receipt fixture header was not removed"
+                    );
+                    let created = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &output_segment_create_variables(&forged_segment)?,
+                        )
+                        .await?;
+                    text.output.close_doc_id = crate::graphql::created_doc_id(
+                        &created,
+                        "AgentOutputSegment",
+                    )?;
+                    txn.execute_with_variables(
+                        CREATE_AGENT_MESSAGE_MUTATION,
+                        &transcript_message_create_variables(&forged_header)?,
+                    )
+                    .await?;
+                    let error = load_tool_call_read_in_txn(
+                        txn,
+                        &tool_doc_id,
+                        &agent_did,
+                        &session_id,
+                        requester_did.as_deref(),
+                    )
+                    .await
+                    .unwrap_err();
+                    let expected = if wrong_source {
+                        "canonical payload close does not belong to the expected source and writer"
+                    } else {
+                        "payload source is not admitted by message publication"
+                    };
+                    anyhow::ensure!(
+                        format!("{error:#}").contains(expected),
+                        "forged receipt failed at the wrong boundary: {error:#}"
+                    );
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+            node.shutdown().await;
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
 }

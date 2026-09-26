@@ -17,7 +17,7 @@ async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &st
 }
 
 async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#, crate::graphql::escape_graphql_string(doc_id))).await;
+    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode started_at deadline_at unclaimed_deadline_at cancel_cause tool_failure_class }} }}"#, crate::graphql::escape_graphql_string(doc_id))).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response.data.unwrap()["AgentToolCall"]
         .as_array()
@@ -473,6 +473,278 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
         teardown(admission).await;
     }
+}
+
+#[tokio::test]
+async fn retained_bridge_mode_and_receipt_rollback_and_replay_together() {
+    let case = crate::lean_vocab_test::lean_restart_disposition_cases()
+        .iter()
+        .find(|case| case.name == "restart_awaited_bridge_interrupted_parent_backgrounded")
+        .expect("generated retained-bridge witness");
+    assert_eq!(case.disposition, "retain_in_background");
+    assert_eq!(case.await_mode, "foreground");
+    assert_eq!(case.post_await_mode.as_deref(), Some("background"));
+    let name = "atomic-retained-bridge";
+    let child_request_id = format!("child-{name}");
+    let mut admission = published_admission(PublishedAdmissionOptions {
+        name: name.to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Foreground,
+        start_running: true,
+        spawn_plan: Some(SpawnAdmissionPlan {
+            tool_call_id: "bridge-native-tool".into(),
+            child_request_id: child_request_id.clone(),
+            spawn_target_did: "overridden-by-fixture".into(),
+            spawn_behavior_id: "general".into(),
+            delegated_workspace: None,
+            await_mode: AwaitMode::Foreground,
+        }),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let tool_doc = admission.tool.doc_id().unwrap().to_owned();
+    let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
+    crate::tool_call_lifecycle::create_subagent_request_with_request_id(
+        &admission.node,
+        child_request_id.clone(),
+        format!("request-{name}"),
+        request_doc.clone(),
+        admission.tool.tool_call_id().to_owned(),
+        tool_doc.clone(),
+        0,
+        admission.agent_did.clone(),
+        "general".to_owned(),
+        "retained child".to_owned(),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .unwrap();
+    update(
+        admission.node.as_ref(),
+        "AgentRequest",
+        &request_doc,
+        r#"lifecycle_state: "interrupted""#,
+    )
+    .await;
+    let unclaimed_due = chrono::Utc::now() + chrono::Duration::minutes(5);
+    update(
+        admission.node.as_ref(),
+        "AgentToolCall",
+        &tool_doc,
+        &format!(
+            r#"unclaimed_deadline_at: "{}""#,
+            crate::graphql::escape_graphql_string(&unclaimed_due.to_rfc3339())
+        ),
+    )
+    .await;
+    let loaded_session = admission.tool.session_id().to_owned();
+    let loaded_requester = admission.tool.requester_did().map(str::to_owned);
+    admission.tool = ToolCallLifecycle::load_by_doc_id(
+        admission.node.clone(),
+        &tool_doc,
+        &admission.agent_did,
+        &loaded_session,
+        loaded_requester.as_deref(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        row(&admission.node, &tool_doc).await["unclaimed_deadline_at"].is_string(),
+        "the foreground fixture must start with an unclaimed bound"
+    );
+    let receipt =
+        crate::hook::persistence::background_receipt_payload(&child_request_id, None, "general");
+    let access = crate::config_client::ConfigAccess::Local(admission.node.clone());
+    let agent_did = admission.agent_did.clone();
+    let session_id = admission.tool.session_id().to_owned();
+    let requester_did = admission.tool.requester_did().map(str::to_owned);
+    let presentation = || async {
+        crate::tool_call_lifecycle::query::load_tool_call_presentation(
+            &access,
+            &tool_doc,
+            &agent_did,
+            &session_id,
+            requester_did.as_deref(),
+        )
+        .await
+        .unwrap()
+        .result
+    };
+    let receipt_key = crate::graphql::escape_graphql_string(&format!(
+        "{session_id}:background-receipt:{tool_doc}"
+    ));
+    let escaped_request = crate::graphql::escape_graphql_string(&request_doc);
+    let message_fields = crate::session::canonical_rows::AGENT_MESSAGE_FIELDS;
+    let segment_fields = crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
+    let durable_query = format!(
+        r#"{{
+            AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                _docID lifecycle_state status await_mode started_at deadline_at unclaimed_deadline_at
+            }}
+            AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key}" }} }}) {{
+                {message_fields}
+            }}
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
+                {segment_fields}
+            }}
+        }}"#,
+        crate::graphql::escape_graphql_string(&tool_doc)
+    );
+    let canonicalize_facts = |mut facts: serde_json::Value| {
+        for collection in ["AgentToolCall", "AgentMessage", "AgentOutputSegment"] {
+            facts["data"][collection]
+                .as_array_mut()
+                .unwrap()
+                .sort_by(|a, b| a["_docID"].as_str().cmp(&b["_docID"].as_str()));
+        }
+        facts
+    };
+    let initial_facts = canonicalize_facts(access.execute(&durable_query).await.unwrap());
+    assert_eq!(
+        initial_facts["data"]["AgentToolCall"][0]["await_mode"],
+        case.await_mode
+    );
+    assert!(initial_facts["data"]["AgentToolCall"][0]["unclaimed_deadline_at"].is_string());
+    assert!(initial_facts["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    for index in 1..=4 {
+        let (failure, mutations) =
+            crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                Some(index),
+                admission.tool.retain_in_background(&receipt),
+            )
+            .await;
+        assert!(failure.is_err(), "write {index} failure must roll back");
+        assert_eq!(mutations, index, "write {index} was not reached");
+        assert_eq!(
+            canonicalize_facts(access.execute(&durable_query).await.unwrap()),
+            initial_facts,
+            "write {index} changed durable row, receipt, or output segments"
+        );
+        assert_eq!(
+            row(&admission.node, &tool_doc).await["await_mode"],
+            case.await_mode,
+            "write {index} left a mode flip without its receipt"
+        );
+        assert_eq!(admission.tool.await_mode(), AwaitMode::Foreground);
+        assert!(
+            presentation().await.is_none(),
+            "write {index} left a receipt"
+        );
+    }
+    let mut stale = ToolCallLifecycle::load_by_doc_id(
+        admission.node.clone(),
+        &tool_doc,
+        &agent_did,
+        &session_id,
+        requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (first, fault_fired) =
+        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+            Some("tool_call.retain_in_background"),
+            admission.tool.retain_in_background(&receipt),
+        )
+        .await;
+    assert!(fault_fired, "commit receipt loss did not fire");
+    assert!(
+        first.unwrap(),
+        "the committed retention must replay successfully"
+    );
+    assert_eq!(
+        row(&admission.node, &tool_doc).await["await_mode"],
+        case.post_await_mode.as_deref().unwrap()
+    );
+    assert_eq!(presentation().await.as_deref(), Some(receipt.as_str()));
+    let committed_facts = canonicalize_facts(access.execute(&durable_query).await.unwrap());
+    assert_eq!(
+        committed_facts["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        committed_facts["data"]["AgentToolCall"][0]["unclaimed_deadline_at"].is_null(),
+        "same-principal background retention must clear its unclaimed bound"
+    );
+    let committed_row = row(&admission.node, &tool_doc).await;
+    assert_eq!(stale.await_mode(), AwaitMode::Foreground);
+    assert!(stale.retain_in_background(&receipt).await.unwrap());
+    assert_eq!(stale.await_mode(), AwaitMode::Background);
+    assert_eq!(row(&admission.node, &tool_doc).await, committed_row);
+    let replayed = canonicalize_facts(access.execute(&durable_query).await.unwrap());
+    assert_eq!(
+        replayed, committed_facts,
+        "external replay changed a committed receipt"
+    );
+    assert!(admission
+        .tool
+        .retain_in_background("a different replay receipt")
+        .await
+        .unwrap());
+    assert_eq!(presentation().await.as_deref(), Some(receipt.as_str()));
+    assert_eq!(
+        canonicalize_facts(access.execute(&durable_query).await.unwrap()),
+        committed_facts,
+        "a replacement replay changed the immutable receipt"
+    );
+    admission.tool.foreground().await.unwrap();
+    let foreground_read = crate::config_client::ConfigAccess::transact_local(
+        admission.node.as_ref(),
+        None,
+        "tool_call.retained_receipt_foreground_read",
+        |txn| {
+            Box::pin(
+                crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+                    txn,
+                    &tool_doc,
+                    &agent_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                ),
+            )
+        },
+    )
+    .await
+    .unwrap();
+    assert!(foreground_read.result.is_some());
+    assert!(foreground_read.raw_result.is_none());
+    assert!(admission
+        .tool
+        .retain_in_background("a third replay receipt")
+        .await
+        .unwrap());
+    assert_eq!(presentation().await.as_deref(), Some(receipt.as_str()));
+    assert_eq!(
+        canonicalize_facts(access.execute(&durable_query).await.unwrap()),
+        committed_facts,
+        "foreground-to-background replay changed the immutable receipt"
+    );
+    update(
+        admission.node.as_ref(),
+        "AgentToolCall",
+        &tool_doc,
+        r#"lifecycle_state: "completed""#,
+    )
+    .await;
+    assert!(
+        !admission.tool.retain_in_background(&receipt).await.unwrap(),
+        "a terminal bridge cannot be retained from a stale running object"
+    );
+    assert_eq!(
+        admission.tool.state(),
+        super::ToolCallState::Completed,
+        "terminal race must refresh the in-memory lifecycle"
+    );
+    assert_eq!(presentation().await.as_deref(), Some(receipt.as_str()));
+    teardown(admission).await;
 }
 
 #[tokio::test]

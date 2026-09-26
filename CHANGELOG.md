@@ -93,6 +93,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- Retaining an awaited subagent in the background now commits its mode change
+  and invocation receipt together; a failed write leaves it foreground, and
+  retrying a committed receipt does not publish another reply (#1908).
 - Stateless (`store:false`) Responses requests to xAI/Grok and ChatGPT Codex
   now always request `include: ["reasoning.encrypted_content"]`, even with no
   reasoning effort configured, so replayed reasoning resolves without

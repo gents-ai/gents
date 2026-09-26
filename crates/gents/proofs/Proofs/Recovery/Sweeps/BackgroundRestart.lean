@@ -133,7 +133,8 @@ inductive RestartDisposition where
       keeps running (`SpawnClaimFence.expire`). -/
   | link
   /-- Keep the child-linked bridge running as background work: flip an
-      awaited bridge to background and ensure its invocation receipt. -/
+      awaited bridge to background and ensure its invocation receipt in the
+      same transaction. A failed receipt write must leave the mode unchanged. -/
   | retainInBackground
   deriving DecidableEq, Repr
 
@@ -324,13 +325,13 @@ theorem native_background_tool_interrupted_on_restart
       .terminalize .terminalizeBackgroundedAsInterrupted := by
   simp [restartDisposition, h_native, h_owner, h_deadline, h_unclaimed, h_process]
 
-/-- RB1: a native background tool with a live parent, no expiry, and an
+/-- RB1: a native background tool with a resolvable parent, no expiry, and an
     observed stop of its proven-owned process is interrupted on restart —
     terminal `cancelled` plus the durable notification/wake obligation. -/
-theorem native_background_tool_live_parent_interrupted_on_restart
+theorem native_background_tool_resolvable_parent_interrupted_on_restart
     (row : RestartRow)
     (h_native : row.isNativeBackgroundTool)
-    (h_live : row.parent = .live)
+    (h_owner : row.parent ≠ .missing)
     (h_deadline : row.deadlineExpired = false)
     (h_unclaimed : row.unclaimedExpired = false)
     (h_process : row.process = .stopped) :
@@ -342,11 +343,11 @@ theorem native_background_tool_live_parent_interrupted_on_restart
           .terminalizeBackgroundedAsInterrupted) := by
   have h : restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
-    simp [restartDisposition, h_native, h_live, h_deadline, h_unclaimed,
+    simp [restartDisposition, h_native, h_owner, h_deadline, h_unclaimed,
       h_process]
   refine ⟨h, ?_, ?_⟩
   · rw [h]; rfl
-  · simp [RestartRow.notification, h_native, h_live, h]
+  · simp [RestartRow.notification, h_native, h_owner, h]
 
 /-- RB1′: a native background process the owner did not observe stopping
     is settled as lost — terminal `failed` with its own notification — rather
@@ -419,6 +420,19 @@ theorem child_linked_terminal_parent_retained_in_background
     simp [restartDisposition, h_not_native, h_child, h_parent, h_present,
       h_deadline, h_unclaimed]
   exact ⟨h, by rw [h]; rfl⟩
+
+/-- A foreground tool without a linked child follows its interrupted parent
+    once its own expiry fences are clear. -/
+theorem foreground_unlinked_interrupted_parent_terminalizes
+    (row : RestartRow)
+    (h_foreground : row.awaitMode = .foreground)
+    (h_child : row.childLinked = false)
+    (h_parent : row.parent = .interrupted)
+    (h_deadline : row.deadlineExpired = false)
+    (h_unclaimed : row.unclaimedExpired = false) :
+    restartDisposition row = .terminalize .parentInterrupted := by
+  simp [restartDisposition, h_foreground, h_child, h_parent, h_deadline,
+    h_unclaimed, RestartRow.isNativeBackgroundTool]
 
 /-- Whether a disposition terminalizes only on the row's own expiry. -/
 def RestartDisposition.expiryOnly : RestartDisposition → Bool
