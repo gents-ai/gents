@@ -214,7 +214,7 @@ async fn start_source(case: &Case) -> (CancellationToken, tokio::task::JoinHandl
     (cancel, handle)
 }
 
-async fn wait_child(case: &Case, interrupted: bool) {
+async fn wait_child(case: &Case) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let child_id = crate::graphql::escape_graphql_string(&case.child_id);
     loop {
@@ -231,16 +231,11 @@ async fn wait_child(case: &Case, interrupted: bool) {
                 child["caused_by_parent_tool_call_doc_id"],
                 case.admission.tool.doc_id().unwrap()
             );
-            if interrupted && child["interrupt_requested_at"].as_str().is_some() {
-                return;
-            }
-            if !interrupted {
-                return;
-            }
+            return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "child did not reach expected interrupt state"
+            "source did not materialize the child"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -287,7 +282,7 @@ async fn canonical_source_cascade_interrupts_processing_child_trace() {
 
     let mut case = case("processing-child-cascade-theorem", CancelPolicy::Cascade).await;
     let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, false).await;
+    wait_child(&case).await;
     let child_id = crate::graphql::escape_graphql_string(&case.child_id);
     let response = case
         .admission
@@ -344,7 +339,7 @@ async fn canonical_source_cascade_interrupts_processing_child_trace() {
         .admission
         .tool
         .cancel_during_run_with_cascade_dispatch(
-            CancelCause::Interrupted,
+            CancelCause::UserCancelled,
             &case.admission.agent_did,
         )
         .await
@@ -404,7 +399,7 @@ async fn canonical_source_cascade_interrupts_processing_child_trace() {
     let data = result.data.expect("cascade trace data");
     let tool = &data["AgentToolCall"][0];
     let child_row = &data["AgentRequest"][0];
-    assert_eq!(tool["cancel_cause"], "interrupted");
+    assert_eq!(tool["cancel_cause"], "userCancelled");
     assert!(tool["cancel_cascade_intent_at"].is_null());
     assert_eq!(
         child_row["lifecycle_state"],
@@ -604,64 +599,43 @@ async fn accepted_unmaterialized_child_remains_listed_readable_and_scoped() {
 }
 
 #[tokio::test]
-async fn cascade_after_source_spawn_reaches_child_request() {
-    let mut case = case("source-cascade-after-spawn", CancelPolicy::Cascade).await;
-    let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, false).await;
-    terminalize(&mut case, RequestTerminalOutcome::Interrupted).await;
-    ToolCallLifecycle::recover_all(&case.admission.node, &case.admission.agent_did)
-        .await
-        .unwrap();
-    wait_child(&case, true).await;
-    finish(case, cancel, handle).await;
+async fn interrupted_parent_recovery_leaves_spawned_child_running() {
+    for policy in [CancelPolicy::Cascade, CancelPolicy::Detach] {
+        let mut case = case(
+            &format!("source-recovery-after-spawn-{}", policy.as_str()),
+            policy,
+        )
+        .await;
+        let (cancel, handle) = start_source(&case).await;
+        wait_child(&case).await;
+        terminalize(&mut case, RequestTerminalOutcome::Interrupted).await;
+        ToolCallLifecycle::recover_all(&case.admission.node, &case.admission.agent_did)
+            .await
+            .unwrap();
+        assert_child_remains_uninterrupted(&case).await;
+        finish(case, cancel, handle).await;
+    }
 }
 
+/// No parent terminal is a cancel signal for a child the source materializes
+/// afterwards; only an explicit bridge cancellation is.
 #[tokio::test]
-async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
-    let mut case = case("source-parent-already-interrupted", CancelPolicy::Cascade).await;
-    terminalize(&mut case, RequestTerminalOutcome::Interrupted).await;
-    let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, true).await;
-    finish(case, cancel, handle).await;
-}
-
-#[tokio::test]
-async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
-    let mut case = case("source-concurrent-parent-cancel", CancelPolicy::Cascade).await;
-    let (cancel, handle) = start_source(&case).await;
-    terminalize(&mut case, RequestTerminalOutcome::Interrupted).await;
-    ToolCallLifecycle::recover_all(&case.admission.node, &case.admission.agent_did)
-        .await
-        .unwrap();
-    wait_child(&case, true).await;
-    finish(case, cancel, handle).await;
-}
-
-#[tokio::test]
-async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_terminal() {
-    let mut case = case("source-parent-dead", CancelPolicy::Cascade).await;
-    terminalize(&mut case, RequestTerminalOutcome::Dead).await;
-    let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, true).await;
-    finish(case, cancel, handle).await;
-}
-
-#[tokio::test]
-async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_normally() {
-    let mut case = case("source-parent-completed", CancelPolicy::Cascade).await;
-    terminalize(&mut case, RequestTerminalOutcome::Completed).await;
-    let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, false).await;
-    assert_child_remains_uninterrupted(&case).await;
-    finish(case, cancel, handle).await;
-}
-
-#[tokio::test]
-async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupted() {
-    let mut case = case("source-detached-parent-interrupted", CancelPolicy::Detach).await;
-    terminalize(&mut case, RequestTerminalOutcome::Interrupted).await;
-    let (cancel, handle) = start_source(&case).await;
-    wait_child(&case, false).await;
-    assert_child_remains_uninterrupted(&case).await;
-    finish(case, cancel, handle).await;
+async fn subagent_source_never_interrupts_child_for_parent_terminal() {
+    for (outcome, policy) in [
+        (RequestTerminalOutcome::Interrupted, CancelPolicy::Cascade),
+        (RequestTerminalOutcome::Interrupted, CancelPolicy::Detach),
+        (RequestTerminalOutcome::Dead, CancelPolicy::Cascade),
+        (RequestTerminalOutcome::Completed, CancelPolicy::Cascade),
+    ] {
+        let mut case = case(
+            &format!("source-parent-{outcome:?}-{}", policy.as_str()).to_lowercase(),
+            policy,
+        )
+        .await;
+        terminalize(&mut case, outcome).await;
+        let (cancel, handle) = start_source(&case).await;
+        wait_child(&case).await;
+        assert_child_remains_uninterrupted(&case).await;
+        finish(case, cancel, handle).await;
+    }
 }

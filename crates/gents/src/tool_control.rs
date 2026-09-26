@@ -64,25 +64,6 @@ pub async fn cancel_background_tool_call(
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    cancel_background_tool_call_with_cause(
-        node,
-        background_executions,
-        agent_did,
-        session_id,
-        tool_call_id,
-        CancelCause::UserCancelled,
-    )
-    .await
-}
-
-pub(crate) async fn cancel_background_tool_call_with_cause(
-    node: Arc<EmbeddedNode>,
-    background_executions: &BackgroundExecutionRegistry,
-    agent_did: &str,
-    session_id: &str,
-    tool_call_id: &str,
-    cause: CancelCause,
-) -> Result<CancelBackgroundToolCallOutcome> {
     let Some(mut lifecycle) =
         ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
     else {
@@ -104,15 +85,15 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
             &node,
             &mut lifecycle,
             background_executions,
-            cause,
-            cause_completion_reason(cause),
+            CancelCause::UserCancelled,
+            "explicit_cancel",
         )
         .await?;
         return Ok(outcome_for_process(process, false));
     }
 
     let persisted = lifecycle
-        .cancel_during_run_with_cascade_dispatch(cause, agent_did)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::UserCancelled, agent_did)
         .await;
     // Persist the operator-authored terminal cause before signalling the live
     // worker. Otherwise the worker can observe cancellation first and win the
@@ -171,14 +152,6 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
         Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
             state: lifecycle.state().as_str().to_string(),
         })
-    }
-}
-
-fn cause_completion_reason(cause: CancelCause) -> &'static str {
-    match cause {
-        CancelCause::Deadline => "deadline_exceeded",
-        CancelCause::Interrupted => "parent_interrupted",
-        CancelCause::UserCancelled => "explicit_cancel",
     }
 }
 
@@ -271,40 +244,52 @@ mod tests {
             .await;
         let message = Message::Assistant {
             id: Some("cancel-provider-message".into()),
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                id: "cancel-native-tool".into(),
-                call_id: Some("cancel-provider-call".into()),
-                function: ToolFunction::new("bash_unrestricted".into(), serde_json::json!({})),
-                signature: None,
-                additional_params: None,
-            })],
+            content: ["cancel-native-tool", "sibling-native-tool"]
+                .into_iter()
+                .map(|id| {
+                    AssistantContent::ToolCall(ToolCall {
+                        id: id.into(),
+                        call_id: Some(format!("{id}-provider-call")),
+                        function: ToolFunction::new(
+                            "bash_unrestricted".into(),
+                            serde_json::json!({}),
+                        ),
+                        signature: None,
+                        additional_params: None,
+                    })
+                })
+                .collect(),
         };
-        let mut published = writer
+        let published = writer
             .publish_native_turn(&request, 0, 0, &message)
             .await
             .unwrap();
-        let accepted = published
-            .accepted_tools
-            .pop()
-            .expect("canonical publication accepted bash_unrestricted");
+        assert_eq!(published.accepted_tools.len(), 2);
         let deadline = request
             .claimed_deadline_at()
             .expect("claimed request deadline");
-        let mut lifecycle = ToolCallLifecycle::from_accepted(
-            node.clone(),
-            agent_did.to_string(),
-            None,
-            accepted,
-            deadline,
-            AwaitMode::Background,
-            crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        )
-        .unwrap();
-        lifecycle.start_running().await.unwrap();
-
         let registry = BackgroundExecutionRegistry::default();
-        let token = CancellationToken::new();
-        let reservation = registry.reserve("cancel-native-tool".to_string(), token.clone());
+        let mut tokens = std::collections::HashMap::new();
+        let mut reservations = std::collections::HashMap::new();
+        for accepted in published.accepted_tools {
+            let id = accepted.id.clone();
+            let mut lifecycle = ToolCallLifecycle::from_accepted(
+                node.clone(),
+                agent_did.to_string(),
+                None,
+                accepted,
+                deadline,
+                AwaitMode::Background,
+                crate::tool_call_lifecycle::CancelPolicy::Cascade,
+            )
+            .unwrap();
+            lifecycle.start_running().await.unwrap();
+            let token = CancellationToken::new();
+            reservations.insert(id.clone(), registry.reserve(id.clone(), token.clone()));
+            tokens.insert(id, token);
+        }
+        let token = tokens["cancel-native-tool"].clone();
+        let reservation = reservations.remove("cancel-native-tool").unwrap();
         // A live worker releases its execution once signalled; cancellation
         // is reported only after that release.
         let worker = {
@@ -356,6 +341,15 @@ mod tests {
             .unwrap()
             .expect("tool row");
         assert!(row.is_cancelled());
+        assert!(
+            !tokens["sibling-native-tool"].is_cancelled(),
+            "killing one background task must not signal its sibling"
+        );
+        let sibling = ToolCallLifecycle::load(node.clone(), "session-1", "sibling-native-tool")
+            .await
+            .unwrap()
+            .expect("sibling row");
+        assert!(sibling.is_running());
 
         let _ = std::fs::remove_dir_all(&data_path);
     }

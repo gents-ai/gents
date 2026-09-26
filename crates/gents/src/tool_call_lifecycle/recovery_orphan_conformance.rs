@@ -385,7 +385,7 @@ async fn accepted_orphan_recovery_rejects_cross_principal_without_opt_in() {
 }
 
 #[tokio::test]
-async fn accepted_orphan_recovery_interrupts_cascade_child_after_parent_interrupt() {
+async fn accepted_orphan_recovery_leaves_cascade_child_of_interrupted_parent_running() {
     let child_request_id = "child-orphan-parent-interrupted";
     let (admitted, mut owner) = configured_accepted_bridge(
         "orphan-parent-interrupted",
@@ -417,8 +417,8 @@ async fn accepted_orphan_recovery_interrupts_cascade_child_after_parent_interrup
         tool.doc_id().unwrap()
     );
     assert!(
-        children[0]["interrupt_requested_at"].as_str().is_some(),
-        "cascade child must carry the durable interrupt latch"
+        children[0]["interrupt_requested_at"].is_null(),
+        "interrupting the parent must not reach its child"
     );
     drop(tool);
     node.shutdown().await;

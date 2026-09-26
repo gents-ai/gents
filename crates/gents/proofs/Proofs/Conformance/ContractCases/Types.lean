@@ -500,6 +500,7 @@ structure RestartDispositionCase where
       write carries a cancel intent and leaves the acknowledgement pending. -/
   bridgeCancelIntent : Option Bool
   bridgeAckPending : Option Bool
+  postAwaitMode : Option String
   notificationReason : Option String
   queueSource : Option String
   queueKeyPrefix : Option String
@@ -518,10 +519,24 @@ structure BridgeStepCase where
   parentState : String
   cancelPolicy : String
   bridgeCommitted : Bool
+  bridgeState : String
   legal : Bool
   postToolState : Option String
   postChildInterruptSet : Bool
   theoremName : String
+  deriving DecidableEq, Repr
+
+/-- Interrupt disposition witness: one owned tool-call shape and the
+    disposition and post-state computed by `Subagent.Interrupt.interruptTool`. -/
+structure InterruptDispositionCase where
+  name : String
+  state : String
+  awaitMode : String
+  childLinked : Bool
+  cancelPolicy : String
+  disposition : String
+  postState : String
+  postAwaitMode : String
   deriving DecidableEq, Repr
 
 /-- Paging witness over the retained output window (#937): inputs plus the

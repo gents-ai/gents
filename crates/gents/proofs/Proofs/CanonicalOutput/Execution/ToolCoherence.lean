@@ -28,7 +28,8 @@ theorem clockWorld_binding (world : World) (document : DocId) (now : Time)
     acceptedHeaderBindsTool (clockWorld world document now) (clockEdit document now tool) =
       acceptedHeaderBindsTool world tool := by
   apply acceptedHeaderBindsTool_map world (clockEdit document now) tool
-  all_goals intro value; unfold clockEdit; split <;> rfl
+  all_goals intro value; try intro _
+  all_goals unfold clockEdit; split <;> rfl
 
 theorem clockWorld_lifecycle (world : World) (document : DocId) (now : Time)
     (coherent : toolLifecycleProjectionCoherent world = true) :

@@ -386,16 +386,16 @@ async fn accepted_wait_subagent_backgrounding_returns_receipt_on_original_bridge
 }
 
 #[tokio::test]
-async fn accepted_resumed_wait_cascades_current_parent_interrupt_to_child() {
-    assert_resumed_wait_cascades_current_request_interrupt(false).await;
+async fn accepted_resumed_wait_interrupt_keeps_child_running_in_background() {
+    assert_resumed_wait_interrupt_keeps_child_running(false).await;
 }
 
 #[tokio::test]
-async fn accepted_later_turn_wait_uses_current_caller_for_interrupt_cascade() {
-    assert_resumed_wait_cascades_current_request_interrupt(true).await;
+async fn accepted_later_turn_wait_interrupt_keeps_child_running_in_background() {
+    assert_resumed_wait_interrupt_keeps_child_running(true).await;
 }
 
-async fn assert_resumed_wait_cascades_current_request_interrupt(later_turn: bool) {
+async fn assert_resumed_wait_interrupt_keeps_child_running(later_turn: bool) {
     let label = if later_turn {
         "r4-accepted-later-wait-interrupt"
     } else {
@@ -548,9 +548,9 @@ async fn assert_resumed_wait_cascades_current_request_interrupt(later_turn: bool
             .expect("resumed wait unblocked")
             .expect("wait task did not panic"),
     );
-    assert_eq!(result["ok"], false);
-    assert_eq!(result["await_mode"], "foreground");
-    assert_eq!(result["status"], "interrupted");
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["await_mode"], "background");
+    assert_eq!(result["status"], "running");
     let bridge =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "accepted-resumed-wait-spawn")
             .await
@@ -558,14 +558,18 @@ async fn assert_resumed_wait_cascades_current_request_interrupt(later_turn: bool
             .expect("bridge row");
     assert_eq!(
         bridge.state(),
-        crate::tool_call_lifecycle::ToolCallState::Cancelled
+        crate::tool_call_lifecycle::ToolCallState::Running
+    );
+    assert_eq!(
+        bridge.await_mode(),
+        crate::tool_call_lifecycle::AwaitMode::Background
     );
     assert!(
         crate::fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
             .await
             .expect("child interrupt observation")
-            .is_some(),
-        "current caller interruption must cascade to child"
+            .is_none(),
+        "interrupting the waiting caller must not reach the child"
     );
     if later_turn {
         assert!(
@@ -699,6 +703,21 @@ async fn accepted_cancel_subagent_cascades_descendants_and_drains_only_owned_que
         .expect("accepted child request id")
         .to_owned();
     wait_for_child_materialized(db.node.as_ref(), &child_request_id).await;
+    let sibling_receipt = skip_json(
+        super::r4c_private_support::accepted_call(
+            &hook,
+            "spawn_subagent",
+            Some("provider-cancel-sibling".into()),
+            "accepted-cancel-sibling-spawn",
+            &spawn_args,
+        )
+        .await,
+    );
+    let sibling_request_id = sibling_receipt["child_request_id"]
+        .as_str()
+        .expect("accepted sibling request id")
+        .to_owned();
+    wait_for_child_materialized(db.node.as_ref(), &sibling_request_id).await;
     drop(source);
     let child_row =
         crate::support::load_request_row_by_logical_id(db.node.as_ref(), &child_request_id).await;
@@ -862,4 +881,14 @@ async fn accepted_cancel_subagent_cascades_descendants_and_drains_only_owned_que
     let cancel_control =
         accepted_tool_row(db.node.as_ref(), &parent_session, "provider-cancel-control").await;
     assert_eq!(cancel_control["lifecycle_state"], "completed");
+    let sibling =
+        accepted_tool_row(db.node.as_ref(), &parent_session, "provider-cancel-sibling").await;
+    assert_eq!(sibling["lifecycle_state"], "running");
+    assert!(
+        crate::fetch_interrupt_requested_at(db.node.as_ref(), &sibling_request_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "cancelling one subagent must not reach its sibling"
+    );
 }

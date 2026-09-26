@@ -20,7 +20,8 @@ theorem ownedToolByDocument_map (world : World) (edit : OwnedTool → OwnedTool)
 /-- Immutable accepted-header ownership survives a pointwise tool edit.  The
 edit may change execution accounting fields, but not physical/provenance
 identity or the two spawned-background configuration fields read by the
-header projection. -/
+header projection. Await mode is read only for a row without a child link, so
+an edit may background a child-linked subagent bridge. -/
 theorem acceptedHeaderBindsTool_map
     (world : World) (edit : OwnedTool → OwnedTool) (tool : OwnedTool)
     (hdocument : ∀ value, (edit value).document = value.document)
@@ -28,7 +29,8 @@ theorem acceptedHeaderBindsTool_map
     (hsession : ∀ value, (edit value).session = value.session)
     (hsequence : ∀ value, (edit value).acceptedSequence = value.acceptedSequence)
     (hprovenance : ∀ value, (edit value).provenance = value.provenance)
-    (hawait : ∀ value, (edit value).context.awaitMode = value.context.awaitMode)
+    (hawait : ∀ value, value.context.childRequestId.isNone = true →
+      (edit value).context.awaitMode = value.context.awaitMode)
     (hchild : ∀ value, (edit value).context.childRequestId = value.context.childRequestId) :
     acceptedHeaderBindsTool
       { world with toolContexts := world.toolContexts.map edit } (edit tool) =
@@ -41,9 +43,13 @@ theorem acceptedHeaderBindsTool_map
       simp only [directAcceptedHeaderMetadataBindsTool, hdocument, hrequest, hsession,
         hsequence]
   | spawnedBackground parent =>
-      simp only [hlookup, hdocument, hrequest, hsession, hsequence, hprovenance,
-        hawait, hchild]
-      cases hl : ownedToolByDocument? world parent <;> simp [hl, hrequest, hsession,
-        hsequence, hprovenance, directAcceptedHeaderMetadataBindsTool, hdocument]
+      cases hc : tool.context.childRequestId with
+      | none =>
+          have hw := hawait tool (by simp [hc])
+          simp only [hlookup, hdocument, hrequest, hsession, hsequence, hprovenance,
+            hw, hchild, hc]
+          cases hl : ownedToolByDocument? world parent <;> simp [hl, hrequest, hsession,
+            hsequence, hprovenance, directAcceptedHeaderMetadataBindsTool, hdocument, hc]
+      | some child => simp [hchild, hc]
 
 end CanonicalOutput.Execution

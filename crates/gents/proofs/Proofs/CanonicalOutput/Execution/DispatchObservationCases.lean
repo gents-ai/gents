@@ -185,8 +185,7 @@ structure ParentFailureRecovery where
 
 /-- The sweep's view of an owned tool once its parent failed. -/
 def terminalParentRow (tool : ToolExecution.ToolCallContext) : Recovery.TerminalParentToolRow :=
-  { call := tool, parentTerminal := true, parentInterrupted := false
-    parentCleanCompleted := false }
+  { call := tool, parentTerminal := true, parentInterrupted := false }
 
 /-- Eventual settlement of a call handed off by parent failure. The existing
 terminal-parent sweep owns it, projected from the exact handed-off context.

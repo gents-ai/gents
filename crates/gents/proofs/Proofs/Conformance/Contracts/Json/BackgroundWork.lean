@@ -273,11 +273,24 @@ def bridgeStepCaseJson (witness : BridgeStepCase) : String :=
     ++ "\"parent_state\":" ++ jsonString witness.parentState ++ ","
     ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
     ++ "\"bridge_committed\":" ++ boolString witness.bridgeCommitted ++ ","
+    ++ "\"bridge_state\":" ++ jsonString witness.bridgeState ++ ","
     ++ "\"legal\":" ++ boolString witness.legal ++ ","
     ++ "\"post_tool_state\":" ++ jsonOptionalString witness.postToolState ++ ","
     ++ "\"post_child_interrupt_set\":"
       ++ boolString witness.postChildInterruptSet ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
+    ++ "}"
+
+def interruptDispositionCaseJson (witness : InterruptDispositionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"state\":" ++ jsonString witness.state ++ ","
+    ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
+    ++ "\"child_linked\":" ++ boolString witness.childLinked ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
+    ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
+    ++ "\"post_state\":" ++ jsonString witness.postState ++ ","
+    ++ "\"post_await_mode\":" ++ jsonString witness.postAwaitMode
     ++ "}"
 
 def toolOutputPagingCaseJson (witness : ToolOutputPagingCase) : String :=

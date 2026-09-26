@@ -1497,7 +1497,12 @@ mod lifecycle_tests {
         {
             let fixture = format!("generated-{}", case.name);
             let (node, path, mut bridge) = published_background_bridge(&fixture).await;
-            if case.parent_state == "processing" {
+            if case.cancel_policy == "detach" {
+                bridge.detach().await.unwrap();
+            } else {
+                assert_eq!(case.cancel_policy, "cascade", "{}", case.name);
+            }
+            if case.bridge_state == "running" {
                 assert!(!case.legal, "{}", case.name);
                 assert!(
                     bridge.bridge_cancel_cascade().await.is_err(),
@@ -1507,14 +1512,9 @@ mod lifecycle_tests {
                 teardown(node, path).await;
                 continue;
             }
-
-            if case.cancel_policy == "detach" {
-                bridge.detach().await.unwrap();
-            } else {
-                assert_eq!(case.cancel_policy, "cascade", "{}", case.name);
-            }
+            assert_eq!(case.bridge_state, "cancelled", "{}", case.name);
             assert!(bridge
-                .cancel_during_run(CancelCause::Interrupted)
+                .cancel_during_run(CancelCause::UserCancelled)
                 .await
                 .unwrap());
             let intent = bridge.bridge_cancel_cascade().await.unwrap();

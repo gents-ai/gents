@@ -403,6 +403,11 @@ impl DefraSessionHook {
                         ToolOutcome::TimedOut { .. } => {
                             let _ = lc.timeout().await?;
                         }
+                        _ if lc.interrupt_disposition()
+                            == crate::tool_call_lifecycle::InterruptDisposition::Background =>
+                        {
+                            self.retain_interrupted_bridge(lc).await?;
+                        }
                         _ => {
                             let _ = lc.cancel_during_run(CancelCause::Interrupted).await?;
                         }

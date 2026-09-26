@@ -72,7 +72,8 @@ theorem cancelPendingWorld_binding (world : World) (document : DocId) (tool : Ow
     acceptedHeaderBindsTool (cancelPendingWorld world document) (cancelPendingTool document tool) =
       acceptedHeaderBindsTool world tool := by
   apply acceptedHeaderBindsTool_map world (cancelPendingTool document) tool
-  all_goals intro value; unfold cancelPendingTool; split <;> rfl
+  all_goals intro value; try intro _
+  all_goals unfold cancelPendingTool; split <;> rfl
 
 theorem cancelPendingWorld_lifecycle (world : World) (document : DocId)
     (pending : ∀ tool ∈ world.toolContexts, tool.document = document → tool.context.state = .pending)

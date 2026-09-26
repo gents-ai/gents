@@ -120,11 +120,26 @@ pub(crate) struct LeanBridgeStepCase {
     pub(crate) parent_state: String,
     pub(crate) cancel_policy: String,
     pub(crate) bridge_committed: bool,
+    pub(crate) bridge_state: String,
     pub(crate) legal: bool,
     pub(crate) post_tool_state: Option<String>,
     pub(crate) post_child_interrupt_set: bool,
     #[allow(dead_code)]
     pub(crate) theorem: String,
+}
+
+/// Interrupt disposition witness computed by the Lean
+/// `Subagent.Interrupt.interruptTool` for one owned tool-call shape.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanInterruptDispositionCase {
+    pub(crate) name: String,
+    pub(crate) state: String,
+    pub(crate) await_mode: String,
+    pub(crate) child_linked: bool,
+    pub(crate) cancel_policy: String,
+    pub(crate) disposition: String,
+    pub(crate) post_state: String,
+    pub(crate) post_await_mode: String,
 }
 
 /// Paging witness over the retained output window (#937): inputs plus the

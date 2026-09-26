@@ -353,6 +353,9 @@ def snapshotJson : String :=
     ++ "\"bridge_step_cases\":"
       ++ jsonArray
         (bridgeStepCases.map bridgeStepCaseJson) ++ ","
+    ++ "\"interrupt_disposition_cases\":"
+      ++ jsonArray
+        (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
     ++ "\"codex_shim_projection_cases\":"
       ++ codexShimProjectionCasesJson ++ ","
     ++ "\"codex_shim_subagent_tool_cases\":"

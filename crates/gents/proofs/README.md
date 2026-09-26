@@ -648,7 +648,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
-| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
+| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, foreground interrupt scope, and property modules (B1/B2 projection, B3/B3′ explicit cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them). Canonical-output accounting is owned by `CanonicalOutput/Execution`, not the retired `Recovery/Outcome` module. |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
@@ -1198,17 +1198,34 @@ Model → conformance → Rust bindings:
   `Proofs/Recovery/Sweeps/BackgroundRestart.lean` models the classifier in
   `recover_stuck_running_tool_calls` as a total function
   (`restartDisposition`) with exhaustive characterizations
-  (`restart_interrupt_iff_native_background_live_parent`,
+  (`restart_interrupt_iff_native_background_resolvable_parent`,
   `leave_running_iff_preserved_shapes`,
+  `retain_in_background_iff_child_linked_terminal_parent`,
+  `child_linked_bridge_terminalizes_only_on_expiry`,
   `notification_iff_terminalized_native_background`,
   `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
   rows are **computed from the model** and driven through the real
   `ToolCallLifecycle::recover_all` by
   `conformance::generated_restart_disposition_cases_drive_recover_all`,
   including the leave-running rows (background subagent bridge under a live
-  parent, detached bridge under an interrupted parent, child-linked bridge
-  under a cleanly completed parent) and the notification + coalesced-wake
-  side effects with idempotence under a second pass.
+  parent), the retain-in-background rows (a child-linked bridge of either
+  cancellation policy under any terminal parent: an awaited one becomes
+  background work with its invocation receipt) and the notification +
+  coalesced-wake side effects with idempotence under a second pass. A lost
+  native process is attributed to the restart, never to its parent. The
+  request's terminal accounting applies the same retention in its terminal
+  transaction (`handoff_backgrounds_child_linked_bridge`), and no sweep
+  releases queued subagents of a terminal parent.
+- **Foreground interrupt scope** — `Proofs/Background/Interrupt.lean` gives
+  each tool owned by an interrupted request one disposition: cancel a pending
+  intent or running foreground native call, turn a running awaited subagent
+  bridge into background work, and leave background work untouched. It
+  ignores the cancellation policy (`disposition_ignores_cancel_policy`),
+  refines existing single-row transitions (`interruptTool_refines`), and
+  leaves no cascade step (`interrupted_parent_admits_no_cascade`). Cascade
+  requires an explicitly cancelled bridge (`bridge_cancel_cascade`,
+  `uncancelled_bridge_does_not_cancel_child`). `interrupt_disposition_cases`
+  drive the hook's in-flight interrupt path.
 - **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
   bridges, subagent liveness #465, terminal-parent owned tools #837, and
   orphaned native-background ownership repair, including volatile execution

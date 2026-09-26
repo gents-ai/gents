@@ -8,7 +8,6 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -131,12 +130,6 @@ impl ToolCallRow {
             .as_deref()
             .and_then(CancelPolicy::from_persisted)
     }
-}
-
-fn parent_reached_cancel_worthy_terminal(row: &AgentRequestRow) -> bool {
-    row.lifecycle_state
-        .is_some_and(RequestLifecycleState::is_terminal)
-        && row.lifecycle_state != Some(RequestLifecycleState::Completed)
 }
 
 #[derive(Debug, Deserialize)]
@@ -411,38 +404,6 @@ impl SubagentSource {
                 row.request_id
             );
         }
-        Ok(rows.into_iter().next())
-    }
-
-    async fn load_parent_terminal(
-        &self,
-        request_doc_id: &str,
-    ) -> anyhow::Result<Option<AgentRequestRow>> {
-        let escaped_request_doc_id = escape_graphql_string(request_doc_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
-                    limit: 1
-                ) {{
-                    request_id
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "query parent AgentRequest terminal state for SubagentSource",
-        )
-        .await?;
-        let value = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .context("AgentRequest field missing from parent terminal query")?;
-        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
-            .context("decode parent terminal AgentRequest rows")?;
         Ok(rows.into_iter().next())
     }
 
@@ -965,94 +926,9 @@ impl SubagentSource {
             .await?
         };
 
-        // Orphan-child-escapes-cancel race (audit Finding 1). The parent may have
-        // been cancelled/interrupted in the window between the spawn hook writing
-        // the `running` bridge and this child create. The cascade's
-        // `interrupt_request(child_request_id)` would have no-oped because the
-        // child did not exist yet, so we re-check AFTER the create and interrupt
-        // the just-created child if a genuine cancel signal is present.
-        //
-        // CRUCIALLY, this re-check must be consistent with the live cascade
-        // (`transition/bridge.rs::bridge_cancel_cascade`) and the recovery cascade
-        // (`recovery.rs::cascade_child_request_id`): BOTH gate the child interrupt
-        // on `cancel_policy == Cascade` and refuse to cascade for detached
-        // children (`if self.cancel_policy != CancelPolicy::Cascade { return None }`
-        // / `cascade_child_request_id` returns `None` unless Cascade). A
-        // DETACHED/background-detached child outlives its parent. So we ONLY
-        // interrupt when the bridge policy is Cascade AND a real cancel signal is
-        // present. A parent that completed NORMALLY is NOT a cancel signal — a
-        // cleanly-completed parent never cascade-cancels its tools anywhere else.
+        // Only an explicit bridge settlement reaches the child; the parent's
+        // interrupt or terminal state never does.
         let latest_bridge = self.load_tool_call(doc_id).await;
-        if bridge_cancel_policy != CancelPolicy::Cascade {
-            tracing::debug!(
-                child_request_id = %request_id,
-                parent_request_id = %parent_request_id,
-                cancel_policy = bridge_cancel_policy.as_str(),
-                "subagent source: detached child, skipping orphan cancel re-check (child outlives parent)",
-            );
-        } else {
-            let bridge_cancelled = match &latest_bridge {
-                Ok(Some(latest)) => {
-                    latest.lifecycle_state.as_deref() == Some(ToolCallState::Cancelled.as_str())
-                }
-                Ok(None) => true,
-                Err(error) => {
-                    tracing::warn!(
-                        child_request_id = %request_id,
-                        %error,
-                        "subagent source failed to re-read bridge lifecycle after child create; cancelling child",
-                    );
-                    true
-                }
-            };
-            let parent_interrupted = if parent.is_some() {
-                match crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
-                    &self.node,
-                    &parent_request_doc_id,
-                )
-                .await
-                {
-                    Ok(value) => value.is_some(),
-                    Err(error) => {
-                        tracing::warn!(
-                            parent_request_id = %parent_request_id,
-                            %error,
-                            "subagent source failed to re-read parent interrupt latch after child create; cancelling child",
-                        );
-                        true
-                    }
-                }
-            } else {
-                false
-            };
-            let parent_cancel_worthy_terminal = if parent.is_some() {
-                match self.load_parent_terminal(&parent_request_doc_id).await {
-                    Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
-                    Ok(None) => true,
-                    Err(error) => {
-                        tracing::warn!(
-                            parent_request_id = %parent_request_id,
-                            %error,
-                            "subagent source failed to re-read parent terminal state after child create; cancelling child",
-                        );
-                        true
-                    }
-                }
-            } else {
-                false
-            };
-            if bridge_cancelled || parent_interrupted || parent_cancel_worthy_terminal {
-                tracing::info!(
-                    child_request_id = %request_id,
-                    parent_request_id = %parent_request_id,
-                    bridge_cancelled,
-                    parent_interrupted,
-                    parent_cancel_worthy_terminal,
-                    "subagent source: Cascade bridge with real cancel signal in materialize window; interrupting just-created orphan child",
-                );
-                self.interrupt_created_child(doc_id, &request_id).await;
-            }
-        }
 
         // Lean `SpawnClaimFence`: a bridge that left `running` or carries a
         // cancel intent would have failed the running-bridge gate above, so its

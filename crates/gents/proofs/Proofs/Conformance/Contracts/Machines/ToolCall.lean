@@ -81,9 +81,9 @@ classes of edge that the plain `(source, target)` pairs in
   to enforce in Rust. `bridge_complete` advances the bridge tool from
   `running → completed` (with `requires_child = true`); `bridge_failure`
   drives `running → failed` or `running → cancelled` (per the disjunction in
-  `BridgedState.Transition.bridge_failure`); `bridge_cancel_cascade` is
-  state-preserving on the parent's bridge tool (it sets the child's
-  `interruptRequestedAt`) so its row uses `running → running`. -/
+  `BridgedState.Transition.bridge_failure`); `bridge_cancel_cascade` fires
+  only from an explicitly cancelled bridge tool and preserves it (it sets the
+  child's `interruptRequestedAt`) so its row uses `cancelled → cancelled`. -/
 def toolCallNamedTransitions : List NamedTransition :=
   [ -- native-only inner transitions: subagent-typed tools (with a child) take
     -- the bridge_* path instead.
@@ -122,8 +122,8 @@ def toolCallNamedTransitions : List NamedTransition :=
     , target := "cancelled"
     , requiresChild := true }
   , { name := "bridge_cancel_cascade"
-    , source := "running"
-    , target := "running"
+    , source := "cancelled"
+    , target := "cancelled"
     , requiresChild := true }
   ]
 

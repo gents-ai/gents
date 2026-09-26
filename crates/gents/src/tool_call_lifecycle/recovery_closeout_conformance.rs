@@ -409,9 +409,7 @@ async fn generated_linked_recovery_cases_use_accepted_spawn() {
         "detached_bridge_child_completed_to_completed",
         "detached_bridge_child_failed_to_failed",
         "detached_bridge_child_interrupted_to_cancelled",
-        "detached_bridge_terminal_parent_to_failed",
         "detached_bridge_deadline_exceeded_to_timed_out",
-        "live_detached_bridge_parent_failed_to_failed",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         let fixture_name = format!("recovery-closeout-{name}");
@@ -811,7 +809,7 @@ async fn liveness_convergence_projects_two_accepted_bridges_and_releases_queued_
     update_request(
         &admission.node,
         queued_bridge.request_doc_id().unwrap(),
-        r#"lifecycle_state: "completed""#,
+        r#"lifecycle_state: "failed""#,
     )
     .await;
     let report =
@@ -820,7 +818,6 @@ async fn liveness_convergence_projects_two_accepted_bridges_and_releases_queued_
             .unwrap();
     assert_eq!(report.expired_children_terminalized, 2);
     assert_eq!(report.bridges_projected, 2);
-    assert_eq!(report.queued_descendants_interrupted, 1);
     for bridge in [&admission.tool, &second] {
         let tool = crate::graphql::escape_graphql_string(bridge.doc_id().unwrap());
         let response = admission.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }} }}) {{ lifecycle_state }} }}"#)).await;
@@ -835,7 +832,8 @@ async fn liveness_convergence_projects_two_accepted_bridges_and_releases_queued_
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert_eq!(
         response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
-        "interrupted"
+        "pending",
+        "a failed parent never releases its queued subagent"
     );
     let second_report =
         ToolCallLifecycle::reconcile_subagent_liveness(&admission.node, &admission.agent_did)
@@ -847,11 +845,7 @@ async fn liveness_convergence_projects_two_accepted_bridges_and_releases_queued_
 }
 
 #[tokio::test]
-async fn generated_queued_descendant_case_releases_local_and_foreign_parent_children() {
-    let case = crate::lean_vocab_test::lean_recovery_sweep_cases()
-        .into_iter()
-        .find(|case| case.name == "queued_descendant_terminal_parent_to_interrupted")
-        .unwrap();
+async fn queued_subagents_of_terminal_local_and_foreign_parents_stay_pending() {
     let fixture_name = "recovery-closeout-queued-descendants";
     let local_child_id = format!("child-{fixture_name}-local");
     let mut admission = published_admission(PublishedAdmissionOptions {
@@ -896,7 +890,7 @@ async fn generated_queued_descendant_case_releases_local_and_foreign_parent_chil
     update_request(
         &admission.node,
         &local_parent_doc,
-        r#"lifecycle_state: "completed""#,
+        r#"lifecycle_state: "interrupted""#,
     )
     .await;
     let bystander_id = format!("wake-{fixture_name}");
@@ -972,19 +966,32 @@ async fn generated_queued_descendant_case_releases_local_and_foreign_parent_chil
     )
     .await;
 
-    let report =
+    // No parent terminal — interrupted, completed, failed, dead or
+    // superseded — releases its queued subagents.
+    for state in [None, Some("failed"), Some("dead"), Some("superseded")] {
+        if let Some(state) = state {
+            for parent_doc in [&local_parent_doc, &foreign_parent_doc] {
+                update_request(
+                    &admission.node,
+                    parent_doc,
+                    &format!(r#"lifecycle_state: "{state}""#),
+                )
+                .await;
+            }
+        }
         ToolCallLifecycle::reconcile_subagent_liveness(&admission.node, &admission.agent_did)
             .await
             .unwrap();
-    assert_eq!(report.queued_descendants_interrupted, 2);
-    for child_id in [&local_child_id, &foreign_child_id] {
-        let child = crate::graphql::escape_graphql_string(child_id);
-        let response = admission.node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child}" }} }}) {{ lifecycle_state }} }}"#)).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        assert_eq!(
-            response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
-            case.terminal_state.as_str()
-        );
+        for child_id in [&local_child_id, &foreign_child_id] {
+            let child = crate::graphql::escape_graphql_string(child_id);
+            let response = admission.node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child}" }} }}) {{ lifecycle_state }} }}"#)).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            assert_eq!(
+                response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
+                "pending",
+                "{child_id} under parent state {state:?}"
+            );
+        }
     }
     let response = admission.node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{bystander}" }} }}) {{ lifecycle_state }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -992,11 +999,6 @@ async fn generated_queued_descendant_case_releases_local_and_foreign_parent_chil
         response.data.unwrap()["AgentRequest"][0]["lifecycle_state"],
         "pending"
     );
-    let second =
-        ToolCallLifecycle::reconcile_subagent_liveness(&admission.node, &admission.agent_did)
-            .await
-            .unwrap();
-    assert!(second.is_noop());
     drop(foreign_bridge);
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).expect("remove exact queued-descendant fixture");
@@ -1010,7 +1012,8 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         "orphaned_background_tool_without_execution_to_cancelled",
         "orphaned_background_tool_expired_terminal_parent_to_timed_out",
         "orphaned_background_tool_unclaimed_to_failed",
-        "orphaned_background_tool_terminal_parent_to_failed",
+        "orphaned_background_tool_terminal_parent_to_cancelled",
+        "orphaned_background_tool_interrupted_parent_to_cancelled",
         "orphaned_background_tool_unowned_process_to_failed",
         "orphaned_background_tool_exited_process_to_failed",
     ] {
@@ -1033,6 +1036,14 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
                 &admission.node,
                 &parent_doc_id,
                 r#"lifecycle_state: "completed""#,
+            )
+            .await;
+        }
+        if case.parent_interrupted == Some(true) {
+            update_request(
+                &admission.node,
+                &parent_doc_id,
+                r#"lifecycle_state: "interrupted""#,
             )
             .await;
         }
@@ -1461,7 +1472,7 @@ async fn generated_unclaimed_remote_spawn_uses_accepted_bridge() {
 }
 
 #[tokio::test]
-async fn recovery_cascade_writes_remote_intent_from_accepted_bridge() {
+async fn recovery_leaves_remote_bridge_of_interrupted_parent_running() {
     let name = "remote-cascade";
     let (node, path, tool, agent_did) = accepted_remote_bridge(name, AwaitMode::Foreground).await;
     let parent_doc_id = tool.request_doc_id().unwrap().to_owned();
@@ -1497,17 +1508,18 @@ async fn recovery_cascade_writes_remote_intent_from_accepted_bridge() {
     let report = ToolCallLifecycle::recover_all(&node, &agent_did)
         .await
         .unwrap();
+    // The awaited remote bridge is backgrounded, not cancelled.
     assert_eq!(report.tool_calls_recovered, 1, "{report:?}");
     let escaped_tool = crate::graphql::escape_graphql_string(&tool_doc_id);
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_tool}" }} }}) {{ lifecycle_state cancel_cause tool_failure_class cancel_cascade_intent_at cancel_pending_remote_ack }} AgentRequest(filter: {{ request_id: {{ _eq: "{child}" }} }}) {{ lifecycle_state interrupt_requested_at }} }}"#)).await;
+    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_tool}" }} }}) {{ lifecycle_state await_mode cancel_cause tool_failure_class cancel_cascade_intent_at cancel_pending_remote_ack }} AgentRequest(filter: {{ request_id: {{ _eq: "{child}" }} }}) {{ lifecycle_state interrupt_requested_at }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     let bridge = &data["AgentToolCall"][0];
-    assert_eq!(bridge["lifecycle_state"], "cancelled");
-    assert_eq!(bridge["cancel_cause"], "interrupted");
-    assert!(bridge["tool_failure_class"].is_null());
-    assert!(bridge["cancel_cascade_intent_at"].is_string());
-    assert_eq!(bridge["cancel_pending_remote_ack"], true);
+    assert_eq!(bridge["lifecycle_state"], "running");
+    assert_eq!(bridge["await_mode"], "background");
+    assert!(bridge["cancel_cause"].is_null());
+    assert!(bridge["cancel_cascade_intent_at"].is_null());
+    assert_ne!(bridge["cancel_pending_remote_ack"], true);
     let child = &data["AgentRequest"][0];
     assert_eq!(child["lifecycle_state"], "processing");
     assert!(child["interrupt_requested_at"].is_null());

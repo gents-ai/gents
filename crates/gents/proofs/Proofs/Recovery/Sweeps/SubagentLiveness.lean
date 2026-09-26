@@ -59,60 +59,8 @@ def expiredSubagentChildSweep : RecoverySweep :=
   , h_recover_zero := expiredChildRecover_zero
   }
 
-structure QueuedDescendantRow where
-  state : RequestState
-  parentTerminal : Bool
-  bridgeLinked : Bool
-  deriving Repr
-
-def queuedDescendantStale (row : QueuedDescendantRow) : Prop :=
-  row.state = .pending ∧ row.parentTerminal = true ∧ row.bridgeLinked = true
-
-instance (row : QueuedDescendantRow) : Decidable (queuedDescendantStale row) := by
-  unfold queuedDescendantStale
-  infer_instance
-
-def queuedDescendantRecover (row : QueuedDescendantRow) : QueuedDescendantRow :=
-  { row with state := .interrupted }
-
-def queuedDescendantMeasure (row : QueuedDescendantRow) : Nat :=
-  if queuedDescendantStale row then 1 else 0
-
-theorem queuedDescendant_stale_positive :
-    ∀ row, queuedDescendantStale row → queuedDescendantMeasure row > 0 := by
-  intro row h_stale
-  simp [queuedDescendantMeasure, h_stale]
-
-theorem queuedDescendantRecover_terminal :
-    ∀ row, queuedDescendantStale row →
-      isTerminal (queuedDescendantRecover row).state := by
-  intro row _h_stale
-  simp [queuedDescendantRecover, HasTerminal.isTerminal, RequestState.instHasTerminal]
-
-theorem queuedDescendantRecover_zero :
-    ∀ row, queuedDescendantStale row →
-      queuedDescendantMeasure (queuedDescendantRecover row) = 0 := by
-  intro row _h_stale
-  have h_not : ¬ queuedDescendantStale (queuedDescendantRecover row) := by
-    intro h_stale
-    rcases h_stale with ⟨h_pending, _, _⟩
-    simp [queuedDescendantRecover] at h_pending
-  simp [queuedDescendantMeasure, h_not]
-
-def queuedDescendantSweep : RecoverySweep :=
-  { Row := QueuedDescendantRow
-  , collection := .agentRequest
-  , sweepId := "subagent_liveness_interrupt_queued_descendants"
-  , rustFunction := "ToolCallLifecycle::reconcile_subagent_liveness"
-  , cadence := .periodic
-  , implementationStatus := .implemented
-  , stale := queuedDescendantStale
-  , recover := queuedDescendantRecover
-  , terminal := fun row => isTerminal row.state
-  , measure := queuedDescendantMeasure
-  , h_stale_positive := queuedDescendant_stale_positive
-  , h_recover_terminal := queuedDescendantRecover_terminal
-  , h_recover_zero := queuedDescendantRecover_zero
-  }
+/- There is no queued-descendant sweep: a parent's terminal state — completed,
+   interrupted, failed, dead or superseded — never releases its queued
+   subagents. Only an explicit bridge cancellation reaches a child. -/
 
 end Recovery

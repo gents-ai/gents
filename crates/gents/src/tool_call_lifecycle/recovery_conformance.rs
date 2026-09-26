@@ -17,7 +17,7 @@ async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &st
 }
 
 async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
-    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state cancel_cause tool_failure_class }} }}"#, crate::graphql::escape_graphql_string(doc_id))).await;
+    let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#, crate::graphql::escape_graphql_string(doc_id))).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response.data.unwrap()["AgentToolCall"]
         .as_array()
@@ -90,11 +90,12 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
     for name in [
         "restart_native_background_live_parent_interrupted",
         "restart_native_background_deadline_expired_times_out",
-        "restart_native_background_interrupted_parent_cancelled",
-        "restart_native_background_terminal_parent_failed",
+        "restart_native_background_interrupted_parent_lost_on_restart",
+        "restart_native_background_terminal_parent_lost_on_restart",
         "restart_native_background_unowned_process_lost",
         "restart_native_background_exited_process_lost",
         "restart_foreground_live_parent_left_running",
+        "restart_foreground_interrupted_parent_cancelled",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert!(!case.child_linked, "{name} must remain a native tool row");
@@ -276,12 +277,22 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
     let cases = crate::lean_vocab_test::lean_restart_disposition_cases();
     for name in [
         "restart_background_subagent_live_parent_left_running",
-        "restart_detached_bridge_interrupted_parent_left_running",
-        "restart_clean_complete_child_linked_left_running",
+        "restart_detached_bridge_interrupted_parent_retained",
+        "restart_cascade_bridge_interrupted_parent_retained",
+        "restart_awaited_bridge_interrupted_parent_backgrounded",
+        "restart_awaited_bridge_failed_parent_backgrounded",
+        "restart_background_bridge_failed_parent_retained",
+        "restart_clean_complete_child_linked_retained",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert!(case.child_linked, "{name} must remain a linked bridge row");
-        assert_eq!(case.disposition, "leave_running", "{name}");
+        assert!(
+            matches!(
+                case.disposition.as_str(),
+                "leave_running" | "retain_in_background"
+            ),
+            "{name}"
+        );
         let await_mode = if case.await_mode == "background" {
             AwaitMode::Background
         } else {
@@ -368,18 +379,67 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
                 )
                 .await;
             }
+            "otherTerminal" => {
+                update(
+                    admission.node.as_ref(),
+                    "AgentRequest",
+                    &request_doc,
+                    r#"lifecycle_state: "failed""#,
+                )
+                .await;
+            }
             other => panic!("unsupported linked restart parent observation {other}"),
+        }
+        if case.await_mode == "background" && case.parent_observation != "live" {
+            // The periodic terminal-parent sweep never ends a subagent bridge.
+            let periodic = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+                &admission.node,
+                &admission.agent_did,
+            )
+            .await
+            .unwrap();
+            assert_eq!(periodic.tool_calls_terminalized, 0, "{name}");
+            assert_eq!(
+                row(&admission.node, &tool_doc).await["lifecycle_state"],
+                "running",
+                "{name}"
+            );
         }
 
         let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
             .await
             .unwrap();
-        assert_eq!(report.tool_calls_recovered, 0, "{name}");
+        let backgrounded = case.post_await_mode.as_deref() == Some("background")
+            && case.await_mode == "foreground";
         assert_eq!(
-            row(&admission.node, &tool_doc).await["lifecycle_state"],
-            "running",
+            report.tool_calls_recovered,
+            usize::from(backgrounded),
             "{name}"
         );
+        let bridge = row(&admission.node, &tool_doc).await;
+        assert_eq!(bridge["lifecycle_state"], "running", "{name}");
+        assert_eq!(
+            bridge["await_mode"],
+            case.post_await_mode
+                .as_deref()
+                .unwrap_or(case.await_mode.as_str()),
+            "{name}"
+        );
+        if case.disposition == "retain_in_background" {
+            let presentation = crate::tool_call_lifecycle::query::load_tool_call_presentation(
+                &crate::config_client::ConfigAccess::Local(admission.node.clone()),
+                &tool_doc,
+                &admission.agent_did,
+                admission.tool.session_id(),
+                admission.tool.requester_did(),
+            )
+            .await
+            .unwrap();
+            assert!(
+                presentation.result.is_some(),
+                "{name}: a retained bridge owns its invocation receipt"
+            );
+        }
         let escaped_child = crate::graphql::escape_graphql_string(&child_request_id);
         let child = admission
             .node

@@ -98,8 +98,8 @@ pub(super) async fn account_tools_in_txn(
             r#"{{
         AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
             _docID tool_call_key request_doc_id agent_did requester_did session_id
-            message_sequence tool_call_id tool_name lifecycle_state await_mode cancel_policy
-            started_at child_request_id spawned_by_tool_call_doc_id delegated_input
+            message_sequence tool_call_id tool_name lifecycle_state await_mode
+            started_at child_request_id spawn_behavior_id spawned_by_tool_call_doc_id
         }}
     }}"#
         ))
@@ -223,29 +223,27 @@ pub(super) async fn account_tools_in_txn(
                 .await?;
             }
         }
+        // A request's exceptional terminal never stops its subagents: an
+        // awaited bridge becomes background work with its invocation receipt
+        // in this transaction, so its child's terminal is later delivered.
+        let background_bridge = state == "running"
+            && !completed
+            && spawned.is_none()
+            && tool.row.await_mode.as_deref() == Some("foreground")
+            && tool
+                .row
+                .child_request_id
+                .as_deref()
+                .is_some_and(|child| !child.is_empty());
         let input = if state == "pending" {
             // No executor ever started: cancel immutable intent, not an effect.
             format!(
                 r#"lifecycle_state: "cancelled", cancel_cause: "interrupted", completed_at: "{timestamp}""#
             )
+        } else if background_bridge {
+            format!(r#"await_mode: "background", stuck_since: "{timestamp}""#)
         } else if state == "running" && !completed {
-            let cascade = tool
-                .row
-                .cancel_policy
-                .as_deref()
-                .context("running tool missing cancel policy")?;
-            anyhow::ensure!(
-                matches!(cascade, "cascade" | "detach"),
-                "invalid tool cancellation policy"
-            );
-            let mut fields = format!(r#"stuck_since: "{timestamp}""#);
-            if cascade == "cascade" {
-                fields.push_str(&format!(r#", cancel_cascade_intent_at: "{timestamp}""#));
-                if tool.row.delegated_input.is_some() {
-                    fields.push_str(", cancel_pending_remote_ack: true");
-                }
-            }
-            fields
+            format!(r#"stuck_since: "{timestamp}""#)
         } else {
             continue;
         };
@@ -264,6 +262,56 @@ pub(super) async fn account_tools_in_txn(
                 .is_some_and(response_has_documents),
             "owned tool accounting lost lifecycle CAS"
         );
+        if background_bridge {
+            publish_retained_bridge_receipt(txn, request, tool, accepted_header, generation)
+                .await?;
+        }
     }
+    Ok(())
+}
+
+async fn publish_retained_bridge_receipt(
+    txn: &ConfigApplyTxn<'_>,
+    request: &AgentRequestRow,
+    tool: &ToolDocument,
+    accepted_header: &TranscriptMessageRow,
+    generation: &str,
+) -> Result<()> {
+    let (id, call_id, name, arguments) = accepted_header
+        .message
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::ToolCall {
+                tool_call_doc_id,
+                id,
+                call_id,
+                name,
+                arguments,
+                ..
+            } if tool_call_doc_id == &tool.doc_id => Some((id, call_id, name, arguments)),
+            _ => None,
+        })
+        .context("accepted bridge intent disappeared")?;
+    let binding = crate::tool_call_lifecycle::BackgroundReceiptBinding {
+        tool_doc_id: tool.doc_id.clone(),
+        request_doc_id: tool.request_doc_id.clone(),
+        accepted_header_doc_id: accepted_header.doc_id.clone(),
+        arguments: arguments.clone(),
+        generation: generation.to_owned(),
+        agent_did: tool.agent_did.clone(),
+        requester_did: request.requester_did.clone(),
+        session_id: accepted_header.message.session_id.clone(),
+        tool_call_id: id.clone(),
+        call_id: call_id.clone(),
+        tool_name: name.clone(),
+        message_sequence: accepted_header.message.sequence,
+    };
+    let receipt = crate::hook::persistence::background_receipt_payload(
+        tool.row.child_request_id.as_deref().unwrap_or_default(),
+        None,
+        tool.row.spawn_behavior_id.as_deref().unwrap_or_default(),
+    );
+    crate::tool_call_lifecycle::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
     Ok(())
 }

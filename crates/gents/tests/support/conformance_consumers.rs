@@ -812,6 +812,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "policy_rejection_settles_pending_call_without_dispatch_election",
         },
         ConformanceConsumer::RustTest {
+            id: "hook::tests::generated_interrupt_dispositions_drive_in_flight_interrupt",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests.rs",
+            module_path: "hook::tests",
+            function: "generated_interrupt_dispositions_drive_in_flight_interrupt",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::generated_persistence_failure_policy_cases_match_hook_decisions",
             package: "gents",
             source_path: "crates/gents/src/hook/tests.rs",
@@ -1041,13 +1048,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/tool_call_lifecycle/recovery_closeout_conformance.rs",
             module_path: "tool_call_lifecycle::recovery_closeout_conformance",
             function: "generated_expired_child_liveness_cases_use_accepted_bridge",
-        },
-        ConformanceConsumer::RustTest {
-            id: "tool_call_lifecycle::recovery_closeout_conformance::generated_queued_descendant_case_releases_local_and_foreign_parent_children",
-            package: "gents",
-            source_path: "crates/gents/src/tool_call_lifecycle/recovery_closeout_conformance.rs",
-            module_path: "tool_call_lifecycle::recovery_closeout_conformance",
-            function: "generated_queued_descendant_case_releases_local_and_foreign_parent_children",
         },
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call",

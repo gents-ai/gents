@@ -159,7 +159,41 @@ fn exact_literal_presentation(text: &str) -> gents_protocol::output::PayloadPres
     }
 }
 
+/// Poll interval of a foreground subagent wait, bounded by the parent's
+/// deadline.
+fn wait_poll_interval(
+    parent_deadline_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Duration {
+    (parent_deadline_at - now)
+        .to_std()
+        .unwrap_or(Duration::from_millis(0))
+        .min(Duration::from_millis(250))
+}
+
 impl DefraSessionHook {
+    /// An interrupted caller leaves its subagent running: an awaited bridge
+    /// becomes background work with its one immutable invocation receipt, so
+    /// the child's terminal is later delivered as a completion notification.
+    pub(crate) async fn retain_interrupted_bridge(
+        &self,
+        mut bridge: ToolCallLifecycle,
+    ) -> anyhow::Result<()> {
+        let child_request_id = bridge
+            .child_request_id
+            .clone()
+            .context("interrupted bridge has no child request")?;
+        let behavior_id = bridge.spawn_behavior_id.clone().unwrap_or_default();
+        bridge
+            .retain_in_background(&background_receipt_payload(
+                &child_request_id,
+                None,
+                &behavior_id,
+            ))
+            .await?;
+        Ok(())
+    }
+
     /// Commit the accepted bridge's immutable background invocation reply
     /// before a parked parent attempts to reacquire active worker capacity.
     /// A terminal race is observed again by the outer wait loop.
@@ -187,24 +221,7 @@ impl DefraSessionHook {
         if !bridge.is_running() || bridge.await_mode() != AwaitMode::Background {
             return Ok(false);
         }
-        // A bridge spawned in background mode may already have its one
-        // immutable receipt. A later foreground wait can be backgrounded
-        // again with a richer presentation, but must never rewrite that
-        // original invocation reply. This read distinguishes no delivery
-        // from malformed or conflicting delivery through the canonical owner.
-        let existing = crate::tool_call_lifecycle::query::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::Local(self.node.clone()),
-            &edge.parent_tool_call_doc_id,
-            &edge.parent_agent_did,
-            &edge.parent_session_id,
-            edge.parent_requester_did.as_deref(),
-        )
-        .await?;
-        if existing.result.is_some() {
-            return Ok(true);
-        }
-        bridge.publish_background_receipt(payload).await?;
-        Ok(true)
+        bridge.retain_in_background(payload).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -260,24 +277,6 @@ impl DefraSessionHook {
         )
         .await
         .map_err(anyhow::Error::from)
-    }
-
-    pub(super) async fn cancel_live_subagent_descendants(
-        &self,
-        child_session_id: &str,
-        child_agent_did: &str,
-        child_requester_did: Option<&str>,
-        cause: CancelCause,
-    ) -> anyhow::Result<usize> {
-        crate::background_tools::subagent_control::cancel_live_subagent_descendants(
-            self.node.clone(),
-            child_session_id,
-            child_agent_did,
-            child_requester_did,
-            &self.agent_did,
-            cause,
-        )
-        .await
     }
 
     pub(super) async fn await_foreground_subagent(
@@ -531,10 +530,7 @@ impl DefraSessionHook {
                 }
             }
 
-            let remaining = (parent_deadline_at - now)
-                .to_std()
-                .unwrap_or(Duration::from_millis(0));
-            tokio::time::sleep(remaining.min(Duration::from_millis(250))).await;
+            tokio::time::sleep(wait_poll_interval(parent_deadline_at, now)).await;
         }
     }
 
@@ -574,6 +570,7 @@ impl DefraSessionHook {
             }
 
             if edge.lifecycle_state == "running"
+                && edge.await_mode == AwaitMode::Foreground
                 && crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
                     &self.node,
                     caller_request_doc_id,
@@ -581,80 +578,17 @@ impl DefraSessionHook {
                 .await?
                 .is_some()
             {
-                let payload = foreground_terminal_failure_payload(
-                    child_request_id,
-                    child_session_id,
-                    "interrupted",
-                    "parent request was cancelled while waiting for child subagent",
-                    FailureClass::External,
-                );
-                if let Some(mut lifecycle) = self
+                if let Some(bridge) = self
                     .take_or_load_in_flight_lifecycle(
                         &parent_context.session_id,
                         parent_tool_call_id,
                     )
                     .await?
                 {
-                    let dispatch = match lifecycle
-                        .cancel_during_run_with_cascade_dispatch_and_presentation(
-                            CancelCause::Interrupted,
-                            &self.agent_did,
-                            Some((&payload, exact_literal_presentation(&payload))),
-                        )
-                        .await
-                    {
-                        Ok(dispatch) => dispatch,
-                        Err(error) => {
-                            return self
-                                .foreground_external_bridge_terminal_or_error(
-                                    parent_context,
-                                    parent_tool_call_id,
-                                    child_request_id,
-                                    child_session_id,
-                                    behavior_id,
-                                    error,
-                                )
-                                .await;
-                        }
-                    };
-                    if !lifecycle.is_cancelled() {
-                        return self
-                            .foreground_external_bridge_terminal_payload(
-                                parent_context,
-                                parent_tool_call_id,
-                                child_request_id,
-                                child_session_id,
-                                behavior_id,
-                            )
-                            .await;
-                    }
-                    if let Some(dispatch) = dispatch {
-                        if let CascadeDispatch::Local { intent, child } = dispatch {
-                            if let Err(error) = crate::interrupt::interrupt_request_by_doc_id(
-                                &self.node,
-                                child
-                                    .doc_id
-                                    .as_deref()
-                                    .expect("verified physical cascade child"),
-                                child
-                                    .agent_did
-                                    .as_deref()
-                                    .expect("verified local child principal"),
-                                child.requester_did.as_deref(),
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    child_request_id = %intent.child_request_id,
-                                    error = %error,
-                                    "failed to cascade wait_subagent cancellation to child request"
-                                );
-                            }
-                        }
-                    }
+                    self.retain_interrupted_bridge(bridge).await?;
                 }
-                self.discard_in_flight_lifecycle(parent_tool_call_id).await;
-                return Ok(payload);
+                tokio::time::sleep(wait_poll_interval(parent_deadline_at, now)).await;
+                continue;
             }
 
             if edge.await_mode == AwaitMode::Background && edge.lifecycle_state == "running" {
@@ -859,10 +793,7 @@ impl DefraSessionHook {
                 }
             }
 
-            let remaining = (parent_deadline_at - now)
-                .to_std()
-                .unwrap_or(Duration::from_millis(0));
-            tokio::time::sleep(remaining.min(Duration::from_millis(250))).await;
+            tokio::time::sleep(wait_poll_interval(parent_deadline_at, now)).await;
         }
     }
 

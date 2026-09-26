@@ -339,6 +339,17 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .expect("accepted spawned process ID")
         .to_owned();
     let args = json!({"tool_call_id":tool_call_id}).to_string();
+    let sibling = invoke(
+        &owner,
+        "cross-agent-sibling-spawn",
+        "spawn_process",
+        r#"{"tool_name":"slow_tool","args":{}}"#,
+    )
+    .await;
+    let sibling_id = sibling["tool_call_id"]
+        .as_str()
+        .expect("accepted sibling process ID")
+        .to_owned();
     let row = fetch_tool_call_row(&node, &session_id, &tool_call_id).await;
     assert_eq!(row["request_id"], owner_request);
     assert_eq!(row["agent_did"], owner_did);
@@ -426,6 +437,21 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
     executions.wait_for_completion(&tool_call_id).await;
     let final_row = fetch_tool_call_row(&node, &session_id, &tool_call_id).await;
     assert_eq!(final_row["lifecycle_state"], "cancelled");
+    let sibling_row = fetch_tool_call_row(&node, &session_id, &sibling_id).await;
+    assert_eq!(
+        sibling_row["lifecycle_state"], "running",
+        "cancelling one process must not stop its sibling"
+    );
+    let sibling_args = json!({"tool_call_id":sibling_id}).to_string();
+    let sibling_cancelled = invoke(
+        &owner,
+        "owner-cancel-sibling",
+        "cancel_process",
+        &sibling_args,
+    )
+    .await;
+    assert_eq!(sibling_cancelled["status"], "cancelled");
+    executions.wait_for_completion(&sibling_id).await;
     hook_execution_fixtures()
         .lock()
         .await

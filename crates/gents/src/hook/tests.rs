@@ -2716,7 +2716,7 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
 
 #[tokio::test]
 #[cfg(unix)]
-async fn interruption_cascades_only_to_exact_parent_background_workers() {
+async fn interruption_leaves_background_workers_running() {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
@@ -2830,178 +2830,170 @@ async fn interruption_cascades_only_to_exact_parent_background_workers() {
     })
     .await
     .unwrap();
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
-    assert!(tokens[0].is_cancelled());
-    match tokio::time::timeout(Duration::from_secs(5), worker)
-        .await
-        .unwrap()
-        .unwrap()
-    {
-        crate::managed_exec::ManagedExecOutcome::Cancelled { kill, .. } => assert!(kill.reaped),
-        other => panic!("expected cancelled managed process, got {other:?}"),
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
+    assert!(tokens.iter().all(|token| !token.is_cancelled()));
+    assert!(!worker.is_finished());
+    assert!(crate::active_native_executors()
+        .iter()
+        .any(|p| p.tool_name.as_deref() == Some(process_name.as_str())));
+    for id in ["owned", "detached"] {
+        let row = fetch_tool_call_row(&node, &session_id, id).await;
+        assert_eq!(row["lifecycle_state"], "running", "{id}");
+        assert!(row["cancel_cause"].is_null(), "{id}");
     }
-    assert!(!tokens[1].is_cancelled());
-    assert!(!tokens[2].is_cancelled());
-    let row = fetch_tool_call_row(&node, &session_id, "owned").await;
-    assert_eq!(row["lifecycle_state"], "cancelled");
-    assert_eq!(row["cancel_cause"], "interrupted");
-    assert_eq!(
-        fetch_tool_call_row(&node, &session_id, "detached").await["lifecycle_state"],
-        "running"
-    );
     assert_eq!(
         fetch_tool_call_row(&node, &unrelated_session_id, "unrelated").await["lifecycle_state"],
         "running"
     );
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
-}
-
-#[tokio::test]
-async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
-    let data_path = std::env::temp_dir().join(format!(
-        "agent-hook-cascade-cancel-{}",
-        uuid::Uuid::new_v4()
+    tokens[0].cancel();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap(),
+        crate::managed_exec::ManagedExecOutcome::Cancelled { .. }
     ));
+}
+
+/// Every running Lean interrupt disposition row is driven through the hook's
+/// in-flight interrupt path; every row also pins the production classifier.
+#[tokio::test]
+async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
+    use crate::tool_call_lifecycle::{
+        AwaitMode, CancelPolicy, InterruptDisposition, ToolCallState,
+    };
+    let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
+    assert_eq!(cases.len(), 48);
+    let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
+        EmbeddedNode::builder()
+            .data_path(dir.path())
             .build()
             .await
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    let session_id = hook.session_id().await.unwrap();
-    let child_request_id = "child-cascade";
-    bind_interruptible_request(
-        &node,
-        &hook,
-        "parent-cascade",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let parent_doc_id = hook.active_request_doc_id().await.unwrap();
-    let mut lifecycle = accepted_subagent_lifecycle(
-        &hook,
-        "tool-cascade",
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        child_request_id,
-    )
-    .await;
-    lifecycle.start_running().await.unwrap();
-    create_corroborated_child_request(
-        &node,
-        child_request_id,
-        &session_id,
-        "parent-cascade",
-        &parent_doc_id,
-        "tool-cascade",
-        lifecycle.doc_id().unwrap(),
-    )
-    .await;
-    hook.in_flight_lifecycles
-        .lock()
-        .await
-        .insert("tool-cascade".to_string(), lifecycle);
-
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
-
-    let parent_row = fetch_tool_call_row(&node, &session_id, "tool-cascade").await;
-    assert_eq!(
-        parent_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("cancelled")
-    );
-    let child_interrupt = crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
-        .await
-        .unwrap();
-    assert!(
-        child_interrupt.is_some(),
-        "cascade cancel should latch child interrupt_requested_at"
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-detach-cancel-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    let mut driven = 0;
+    for case in cases {
+        let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
+        let await_mode = AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
+        assert_eq!(
+            InterruptDisposition::of(state, await_mode, case.child_linked).as_str(),
+            case.disposition,
+            "{}",
+            case.name
+        );
+        if state != ToolCallState::Running {
+            continue;
+        }
+        let policy = CancelPolicy::from_persisted(&case.cancel_policy).expect("modeled policy");
+        let hook = DefraSessionHook::with_identity(
+            node.clone(),
+            "general",
+            "did:test:general",
+            FailurePolicy::default(),
+        );
+        hook.on_completion_call(&user_text_message(&case.name), &[])
+            .await;
+        let session_id = hook.session_id().await.unwrap();
+        let parent_id = format!("parent-{}", case.name);
+        bind_interruptible_request(&node, &hook, &parent_id, &session_id, deadline).await;
+        let child_id = format!("child-{}", case.name);
+        let mut lifecycle = if case.child_linked {
+            accepted_subagent_lifecycle(&hook, &case.name, deadline, await_mode, policy, &child_id)
+                .await
+        } else {
+            accepted_hook_tool_lifecycle(
+                &hook, &case.name, "bash", "{}", deadline, await_mode, policy,
+            )
             .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
+        };
+        lifecycle.start_running().await.unwrap();
+        if case.child_linked {
+            if await_mode == AwaitMode::Background {
+                lifecycle
+                    .publish_background_receipt("child started")
+                    .await
+                    .unwrap();
+            }
+            let parent_doc_id = hook.active_request_doc_id().await.unwrap();
+            create_corroborated_child_request(
+                &node,
+                &child_id,
+                &session_id,
+                &parent_id,
+                &parent_doc_id,
+                &case.name,
+                lifecycle.doc_id().unwrap(),
+            )
+            .await;
+        }
+        let tool_doc_id = lifecycle.doc_id().unwrap().to_owned();
+        hook.in_flight_lifecycles
+            .lock()
+            .await
+            .insert(case.name.clone(), lifecycle);
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    let session_id = hook.session_id().await.unwrap();
-    let child_request_id = "child-detach";
-    bind_interruptible_request(
-        &node,
-        &hook,
-        "parent-detach",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    create_interruptible_request(&node, child_request_id, &session_id).await;
-    let mut lifecycle = accepted_subagent_lifecycle(
-        &hook,
-        "tool-detach",
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
-        crate::tool_call_lifecycle::CancelPolicy::Detach,
-        child_request_id,
-    )
-    .await;
-    lifecycle.start_running().await.unwrap();
-    hook.in_flight_lifecycles
-        .lock()
-        .await
-        .insert("tool-detach".to_string(), lifecycle);
-
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
-
-    let parent_row = fetch_tool_call_row(&node, &session_id, "tool-detach").await;
-    assert_eq!(
-        parent_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("cancelled")
-    );
-    let child_interrupt = crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
-        .await
-        .unwrap();
-    assert!(
-        child_interrupt.is_none(),
-        "detached cancel must leave child request interrupt unset"
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
+        let cancelled = hook.cancel_in_flight_tool_calls().await.unwrap();
+        assert_eq!(
+            cancelled,
+            usize::from(case.disposition == "cancel"),
+            "{}",
+            case.name
+        );
+        let row = fetch_tool_call_row(&node, &session_id, &case.name).await;
+        assert_eq!(
+            row["lifecycle_state"],
+            case.post_state.as_str(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            row["await_mode"],
+            case.post_await_mode.as_str(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            row["cancel_policy"],
+            case.cancel_policy.as_str(),
+            "{}",
+            case.name
+        );
+        if case.child_linked {
+            assert!(
+                crate::interrupt::fetch_interrupt_requested_at(&node, &child_id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{}: interrupting the parent reached its child",
+                case.name
+            );
+            let receipt = crate::tool_call_lifecycle::query::load_tool_call_presentation(
+                &crate::config_client::ConfigAccess::Local(node.clone()),
+                &tool_doc_id,
+                "did:test:general",
+                &session_id,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(
+                receipt.result.is_some(),
+                "{}: a retained bridge owns its invocation receipt",
+                case.name
+            );
+        }
+        driven += 1;
+    }
+    assert_eq!(driven, 8);
 }
 
-/// A parent interrupt drains both native tools and child bridges from the
-/// in-flight lifecycle map without waiting for their deadlines.
+/// A parent interrupt drains the in-flight map: the foreground native tool is
+/// cancelled while the background child bridge and its child keep running.
 #[tokio::test]
-async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
+async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -3072,7 +3064,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         .await
         .insert("child-bridge".to_string(), bridge);
 
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 2);
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
     // Duplicate interrupt delivery is a no-op once the map is empty.
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
 
@@ -3101,25 +3093,15 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     );
 
     let bridge_row = fetch_tool_call_row(&node, &session_id, "child-bridge").await;
-    assert_eq!(
-        bridge_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("cancelled")
-    );
-    assert_eq!(
-        bridge_row
-            .get("cancel_cause")
-            .and_then(|value| value.as_str()),
-        Some("interrupted")
-    );
-
-    let child_interrupt = crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
-        .await
-        .unwrap();
+    assert_eq!(bridge_row["lifecycle_state"], "running");
+    assert_eq!(bridge_row["await_mode"], "background");
+    assert!(bridge_row["cancel_cause"].is_null());
     assert!(
-        child_interrupt.is_some(),
-        "cascade cancel should latch child interrupt_requested_at"
+        crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "interrupting the parent must not reach the child"
     );
 
     // Divergent late output must not overwrite the durable interrupt terminal.

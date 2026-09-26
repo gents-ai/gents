@@ -1207,11 +1207,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_queued_descendant_case_releases_local_and_foreign_parent_children")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases"
       "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1353,7 +1348,12 @@ def caseCoverage : List CoverageEntry :=
       "bridge_step_cases"
       "BridgeStepCases"
       "tool_call_lifecycle::background_hook_conformance::generated_bridge_steps_drive_real_background_projector_and_cascade"
-      "Nine committed-bridge cases drive canonical admission, the production background projector and cascade owner. The uncommitted-bridge rejection remains a model assertion, not a native owner invocation.")
+      "Ten committed-bridge cases drive canonical admission, the production background projector and cascade owner. The uncommitted-bridge rejection remains a model assertion, not a native owner invocation.")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "interrupt_disposition_cases"
+      "InterruptDispositionCases"
+      "hook::tests::generated_interrupt_dispositions_drive_in_flight_interrupt")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "codex_shim_projection_cases"

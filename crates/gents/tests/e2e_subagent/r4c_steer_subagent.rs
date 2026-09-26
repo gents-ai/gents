@@ -723,7 +723,7 @@ async fn steer_subagent_interrupt_replay_preserves_later_automated_wakeup() {
 }
 
 #[tokio::test]
-async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
+async fn steer_subagent_interrupt_leaves_grandchild_subagents_running() {
     let (db, source) = setup_db("r4c-steer-cascade").await;
     let hook = create_parent_hook(&db, "parent-cascade", "session-cascade").await;
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
@@ -813,6 +813,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         fetch_interrupt_requested_at(db.node.as_ref(), grandchild_request_id)
             .await
             .unwrap()
-            .is_some()
+            .is_none(),
+        "interrupting the child thread must not reach its own subagents"
     );
 }

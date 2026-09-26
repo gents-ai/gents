@@ -78,7 +78,8 @@ def bridgeStepComposed
 def bridgeStepFixture
     (childState parentState : RequestState)
     (policy : CancelPolicy)
-    (bridgeCommitted : Bool) : Subagent.BridgedState :=
+    (bridgeCommitted : Bool)
+    (bridgeState : ToolExecution.ToolCallState := .running) : Subagent.BridgedState :=
   let childReq :=
     { bridgeStepRequest childState (bridgeStepAdmission childState) with
         subagentDepth := 1
@@ -88,8 +89,9 @@ def bridgeStepFixture
   { parent :=
       bridgeStepComposed 900
         (bridgeStepRequest parentState (bridgeStepAdmission parentState))
-        [ bridgeStepToolRow policy
-            (if bridgeCommitted then .committed else .committing) ]
+        [ { bridgeStepToolRow policy
+              (if bridgeCommitted then .committed else .committing) with
+              state := bridgeState } ]
   , child := child
   , bridgeCallId := 77
   }
@@ -101,8 +103,10 @@ def bridgeStepCase
     (childState parentState : RequestState)
     (policy : CancelPolicy)
     (bridgeCommitted : Bool)
-    (theoremName : String) : BridgeStepCase :=
-  let fixture := bridgeStepFixture childState parentState policy bridgeCommitted
+    (theoremName : String)
+    (bridgeState : ToolExecution.ToolCallState := .running) : BridgeStepCase :=
+  let fixture :=
+    bridgeStepFixture childState parentState policy bridgeCommitted bridgeState
   let base : BridgeStepCase :=
     { name := name
     , event := eventName
@@ -110,6 +114,7 @@ def bridgeStepCase
     , parentState := parentState.toDefraDB
     , cancelPolicy := policy.toDefraDB
     , bridgeCommitted := bridgeCommitted
+    , bridgeState := bridgeState.toDefraDB
     , legal := false
     , postToolState := none
     , postChildInterruptSet := false
@@ -147,25 +152,24 @@ def bridgeStepCases : List BridgeStepCase :=
   , bridgeStepCase "bridge_step_failure_child_completed_rejected"
       .bridge_failure "bridge_failure" .completed .processing .cascade true
       "Subagent.BridgedState.step_refines_transition"
-  , -- Cascade rows: `post_tool_state = "running"` is the MODEL's
-    -- structurally-inert parent (the cascade step only latches the child's
-    -- interrupt flag). The Rust decision seam (`bridge_cancel_cascade`)
-    -- implements the tool-cancelled arm of the guard, so the runtime driver
-    -- reaches it via `cancel_during_run` first and binds only the
-    -- intent/interrupt outcome — the "running" post is pinned by the Lean
-    -- `rfl` theorem, not by the runtime.
-    bridgeStepCase "bridge_step_cascade_parent_interrupted_cascade"
+  , -- Cascade rows: only an explicitly cancelled bridge carries a cascade.
+    -- A running bridge under an interrupted parent is not a cascade signal.
+    bridgeStepCase "bridge_step_cascade_explicit_cancel_cascade"
+      .bridge_cancel_cascade "bridge_cancel_cascade"
+      .processing .processing .cascade true
+      "Subagent.BridgedState.cascade_cancels_child" .cancelled
+  , bridgeStepCase "bridge_step_cascade_explicit_cancel_detach"
+      .bridge_cancel_cascade "bridge_cancel_cascade"
+      .processing .processing .detach true
+      "Subagent.BridgedState.detach_does_not_cancel_child" .cancelled
+  , bridgeStepCase "bridge_step_cascade_parent_interrupted_running_bridge_rejected"
       .bridge_cancel_cascade "bridge_cancel_cascade"
       .processing .interrupted .cascade true
-      "Subagent.BridgedState.cascade_cancels_child"
-  , bridgeStepCase "bridge_step_cascade_parent_interrupted_detach"
-      .bridge_cancel_cascade "bridge_cancel_cascade"
-      .processing .interrupted .detach true
-      "Subagent.BridgedState.detach_does_not_cancel_child"
+      "Subagent.BridgedState.uncancelled_bridge_admits_no_cascade_step"
   , bridgeStepCase "bridge_step_cascade_parent_live_rejected"
       .bridge_cancel_cascade "bridge_cancel_cascade"
       .processing .processing .cascade true
-      "Subagent.BridgedState.step_refines_transition"
+      "Subagent.BridgedState.uncancelled_bridge_admits_no_cascade_step"
   ]
 
 /-- Pinned outcomes: fails at Lean build time if a step guard or projection
@@ -182,9 +186,11 @@ theorem bridgeStepCases_pinned :
       , ("bridge_step_failure_child_failed", true, some "failed", false)
       , ("bridge_step_failure_child_dead", true, some "failed", false)
       , ("bridge_step_failure_child_completed_rejected", false, none, false)
-      , ("bridge_step_cascade_parent_interrupted_cascade", true, some "running",
+      , ("bridge_step_cascade_explicit_cancel_cascade", true, some "cancelled",
           true)
-      , ("bridge_step_cascade_parent_interrupted_detach", false, none, false)
+      , ("bridge_step_cascade_explicit_cancel_detach", false, none, false)
+      , ("bridge_step_cascade_parent_interrupted_running_bridge_rejected", false,
+          none, false)
       , ("bridge_step_cascade_parent_live_rejected", false, none, false)
       ] := by
   rfl

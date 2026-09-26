@@ -374,6 +374,7 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
     ++ "\"cause\":" ++ jsonOptionalString witness.cause ++ ","
     ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
+    ++ "\"post_await_mode\":" ++ jsonOptionalString witness.postAwaitMode ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","
     ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","

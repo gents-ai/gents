@@ -717,15 +717,18 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
           (decide (isTerminal terminal) && canonicalToolDelivered world tool)
     else true
 
+/-- A running call outlives its request's exceptional terminal: the handoff
+records uncertainty and writes no cascade intent, since a request terminal is
+never a cancel signal for a subagent. An awaited subagent bridge becomes
+background work (`Subagent.Interrupt`'s background disposition); native
+publishes its one invocation receipt in the same terminal transaction, so the
+child's terminal is later delivered as a completion notification. -/
 def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
   { tool with
-    cancelCascadeIntentAt :=
-      if tool.context.cancelPolicy == .cascade then some world.lease.now
-      else tool.cancelCascadeIntentAt
-    cancelPendingRemoteAck :=
-      tool.cancelPendingRemoteAck ||
-        (tool.context.cancelPolicy == .cascade &&
-          world.delegatedCalls.any (fun delegated => delegated.call == tool.document))
+    context :=
+      if tool.context.childRequestId.isSome then
+        { tool.context with awaitMode := .background }
+      else tool.context
     stuckSince := some world.lease.now }
 
 def accountOneOwnedTool (world : World) (generation : Generation)

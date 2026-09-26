@@ -224,8 +224,7 @@ pub mod cancel_propagation {
     /// some other, natural path" (completed/failed/dead/superseded): terminal
     /// states reachable without an interrupt ever landing. `Interrupted`
     /// itself is `RequestLifecycleState::is_terminal() == true` but is
-    /// explicitly exempted here, same shape as
-    /// `tool_call_lifecycle::recovery::request_is_cancel_worthy_terminal`.
+    /// explicitly exempted here.
     pub fn cascade_interrupts_only_running(o: &Observation) {
         for child in &o.b_child_requests {
             if child.interrupt_requested_at.is_some() {
