@@ -1,4 +1,6 @@
 //! Publish an already claimed continuation through the existing Goal transaction.
+mod wait_observation;
+
 use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::{AgentIdentity, RegisteredIdentity};
@@ -147,6 +149,20 @@ async fn stage_claimed_continuation(
             .is_some_and(RequestLifecycleState::is_terminal)
         || !goal_session_is_idle(&requests)
         || !latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id)
+    {
+        return Ok(None);
+    }
+    if wait_observation::intentional_wait_still_running(
+        txn,
+        parent_row
+            .doc_id
+            .as_deref()
+            .context("goal predecessor lacks physical document identity")?,
+        &goal.agent_did,
+        &goal.session_id,
+        parent_row.requester_did.as_deref(),
+    )
+    .await?
     {
         return Ok(None);
     }

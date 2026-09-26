@@ -49,7 +49,7 @@ structure Request where
   deriving DecidableEq, Repr
 
 inductive Outcome where
-  | denied | stale | illegal | conflict | rolledBack
+  | denied | stale | illegal | conflict | rolledBack | deferred | invalidEvidence
   | created | recovered
   deriving DecidableEq, Repr
 

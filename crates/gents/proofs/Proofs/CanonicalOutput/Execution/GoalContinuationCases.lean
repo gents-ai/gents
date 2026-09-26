@@ -20,7 +20,7 @@ def claimedGoal : Snapshot :=
 def claimedRequest : ClaimedRequest :=
   { expectedStatus := .active, expectedSequence := 1, authorized := true
   , parentBelongsToGoal := true, terminalParent := true, sessionIdle := true
-  , binding := goalBinding, expectedLastContinuedFrom := some 10 }
+  , binding := goalBinding, expectedLastContinuedFrom := some 10, requester := none }
 
 def goalEntry : SessionQueue.QueueEntry :=
   { requestId := 20, createdAt := 5, source := .goal, policy := .coalesce
@@ -30,7 +30,7 @@ def physicalBinding (status : Goals.Status := .active) : GoalContinuation.Bindin
   { goalDocument := 70, goalOwner := "owner", goalSession := "session"
   , observedStatus := status, executionAgent := 1, executionSession := 1
   , parentDocument := 10, parentLogical := 10, childDocument := 200, childRequester := none
-  , childEntry := goalEntry, authenticated := true }
+  , childEntry := goalEntry, observation := ⟨[], some []⟩, authenticated := true }
 
 def parentLease : RequestExecutionLease.World Generation :=
   { request := .completed, lease := .terminal 7 .completed, usedGenerations := [7]
