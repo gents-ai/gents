@@ -141,14 +141,13 @@ manifest declares, including each plugin's compiled `.afb`, in the order the
 digest is computed over. A pack is named by its digest, `sha256:<hex>`, and a
 home keeps the packs it has seen under `packs/store/sha256/`. A path is local
 only when written as one (`./dir`, `../dir`, `/abs`, or a `.pack` file); a
-bare name always means the bundled or registry pack. The registry at
-`https://packs.gents.xyz` serves both packs and plugins, so a plugin
-published on its own uses the same `.afb` a pack carries internally, and a
-pack that ships plugins is one artifact rather than an archive plus a pile of
-modules.
+bare name always means the bundled or registry pack. The registry serves
+packs only: `gents plugin publish` wraps a plugin in a single-plugin pack, so
+a pack that ships plugins is one artifact rather than an archive plus a pile
+of modules.
 
-The default registry is `https://packs.gents.xyz`, overridable per command and
-by `GENTS_REGISTRY`.
+The default registry is `https://registry.dev.gents.xyz`, overridable per
+command with `--registry` and by `GENTS_REGISTRY`.
 
 A pack installed from a registry is the same pack as the one compiled into a
 binary: the digest is over the declared contents, never over the container, so

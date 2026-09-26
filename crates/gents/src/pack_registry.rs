@@ -15,7 +15,7 @@ use crate::pack::PackManifest;
 use crate::pack_archive::PackArchive;
 use crate::pack_store::PackStore;
 
-pub const DEFAULT_REGISTRY_URL: &str = "https://packs.gents.xyz";
+pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
