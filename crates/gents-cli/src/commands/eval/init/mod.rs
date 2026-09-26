@@ -290,7 +290,7 @@ pub(crate) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
+    let gents::ConfigAccess::Graphql(graphql) = &*ctx.access else {
         anyhow::bail!(
             "start `gents server` for this home and retry: the author runs on a served home"
         );

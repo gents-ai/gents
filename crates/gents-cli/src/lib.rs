@@ -581,26 +581,63 @@ pub(crate) async fn http_delete_json<B: Serialize>(
     Ok(())
 }
 
+/// The control plane a command reads and writes, holding the claim on the
+/// home's store for exactly as long as it holds that store open.
+///
+/// The claim is the store lock `gents init` and `gents server` take, so
+/// `gents init --overwrite` cannot wipe a store a command still has open.
+/// Fields drop in declaration order: the access, and with it this command's
+/// handle on the embedded node, is released before the claim.
+pub(crate) struct CommandAccess {
+    access: ConfigAccess,
+    _claim: Option<gents::home::StoreLock>,
+}
+
+impl std::ops::Deref for CommandAccess {
+    type Target = ConfigAccess;
+
+    fn deref(&self) -> &ConfigAccess {
+        &self.access
+    }
+}
+
+impl From<ConfigAccess> for CommandAccess {
+    /// Access whose store, if any, its caller already holds.
+    fn from(access: ConfigAccess) -> Self {
+        Self {
+            access,
+            _claim: None,
+        }
+    }
+}
+
+/// Opens the control plane a command reads and writes: the running server's
+/// GraphQL endpoint, or the home's own store as an embedded node claimed for
+/// as long as the returned access lives.
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
-) -> Result<(ConfigAccess, PathBuf)> {
+) -> Result<(CommandAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok((ConfigAccess::Graphql(graphql.to_string()), home_dir));
+        return Ok((ConfigAccess::Graphql(graphql.to_string()).into(), home_dir));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            return Ok((ConfigAccess::Graphql(runtime_state.graphql), home_dir));
+            return Ok((
+                ConfigAccess::Graphql(runtime_state.graphql).into(),
+                home_dir,
+            ));
         }
     }
 
     let data_dir = default_data_dir(&home_dir);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let claim = gents::home::lock_store(&home_dir, &data_dir)?;
     let node = {
         use std::sync::Arc;
         let node_arc = Arc::new(
@@ -618,7 +655,13 @@ pub(crate) async fn resolve_config_access(
             unreachable!("node_arc had exactly one strong reference at this point")
         })
     };
-    Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
+    Ok((
+        CommandAccess {
+            access: ConfigAccess::Local(std::sync::Arc::new(node)),
+            _claim: Some(claim),
+        },
+        home_dir,
+    ))
 }
 
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> Result<NodeBuilder> {
@@ -783,6 +826,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(node.node_identity_did(), Some(did.as_str()));
+    }
+
+    /// An initialized home: the signing key and `init.json` every
+    /// embedded-node entry point requires before it will open the store.
+    fn initialized_home(temp: &Path) -> PathBuf {
+        let home = temp.join("home");
+        let key_path = default_key_path(&home, "default");
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        write_init_config(
+            &home,
+            &StoredInitConfig {
+                home: home.to_string_lossy().to_string(),
+                agent_name: "default".to_string(),
+                agent_did: identity.did().to_string(),
+                key_path: Some(key_path.to_string_lossy().to_string()),
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: ToolCeilingArg::Readonly,
+                tool_root: None,
+            },
+        )
+        .unwrap();
+        home
+    }
+
+    #[tokio::test]
+    async fn an_offline_access_claims_its_store_until_the_node_is_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = initialized_home(temp.path());
+
+        let (access, _) = resolve_config_access(Some(&home), None).await.unwrap();
+        let ConfigAccess::Local(node) = &*access else {
+            panic!("an offline home opens its store");
+        };
+        let node = std::sync::Arc::downgrade(node);
+
+        let error = gents::home::lock_store(&home, &default_data_dir(&home))
+            .expect_err("an opened store excludes another runtime");
+        assert!(
+            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
+            "{error:#}"
+        );
+
+        drop(access);
+        assert_eq!(node.strong_count(), 0, "the access held the only node");
+        // The backend refuses a store still open in this process, so reopening
+        // proves the node closed as well as the claim released.
+        let (reopened, _) = resolve_config_access(Some(&home), None)
+            .await
+            .expect("a dropped access releases the store");
+        assert_eq!(reopened.mode(), "local");
+    }
+
+    #[tokio::test]
+    async fn an_offline_access_names_the_holder_of_a_claimed_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = initialized_home(temp.path());
+        let _held = gents::home::lock_home_store(&home).unwrap();
+
+        let error = match resolve_config_access(Some(&home), None).await {
+            Ok(_) => panic!("a claimed store must not be opened a second time"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
+            "{error:#}"
+        );
     }
 
     #[test]

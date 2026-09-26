@@ -172,7 +172,7 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
     }
 }
 
-async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(ConfigAccess, String)> {
+async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(crate::CommandAccess, String)> {
     let actor = resolve_agent_did(scope.home.as_deref(), scope.agent_did.as_deref())?;
     let (access, _) =
         resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
@@ -181,7 +181,7 @@ async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(ConfigAccess, Strin
 
 async fn run(args: GraphRunArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
-    let ConfigAccess::Graphql(_) = &access else {
+    let ConfigAccess::Graphql(_) = &*access else {
         anyhow::bail!(
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );

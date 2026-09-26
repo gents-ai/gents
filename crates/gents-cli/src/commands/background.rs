@@ -27,7 +27,7 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     let (access, _home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let tool_calls = load_background_tool_calls(&access, &args, age_cutoff).await?;
-    let liveness = match &access {
+    let liveness = match &*access {
         ConfigAccess::Graphql(graphql) => {
             crate::commands::status::load_liveness_value(graphql, "").await
         }
