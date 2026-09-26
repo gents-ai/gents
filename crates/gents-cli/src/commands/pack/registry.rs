@@ -34,6 +34,33 @@ pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
         })
 }
 
+/// Reads one line from standard input, trimming the trailing newline. Shared
+/// by `--token-stdin` and `--password-stdin`, so a token or password never
+/// shows up in `ps` or shell history.
+pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .with_context(|| format!("reading the {what} from standard input"))?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+}
+
+/// The `--token` value, read from standard input instead when `--token-stdin`
+/// was passed. One function so every command that accepts both flags agrees
+/// on how the token is obtained.
+pub(crate) fn resolve_token_flag(
+    token: Option<String>,
+    token_stdin: bool,
+) -> Result<Option<String>> {
+    if token_stdin {
+        Ok(Some(read_stdin_line("registry token")?))
+    } else {
+        Ok(token)
+    }
+}
+
 /// `gents pack fetch`: the artifact itself, verified, without installing
 /// it.
 ///
@@ -120,7 +147,8 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-    let token = super::account::resolve_publish_token(args.token.as_deref(), &registry, &home)?;
+    let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
+    let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
@@ -132,15 +160,21 @@ pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-    use axum::extract::{Path as AxumPath, State};
-    use axum::http::StatusCode;
+    use axum::extract::{Path as AxumPath, Query, State};
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::{IntoResponse, Response};
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::json;
+
+    /// The account and token every fake registry in this module accepts.
+    pub(crate) const FAKE_USERNAME: &str = "demo";
+    pub(crate) const FAKE_PASSWORD: &str = "demo-pass";
+    pub(crate) const FAKE_TOKEN: &str = "demo-token";
 
     // --- env var precedence: guarded so parallel tests don't race the process env ---
 
@@ -248,12 +282,23 @@ pub(crate) mod tests {
 
     // --- a tiny fake registry, just the routes `gents pack` needs ---
 
-    struct FakeRegistryState {
+    /// `(namespace, name, version, undo, bearer_token)` of a yank request.
+    pub(crate) type YankRequest = (String, String, String, bool, String);
+    /// `(namespace, name, new_owner, bearer_token)` of an owner transfer.
+    pub(crate) type OwnerTransferRequest = (String, String, String, String);
+
+    pub(crate) struct FakeRegistryState {
         name: String,
         latest: String,
         bytes: Vec<u8>,
         digest: String,
-        downloads: Arc<AtomicUsize>,
+        pub(crate) downloads: AtomicUsize,
+        /// `(namespace, name, version, undo, bearer_token)` from the last
+        /// yank request.
+        pub(crate) last_yank: Mutex<Option<YankRequest>>,
+        /// `(namespace, name, new_owner, bearer_token)` from the last owner
+        /// transfer.
+        pub(crate) last_owner_transfer: Mutex<Option<OwnerTransferRequest>>,
     }
 
     /// Only the one pack is known; anything else is a real 404, so an
@@ -291,29 +336,86 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    /// Starts a fake registry serving `plain_pack@1.0.0`, and returns its
-    /// base URL plus the download-hit counter.
+    fn bearer_token(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get(axum::http::header::AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")
+            .map(str::to_owned)
+    }
+
+    async fn fake_login(Json(body): Json<Value>) -> Response {
+        if body["username"].as_str() == Some(FAKE_USERNAME)
+            && body["password"].as_str() == Some(FAKE_PASSWORD)
+        {
+            Json(json!({ "token": FAKE_TOKEN })).into_response()
+        } else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+
+    async fn fake_me(headers: HeaderMap) -> Response {
+        if bearer_token(&headers).as_deref() == Some(FAKE_TOKEN) {
+            Json(json!({ "username": FAKE_USERNAME })).into_response()
+        } else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+
+    async fn fake_yank(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((ns, name, version)): AxumPath<(String, String, String)>,
+        Query(params): Query<BTreeMap<String, String>>,
+        headers: HeaderMap,
+    ) -> Response {
+        let Some(token) = bearer_token(&headers) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let undo = params.get("undo").map(String::as_str) == Some("true");
+        *state.last_yank.lock().unwrap() = Some((ns, name, version.clone(), undo, token));
+        Json(json!({ "version": version, "yanked": !undo })).into_response()
+    }
+
+    async fn fake_owner(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((ns, name)): AxumPath<(String, String)>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        let Some(token) = bearer_token(&headers) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let new_owner = body["username"].as_str().unwrap_or_default().to_owned();
+        *state.last_owner_transfer.lock().unwrap() = Some((ns, name, new_owner.clone(), token));
+        Json(json!({ "owner": new_owner })).into_response()
+    }
+
+    /// Starts a fake registry serving `plain_pack@1.0.0`.
     async fn start_fake_registry(
         bytes: Vec<u8>,
         advertised_digest: String,
-    ) -> (String, Arc<AtomicUsize>) {
+    ) -> (String, Arc<FakeRegistryState>) {
         serve_fake_pack("plain_pack", "1.0.0", bytes, advertised_digest).await
     }
 
-    /// Starts a fake registry serving one version of one pack.
+    /// Starts a fake registry serving one version of one pack, plus the
+    /// account routes (`login`, `me`, `yank`, `owner`) every registry token
+    /// command needs; all accept [`FAKE_TOKEN`].
     pub(crate) async fn serve_fake_pack(
         name: &str,
         latest: &str,
         bytes: Vec<u8>,
         advertised_digest: String,
-    ) -> (String, Arc<AtomicUsize>) {
-        let downloads = Arc::new(AtomicUsize::new(0));
+    ) -> (String, Arc<FakeRegistryState>) {
         let state = Arc::new(FakeRegistryState {
             name: name.to_owned(),
             latest: latest.to_owned(),
             bytes,
             digest: advertised_digest,
-            downloads: downloads.clone(),
+            downloads: AtomicUsize::new(0),
+            last_yank: Mutex::new(None),
+            last_owner_transfer: Mutex::new(None),
         });
         // `/packs/...`, the route the real registry serves a pack on.
         // These routes had been the plugin ones (`/packages/...`), which is
@@ -326,7 +428,11 @@ pub(crate) mod tests {
                 "/api/v1/packs/{ns}/{name}/{version}/download",
                 get(fake_download),
             )
-            .with_state(state);
+            .route("/api/v1/packs/{ns}/{name}/{version}/yank", post(fake_yank))
+            .route("/api/v1/packages/{ns}/{name}/owner", post(fake_owner))
+            .route("/api/v1/login", post(fake_login))
+            .route("/api/v1/me", get(fake_me))
+            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind fake registry");
@@ -334,7 +440,7 @@ pub(crate) mod tests {
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        (format!("http://{addr}"), downloads)
+        (format!("http://{addr}"), state)
     }
 
     /// A tiny real `.pack`, built the same way `gents pack build` does, with
@@ -405,7 +511,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn fetch_pack_downloads_verifies_and_caches() {
         let (bytes, digest) = sample_pack();
-        let (base_url, downloads) = start_fake_registry(bytes.clone(), digest.clone()).await;
+        let (base_url, state) = start_fake_registry(bytes.clone(), digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
@@ -415,7 +521,7 @@ pub(crate) mod tests {
         assert_eq!(first.namespace, "gents");
         assert_eq!(first.name, "plain_pack");
         assert_eq!(first.version, "1.0.0");
-        assert_eq!(downloads.load(Ordering::SeqCst), 1);
+        assert_eq!(state.downloads.load(Ordering::SeqCst), 1);
         assert!(gents::pack_store::PackStore::new(home.path())
             .contains(&first.digest)
             .unwrap());
@@ -426,7 +532,7 @@ pub(crate) mod tests {
             .expect("second fetch (cached)");
         assert_eq!(second.digest, first.digest);
         assert_eq!(
-            downloads.load(Ordering::SeqCst),
+            state.downloads.load(Ordering::SeqCst),
             1,
             "second install must not refetch"
         );
@@ -436,7 +542,7 @@ pub(crate) mod tests {
     async fn a_digest_mismatch_is_refused_naming_both_digests() {
         let (bytes, _real_digest) = sample_pack();
         let wrong_digest = "0".repeat(64);
-        let (base_url, _downloads) = start_fake_registry(bytes, wrong_digest.clone()).await;
+        let (base_url, _state) = start_fake_registry(bytes, wrong_digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
@@ -453,7 +559,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_coordinate_mismatch_is_refused_before_the_pack_is_cached() {
         let (bytes, digest) = sample_pack();
-        let (base_url, _downloads) = start_fake_registry(bytes, digest.clone()).await;
+        let (base_url, _state) = start_fake_registry(bytes, digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
@@ -476,7 +582,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn an_unknown_pack_is_a_clean_not_found_not_a_silent_success() {
         let (bytes, digest) = sample_pack();
-        let (base_url, _downloads) = start_fake_registry(bytes, digest).await;
+        let (base_url, _state) = start_fake_registry(bytes, digest).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 

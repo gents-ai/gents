@@ -57,13 +57,48 @@ impl RegistryClient {
         )
     }
 
-    /// An endpoint that is the same for packs and plugins.
-    fn base_api(&self, path: &str) -> String {
-        format!("{}/api/v1{path}", self.base_url)
+    /// `{base_url}/api/v1/<segments>`, one canonical builder for every
+    /// registry path: each segment is percent-encoded through
+    /// [`url::PathSegmentsMut::extend`], so a namespace, name or version
+    /// containing a `/` or a space is encoded, never spliced into the path.
+    fn api_url(&self, segments: &[&str]) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&self.base_url)
+            .with_context(|| format!("{} is not a valid registry URL", self.base_url))?;
+        url.path_segments_mut()
+            .map_err(|()| anyhow::anyhow!("{} cannot be a base for a registry URL", self.base_url))?
+            .extend(["api", "v1"])
+            .extend(segments);
+        Ok(url)
     }
 
-    fn api(&self, path: &str) -> String {
-        format!("{}/api/v1{path}", self.base_url)
+    /// Whether `url`'s host is a loopback address or `localhost`: it never
+    /// leaves the machine, so plain http there is not a cleartext leak.
+    fn host_is_loopback(url: &reqwest::Url) -> bool {
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        if host.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        // `host_str` keeps the brackets around an IPv6 address.
+        let host = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        host.parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+    }
+
+    /// Refuses a registry that is neither `https` nor loopback. Every call
+    /// that sends a password or a bearer token goes through this first, so
+    /// a mistyped or misconfigured `http://` registry cannot leak either in
+    /// cleartext.
+    fn require_secure(url: &reqwest::Url) -> Result<()> {
+        anyhow::ensure!(
+            url.scheme() == "https" || Self::host_is_loopback(url),
+            "refusing to send a password or registry token to {url} over plain http; use an https:// registry, or one on localhost/127.0.0.1"
+        );
+        Ok(())
     }
 
     async fn json_or_error(response: reqwest::Response, url: &str) -> Result<Value> {
@@ -81,37 +116,36 @@ impl RegistryClient {
             .with_context(|| format!("reading the registry's response from {url}"))
     }
 
-    async fn get_json(&self, path: &str) -> Result<Value> {
-        let url = self.api(path);
+    async fn get_json(&self, segments: &[&str]) -> Result<Value> {
+        let url = self.api_url(segments)?;
         let response = self
             .http
-            .get(&url)
+            .get(url.clone())
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 
     pub async fn package(&self, namespace: &str, name: &str) -> Result<Value> {
-        self.get_json(&format!("/packs/{namespace}/{name}")).await
+        self.get_json(&["packs", namespace, name]).await
     }
 
     pub async fn version(&self, namespace: &str, name: &str, version: &str) -> Result<Value> {
-        self.get_json(&format!("/packs/{namespace}/{name}/{version}"))
-            .await
+        self.get_json(&["packs", namespace, name, version]).await
     }
 
     /// One page of search results; `page` is 1-based.
     pub async fn search(&self, query: &str, page: u32) -> Result<Value> {
-        let url = self.api("/packs");
+        let url = self.api_url(&["packs"])?;
         let response = self
             .http
-            .get(&url)
+            .get(url.clone())
             .query(&[("q", query), ("page", &page.to_string())])
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 
     pub async fn download(&self, namespace: &str, name: &str, version: &str) -> Result<Vec<u8>> {
@@ -131,10 +165,10 @@ impl RegistryClient {
         out: &mut impl std::io::Write,
     ) -> Result<String> {
         use sha2::{Digest, Sha256};
-        let url = self.api(&format!("/packs/{namespace}/{name}/{version}/download"));
+        let url = self.api_url(&["packs", namespace, name, version, "download"])?;
         let mut response = self
             .http
-            .get(&url)
+            .get(url.clone())
             .send()
             .await
             .with_context(|| self.unreachable())?;
@@ -171,15 +205,16 @@ impl RegistryClient {
 
     /// Exchanges a username and password for an API token.
     pub async fn login(&self, username: &str, password: &str) -> Result<String> {
-        let url = self.base_api("/login");
+        let url = self.api_url(&["login"])?;
+        Self::require_secure(&url)?;
         let response = self
             .http
-            .post(&url)
+            .post(url.clone())
             .json(&serde_json::json!({"username": username, "password": password}))
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url)
+        Self::json_or_error(response, url.as_str())
             .await?
             .get("token")
             .and_then(Value::as_str)
@@ -189,15 +224,16 @@ impl RegistryClient {
 
     /// Who `token` signs in as.
     pub async fn me(&self, token: &str) -> Result<Value> {
-        let url = self.base_api("/me");
+        let url = self.api_url(&["me"])?;
+        Self::require_secure(&url)?;
         let response = self
             .http
-            .get(&url)
+            .get(url.clone())
             .bearer_auth(token)
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 
     /// Gives a package to the account `username`; the caller must own it or
@@ -209,16 +245,17 @@ impl RegistryClient {
         name: &str,
         username: &str,
     ) -> Result<Value> {
-        let url = self.base_api(&format!("/packages/{namespace}/{name}/owner"));
+        let url = self.api_url(&["packages", namespace, name, "owner"])?;
+        Self::require_secure(&url)?;
         let response = self
             .http
-            .post(&url)
+            .post(url.clone())
             .bearer_auth(token)
             .json(&serde_json::json!({ "username": username }))
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 
     /// Yanks a version, or restores it with `undo`.
@@ -230,29 +267,31 @@ impl RegistryClient {
         version: &str,
         undo: bool,
     ) -> Result<Value> {
-        let url = self.api(&format!("/packs/{namespace}/{name}/{version}/yank"));
+        let url = self.api_url(&["packs", namespace, name, version, "yank"])?;
+        Self::require_secure(&url)?;
         let response = self
             .http
-            .post(&url)
+            .post(url.clone())
             .query(&[("undo", undo)])
             .bearer_auth(token)
             .send()
             .await
             .with_context(|| self.unreachable())?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 
     pub async fn publish(&self, token: &str, bytes: Vec<u8>) -> Result<Value> {
-        let url = self.api("/publish");
+        let url = self.api_url(&["publish"])?;
+        Self::require_secure(&url)?;
         let response = self
             .http
-            .post(&url)
+            .post(url.clone())
             .bearer_auth(token)
             .body(bytes)
             .send()
             .await
             .with_context(|| format!("publishing to {url}"))?;
-        Self::json_or_error(response, &url).await
+        Self::json_or_error(response, url.as_str()).await
     }
 }
 
@@ -375,9 +414,9 @@ pub async fn fetch_pack(
         "{}/{}@{}",
         coordinate.namespace, coordinate.name, coordinate.version
     );
-    // vertexia: the registry names a download by the digest of its bytes, so
-    // this index maps that to the pack digest the store uses; delete it once
-    // the registry advertises pack digests.
+    // The registry names a download by the digest of its bytes, so this
+    // index maps that to the pack digest the store uses; delete it once the
+    // registry advertises pack digests directly.
     let advertised = format!("sha256:{}", coordinate.artifact_digest);
     let index = cache_home
         .map(|home| -> Result<PathBuf> {
@@ -479,6 +518,32 @@ pub mod credentials {
             .join("credentials.json")
     }
 
+    fn lock_path(home: &Path) -> PathBuf {
+        home.join(crate::home::REGISTRY_DIR_NAME)
+            .join("credentials.json.lock")
+    }
+
+    /// An exclusive lock held across a read-modify-write of the credentials
+    /// file, so two `gents pack login`/`logout` invocations racing on the
+    /// same home cannot interleave and drop one write.
+    fn exclusive_lock(home: &Path) -> Result<std::fs::File> {
+        let path = lock_path(home);
+        let dir = path
+            .parent()
+            .context("credentials lock path has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("locking {}", path.display()))?;
+        Ok(file)
+    }
+
     fn read_all(home: &Path) -> Result<BTreeMap<String, String>> {
         match std::fs::read(path(home)) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -517,6 +582,7 @@ pub mod credentials {
     }
 
     pub fn set(home: &Path, registry: &str, token: &str) -> Result<()> {
+        let _lock = exclusive_lock(home)?;
         let mut tokens = read_all(home)?;
         tokens.insert(registry.trim_end_matches('/').to_owned(), token.to_owned());
         write_all(home, &tokens)
@@ -524,6 +590,7 @@ pub mod credentials {
 
     /// Forgets the token for `registry`; returns whether there was one.
     pub fn remove(home: &Path, registry: &str) -> Result<bool> {
+        let _lock = exclusive_lock(home)?;
         let mut tokens = read_all(home)?;
         let removed = tokens.remove(registry.trim_end_matches('/')).is_some();
         if removed {
@@ -602,5 +669,42 @@ mod tests {
                 .as_deref(),
             Some("gcpat_b")
         );
+    }
+
+    #[test]
+    fn a_name_with_a_space_or_slash_is_encoded_not_injected() {
+        let client = RegistryClient::new("https://registry.example".to_string());
+        let url = client
+            .api_url(&["packs", "acme", "weird name/with-slash", "1.0.0"])
+            .unwrap();
+        // A literal `/` in a segment must not open a new path component, and
+        // a space must not reach the wire unescaped.
+        assert_eq!(
+            url.as_str(),
+            "https://registry.example/api/v1/packs/acme/weird%20name%2Fwith-slash/1.0.0"
+        );
+        assert_eq!(url.path_segments().unwrap().count(), 6);
+    }
+
+    #[test]
+    fn only_https_or_loopback_registries_may_carry_a_password_or_token() {
+        let secure = reqwest::Url::parse("https://registry.example/api/v1/login").unwrap();
+        RegistryClient::require_secure(&secure).expect("https is always allowed");
+
+        for loopback in [
+            "http://127.0.0.1:8080/api/v1/login",
+            "http://[::1]:8080/api/v1/login",
+            "http://localhost:8080/api/v1/login",
+        ] {
+            let url = reqwest::Url::parse(loopback).unwrap();
+            RegistryClient::require_secure(&url)
+                .unwrap_or_else(|error| panic!("{loopback} must be allowed: {error:#}"));
+        }
+
+        let cleartext = reqwest::Url::parse("http://registry.example/api/v1/login").unwrap();
+        let error = RegistryClient::require_secure(&cleartext).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("https"), "{message}");
+        assert!(message.contains("http://registry.example"), "{message}");
     }
 }

@@ -845,6 +845,77 @@ fn pack_search_and_publish_parse() {
     }
 }
 
+/// `--token` and `--token-stdin` name the same value two ways; passing both
+/// is a usage error everywhere a registry token is accepted.
+#[test]
+fn token_and_token_stdin_conflict_on_every_command_that_accepts_both() {
+    for argv in [
+        ["pack", "login", "--token", "x", "--token-stdin"].as_slice(),
+        [
+            "pack",
+            "publish",
+            "/tmp/p.tar.gz",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "pack",
+            "yank",
+            "acme/widget@1.0.0",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "pack",
+            "owner",
+            "acme/widget",
+            "--transfer",
+            "bob",
+            "--yes",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "plugin",
+            "publish",
+            "/tmp/p.afb",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+    ] {
+        let mut full = vec!["gents"];
+        full.extend_from_slice(argv);
+        assert!(
+            Cli::try_parse_from(&full).is_err(),
+            "{argv:?} should refuse --token with --token-stdin"
+        );
+    }
+}
+
+/// `--transfer` parses with or without `--yes`; the runtime refuses an
+/// unconfirmed transfer (see `commands::pack::account::tests`), but `--yes`
+/// alone names nothing to confirm, which clap catches at parse time.
+#[test]
+fn owner_yes_requires_a_transfer_to_confirm() {
+    assert!(matches!(
+        parse_pack(&["owner", "acme/widget", "--transfer", "bob", "--yes"]),
+        PackCommand::Owner(args) if args.transfer.as_deref() == Some("bob") && args.yes
+    ));
+    assert!(matches!(
+        parse_pack(&["owner", "acme/widget", "--transfer", "bob"]),
+        PackCommand::Owner(args) if args.transfer.as_deref() == Some("bob") && !args.yes
+    ));
+    assert!(Cli::try_parse_from(["gents", "pack", "owner", "acme/widget", "--yes"]).is_err());
+}
+
 #[test]
 fn chain_key_commands_parse() {
     let list = Cli::try_parse_from(["gents", "chain", "key", "list"]).expect("list");

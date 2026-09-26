@@ -629,7 +629,7 @@ pub(crate) enum PackCommand {
     Info(PackInfoArgs),
     /// Sign in to the registry and save the token in the gents home.
     Login(PackLoginArgs),
-    /// Forget the saved registry login.
+    /// Remove the saved token from this machine; does not revoke it on the registry.
     Logout(PackAccountArgs),
     /// Show who the saved registry login is.
     Whoami(PackAccountArgs),
@@ -715,6 +715,12 @@ pub(crate) struct PackPublishArgs {
         help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
     #[arg(long, help = "Home holding your saved registry login")]
     pub(crate) home: Option<PathBuf>,
 }
@@ -735,6 +741,12 @@ pub(crate) struct PackLoginArgs {
         help = "A token from your registry dashboard"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with_all = ["token", "username"],
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
@@ -778,6 +790,12 @@ pub(crate) struct PackOwnerArgs {
     pub(crate) transfer: Option<String>,
     #[arg(
         long,
+        requires = "transfer",
+        help = "Confirm the transfer; it cannot be undone"
+    )]
+    pub(crate) yes: bool,
+    #[arg(
+        long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
@@ -786,6 +804,12 @@ pub(crate) struct PackOwnerArgs {
         help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
     #[arg(long, help = "Home holding your saved registry login")]
     pub(crate) home: Option<PathBuf>,
 }
@@ -806,6 +830,12 @@ pub(crate) struct PackYankArgs {
         help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
     #[arg(long, help = "Home holding your saved registry login")]
     pub(crate) home: Option<PathBuf>,
 }
@@ -1100,6 +1130,12 @@ pub(crate) struct PluginPublishArgs {
         help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
     #[arg(long, help = "Home holding your saved registry login")]
     pub(crate) home: Option<PathBuf>,
 }

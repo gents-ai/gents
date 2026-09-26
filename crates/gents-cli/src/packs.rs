@@ -121,6 +121,7 @@ pub async fn login(home: PathBuf, registry: Option<String>, token: String) -> Re
         username: None,
         password_stdin: false,
         token: Some(token),
+        token_stdin: false,
         registry,
         home: Some(home),
     }))
