@@ -145,6 +145,12 @@ source consistency checks, not a separate runtime compatibility version.
 - A command whose CRLF output runs past the output limit no longer fails to
   record its result. The shown part keeps each line's `\r`, so it is exactly
   the start of the captured output (#1867).
+- A bash call rejected by its command policy no longer becomes `running`
+  first. The policy is checked before dispatch, and the call goes straight
+  from `pending` to `failed` (`policyDenied`). The same check runs before
+  `spawn_process` admits a background command. Tool calls settled before
+  dispatch (policy rejection, pre-dispatch failure or cancellation) no longer
+  record a made-up `started_at` or `latency_ms` (#1801).
 
 ## 0.19.0 - 2026-09-24
 

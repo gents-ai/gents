@@ -163,6 +163,8 @@ def snapshotJson : String :=
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
+    ++ "\"canonical_spawned_target_rejection_cases\":"
+      ++ Conformance.DispatchObservationContracts.spawnedTargetCasesJson ++ ","
     ++ "\"canonical_worker_capacity_cases\":"
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"

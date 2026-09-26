@@ -21,6 +21,9 @@ mod background_panic;
 #[path = "tests/background_budget.rs"]
 mod background_budget;
 
+#[path = "tests/background_admission.rs"]
+mod background_admission;
+
 #[path = "tests/wait_settlement.rs"]
 mod wait_settlement;
 
@@ -737,13 +740,19 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 .terminalize_owned(completion_outcome, selection.clone(), None)
                 .await;
             assert_eq!(completion.is_ok(), case.completion_probe_accepted);
-            let rejection = completion.expect_err("running foreground call must block completion");
-            assert!(
+            // Durable tool accounting rejects completion exactly while a
+            // foreground call holds the request's in-flight claim.
+            let native_in_flight = completion.as_ref().err().is_some_and(|rejection| {
                 matches!(
                     rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
                     Some(crate::lifecycle::ToolAccountingRejection::ForegroundRunning)
-                ),
-                "completion must be rejected by durable tool accounting: {rejection:#}"
+                )
+            });
+            assert_eq!(
+                native_in_flight,
+                case.expected.last().unwrap().in_flight,
+                "{}: {completion:?}",
+                case.name
             );
             let after_probe = access.execute(&request_query).await.unwrap();
             assert_eq!(
@@ -779,6 +788,42 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(
                 data["AgentMessage"].as_array().unwrap().len(),
                 expected.message_count
+            );
+            let recovery = case
+                .expected_after_parent_recovery
+                .as_ref()
+                .expect("a handed-off running call has a modeled recovery");
+            let report = crate::tool_call_lifecycle::ToolCallLifecycle::
+                reconcile_terminal_parent_owned_tools(&node, "did:test:dispatch-receipt")
+                .await
+                .unwrap();
+            assert_eq!(
+                report.tool_calls_terminalized, recovery.terminalized,
+                "{}",
+                case.name
+            );
+            let recovered = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            assert_eq!(recovered["_docID"], admitted["_docID"]);
+            assert_eq!(
+                recovered["lifecycle_state"].as_str(),
+                Some(recovery.state.as_str()),
+                "{}: terminal-parent recovery settles the handed-off call",
+                case.name
+            );
+            hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
+                .await
+                .unwrap();
+            let replay = hook.on_tool_call("read", None, "receipt-call", "{}").await;
+            assert_eq!(
+                matches!(replay, ToolCallHookAction::Continue),
+                recovery.dispatchable,
+                "{}: a settled call is never re-elected: {replay:?}",
+                case.name
+            );
+            let after_replay = fetch_tool_call_row(&node, &session_id, "receipt-call").await;
+            assert_eq!(
+                after_replay["lifecycle_state"],
+                recovered["lifecycle_state"]
             );
             node.shutdown().await;
         }

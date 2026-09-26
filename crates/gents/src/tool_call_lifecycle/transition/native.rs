@@ -231,12 +231,10 @@ impl ToolCallLifecycle {
         &mut self,
         result: &str,
         denial: &CommandPolicyDenial,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let _ = denial;
-        let _ = self
-            .fail_owned(result, FailureClass::PolicyDenied, None)
-            .await?;
-        Ok(())
+        self.fail_owned(result, FailureClass::PolicyDenied, None)
+            .await
     }
 
     pub(crate) async fn fail_owned(
@@ -302,7 +300,6 @@ impl ToolCallLifecycle {
         self.spawn_failed_with_details(failure, reason, None).await
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn spawn_failed_with_command_denial(
         &mut self,
         reason: &str,

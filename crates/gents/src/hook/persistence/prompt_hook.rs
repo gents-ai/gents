@@ -321,6 +321,59 @@ impl DefraSessionHook {
         }
     }
 
+    pub async fn on_tool_admission_rejected(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &crate::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        let result: anyhow::Result<()> = async {
+            let crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                denial,
+                text,
+            } = outcome
+            else {
+                anyhow::bail!("tool admission rejection must carry a failed outcome");
+            };
+            let (session_id, request_id, deadline_at, _seq) =
+                self.ensure_assistant_turn_sequence().await?;
+            let mut lc = self
+                .adopt_accepted_tool_dispatch(
+                    internal_call_id,
+                    tool_call_id.as_deref(),
+                    &request_id,
+                    &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                    crate::tool_call_lifecycle::AwaitMode::Foreground,
+                    crate::tool_call_lifecycle::CancelPolicy::Cascade,
+                )
+                .await?;
+            match denial {
+                Some(denial) => lc.spawn_failed_with_command_denial(text, denial).await,
+                None => lc.spawn_failed(*class, text).await,
+            }
+        }
+        .instrument(tracing::info_span!(
+            "tool.admission_rejected",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.record_success();
+                HookAction::Continue
+            }
+            Err(e) => self.on_persistence_error("persist tool admission rejection", &e),
+        }
+    }
+
     pub async fn on_tool_result(
         &self,
         tool_name: &str,

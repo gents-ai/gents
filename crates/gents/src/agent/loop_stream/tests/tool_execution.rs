@@ -92,6 +92,105 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
     }
 }
 
+/// The read-only command owner rejects the call; the generated settlement
+/// fixes what the durable row must show afterwards.
+#[tokio::test]
+async fn policy_rejection_settles_pending_call_without_dispatch_election() {
+    let cases: Vec<_> = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_dispatch_observation_cases
+        .iter()
+        .filter_map(|case| {
+            case.expected_after_policy_settlement
+                .as_ref()
+                .map(|settlement| (case, settlement))
+        })
+        .collect();
+    assert!(!cases.is_empty());
+    for (case, settlement) in cases {
+        assert!(case
+            .inputs
+            .iter()
+            .all(|input| input.acknowledged && !input.policy_allows));
+        for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+            let (node, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
+            let root = tempfile::tempdir().unwrap();
+            let model = ScriptedModel::new_turns(vec![
+                vec![
+                    RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        "policy-call".into(),
+                        "bash".into(),
+                        serde_json::json!({"command": "rm", "args": ["-rf", "."]}),
+                    )),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+            ]);
+            let tools = vec![crate::toolset::read_only_bash_for_test(
+                root.path(),
+                vec!["ls".into()],
+            )];
+            let stream = run_loop_stream(
+                model,
+                Some(hook.clone()),
+                Message::user("remove everything"),
+                Vec::new(),
+                Arc::new(tools),
+                owned_config(4),
+            );
+            let collect = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle);
+            let (collected, fired) =
+                crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+                    Some("tool_call.start_running_canonical"),
+                    collect,
+                )
+                .await;
+            assert_eq!(
+                fired,
+                case.expected.iter().any(|expected| expected.running),
+                "{}: the dispatch election commits only for a modeled Running call",
+                case.name
+            );
+            assert!(collected.error.is_none(), "{:?}", collected.error);
+            assert_eq!(collected.tool_results.len(), 1);
+            assert_eq!(collected.final_text.as_deref(), Some("done"));
+            assert!(root.path().exists());
+
+            let rows = crate::config_client::ConfigAccess::Local(node.clone())
+                .execute("query { AgentToolCall { lifecycle_state started_at tool_failure_class } }")
+                .await
+                .unwrap();
+            let rows = rows["data"]["AgentToolCall"].as_array().unwrap();
+            assert_eq!(rows.len(), 1, "publication precedes admission");
+            let row = &rows[0];
+            assert_eq!(row["lifecycle_state"] == "failed", settlement.failed);
+            assert_eq!(row["lifecycle_state"] == "running", settlement.running);
+            assert_eq!(row["started_at"].is_string(), settlement.started);
+            assert_eq!(
+                row["tool_failure_class"].as_str(),
+                settlement.failure_class.as_deref()
+            );
+
+            let completion = lifecycle
+                .terminalize_owned(
+                    crate::lifecycle::RequestTerminalOutcome::Completed,
+                    writer.terminal_output(&lifecycle.request().doc_id).await,
+                    None,
+                )
+                .await;
+            assert_eq!(
+                completion.is_ok(),
+                settlement.completion_accepted,
+                "{}: {completion:?}",
+                case.name
+            );
+            node.shutdown().await;
+        }
+    }
+}
+
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;

@@ -1464,10 +1464,30 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalExecutionGateCases"
       "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
+      "canonical_spawned_target_rejection_cases"
+      "CanonicalSpawnedTargetRejectionCases"
+      "hook::tests::background_admission::spawn_process_rejects_target_policy_before_spawned_admission")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
       "canonical_dispatch_observation_cases"
       "CanonicalDispatchObservationCases"
-      "Compose durable gate commits with caller acknowledgements. Lost receipts retain Running without permission to invoke; acknowledged Running replay is not a fresh election. Bind generated sequences to native call hooks under both persistence policies, physical row accounting, recovery, and an external-dispatch spy. A hook return check alone does not establish zero external effects or special-tool post-effect error safety.")
+      "hook::tests::dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "canonical_dispatch_observation_cases"
+      "CanonicalDispatchObservationCases"
+      "hook::tests::control_tool_completion_failure_never_reauthorizes_dispatch")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "canonical_dispatch_observation_cases"
+      "CanonicalDispatchObservationCases"
+      "agent::loop_stream::tests::dispatch_receipt_loss_gates_real_hook_loop_invocation")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "canonical_dispatch_observation_cases"
+      "CanonicalDispatchObservationCases"
+      "agent::loop_stream::tests::policy_rejection_settles_pending_call_without_dispatch_election")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"

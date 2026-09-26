@@ -20,13 +20,51 @@ pub(crate) struct LeanDispatchObservationCase {
     pub(crate) completion_probe_accepted: bool,
     pub(crate) parent_outcome: String,
     pub(crate) expected_after_parent_failure: LeanDispatchParentFailure,
+    pub(crate) expected_after_policy_settlement: Option<LeanDispatchPolicySettlement>,
+    pub(crate) expected_after_parent_recovery: Option<LeanDispatchParentRecovery>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchParentRecovery {
+    pub(crate) state: String,
+    pub(crate) dispatchable: bool,
+    pub(crate) terminalized: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchPolicySettlement {
+    pub(crate) failed: bool,
+    pub(crate) running: bool,
+    pub(crate) started: bool,
+    pub(crate) failure_class: Option<String>,
+    pub(crate) completion_accepted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSpawnedTargetRejectionCase {
+    pub(crate) name: String,
+    pub(crate) parent_tool: String,
+    pub(crate) completion_probe_outcome: String,
+    pub(crate) expected: LeanSpawnedTargetRejection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSpawnedTargetRejection {
+    pub(crate) failed: bool,
+    pub(crate) started: bool,
+    pub(crate) failure_class: Option<String>,
+    pub(crate) spawned_admitted: bool,
+    pub(crate) completion_accepted: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanDispatchParentFailure {
     pub(crate) running: bool,
-    pub(crate) in_flight: bool,
     pub(crate) needs_recovery: bool,
     pub(crate) message_count: usize,
 }

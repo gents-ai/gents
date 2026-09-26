@@ -24,10 +24,15 @@ def resultJson (result : Result) : String :=
     ",\"running\":" ++ jsonOptionalBool (some result.running) ++
     ",\"in_flight\":" ++ jsonOptionalBool (some result.inFlight) ++ "}"
 
+def failureClassJson : Option ToolExecution.FailureClass → String
+  | none => "null"
+  | some failure => jsonString failure.toDefraDB
+
 def cases : List (String × List Input) :=
   [("lost_receipt_then_replay", lostThenReplay),
    ("won_dispatch_then_replay", wonThenReplay),
-   ("rejected_then_won_dispatch", rejectedThenWon)]
+   ("rejected_then_won_dispatch", rejectedThenWon),
+   ("policy_rejected_then_settled", policyRejected)]
 
 def caseJson (entry : String × List Input) : String :=
   "{\"name\":" ++ jsonString entry.1 ++
@@ -41,13 +46,48 @@ def caseJson (entry : String × List Input) : String :=
     ",\"expected_after_parent_failure\":" ++
     (match afterParentFailure entry.2 with
       | none => "null"
-      | some (running, inFlight, needsRecovery, messages) =>
+      | some (running, _, needsRecovery, messages) =>
           "{\"running\":" ++ jsonOptionalBool (some running) ++
-          ",\"in_flight\":" ++ jsonOptionalBool (some inFlight) ++
           ",\"needs_recovery\":" ++ jsonOptionalBool (some needsRecovery) ++
-          ",\"message_count\":" ++ toString messages ++ "}") ++ "}"
+          ",\"message_count\":" ++ toString messages ++ "}") ++
+    ",\"expected_after_policy_settlement\":" ++
+    (match afterPolicySettlement entry.2 with
+      | none => "null"
+      | some settlement =>
+          "{\"failed\":" ++ jsonOptionalBool (some settlement.failed) ++
+          ",\"running\":" ++ jsonOptionalBool (some settlement.running) ++
+          ",\"started\":" ++ jsonOptionalBool (some settlement.started) ++
+          ",\"failure_class\":" ++ failureClassJson settlement.failureClass ++
+          ",\"completion_accepted\":" ++
+            jsonOptionalBool (some settlement.completionAccepted) ++ "}") ++
+    ",\"expected_after_parent_recovery\":" ++
+    (match afterParentFailureRecovery entry.2 with
+      | some (some recovery) =>
+          "{\"state\":" ++ jsonString recovery.state.toDefraDB ++
+          ",\"dispatchable\":" ++ jsonOptionalBool (some recovery.dispatchable) ++
+          ",\"terminalized\":" ++ toString recovery.terminalized ++ "}"
+      | _ => "null") ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
+
+/-- The `spawn_process` parent is accepted and wins its own dispatch; its
+target's command policy then denies the target. -/
+def spawnedTargetCasesJson : String :=
+  jsonArray [
+    "{\"name\":\"spawn_process_target_policy_denied\"" ++
+    ",\"parent_tool\":" ++ jsonString "spawn_process" ++
+    ",\"completion_probe_outcome\":" ++ jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName completionProbeOutcome) ++
+    ",\"expected\":" ++ (match afterSpawnedTargetRejection with
+      | none => "null"
+      | some rejection =>
+          "{\"failed\":" ++ jsonOptionalBool (some rejection.failed) ++
+          ",\"started\":" ++ jsonOptionalBool (some rejection.started) ++
+          ",\"failure_class\":" ++ failureClassJson rejection.failureClass ++
+          ",\"spawned_admitted\":" ++ jsonOptionalBool (some rejection.spawnedAdmitted) ++
+          ",\"completion_accepted\":" ++
+            jsonOptionalBool (some rejection.completionAccepted) ++ "}") ++ "}"]
+
+example : afterSpawnedTargetRejection.isSome = true := by native_decide
 
 example : cases.all (fun entry => (run entry.2).isSome) = true := by native_decide
 

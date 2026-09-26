@@ -4,7 +4,7 @@
 //! tool-call/result transition, a pre-completion prompt check) through a
 //! [`SessionHook`] instead of writing DefraDB itself. `gents`'s
 //! `DefraSessionHook` (native) implements it; the loop only ever calls these
-//! nine methods, exactly what `agent/loop_stream.rs`, its `one_shot`
+//! ten methods, exactly what `agent/loop_stream.rs`, its `one_shot`
 //! sub-module, and `stream_processor.rs` call on the hook today.
 //!
 //! `run_loop_stream` and `StreamProcessor` take `H: SessionHook` as a type
@@ -56,6 +56,18 @@ pub trait SessionHook: Send + Sync {
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction;
+
+    /// Called instead of `on_tool_call` when tool-policy admission rejects
+    /// the call. The call never wins the dispatch election: it must be settled
+    /// from Pending with `outcome` as its pre-dispatch failure result.
+    async fn on_tool_admission_rejected(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &ToolOutcome,
+    ) -> HookAction;
 
     /// Called after a tool has run (or timed out, or been cancelled):
     /// persists the outcome and returns whether to continue or terminate.
@@ -110,6 +122,17 @@ impl SessionHook for NoopSessionHook {
         _args: &str,
     ) -> ToolCallHookAction {
         ToolCallHookAction::Continue
+    }
+
+    async fn on_tool_admission_rejected(
+        &self,
+        _tool_name: &str,
+        _tool_call_id: Option<String>,
+        _internal_call_id: &str,
+        _args: &str,
+        _outcome: &ToolOutcome,
+    ) -> HookAction {
+        HookAction::Continue
     }
 
     async fn on_tool_result(
