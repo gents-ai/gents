@@ -435,3 +435,85 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
     assert!(projection.components.tool_schemas > 0);
     assert_eq!(projection.components.documents, 0);
 }
+
+async fn terminal_body<H>(
+    transport: H,
+    bodies: Arc<Mutex<Vec<Value>>>,
+    request: CompletionRequest,
+) -> Value
+where
+    H: Clone + Default + HttpClientExt + std::fmt::Debug + WasmCompatSend + Sync + 'static,
+{
+    let client = crate::inference_http::build_openai_responses_client(
+        "test-key",
+        "http://provider.invalid",
+        transport,
+        rig::http_client::HeaderMap::default(),
+    )
+    .expect("Responses client");
+    let model = client.completion_model("test-model");
+    if let Ok(mut response) = model.stream(request).await {
+        let _ = response.next().await;
+    }
+    let body = bodies.lock().unwrap().pop().expect("captured wire body");
+    body
+}
+
+fn requests_encrypted_reasoning(body: &Value) -> bool {
+    body["include"].as_array().is_some_and(|include| {
+        include
+            .iter()
+            .any(|item| item == "reasoning.encrypted_content")
+    })
+}
+
+#[tokio::test]
+async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
+    let request = core_request("xai-visible reasoning");
+    assert!(request
+        .additional_params
+        .as_ref()
+        .is_some_and(|params| params.get("reasoning").is_none()));
+    let terminal = WireCapturingClient::default();
+    let bodies = terminal.bodies.clone();
+    let transport =
+        crate::xai_grok_oauth::XaiGrokOAuthHttpClient::with_inner(Arc::new(StaticBearer), terminal);
+    let body = terminal_body(transport, bodies, request).await;
+
+    assert_eq!(body["store"], false);
+    assert!(body.get("reasoning").is_none());
+    assert!(requests_encrypted_reasoning(&body), "{body}");
+}
+
+#[tokio::test]
+async fn openai_responses_wire_body_never_adds_encrypted_reasoning_even_when_stateless() {
+    let mut request = core_request("openai-visible reasoning");
+    request.additional_params = Some(serde_json::json!({ "store": false }));
+    let counter = ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::Responses,
+        "test-model",
+    );
+    let projected_body = counter.project_body(&request).expect("provider body");
+    let terminal = WireCapturingClient::default();
+    let bodies = terminal.bodies.clone();
+    let transport = crate::inference_http::ResponsesNormalizingHttpClient::new(terminal);
+    let body = terminal_body(transport, bodies, request).await;
+
+    assert_eq!(projected_body, body);
+    assert_eq!(body["store"], false);
+    assert!(body.get("reasoning").is_none());
+    assert!(!requests_encrypted_reasoning(&body), "{body}");
+}
+
+#[tokio::test]
+async fn openai_responses_wire_body_leaves_include_to_the_server_default_store() {
+    let request = core_request("openai-visible reasoning");
+    let terminal = WireCapturingClient::default();
+    let bodies = terminal.bodies.clone();
+    let transport = crate::inference_http::ResponsesNormalizingHttpClient::new(terminal);
+    let body = terminal_body(transport, bodies, request).await;
+
+    assert!(body.get("store").is_none());
+    assert!(!requests_encrypted_reasoning(&body), "{body}");
+}
