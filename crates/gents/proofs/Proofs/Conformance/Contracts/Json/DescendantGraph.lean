@@ -65,4 +65,14 @@ def descendantCursorCaseJson (value : DescendantCursorCase) : String :=
 def descendantCursorCasesJson : String :=
   jsonArray (descendantCursorCases.map descendantCursorCaseJson)
 
+def cancelChildSessionCaseJson (value : CancelChildSessionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString value.name ++ ","
+    ++ "\"session\":" ++ jsonArray (value.session.map jsonString) ++ ","
+    ++ "\"cancelled\":" ++ jsonArray (value.cancelled.map jsonString)
+    ++ "}"
+
+def cancelChildSessionCasesJson : String :=
+  jsonArray (cancelChildSessionCases.map cancelChildSessionCaseJson)
+
 end Conformance.Contracts

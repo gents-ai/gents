@@ -395,6 +395,8 @@ def snapshotJson : String :=
       ++ descendantCursorCasesJson ++ ","
     ++ "\"spawn_fence_cases\":"
       ++ spawnFenceCasesJson ++ ","
+    ++ "\"cancel_child_session_cases\":"
+      ++ cancelChildSessionCasesJson ++ ","
     ++ "\"r5_cross_principal_cases\":"
       ++ jsonArray
         (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","

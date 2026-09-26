@@ -1327,8 +1327,14 @@ def caseCoverage : List CoverageEntry :=
       "descendant_graph_cases"
       "DescendantGraphCases"
       "descendant_graph::tests::generated_steer_admission_cases_fence_terminal_child_steering"
-      "Generated steer admissions bind the native steer_admission decision to DescendantGraph.steerAdmission over the modeled edge and SteerEvidence (child request state, unclaimed-spawn failure class and cancel intent). Readable and controllable edge facts are adapted from the same generated case, which the visibility consumer fences separately. The database-backed steer_subagent tests exercise the fence loader, the append to a finished child's session and cancelChildSession through cancel_subagent.")
+      "Generated steer admissions bind the native steer_admission decision to DescendantGraph.steerAdmission over the modeled edge and SteerEvidence (child request state, unclaimed-spawn failure class and cancel intent). Readable and controllable edge facts are adapted from the same generated case, which the visibility consumer fences separately. The enqueue transaction re-evaluates the same decision (steerAppend); database steer tests exercise the fence loader and the append to a finished child's session.")
       "descendant-graph" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "cancel_child_session_cases"
+      "CancelChildSessionCases"
+      "hook::tests::r4c_steer_subagent::generated_cancel_child_session_cases_drive_cancel_subagent"
+      "Each generated child session is built through the real spawn and steer tools (original child request plus steered requests), then cancel_session_subagent runs once. A queued request is drained to interrupted; an active one gets its durable interrupt latch, which the owned execution loop turns into the interrupted terminal, so the consumer reads a latched active request as interrupted.")
+      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"

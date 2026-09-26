@@ -270,4 +270,27 @@ def descendantCursorCases : List DescendantCursorCase :=
   , descendantCursorCase "stale_anchor_same_tool_other_child" cursorFanOut (some (21, 9))
   ]
 
+/-- One explicit `cancel_subagent` over a child session holding the original
+child request followed by steered requests, oldest first. -/
+structure CancelChildSessionCase where
+  name : String
+  session : List String
+  cancelled : List String
+  deriving Repr
+
+def cancelChildSessionCase (name : String) (session : List RequestState) :
+    CancelChildSessionCase :=
+  { name
+  , session := session.map RequestState.toDefraDB
+  , cancelled := (cancelChildSession session).map RequestState.toDefraDB }
+
+def cancelChildSessionCases : List CancelChildSessionCase :=
+  [ cancelChildSessionCase "finished_child_queued_steer" [.failed, .pending]
+  , cancelChildSessionCase "finished_child_running_steer" [.completed, .processing]
+  , cancelChildSessionCase "finished_child_running_and_queued_steers"
+      [.completed, .processing, .pending]
+  , cancelChildSessionCase "running_child_queued_steer" [.processing, .pending]
+  , cancelChildSessionCase "finished_child_settled_steer" [.failed, .completed]
+  ]
+
 end Conformance.ContractCases

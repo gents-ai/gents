@@ -186,7 +186,7 @@ theorem childRequestTerminal_iff (state : RequestState) :
 
 `child` is the corroborated child request's lifecycle, `none` when its row is
 not readable. `spawnUnclaimed` and `cancelIntent` are the bridge's
-unclaimed-spawn failure class and `cancel_cascade_intent_at` (#1851). On a
+unclaimed-spawn failure class and `cancel_cascade_intent_at`. On a
 settled bridge either records that a spawn fence decided the child must stop,
 and a steer must not override that decision by queueing new work in the child
 session. `stuck_since` is deliberately not evidence: a parent interrupt stops
@@ -240,7 +240,7 @@ def steerAdmission (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence) :
 /-- Explicit cancellation through an edge (`cancel_subagent`) stops every live
 request of the child session, including requests a steer queued after the
 original child request, and leaves settled requests unchanged. A request
-terminal never cascades into its subagents (#1624), so this edge is the
+terminal never cascades into its subagents, so this edge is the
 supervisor of all work a steer admits: the controlling parent that appended it
 can always stop it. -/
 def cancelChildSession (session : List RequestState) : List RequestState :=
@@ -283,15 +283,6 @@ theorem append_requires_direct_control
 
 /-- Every admitted steer is supervised: its controlling parent can cancel the
 edge, and that cancellation reaches the child session the steer appended to. -/
-theorem steer_is_supervised
-    (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence)
-    (h : steerAdmission viewer edge evidence = .append) :
-    controllable viewer edge = true ∧ readable viewer edge = true := by
-  have hControl := (append_requires_direct_control viewer edge evidence h).1
-  refine ⟨hControl, ?_⟩
-  simp only [controllable, Bool.and_eq_true] at hControl
-  exact hControl.1.1
-
 theorem steer_never_grants_ancestor_control
     (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence)
     (h : edge.directFromRoot = false) :
@@ -328,8 +319,8 @@ theorem unmaterialized_edge_never_appends
     (h : edge.materialization = .pending) :
     steerAdmission viewer edge evidence ≠ .append := by
   intro hc
-  have hRead := (steer_is_supervised viewer edge evidence hc).2
-  simp [readable, h] at hRead
+  have hControl := (append_requires_direct_control viewer edge evidence hc).1
+  simp [controllable, readable, h] at hControl
 
 /-- A finished child whose own attempt ended (completed, failed or timed out)
 without a fence continues in its session. -/
@@ -364,6 +355,56 @@ theorem cancel_keeps_settled_requests (session : List RequestState) (state : Req
     state ∈ cancelChildSession session := by
   simp only [cancelChildSession, List.mem_map]
   exact ⟨state, hMem, by simp [hSettled]⟩
+
+/-- A steer's append, decided against the same serialized state that it
+writes: the enqueue transaction re-reads the bridge and appends only while
+`steerAdmission` still admits it. A fence or cancellation that commits first
+refuses the steer; one that commits later is ordered after the append, as for
+any running child. -/
+def steerAppend (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence)
+    (session : List RequestState) : Option (List RequestState) :=
+  if steerAdmission viewer edge evidence = .append then some (session ++ [.pending]) else none
+
+/-- The unclaimed-spawn fence settling a bridge: it fails with the
+`spawnUnclaimed` class and a durable cancel intent in one write. -/
+def fenceUnclaimedSpawn (edge : Edge) (evidence : SteerEvidence) : Edge × SteerEvidence :=
+  ({ edge with lifecycle := .failed }, { evidence with spawnUnclaimed := true, cancelIntent := true })
+
+theorem fence_then_steer_is_refused
+    (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence) (session : List RequestState) :
+    steerAppend viewer (fenceUnclaimedSpawn edge evidence).1
+      (fenceUnclaimedSpawn edge evidence).2 session = none := by
+  have h := fenced_settled_spawn_is_never_steered viewer
+    (fenceUnclaimedSpawn edge evidence).1 (fenceUnclaimedSpawn edge evidence).2
+    (by simp [fenceUnclaimedSpawn, terminal]) (by simp [fenceUnclaimedSpawn, fenced])
+  simp [steerAppend, h]
+
+theorem cancel_then_steer_is_refused
+    (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence) (session : List RequestState) :
+    steerAppend viewer { edge with lifecycle := .cancelled } evidence session = none := by
+  have h := cancelled_edge_stays_cancelled viewer { edge with lifecycle := .cancelled } evidence rfl
+  simp [steerAppend, h]
+
+/-- Every admitted steer is supervised: its parent controls the edge, and
+cancelling that edge settles the whole child session, interrupting the steered
+request itself. -/
+theorem steer_is_supervised
+    (viewer : Viewer) (edge : Edge) (evidence : SteerEvidence)
+    (session after : List RequestState)
+    (h : steerAppend viewer edge evidence session = some after) :
+    controllable viewer edge = true ∧
+      (cancelChildSession after).all childRequestTerminal = true ∧
+      (cancelChildSession after).getLast? = some .interrupted := by
+  unfold steerAppend at h
+  split at h
+  · rename_i hAdmit
+    simp only [Option.some.injEq] at h
+    subst h
+    refine ⟨(append_requires_direct_control viewer edge evidence hAdmit).1,
+      cancel_leaves_no_live_request _, ?_⟩
+    simp [cancelChildSession, childRequestTerminal]
+  · simp at h
+
 
 def inScope (scope : Scope) (edge : Edge) : Bool :=
   match scope with

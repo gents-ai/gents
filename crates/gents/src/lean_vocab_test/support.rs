@@ -187,6 +187,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
     pub(crate) descendant_cursor_cases: Vec<LeanDescendantCursorCase>,
     pub(crate) spawn_fence_cases: Vec<LeanSpawnFenceCase>,
+    pub(crate) cancel_child_session_cases: Vec<LeanCancelChildSessionCase>,
     pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
     pub(crate) r5_scenario_cases: Vec<serde_json::Value>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -1477,6 +1478,10 @@ pub(crate) fn lean_descendant_cursor_cases() -> &'static [LeanDescendantCursorCa
 
 pub(crate) fn lean_spawn_fence_cases() -> &'static [LeanSpawnFenceCase] {
     &lean_contract_snapshot().spawn_fence_cases
+}
+
+pub(crate) fn lean_cancel_child_session_cases() -> &'static [LeanCancelChildSessionCase] {
+    &lean_contract_snapshot().cancel_child_session_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {

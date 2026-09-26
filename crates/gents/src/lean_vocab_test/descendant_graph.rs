@@ -49,3 +49,10 @@ pub(crate) struct LeanDescendantCursorCase {
     pub(crate) expected_child_request_ids: Vec<usize>,
     pub(crate) stale_cursor: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCancelChildSessionCase {
+    pub(crate) name: String,
+    pub(crate) session: Vec<String>,
+    pub(crate) cancelled: Vec<String>,
+}
