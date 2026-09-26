@@ -237,7 +237,7 @@ opaque recoveryHandsOffRunning : Option Bool := do
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 [])
   let tool ← ownedToolByDocument? recovered 600
   pure (tool.context.state == .running && tool.stuckSince == some 10 &&
-    tool.cancelCascadeIntentAt == some 10 &&
+    tool.cancelCascadeIntentAt.isNone && !tool.cancelPendingRemoteAck &&
     !(600 ∈ recovered.transcript.inFlight) &&
     recovered.currentGeneration? == some 8)
 

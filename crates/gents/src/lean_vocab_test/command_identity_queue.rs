@@ -362,6 +362,7 @@ pub(crate) struct LeanRestartDispositionCase {
     pub(crate) disposition: String,
     pub(crate) cause: Option<String>,
     pub(crate) terminal_state: Option<String>,
+    pub(crate) post_await_mode: Option<String>,
     pub(crate) notification_reason: Option<String>,
     pub(crate) queue_source: Option<String>,
     pub(crate) queue_key_prefix: Option<String>,

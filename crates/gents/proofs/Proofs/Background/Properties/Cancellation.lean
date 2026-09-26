@@ -3,18 +3,19 @@ import Proofs.Background.Transition
 namespace Subagent
 namespace BridgedState
 
+/-- An explicit cancellation of a cascade-policy bridge reaches its child:
+there is a trace in which the processing child ends `interrupted`. -/
 theorem cascade_cancels_child
     (pre : BridgedState)
-    (h_parent_term : isTerminal pre.parent.request.state)
     (h_cascade     : ∃ t ∈ pre.parent.tools,
                        t.callId = pre.bridgeCallId ∧
                        t.cancelPolicy = .cascade ∧
-                       ¬ isTerminal t.state)
+                       t.state = .cancelled)
     (h_child_proc      : pre.child.request.state = .processing)
     (h_child_admission : pre.child.request.admission = .executing)
     (h_linked          : pre.linked) :
     ∃ post, Trace pre post ∧ post.child.request.state = .interrupted := by
-  obtain ⟨tCascade, h_in, h_id, h_pol, _h_live⟩ := h_cascade
+  obtain ⟨tCascade, h_in, h_id, h_pol, h_cancelled⟩ := h_cascade
   let midChildReq : RequestContext :=
     { pre.child.request with
         interruptRequestedAt := some pre.child.request.currentTime }
@@ -31,7 +32,7 @@ theorem cascade_cancels_child
     refine @Trace.step pre mid post ?_ (@Trace.step mid post post ?_ Trace.refl)
     ·
       refine Transition.bridge_cancel_cascade
-        (Or.inl h_parent_term)
+        ⟨tCascade, h_in, h_id, h_cancelled⟩
         ⟨tCascade, h_in, h_id, h_pol⟩
         ?_
         rfl
@@ -119,10 +120,12 @@ theorem cascade_cancels_child
     show postChildReq.state = .interrupted
     rfl
 
-theorem detach_does_not_cancel_child
+/-- The child's interrupt latch changes only through a direct child interrupt
+or a cascade from an explicitly cancelled cascade-policy bridge. -/
+theorem child_interrupt_latch_preserved_without_explicit_cascade
     (pre post : BridgedState)
-    (h_detach    : ∃ t ∈ pre.parent.tools,
-                     t.callId = pre.bridgeCallId ∧ t.cancelPolicy = .detach)
+    (h_no_cascade : ∀ t ∈ pre.parent.tools, t.callId = pre.bridgeCallId →
+                      ¬ (t.state = .cancelled ∧ t.cancelPolicy = .cascade))
     (h_step      : Transition pre post)
     (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
     (h_uniq      : pre.parent.UniqueCallIds)
@@ -193,15 +196,77 @@ theorem detach_does_not_cancel_child
     rw [h_child_eq]
   | bridge_failure _ _ _ _ _ _ _ _ _ _ h_child_eq _ _ =>
     rw [h_child_eq]
-  | bridge_cancel_cascade _ h_cascade _ _ _ _ _ _ _ _ =>
-    obtain ⟨tDet, h_in_d, h_id_d, h_pol_d⟩ := h_detach
+  | bridge_cancel_cascade h_cancelled h_cascade _ _ _ _ _ _ _ _ =>
+    obtain ⟨tCan, h_in_n, h_id_n, h_state_n⟩ := h_cancelled
     obtain ⟨tCas, h_in_c, h_id_c, h_pol_c⟩ := h_cascade
-    have h_callIds : tDet.callId = tCas.callId := by rw [h_id_d, h_id_c]
-    have h_same_tool : tDet = tCas :=
-      ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in_d h_in_c h_callIds
-    rw [h_same_tool] at h_pol_d
-    rw [h_pol_c] at h_pol_d
-    cases h_pol_d
+    have h_callIds : tCan.callId = tCas.callId := by rw [h_id_n, h_id_c]
+    have h_same_tool : tCan = tCas :=
+      ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in_n h_in_c h_callIds
+    rw [← h_same_tool] at h_pol_c
+    exact absurd ⟨h_state_n, h_pol_c⟩ (h_no_cascade tCan h_in_n h_id_n)
+
+/-- A detached bridge never reaches its child, even when explicitly cancelled. -/
+theorem detach_does_not_cancel_child
+    (pre post : BridgedState)
+    (h_detach    : ∃ t ∈ pre.parent.tools,
+                     t.callId = pre.bridgeCallId ∧ t.cancelPolicy = .detach)
+    (h_step      : Transition pre post)
+    (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
+    (h_uniq      : pre.parent.UniqueCallIds)
+    (h_not_direct_interrupt :
+      ∀ t : Time,
+        post.child.request ≠
+          { pre.child.request with interruptRequestedAt := some t }) :
+    post.child.request.interruptRequestedAt =
+      pre.child.request.interruptRequestedAt := by
+  obtain ⟨tDet, h_in_d, h_id_d, h_pol_d⟩ := h_detach
+  refine child_interrupt_latch_preserved_without_explicit_cascade pre post ?_
+    h_step h_no_other h_uniq h_not_direct_interrupt
+  intro t h_in h_id h_cascade
+  have h_same : t = tDet :=
+    ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in h_in_d (by rw [h_id, h_id_d])
+  rw [h_same, h_pol_d] at h_cascade
+  cases h_cascade.2
+
+/-- Interrupting or otherwise terminalizing the parent is not a cascade: while
+its bridge tool has not been explicitly cancelled, no parent-side step latches
+the child's interrupt, whatever the parent request's lifecycle state. -/
+theorem uncancelled_bridge_does_not_cancel_child
+    (pre post : BridgedState)
+    (h_bridge    : ∃ t ∈ pre.parent.tools,
+                     t.callId = pre.bridgeCallId ∧ t.state ≠ .cancelled)
+    (h_step      : Transition pre post)
+    (h_no_other  : ¬ pre.child.request.interruptRequestedAt.isSome)
+    (h_uniq      : pre.parent.UniqueCallIds)
+    (h_not_direct_interrupt :
+      ∀ t : Time,
+        post.child.request ≠
+          { pre.child.request with interruptRequestedAt := some t }) :
+    post.child.request.interruptRequestedAt =
+      pre.child.request.interruptRequestedAt := by
+  obtain ⟨tLive, h_in_l, h_id_l, h_state_l⟩ := h_bridge
+  refine child_interrupt_latch_preserved_without_explicit_cascade pre post ?_
+    h_step h_no_other h_uniq h_not_direct_interrupt
+  intro t h_in h_id h_cascade
+  have h_same : t = tLive :=
+    ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in h_in_l (by rw [h_id, h_id_l])
+  rw [h_same] at h_cascade
+  exact h_state_l h_cascade.1
+
+/-- No cascade step exists from a state whose bridge tool is not cancelled. -/
+theorem uncancelled_bridge_admits_no_cascade_step
+    (pre post : BridgedState)
+    (h_bridge : ∃ t ∈ pre.parent.tools,
+                  t.callId = pre.bridgeCallId ∧ t.state ≠ .cancelled)
+    (h_uniq   : pre.parent.UniqueCallIds) :
+    ¬ BridgeCancelCascadeStep pre post := by
+  intro h_step
+  obtain ⟨tLive, h_in_l, h_id_l, h_state_l⟩ := h_bridge
+  obtain ⟨tCan, h_in_n, h_id_n, h_state_n⟩ := h_step.h_bridge_cancelled
+  have h_same : tCan = tLive :=
+    ComposedState.UniqueCallIds.eq_of_callId_eq h_uniq h_in_n h_in_l (by rw [h_id_n, h_id_l])
+  rw [h_same] at h_state_n
+  exact h_state_l h_state_n
 
 end BridgedState
 end Subagent

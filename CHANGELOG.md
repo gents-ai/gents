@@ -39,6 +39,17 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- Interrupting a thread stops only its foreground turn and in-flight
+  foreground calls. Background processes and subagents, including one the
+  thread was waiting on, keep running and stay attached; an awaited subagent
+  becomes background work whose completion is delivered to the session.
+  Subagents and background processes stop only when explicitly cancelled:
+  `cancel_subagent`, and `cancel_process` or the UI's background-task stop.
+  Parent interrupts, failures, completion and restart recovery no longer
+  interrupt or fail child requests, including queued ones; a subagent a failed
+  or restarted parent was waiting on becomes background work whose completion
+  is delivered to the session. Steering a subagent with `interrupt` no longer
+  cancels that subagent's own subagents (#1624).
 - Plain `gents init` enables the Engineer's self-config tools and graph tools,
   as the desktop first run does. The tool ceiling set at init still bounds what
   they can change. `--setup-steward` now only seeds the Engineer identity, the

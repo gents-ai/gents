@@ -2108,7 +2108,21 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
 }
 
 #[tokio::test]
-async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
+/// A crash between the parent's interrupt latch and the live hook's
+/// retention leaves the awaited bridge foreground. Request recovery's terminal
+/// accounting backgrounds it with its receipt, so the child's later terminal
+/// is still delivered to the session.
+async fn crash_between_interrupt_latch_and_retain_still_delivers_child_completion() {
+    let contract: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("load generated recovery contract");
+    let modeled = contract["restart_disposition_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "restart_awaited_bridge_interrupted_parent_backgrounded")
+        .expect("Lean awaited-bridge restart witness");
+    assert_eq!(modeled["disposition"], "retain_in_background");
+    assert_eq!(modeled["post_await_mode"], "background");
     let db = test_db("tool-call-recover-cascade").await;
     let (runtime, interrupted_doc, bridge_doc_id, child_request_id, child_request_doc_id) =
         boot_running_recovery_subagent(&db, "tool-cascade", "foreground", "cascade").await;
@@ -2131,7 +2145,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
     let report = ToolCallLifecycle::recover_all(&db.node, db.node_identity.did())
         .await
         .unwrap();
-    assert_eq!(report.tool_calls_recovered, 1);
+    assert_eq!(report.tool_calls_recovered, 0);
 
     let snapshots =
         fetch_tool_call_snapshots_for_session(&db.node, "tool-cascade-parent-session").await;
@@ -2139,13 +2153,59 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         .iter()
         .find(|row| row.doc_id == bridge_doc_id)
         .expect("accepted cascade bridge remains queryable");
-    assert_eq!(bridge.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(bridge.lifecycle_state.as_deref(), Some("running"));
+    let bridge_row = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ await_mode }} }}"#,
+            gents::graphql::escape_graphql_string(&bridge_doc_id),
+        ))
+        .await;
+    assert!(!bridge_row.has_errors(), "{:?}", bridge_row.errors);
+    assert_eq!(
+        bridge_row.data.unwrap()["AgentToolCall"][0]["await_mode"],
+        "background",
+        "the interrupted parent's terminal accounting backgrounds its awaited bridge"
+    );
+    assert!(
+        !bridge.load_result(db.node.clone()).await.is_empty(),
+        "the backgrounded bridge owns its invocation receipt"
+    );
 
     let child_interrupt =
         fetch_interrupt_requested_at_by_doc(&db.node, &child_request_doc_id).await;
     assert!(
-        child_interrupt.is_some(),
-        "cascade recovery should latch child interrupt_requested_at"
+        child_interrupt.is_none(),
+        "recovery of an interrupted parent must not reach its child"
+    );
+
+    // The child's own terminal is delivered to the parent session.
+    let failed = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "failed", failure_reason: "child failed after parent interrupt" }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(&child_request_doc_id),
+        ))
+        .await;
+    assert!(!failed.has_errors(), "{:?}", failed.errors);
+    ToolCallLifecycle::recover_all(&db.node, db.node_identity.did())
+        .await
+        .unwrap();
+    let projected =
+        fetch_tool_call_snapshots_for_session(&db.node, "tool-cascade-parent-session").await;
+    assert_eq!(
+        projected
+            .iter()
+            .find(|row| row.doc_id == bridge_doc_id)
+            .and_then(|row| row.lifecycle_state.as_deref()),
+        Some("failed")
+    );
+    assert!(
+        fetch_message_snapshots_for_session(&db.node, "tool-cascade-parent-session")
+            .await
+            .iter()
+            .any(|message| message.content.contains("<subagent-notification")),
+        "the child's terminal is delivered as a completion notification"
     );
     assert_unique_request_identity(
         &db.node,
@@ -2164,9 +2224,9 @@ async fn recover_all_preserves_detached_bridge_without_interrupting_child() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|case| case["name"] == "restart_detached_bridge_interrupted_parent_left_running")
+        .find(|case| case["name"] == "restart_detached_bridge_interrupted_parent_retained")
         .expect("Lean detached restart witness");
-    assert_eq!(modeled["disposition"], "leave_running");
+    assert_eq!(modeled["disposition"], "retain_in_background");
     assert!(modeled["terminal_state"].is_null());
     let db = test_db("tool-call-recover-detach").await;
     let (runtime, interrupted_doc, bridge_doc_id, child_request_id, child_request_doc_id) =

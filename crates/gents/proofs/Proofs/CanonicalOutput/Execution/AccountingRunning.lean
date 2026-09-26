@@ -30,17 +30,20 @@ theorem handoffRunningEdit_provenance (world : World) (document : DocId) (tool :
     (handoffRunningEdit world document tool).provenance = tool.provenance := by
   unfold handoffRunningEdit handoffRunningTool; split <;> rfl
 
-theorem handoffRunningEdit_await (world : World) (document : DocId) (tool : OwnedTool) :
+theorem handoffRunningEdit_await (world : World) (document : DocId) (tool : OwnedTool)
+    (hchild : tool.context.childRequestId.isNone = true) :
     (handoffRunningEdit world document tool).context.awaitMode = tool.context.awaitMode := by
-  unfold handoffRunningEdit handoffRunningTool; split <;> rfl
+  have : tool.context.childRequestId.isSome = false := by
+    cases h : tool.context.childRequestId <;> simp_all
+  unfold handoffRunningEdit handoffRunningTool; split <;> simp [this]
 
 theorem handoffRunningEdit_child (world : World) (document : DocId) (tool : OwnedTool) :
     (handoffRunningEdit world document tool).context.childRequestId = tool.context.childRequestId := by
-  unfold handoffRunningEdit handoffRunningTool; split <;> rfl
+  unfold handoffRunningEdit handoffRunningTool; split <;> (try split) <;> rfl
 
 theorem handoffRunningEdit_state (world : World) (document : DocId) (tool : OwnedTool) :
     (handoffRunningEdit world document tool).context.state = tool.context.state := by
-  unfold handoffRunningEdit handoffRunningTool; split <;> rfl
+  unfold handoffRunningEdit handoffRunningTool; split <;> (try split) <;> rfl
 
 theorem handoffRunningWorld_owned_lookup (world : World) (document key : DocId) :
     ownedToolByDocument? (handoffRunningWorld world document) key =
@@ -60,7 +63,8 @@ theorem handoffRunningWorld_header (world : World) (document : DocId) (tool : Ow
   exact acceptedHeaderBindsTool_map world (handoffRunningEdit world document) tool
     (handoffRunningEdit_document world document) (handoffRunningEdit_requestDoc world document)
     (handoffRunningEdit_session world document) (handoffRunningEdit_sequence world document)
-    (handoffRunningEdit_provenance world document) (handoffRunningEdit_await world document)
+    (handoffRunningEdit_provenance world document)
+    (fun value hchild => handoffRunningEdit_await world document value hchild)
     (handoffRunningEdit_child world document)
 
 theorem handoffRunningWorld_result (world : World) (document : DocId) (tool : OwnedTool)

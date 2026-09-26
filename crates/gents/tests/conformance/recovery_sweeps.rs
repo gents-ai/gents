@@ -35,7 +35,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        38,
+        36,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -48,7 +48,6 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "tool_call_lifecycle_recover_detached_bridge_rows",
         "inference_call_recover_all_stale_calls",
         "subagent_liveness_terminalize_expired_children",
-        "subagent_liveness_interrupt_queued_descendants",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -170,7 +169,6 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
         || matches!(
             case.sweep_id.as_str(),
             "subagent_liveness_terminalize_expired_children"
-                | "subagent_liveness_interrupt_queued_descendants"
         )
     {
         // These rows are driven by the crate-private accepted-publication

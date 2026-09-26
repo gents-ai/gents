@@ -102,8 +102,9 @@ impl AwaitMode {
     pub const ALL: &'static [AwaitMode] = &[AwaitMode::Foreground, AwaitMode::Background];
 }
 
-/// Whether parent termination drives the linked child request to .interrupted
-/// (cascade) or detaches the child to its own deadline.
+/// Whether an explicit cancellation of a subagent bridge also interrupts its
+/// linked child request (cascade) or leaves the child running (detach).
+/// Interrupting or terminalizing the parent request never applies it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CancelPolicy {
     Cascade,
@@ -127,6 +128,38 @@ impl CancelPolicy {
     }
 
     pub const ALL: &'static [CancelPolicy] = &[CancelPolicy::Cascade, CancelPolicy::Detach];
+}
+
+/// What interrupting a request does to one of its owned tool calls
+/// (Lean `Subagent.Interrupt.disposition`). The cancellation policy is not an
+/// input: an interrupt never reaches background work or subagents.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum InterruptDisposition {
+    /// Never-dispatched intents and running foreground native calls.
+    Cancel,
+    /// A running awaited subagent bridge becomes background work.
+    Background,
+    /// Background work and terminal rows.
+    Retain,
+}
+
+impl InterruptDisposition {
+    pub fn of(state: ToolCallState, await_mode: AwaitMode, child_linked: bool) -> Self {
+        match (state, await_mode) {
+            (ToolCallState::Pending, _) => Self::Cancel,
+            (ToolCallState::Running, AwaitMode::Foreground) if child_linked => Self::Background,
+            (ToolCallState::Running, AwaitMode::Foreground) => Self::Cancel,
+            _ => Self::Retain,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancel => "cancel",
+            Self::Background => "background",
+            Self::Retain => "retain",
+        }
+    }
 }
 
 /// Why a tool-call cancellation was requested at the state-machine boundary.
@@ -189,11 +222,10 @@ impl ChildTerminal {
     pub const ALL_KIND: &'static [&'static str] = &["failed", "dead", "interrupted", "superseded"];
 }
 
-/// Returned by `bridge_cancel_cascade` (wrapped in Option). The caller — typically
-/// R3's daemon interrupt dispatcher — performs the actual write to the child
-/// AgentRequest's interrupt_requested_at field. Returning None from
-/// bridge_cancel_cascade means no cascade is required: the bridge tool is
-/// native (no child link), detached (no cascade), or not in .cancelled state.
+/// Returned by `bridge_cancel_cascade` (wrapped in Option) after an explicit
+/// bridge cancellation. The caller performs the write to the child
+/// AgentRequest's interrupt_requested_at field. None means no cascade is
+/// required: the bridge tool is native (no child link) or detached.
 #[derive(Clone, Debug)]
 pub struct CascadeIntent {
     pub child_request_id: String,
@@ -214,6 +246,7 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 
 pub(crate) mod delivery;
+pub(crate) use delivery::{publish_background_receipt_in_txn, BackgroundReceiptBinding};
 pub(crate) mod query;
 // Consumers reconstruct invocation replies through the same physical-identity
 // owner as the runtime; admission and mutation internals remain private.
@@ -609,6 +642,10 @@ impl ToolCallLifecycle {
 
     pub(crate) fn is_subagent_bridge(&self) -> bool {
         self.child_request_id.is_some()
+    }
+
+    pub(crate) fn interrupt_disposition(&self) -> InterruptDisposition {
+        InterruptDisposition::of(self.state, self.await_mode, self.is_subagent_bridge())
     }
 
     pub(crate) fn is_background_tool_bridge(&self) -> bool {

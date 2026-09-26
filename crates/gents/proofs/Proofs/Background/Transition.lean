@@ -79,11 +79,14 @@ inductive Transition : BridgedState → BridgedState → Prop where
       (h_parent_id_eq  : post.parent.requestId = pre.parent.requestId)
       : Transition pre post
 
+  /-- Cascade is an explicit control action on one bridge: only a bridge tool
+      that was itself cancelled latches its child's interrupt. The parent
+      request's lifecycle is deliberately absent from the guard, so a parent
+      that is interrupted, fails or completes never cancels its subagents. -/
   | bridge_cancel_cascade {pre post : BridgedState}
-      (h_parent_term   : isTerminal pre.parent.request.state ∨
-                         (∃ t ∈ pre.parent.tools,
-                            t.callId = pre.bridgeCallId ∧
-                            t.state = .cancelled))
+      (h_bridge_cancelled : ∃ t ∈ pre.parent.tools,
+                              t.callId = pre.bridgeCallId ∧
+                              t.state = .cancelled)
       (h_cascade_pol   : ∃ t ∈ pre.parent.tools,
                            t.callId = pre.bridgeCallId ∧
                            t.cancelPolicy = .cascade)
@@ -109,10 +112,9 @@ inductive Trace : BridgedState → BridgedState → Prop where
 
 structure BridgeCancelCascadeStep
     (pre post : BridgedState) : Prop where
-  h_parent_term   : isTerminal pre.parent.request.state ∨
-                    (∃ t ∈ pre.parent.tools,
-                       t.callId = pre.bridgeCallId ∧
-                       t.state = .cancelled)
+  h_bridge_cancelled : ∃ t ∈ pre.parent.tools,
+                         t.callId = pre.bridgeCallId ∧
+                         t.state = .cancelled
   h_cascade_pol   : ∃ t ∈ pre.parent.tools,
                       t.callId = pre.bridgeCallId ∧
                       t.cancelPolicy = .cascade
@@ -139,7 +141,7 @@ theorem BridgeCancelCascadeStep.to_transition
     (h : BridgeCancelCascadeStep pre post) :
     Transition pre post :=
   Transition.bridge_cancel_cascade
-    h.h_parent_term
+    h.h_bridge_cancelled
     h.h_cascade_pol
     h.h_interrupt_set
     h.h_parent_eq

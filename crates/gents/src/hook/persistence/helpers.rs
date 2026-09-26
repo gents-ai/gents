@@ -46,7 +46,7 @@ pub(super) async fn count_live_backgrounded_rows(
         .count())
 }
 
-pub(super) fn background_receipt_payload(
+pub(crate) fn background_receipt_payload(
     child_request_id: &str,
     child_session_id: Option<&str>,
     behavior_id: &str,

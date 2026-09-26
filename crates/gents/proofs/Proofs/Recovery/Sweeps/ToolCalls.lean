@@ -176,7 +176,9 @@ def OrphanedBackgroundToolRow.parentResolvable
     cause is persisted before the worker is signalled, so the worker cannot
     replace it. Without a live worker, a process the owner still observes
     running keeps its row running, and one whose stop the owner could not
-    observe settles as lost, never as a stop. -/
+    observe settles as lost, never as a stop. A stopped process is never
+    attributed to its parent's interrupt or terminal state: that state does not
+    stop background work. -/
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
@@ -195,14 +197,8 @@ def orphanedBackgroundToolCause
         some .unclaimedCrossPrincipalSpawn
       else if row.ownerTaskDeleted then
         some .taskDeleted
-      else if row.parentLive then
-        some .terminalizeBackgroundedAsInterrupted
-      else if row.parentInterrupted then
-        some .parentInterrupted
-      else if row.parentTerminal then
-        some .parentTerminal
       else
-        none
+        some .terminalizeBackgroundedAsInterrupted
 
 theorem orphanedBackgroundTool_no_parent_no_cause
     (row : OrphanedBackgroundToolRow)
@@ -399,7 +395,6 @@ structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
-  parentCleanCompleted : Bool
   deriving Repr
 
 def isChildLinkedBridge (call : ToolCallContext) : Prop :=
@@ -409,18 +404,14 @@ instance (call : ToolCallContext) : Decidable (isChildLinkedBridge call) := by
   unfold isChildLinkedBridge
   infer_instance
 
-def exclusiveCleanCompleted (row : TerminalParentToolRow) : Prop :=
-  row.parentCleanCompleted = true ∧ row.parentInterrupted = false
-
-instance (row : TerminalParentToolRow) : Decidable (exclusiveCleanCompleted row) := by
-  unfold exclusiveCleanCompleted
-  infer_instance
-
+/-- No terminal parent is a cancel signal for a child-linked bridge, whatever
+    its cancellation policy: the bridge is retained as background work
+    (`Recovery.restartDisposition`'s `retainInBackground`, applied in the
+    parent's terminal accounting), never terminalized by this sweep. -/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
-  ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true) ∧
-  ¬ (isChildLinkedBridge row.call ∧ exclusiveCleanCompleted row) ∧
+  ¬ isChildLinkedBridge row.call ∧
   ¬ isNativeBackgroundCall row.call
 
 theorem terminalParent_native_background_not_stale
@@ -428,7 +419,14 @@ theorem terminalParent_native_background_not_stale
     (h_native : isNativeBackgroundCall row.call) :
     ¬ terminalParentToolStale row := by
   intro h_stale
-  exact h_stale.2.2.2.2 h_native
+  exact h_stale.2.2.2 h_native
+
+theorem terminalParent_child_linked_not_stale
+    (row : TerminalParentToolRow)
+    (h_child : isChildLinkedBridge row.call) :
+    ¬ terminalParentToolStale row := by
+  intro h_stale
+  exact h_stale.2.2.1 h_child
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
@@ -457,7 +455,7 @@ theorem terminalParentToolRecover_terminal :
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
   ·
     have h_term : row.parentTerminal = true := by
-      rcases h_stale with ⟨_, h_parent, _, _, _⟩
+      rcases h_stale with ⟨_, h_parent, _, _⟩
       cases h_parent with
       | inl h => exact absurd h (by simpa using h_int)
       | inr h => exact h
@@ -470,7 +468,7 @@ theorem terminalParentToolRecover_zero :
   intro row h_stale
   have h_not : ¬ terminalParentToolStale (terminalParentToolRecover row) := by
     intro h
-    rcases h with ⟨h_running, _, _, _, _⟩
+    rcases h with ⟨h_running, _, _, _⟩
     unfold terminalParentToolRecover at h_running
     by_cases h_int : row.parentInterrupted
     · simp [h_int, ToolRecoveryCause.terminalState] at h_running

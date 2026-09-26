@@ -741,7 +741,7 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
     }
   , { theoremName := "Subagent.BridgedState.cascade_cancels_child"
     , witnessKind := "reachability_trace"
-    , scenario := "parent_terminal_with_cascade_bridge_interrupts_processing_child"
+    , scenario := "explicit_cascade_bridge_cancel_interrupts_processing_child"
     , numericBound := 2
     , kindFields :=
         [ ("cancel_policy", "cascade")

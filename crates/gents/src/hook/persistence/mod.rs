@@ -29,8 +29,8 @@ use crate::tool_call_lifecycle::subagent_workspace::{
     resolve_spawn_workspace, ParentWorkspaceStamp, SpawnWorkspaceError,
 };
 use crate::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
-    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallLifecycle,
+    MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
     CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
@@ -58,6 +58,7 @@ mod prompt_hook;
 mod subagent_bridge;
 mod subagent_tools;
 
+pub(crate) use helpers::background_receipt_payload;
 use helpers::*;
 #[cfg(test)]
 pub(super) fn test_model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {

@@ -15,7 +15,7 @@ use crate::background_tools::LiveToolOutputRegistry;
 use crate::meta_tools::selected_remote_identity;
 use crate::session;
 use crate::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CascadeDispatch, ChildTerminal, ToolCallLifecycle,
+    AwaitMode, CancelCause, ChildTerminal, InterruptDisposition, ToolCallLifecycle,
 };
 use crate::truncation::TruncationLimits;
 
@@ -944,6 +944,7 @@ impl DefraSessionHook {
         self.state.lock().await.current_requester_did.clone()
     }
 
+    #[cfg(test)]
     async fn active_request_doc_id(&self) -> Option<String> {
         self.state.lock().await.current_request_doc_id.clone()
     }
@@ -1057,6 +1058,9 @@ impl DefraSessionHook {
         Ok(count)
     }
 
+    /// Apply the interrupt disposition to this hook's in-flight calls and
+    /// return how many were cancelled. Background work, including spawned
+    /// processes in the background registry, is not reachable from here.
     pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
@@ -1065,85 +1069,24 @@ impl DefraSessionHook {
                 .collect::<Vec<_>>()
         };
 
-        let mut count = lifecycles.len();
+        let mut cancelled = 0;
+        let mut first_error = None;
         for mut lifecycle in lifecycles {
-            let dispatch = lifecycle
-                .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &self.agent_did)
-                .await?;
-            if lifecycle.is_cancelled() {
-                if let Some(dispatch) = dispatch {
-                    if let CascadeDispatch::Local { intent, child } = dispatch {
-                        if let Err(error) = crate::interrupt::interrupt_request_by_doc_id(
-                            &self.node,
-                            child
-                                .doc_id
-                                .as_deref()
-                                .expect("verified physical cascade child"),
-                            child
-                                .agent_did
-                                .as_deref()
-                                .expect("verified local child principal"),
-                            child.requester_did.as_deref(),
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                child_request_id = %intent.child_request_id,
-                                error = %error,
-                                "failed to cascade live tool-call cancellation to child request"
-                            );
-                        }
-                    }
-                }
+            let applied = match lifecycle.interrupt_disposition() {
+                // A pending intent is cancelled by the request's terminal
+                // tool accounting; only a running call has an executor here.
+                InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
+                    .cancel_during_run(CancelCause::Interrupted)
+                    .await
+                    .map(|won| cancelled += usize::from(won)),
+                InterruptDisposition::Background => self.retain_interrupted_bridge(lifecycle).await,
+                InterruptDisposition::Cancel | InterruptDisposition::Retain => Ok(()),
+            };
+            if let Err(error) = applied {
+                first_error.get_or_insert(error);
             }
         }
-        // spawn_process lifecycles live in the background registry, not the
-        // foreground map. Explicit interruption cascades to this exact physical
-        // parent's native background work; ordinary completion still detaches
-        // execution from the parent's deadline as before.
-        if let Some(parent_doc) = self.active_request_doc_id().await {
-            let query = format!(
-                r#"{{ AgentToolCall(filter: {{ agent_did: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}, cancel_policy: {{ _eq: "cascade" }}, child_request_id: {{ _eq: null }} }}) {{ session_id tool_call_id }} }}"#,
-                crate::graphql::escape_graphql_string(&self.agent_did),
-                crate::graphql::escape_graphql_string(&parent_doc),
-            );
-            let response = self.node.execute(&query).await;
-            anyhow::ensure!(
-                !response.has_errors(),
-                "load interrupted background tools: {:?}",
-                response.errors
-            );
-            for row in response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentToolCall"))
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let session_id = row["session_id"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("background tool omitted session"))?;
-                let tool_call_id = row["tool_call_id"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("background tool omitted identity"))?;
-                if matches!(
-                    crate::tool_control::cancel_background_tool_call_with_cause(
-                        self.node.clone(),
-                        &self.background_executions,
-                        &self.agent_did,
-                        session_id,
-                        tool_call_id,
-                        CancelCause::Interrupted,
-                    )
-                    .await?,
-                    crate::tool_control::CancelBackgroundToolCallOutcome::Cancelled { .. }
-                ) {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
+        first_error.map_or(Ok(cancelled), Err)
     }
 
     pub(crate) async fn fail_in_flight_tool_calls(

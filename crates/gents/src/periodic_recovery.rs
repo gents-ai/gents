@@ -16,10 +16,7 @@ use crate::tool_call_lifecycle::{
     TerminalParentToolReport, ToolCallLifecycle,
 };
 
-const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &[
-    "subagent_liveness_terminalize_expired_children",
-    "subagent_liveness_interrupt_queued_descendants",
-];
+const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &["subagent_liveness_terminalize_expired_children"];
 const REQUEST_TERMINAL_REPAIR_SWEEP_IDS: &[&str] = &["request_lifecycle_recover_all_requests"];
 const TERMINAL_PARENT_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_terminal_parent_owned_tools"];

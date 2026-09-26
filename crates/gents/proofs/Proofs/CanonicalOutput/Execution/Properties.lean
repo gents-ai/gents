@@ -339,8 +339,18 @@ theorem accounting_hands_off_running_without_claiming_stop
       (handoffRunningTool world tool).context.state = .running ∧
       tool.document ∉
         (world.transcript.releaseParentInFlight tool.document).inFlight := by
-  simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool,
-    Transcript.TranscriptState.releaseParentInFlight]
+  cases hc : tool.context.childRequestId <;>
+    simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool, hc,
+      Transcript.TranscriptState.releaseParentInFlight]
+
+/-- An exceptional request terminal hands an owned running subagent bridge
+off to background work instead of leaving it awaited. -/
+theorem handoff_backgrounds_child_linked_bridge
+    (world : World) (tool : OwnedTool)
+    (hchild : tool.context.childRequestId.isSome = true) :
+    (handoffRunningTool world tool).context.awaitMode = .background ∧
+      (handoffRunningTool world tool).context.state = tool.context.state := by
+  simp [handoffRunningTool, hchild]
 
 theorem accounting_ignores_foreign_request_even_same_generation
     (world : World) (generation : Generation) (tool : OwnedTool)
@@ -457,6 +467,7 @@ theorem metadata_owned_running_is_handed_off_without_fake_stop
     (hrunning : tool.context.state = .running) :
     (accountOneMetadataOwnedTool world generation tool).1.context.state = .running ∧
       (accountOneMetadataOwnedTool world generation tool).1.stuckSince = some world.lease.now := by
-  simp [accountOneMetadataOwnedTool, howned, hrunning, handoffRunningTool]
+  cases hc : tool.context.childRequestId <;>
+    simp [accountOneMetadataOwnedTool, howned, hrunning, handoffRunningTool, hc]
 
 end CanonicalOutput.Execution

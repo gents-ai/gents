@@ -13,9 +13,9 @@ three bridge-local events on the subagent leg:
 * `bridge_failure` — a non-completed durable child terminal projects onto the
   running bridge tool via `ChildTerminal.projectedToolState`
   (interrupted → cancelled, everything else → failed);
-* `bridge_cancel_cascade` — a terminal parent (or already-cancelled bridge
-  tool) with a cascade-policy bridge sets the child's
-  `interruptRequestedAt`.
+* `bridge_cancel_cascade` — an explicitly cancelled cascade-policy bridge
+  tool sets the child's `interruptRequestedAt`; the parent's lifecycle is
+  not consulted.
 
 Parent/child composition and bridge creation remain with their relational
 transition owner. This executable event type contains only operations it runs.
@@ -119,8 +119,7 @@ def failurePost (s : BridgedState) (idx : Nat)
 /-- `bridge_cancel_cascade` guard + post-state for one located bridge slot. -/
 def cascadePost (s : BridgedState)
     (tBridge : ToolExecution.ToolCallContext) : Option BridgedState :=
-  if (isTerminal s.parent.request.state ∨ tBridge.state = .cancelled) ∧
-      tBridge.cancelPolicy = .cascade then
+  if tBridge.state = .cancelled ∧ tBridge.cancelPolicy = .cascade then
     some { s with child := { s.child with request :=
       { s.child.request with
           interruptRequestedAt := some s.child.request.currentTime } } }
@@ -211,18 +210,14 @@ theorem step_refines_transition
             findBridgeSlot?_mem s.parent.tools s.bridgeCallId h_find
           unfold cascadePost at h
           by_cases h_guard :
-              (isTerminal s.parent.request.state ∨ tBridge.state = .cancelled) ∧
-                tBridge.cancelPolicy = .cascade
+              tBridge.state = .cancelled ∧ tBridge.cancelPolicy = .cascade
           · rw [if_pos h_guard] at h
-            obtain ⟨h_term, h_policy⟩ := h_guard
+            obtain ⟨h_cancelled, h_policy⟩ := h_guard
             cases h
-            refine Transition.bridge_cancel_cascade
-              ?_ ⟨tBridge, h_mem, h_callId, h_policy⟩ (by simp)
+            exact Transition.bridge_cancel_cascade
+              ⟨tBridge, h_mem, h_callId, h_cancelled⟩
+              ⟨tBridge, h_mem, h_callId, h_policy⟩ (by simp)
               rfl rfl rfl rfl rfl rfl rfl
-            cases h_term with
-            | inl h_parent => exact Or.inl h_parent
-            | inr h_cancelled =>
-                exact Or.inr ⟨tBridge, h_mem, h_callId, h_cancelled⟩
           · rw [if_neg h_guard] at h
             exact Option.noConfusion h
 

@@ -41,7 +41,7 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
         "cancel_propagates_across_declarative_subagent_legs"
     );
     assert_eq!(case.route, "declarative_subagent_pairing");
-    assert_eq!(case.action, "cancel_parent");
+    assert_eq!(case.action, "cancel_bridge");
     assert_eq!(case.parent_principal, "coordinator");
     assert_eq!(case.child_principal, "worker");
     assert_eq!(case.bridge_collection, "AgentToolCall");
@@ -136,7 +136,7 @@ async fn drive_declarative_cancel_propagation() {
             .expect("load accepted bridge")
             .expect("accepted bridge exists");
     let dispatch = bridge
-        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &coord_did)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::UserCancelled, &coord_did)
         .await
         .expect("cancel bridge with remote cascade dispatch");
     let coord_bridge_after_cancel =

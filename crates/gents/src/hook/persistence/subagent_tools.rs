@@ -505,14 +505,6 @@ impl DefraSessionHook {
                         edge.child_requester_did.as_deref(),
                     )
                     .await?;
-                let _descendants_cancelled = self
-                    .cancel_live_subagent_descendants(
-                        &edge.child_session_id,
-                        &edge.child_agent_did,
-                        edge.child_requester_did.as_deref(),
-                        CancelCause::UserCancelled,
-                    )
-                    .await?;
                 interrupted_active_request_id = Some(active_request.request_id);
             } else {
                 drained_wake_up_request_ids = drain_automated_wakeups_returning_ids(

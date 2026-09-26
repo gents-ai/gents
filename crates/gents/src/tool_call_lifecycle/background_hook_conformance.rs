@@ -430,7 +430,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
 #[tokio::test]
 async fn generated_bridge_steps_drive_real_background_projector_and_cascade() {
     let cases = lean_bridge_step_cases();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 11);
     let mut driven = 0;
     for case in cases {
         if !case.bridge_committed {
@@ -491,7 +491,7 @@ async fn generated_bridge_steps_drive_real_background_projector_and_cascade() {
             }
             "bridge_cancel_cascade" => {
                 set_request_state(&admission.node, &child_id, "processing").await;
-                if case.parent_state == "processing" {
+                if case.bridge_state == "running" {
                     assert!(!case.legal, "{}", case.name);
                     assert!(
                         admission.tool.bridge_cancel_cascade().await.is_err(),
@@ -499,9 +499,10 @@ async fn generated_bridge_steps_drive_real_background_projector_and_cascade() {
                         case.name
                     );
                 } else {
+                    assert_eq!(case.bridge_state, "cancelled", "{}", case.name);
                     admission
                         .tool
-                        .cancel_during_run(CancelCause::Interrupted)
+                        .cancel_during_run(CancelCause::UserCancelled)
                         .await
                         .unwrap();
                     let intent = admission.tool.bridge_cancel_cascade().await.unwrap();
@@ -520,5 +521,5 @@ async fn generated_bridge_steps_drive_real_background_projector_and_cascade() {
         admission.node.shutdown().await;
         std::fs::remove_dir_all(&admission.path).unwrap();
     }
-    assert_eq!(driven, 9);
+    assert_eq!(driven, 10);
 }

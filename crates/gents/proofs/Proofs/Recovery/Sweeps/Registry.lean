@@ -15,7 +15,6 @@ def registeredRecoverySweeps : List RecoverySweep :=
   , detachedBridgeRecoverySweep
   , inferenceCallRecoverySweep
   , expiredSubagentChildSweep
-  , queuedDescendantSweep
   ]
 
 def registeredRecoverySweepIds : List String :=

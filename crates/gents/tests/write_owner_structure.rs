@@ -41,7 +41,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/goal/operator_resume/support.rs", 2),
     ("crates/gents/src/graph_pipeline/run.rs", 2),
     ("crates/gents/src/health_checker.rs", 1),
-    ("crates/gents/src/hook.rs", 1),
     ("crates/gents/src/hook/persistence/helpers.rs", 1),
     ("crates/gents/src/hook/persistence/subagent_bridge.rs", 1),
     ("crates/gents/src/lifecycle/background_wake_recovery.rs", 1),
@@ -58,7 +57,7 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/session/observations.rs", 1),
     ("crates/gents/src/session/query.rs", 1),
     ("crates/gents/src/tool_call_lifecycle/query.rs", 2),
-    ("crates/gents/src/tool_call_lifecycle/recovery.rs", 9),
+    ("crates/gents/src/tool_call_lifecycle/recovery.rs", 6),
     ("crates/gents/src/tool_call_lifecycle/subagent_request.rs", 2),
     ("crates/gents/src/tool_surface/root_admission.rs", 1),
 ];

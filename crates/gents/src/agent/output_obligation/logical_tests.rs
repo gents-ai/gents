@@ -259,7 +259,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         assert!(observed["cancel_cause"].is_null());
         assert!(observed["tool_failure_class"].is_null());
         assert!(observed["stuck_since"].is_string());
-        assert!(observed["cancel_cascade_intent_at"].is_string());
+        assert!(observed["cancel_cascade_intent_at"].is_null());
     }
 }
 

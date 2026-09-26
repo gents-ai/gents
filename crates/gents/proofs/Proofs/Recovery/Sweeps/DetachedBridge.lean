@@ -4,9 +4,10 @@ namespace Recovery
 
 open ToolExecution
 
+/-- A detached bridge ends only on its own deadline or its child's terminal:
+    no parent terminal is a cause. -/
 inductive DetachedBridgeRecoveryCause where
   | deadlineExceeded
-  | terminalParent
   | childCompleted
   | childFailed
   | childDead
@@ -18,7 +19,6 @@ namespace DetachedBridgeRecoveryCause
 
 def toContract : DetachedBridgeRecoveryCause → String
   | .deadlineExceeded => "deadlineExceeded"
-  | .terminalParent => "terminalParent"
   | .childCompleted => "childCompleted"
   | .childFailed => "childFailed"
   | .childDead => "childDead"
@@ -27,7 +27,6 @@ def toContract : DetachedBridgeRecoveryCause → String
 
 def terminalState : DetachedBridgeRecoveryCause → ToolCallState
   | .deadlineExceeded => .timedOut
-  | .terminalParent => .failed
   | .childCompleted => .completed
   | .childFailed => .failed
   | .childDead => .failed

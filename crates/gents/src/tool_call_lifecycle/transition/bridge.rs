@@ -261,10 +261,9 @@ impl ToolCallLifecycle {
     }
 
     /// Lean parity: bridge_cancel_cascade. Pure — returns the action that should
-    /// be taken on the child AgentRequest. Caller (typically R3's daemon
-    /// interrupt dispatcher) performs the actual write to set
-    /// interrupt_requested_at on the child. Returns None for native tools,
-    /// detached subagents, or non-cancelled bridge tools.
+    /// be taken on the child AgentRequest after an explicit bridge
+    /// cancellation; the caller writes the child's interrupt_requested_at.
+    /// Returns None for native tools and detached subagents.
     pub async fn bridge_cancel_cascade(&self) -> Result<Option<super::CascadeIntent>> {
         if self.state != ToolCallState::Cancelled {
             return Err(IllegalToolCallTransition::CascadeRequiresCancelled.into());
@@ -355,26 +354,6 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         self.cancel_during_run_inner(cause, None, Some(completion_reason), None)
             .await
-    }
-
-    pub(crate) async fn cancel_during_run_from_recovery(
-        &mut self,
-        cause: CancelCause,
-        remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
-        completion_reason: &str,
-    ) -> Result<bool> {
-        if remote_cancel_intent_at.is_some() {
-            self.child_request_id
-                .as_ref()
-                .context("remote recovery cancel intent requires child binding")?;
-        }
-        self.cancel_during_run_inner(
-            cause,
-            remote_cancel_intent_at,
-            Some(completion_reason),
-            None,
-        )
-        .await
     }
 
     /// Running -> Cancelled while dispatching a cascade cancel. For remote
