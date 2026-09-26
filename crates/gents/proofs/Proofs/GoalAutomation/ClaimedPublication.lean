@@ -139,9 +139,11 @@ temporary trouble without an operator. Only uninterpretable evidence stops.
 Fail-closed evidence must stop automatic continuation visibly rather than
 be retried silently forever. It uses the existing Goal transitions: an active
 Goal pauses; a budget-limited Goal abandons its wrap-up. Native records the
-reason in `last_failure`; either transition leaves the automatic candidate
-set, so the write cannot re-trigger itself, and operator resume clears the
-reason and starts a new epoch, so no retry prompt reads it. -/
+reason in `last_failure`. A paused Goal leaves the automatic candidate set.
+A budget-limited Goal with an abandoned wrap-up stays a candidate, but a
+completed wrap-up admits no claimed publication, so its durable claim can
+neither publish nor re-run this stop. Operator resume clears the reason and
+starts a new epoch, so no retry prompt reads it. -/
 def stopForInvalidEvidence (g : Goals.State) : Option Goals.State :=
   if g.status = .active then Goals.step? g .pause else Goals.step? g .wrapupAbandoned
 
@@ -169,6 +171,7 @@ def publishClaimed (s : Snapshot) (r : ClaimedRequest)
       if s.goal.status ≠ r.expectedStatus || s.sequence != r.expectedSequence ||
           s.lastContinuedFrom != r.expectedLastContinuedFrom then (s, .stale)
       else if (s.goal.status != .active && s.goal.status != .budgetLimited) ||
+          s.goal.wrapupCompleted ||
           !r.terminalParent || !r.sessionIdle ||
           r.binding.predecessor != s.latestRequest ||
           s.lastContinuedFrom != some r.binding.predecessor ||
@@ -235,6 +238,15 @@ theorem invalid_evidence_pauses_active_goal (s : Snapshot) (r : ClaimedRequest)
     (publishClaimed s r o true).1.goal.status = .paused := by
   rw [invalid_evidence_result s r o true h]
   simp [stopGoal, stopForInvalidEvidence, Goals.step?, hactive]
+
+/-- A finished or abandoned wrap-up is the end of automatic continuation: its
+claim can never publish or stop again, whatever the wait evidence says. -/
+theorem completed_wrapup_admits_no_publication (s : Snapshot) (r : ClaimedRequest)
+    (o : PublicationObservation) (commit : Bool) (h : s.goal.wrapupCompleted = true) :
+    (publishClaimed s r o commit).1 = s ∧ (publishClaimed s r o commit).2 ≠ .created := by
+  unfold publishClaimed
+  repeat' split
+  all_goals simp_all
 
 /-- Anti-suppression: a deferral exists only because a matching accepted
 wait_process timed out on a matching, correctly-originated, running target. -/

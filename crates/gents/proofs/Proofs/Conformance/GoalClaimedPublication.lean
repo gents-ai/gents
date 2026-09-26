@@ -131,6 +131,12 @@ def cases : List PublicationCase :=
        cancelledBeforeStart, true, published, .created⟩
   , ⟨"wait_evidence_storage_failure_retries_without_transition", claimed, request,
        {waiting with storageFailed := true}, true, claimed, .unavailable⟩
+  , ⟨"abandoned_wrapup_rescan_makes_no_write", budgetWrapupAbandoned,
+       {request with expectedStatus := .budgetLimited}, malformedWait, true,
+       budgetWrapupAbandoned, .illegal⟩
+  , ⟨"abandoned_wrapup_never_publishes_after_evidence_clears", budgetWrapupAbandoned,
+       {request with expectedStatus := .budgetLimited}, noWait, true,
+       budgetWrapupAbandoned, .illegal⟩
   , ⟨"budget_wrapup_invalid_evidence_abandons_wrapup", budgetClaimed,
        {request with expectedStatus := .budgetLimited}, malformedWait, true,
        budgetWrapupAbandoned, .invalidEvidence⟩
@@ -148,6 +154,18 @@ theorem claimed_wait_then_completion_reuses_claim :
       deferred = (claimed, .deferred) ∧
       publishClaimed deferred.1 request completedTool true = (published, .created) := by decide
 
+
+/-- The abandoned wrap-up keeps its claim and stays a GoalSource candidate:
+a later scan with the same evidence writes nothing, and once the evidence
+clears it still publishes nothing. -/
+theorem abandoned_wrapup_claim_stays_inert :
+    let budgetRequest := {request with expectedStatus := .budgetLimited}
+    publishClaimed budgetClaimed budgetRequest malformedWait true =
+        (budgetWrapupAbandoned, .invalidEvidence) ∧
+      publishClaimed budgetWrapupAbandoned budgetRequest malformedWait true =
+        (budgetWrapupAbandoned, .illegal) ∧
+      publishClaimed budgetWrapupAbandoned budgetRequest noWait true =
+        (budgetWrapupAbandoned, .illegal) := by decide
 
 private def outcomeJson : Outcome → String
   | .denied => "denied" | .stale => "stale" | .illegal => "illegal"

@@ -163,17 +163,36 @@ async fn run_generated_running_wait() {
     fixture.node.shutdown().await;
 }
 
+/// Later scans of the same abandoned claim, bound as follow-ups of the
+/// budget wrap-up case rather than as independent fixtures.
+const ABANDONED_RESCAN: &str = "abandoned_wrapup_rescan_makes_no_write";
+const ABANDONED_CLEARED: &str = "abandoned_wrapup_never_publishes_after_evidence_clears";
+
 async fn run_generated_wait_observations() {
     let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let follow_up = |name: &str| {
+        contracts
+            .goal_claimed_publication_cases
+            .iter()
+            .find(|case| case.name == name)
+            .map(|case| (case.expected.clone(), case.outcome.clone()))
+            .expect("generated abandoned wrap-up follow-up")
+    };
+    let (rescan_expected, rescan_outcome) = follow_up(ABANDONED_RESCAN);
+    let (cleared_expected, cleared_outcome) = follow_up(ABANDONED_CLEARED);
+    assert_eq!((rescan_outcome.as_str(), cleared_outcome.as_str()), ("illegal", "illegal"));
     let cases: Vec<_> = contracts
         .goal_claimed_publication_cases
         .into_iter()
         .filter(|case| {
-            case.name == "launched_without_wait_publishes"
-                || (case.observation["waits"] != json!([])
-                    && case.name != "claimed_wait_running_defers")
+            case.name != ABANDONED_RESCAN
+                && case.name != ABANDONED_CLEARED
+                && (case.name == "launched_without_wait_publishes"
+                    || (case.observation["waits"] != json!([])
+                        && case.name != "claimed_wait_running_defers"))
         })
         .collect();
+    let mut abandoned_follow_ups = 0;
     assert_eq!(
         cases.len(),
         22,
@@ -265,6 +284,7 @@ async fn run_generated_wait_observations() {
         let mut handle = "absent-generated-handle".to_owned();
         let mut target_doc = None;
         let mut renamed_wait_doc = None;
+        let mut wait_docs = Vec::new();
         if wants_target {
             let mut spawn = publish_accepted_on_claimed_request(
                 fixture.node.clone(),
@@ -374,6 +394,7 @@ async fn run_generated_wait_observations() {
             .await
             .unwrap();
             terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
+            wait_docs.push(wait.doc_id().unwrap().to_owned());
             if observed_wait["replied"] == false {
                 // Left pending: parent terminalization cancels it with no reply.
                 turn += 1;
@@ -593,12 +614,47 @@ async fn run_generated_wait_observations() {
                     case.name,
                     stopped.last_failure,
                 );
+                if stopped.parsed_status() == Some(GoalStatus::BudgetLimited) {
+                    // The abandoned wrap-up keeps its claim and stays a candidate.
+                    let rescan = |wrapup| {
+                        publish_claimed_continuation(
+                            &fixture.node,
+                            &observed,
+                            PARENT,
+                            "Original signed continuation",
+                            wrapup,
+                        )
+                    };
+                    assert!(rescan(wrapup).await.unwrap().is_none(), "{ABANDONED_RESCAN}");
+                    assert_eq!(fixture.observe().await, rescan_expected, "{ABANDONED_RESCAN}");
+                    let rescanned =
+                        load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
+                            .await
+                            .unwrap()
+                            .unwrap();
+                    assert_eq!(
+                        (&rescanned.updated_at, &rescanned.last_failure),
+                        (&stopped.updated_at, &stopped.last_failure),
+                        "{ABANDONED_RESCAN}: a rescan must not write the Goal again"
+                    );
+                    // Settle every wait so the evidence reads as absent.
+                    for wait_doc in &wait_docs {
+                        execute(&fixture.node, &format!(
+                            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "cancelled" }}) {{ _docID }} }}"#,
+                            escape_graphql_string(wait_doc),
+                        )).await;
+                    }
+                    assert!(rescan(wrapup).await.unwrap().is_none(), "{ABANDONED_CLEARED}");
+                    assert_eq!(fixture.observe().await, cleared_expected, "{ABANDONED_CLEARED}");
+                    abandoned_follow_ups += 1;
+                }
             }
             outcome => panic!("unmapped generated wait outcome {outcome}"),
         }
         assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
         fixture.node.shutdown().await;
     }
+    assert_eq!(abandoned_follow_ups, 1, "the budget wrap-up case drives its follow-up scans");
 }
 
 #[tokio::test]
@@ -615,7 +671,9 @@ async fn run_historical_publication_cases() {
         .goal_claimed_publication_cases
         .into_iter()
         .filter(|case| {
-            case.observation["waits"] == json!([]) && case.name != "launched_without_wait_publishes"
+            case.observation["waits"] == json!([])
+                && case.name != "launched_without_wait_publishes"
+                && case.name != ABANDONED_CLEARED
         })
     {
         assert!(seen.insert(case.name.clone()), "duplicate generated case");
@@ -657,6 +715,7 @@ async fn run_historical_publication_cases() {
             PARENT,
             "Original signed continuation",
             wrapup,
+            &std::sync::Mutex::new(None),
         )
         .await;
         match case.outcome.as_str() {
