@@ -1,5 +1,6 @@
 import Proofs.Goals
 import Proofs.GoalAutomation
+import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 
@@ -547,5 +548,122 @@ def goalContinuationMaterializationCaseJson
 
 def goalContinuationMaterializationCasesJson : String :=
   jsonArray (goalContinuationMaterializationCases.map goalContinuationMaterializationCaseJson)
+
+section ReadinessGate
+
+open GoalAutomation.ReadinessGate
+
+structure GoalReadinessGateCase where
+  name : String
+  observation : Observation
+  settled : Bool
+  cause : Cause
+  input : Input
+
+private def activeInput (terminal : Goals.RequestTerminal) (retries : Nat := 0)
+    (budget : Bool := false) (child : Bool := false) (idle : Bool := true) : Input :=
+  { status := .active, terminal, sessionIdle := idle, childExists := child,
+    budgetReached := budget, hasActivity := true, requestIsWrapup := false, retries,
+    wrapupRequested := false, wrapupCompleted := false }
+
+private def pendingWrapupInput (terminal : Goals.RequestTerminal) (retries : Nat) : Input :=
+  { status := .budgetLimited, terminal, sessionIdle := true, childExists := false,
+    budgetReached := true, hasActivity := true, requestIsWrapup := true, retries,
+    wrapupRequested := true, wrapupCompleted := false }
+
+def goalReadinessGateCases : List GoalReadinessGateCase :=
+  [ { name := "missing_readiness_defers_continuation", observation := .unknown,
+      settled := true, cause := .attempt, input := activeInput .completed }
+  , { name := "backend_recovery_defers_even_when_settled", observation := .backendRecovering,
+      settled := true, cause := .attempt, input := activeInput .completed }
+  , { name := "unsettled_invalid_behavior_defers", observation := .unavailable,
+      settled := false, cause := .attempt, input := activeInput .completed }
+  , { name := "settled_invalid_behavior_stops_active_goal", observation := .unavailable,
+      settled := true, cause := .attempt, input := activeInput .completed }
+  , { name := "settled_unassigned_behavior_stops_active_goal", observation := .unassigned,
+      settled := true, cause := .attempt, input := activeInput .completed }
+  , { name := "ready_completed_attempt_continues_and_clears_retries", observation := .ready true,
+      settled := true, cause := .attempt, input := activeInput .completed 1 }
+  , { name := "readiness_rejection_while_waiting_is_uncharged", observation := .unknown,
+      settled := false, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+  , { name := "readiness_rejection_after_recovery_continues_uncharged", observation := .ready true,
+      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+  , { name := "readiness_rejection_at_exhausted_budget_does_not_pause", observation := .ready true,
+      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 2 }
+  , { name := "readiness_rejection_over_token_budget_requests_wrapup", observation := .ready true,
+      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 true }
+  , { name := "executed_failure_is_charged", observation := .ready true,
+      settled := true, cause := .attempt, input := activeInput .failed 0 }
+  , { name := "executed_failure_exhausts_bound", observation := .ready true,
+      settled := true, cause := .attempt, input := activeInput .dead 2 }
+  , { name := "executed_failure_while_waiting_defers_charge", observation := .backendRecovering,
+      settled := true, cause := .attempt, input := activeInput .failed 0 }
+  , { name := "exhausted_failure_pauses_without_readiness", observation := .unavailable,
+      settled := true, cause := .attempt, input := activeInput .failed 2 }
+  , { name := "readiness_rejected_wrapup_reissues_uncharged", observation := .ready true,
+      settled := true, cause := .behaviorUnavailable, input := pendingWrapupInput .failed 1 }
+  , { name := "settled_unavailable_abandons_pending_wrapup", observation := .unavailable,
+      settled := true, cause := .attempt, input := pendingWrapupInput .failed 0 }
+  , { name := "existing_child_is_never_duplicated", observation := .ready true,
+      settled := true, cause := .behaviorUnavailable,
+      input := activeInput .failed 0 (child := true) }
+  , { name := "stale_readiness_defers_rejection_reissue", observation := .ready false,
+      settled := true, cause := .behaviorUnavailable, input := activeInput .failed 1 }
+  , { name := "stale_readiness_still_decides_an_executed_attempt", observation := .ready false,
+      settled := true, cause := .attempt, input := activeInput .failed 0 }
+  , { name := "busy_session_never_continues", observation := .unavailable,
+      settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
+  ]
+
+def readinessObservationName : Observation → String
+  | .ready _ => "ready"
+  | .backendRecovering => "backend_recovering"
+  | .unavailable => "unavailable"
+  | .unassigned => "unassigned"
+  | .unknown => "unknown"
+
+def readinessName : Readiness → String
+  | .ready => "ready"
+  | .waiting => "waiting"
+  | .unavailable => "unavailable"
+
+def readinessCauseName : Cause → String
+  | .attempt => "attempt"
+  | .behaviorUnavailable => "behavior_unavailable"
+
+def gatedName : Gated → String
+  | .decided decision => decisionName decision
+  | .awaitReadiness => "await_readiness"
+  | .behaviorUnavailable => "behavior_unavailable"
+
+def goalReadinessGateCaseJson (w : GoalReadinessGateCase) : String :=
+  let readiness := observe w.observation w.settled
+  let gated := gate w.observation w.settled w.cause w.input
+  let i := w.input
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"observation\":" ++ jsonString (readinessObservationName w.observation) ++ ","
+    ++ "\"newer_than_terminal\":" ++ boolString w.observation.newerThanTerminal ++ ","
+    ++ "\"settled\":" ++ boolString w.settled ++ ","
+    ++ "\"cause\":" ++ jsonString (readinessCauseName w.cause) ++ ","
+    ++ "\"status\":" ++ jsonString i.status.toDefraDB ++ ","
+    ++ "\"terminal\":" ++ jsonString (terminalName i.terminal) ++ ","
+    ++ "\"session_idle\":" ++ boolString i.sessionIdle ++ ","
+    ++ "\"child_exists\":" ++ boolString i.childExists ++ ","
+    ++ "\"budget_reached\":" ++ boolString i.budgetReached ++ ","
+    ++ "\"has_activity\":" ++ boolString i.hasActivity ++ ","
+    ++ "\"request_is_wrapup\":" ++ boolString i.requestIsWrapup ++ ","
+    ++ "\"infrastructure_retries\":" ++ toString i.retries ++ ","
+    ++ "\"wrapup_requested\":" ++ boolString i.wrapupRequested ++ ","
+    ++ "\"wrapup_completed\":" ++ boolString i.wrapupCompleted ++ ","
+    ++ "\"expected_readiness\":" ++ jsonString (readinessName readiness) ++ ","
+    ++ "\"expected_gate\":" ++ jsonString (gatedName gated) ++ ","
+    ++ "\"expected_retries\":" ++ toString (nextRetries w.cause i gated)
+    ++ "}"
+
+def goalReadinessGateCasesJson : String :=
+  jsonArray (goalReadinessGateCases.map goalReadinessGateCaseJson)
+
+end ReadinessGate
 
 end Conformance.Contracts

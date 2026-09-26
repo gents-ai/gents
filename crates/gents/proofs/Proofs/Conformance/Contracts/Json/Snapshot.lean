@@ -188,6 +188,8 @@ def snapshotJson : String :=
       ++ Conformance.EventGroupContracts.eventGroupCasesJson ++ ","
     ++ "\"goal_decision_cases\":"
       ++ goalDecisionCasesJson ++ ","
+    ++ "\"goal_readiness_gate_cases\":"
+      ++ goalReadinessGateCasesJson ++ ","
     ++ "\"goal_transition_cases\":"
       ++ goalTransitionCasesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","

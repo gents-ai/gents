@@ -13,13 +13,14 @@ use crate::request_lifecycle::RequestLifecycleState;
 
 pub use crate::behavior_readiness::{
     decode_behavior_readiness_snapshot, effective_behavior_readiness_admission,
-    project_behavior_readiness, project_behavior_readiness_source,
-    project_behavior_readiness_summary, AgentBehaviorReadinessRow, BehaviorReadinessEntry,
-    BehaviorReadinessProcessState, BehaviorReadinessProjection, BehaviorReadinessSnapshot,
-    BehaviorReadinessSourceEntry, BehaviorReadinessState, BehaviorReadinessSummary,
-    BehaviorReadinessUnavailableReason, BehaviorReadinessUnknownReason,
-    EffectiveBehaviorReadinessAdmission, ProjectedBehaviorReadiness,
-    ProjectedBehaviorReadinessSummary, BEHAVIOR_READINESS_FORMAT_VERSION,
+    is_behavior_unavailable_rejection, project_behavior_readiness,
+    project_behavior_readiness_source, project_behavior_readiness_summary,
+    AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
+    BehaviorReadinessProjection, BehaviorReadinessSnapshot, BehaviorReadinessSourceEntry,
+    BehaviorReadinessState, BehaviorReadinessSummary, BehaviorReadinessUnavailableReason,
+    BehaviorReadinessUnknownReason, EffectiveBehaviorReadinessAdmission,
+    ProjectedBehaviorReadiness, ProjectedBehaviorReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE,
+    BEHAVIOR_READINESS_FORMAT_VERSION,
 };
 
 pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>

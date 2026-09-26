@@ -98,6 +98,13 @@ source consistency checks, not a separate runtime compatibility version.
   rate limits still retry, after the provider's `Retry-After` rather than a
   fixed 60 seconds, and Goals pause as usage-limited on the same
   classification (#1422).
+- A durable Goal no longer spends its infrastructure retries while its behavior
+  is unavailable. Continuation, including a claimed continuation recovered
+  after a restart, waits for the runtime's behavior readiness and records why
+  it is waiting; a continuation rejected before execution because the behavior
+  was unavailable is re-issued without a charge once readiness is republished;
+  and a behavior that stays unavailable after reconciliation settles pauses the
+  Goal with that reason instead of waiting forever (#1345).
 - CLI integration tests recover from a port taken between allocation and the
   server's bind, instead of failing the run (#1641).
 - A runtime with one permanently invalid behavior it is not using now settles

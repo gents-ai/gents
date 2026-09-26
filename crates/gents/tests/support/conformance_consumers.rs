@@ -462,6 +462,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_decision_cases_fence_runtime_controller",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::goals::generated_goal_readiness_gate_cases_fence_retry_accounting",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/goals.rs",
+            module_path: "conformance::goals",
+            function: "generated_goal_readiness_gate_cases_fence_retry_accounting",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine",
             package: "gents",
             source_path: "crates/gents/tests/conformance/goals.rs",

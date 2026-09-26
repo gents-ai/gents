@@ -35,7 +35,7 @@ impl ReconcilePhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReconcileResult {
+pub(crate) enum ReconcileResult {
     Startup,
     Noop,
     Applied,
@@ -43,7 +43,7 @@ enum ReconcileResult {
 }
 
 impl ReconcileResult {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Startup => "startup",
             Self::Noop => "noop",

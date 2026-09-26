@@ -1,17 +1,31 @@
 use gents::goal::{
-    decide_goal_continuation, decide_model_goal_create, goal_continuation_materialization_step,
-    goal_creation_fingerprint, goal_submission_step, GoalAction, GoalAuditObservation,
-    GoalContinuationAction, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
-    GoalCreationFingerprint, GoalDecision, GoalRequestTerminal, GoalState, GoalStatus,
-    GoalSubmissionAction, GoalSubmissionState,
+    decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
+    goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
+    next_goal_infrastructure_retries, observe_goal_behavior_readiness, GoalAction,
+    GoalAuditObservation, GoalBehaviorObservation, GoalBehaviorReadiness, GoalContinuationAction,
+    GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
+    GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
+    GoalRequestTerminal, GoalState, GoalStatus, GoalSubmissionAction, GoalSubmissionState,
 };
 
 use crate::lean_vocab_test::{
     assert_state_machine_contract_is_complete, lean_goal_continuation_materialization_cases,
-    lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
-    lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
-    lean_vocabulary_values,
+    lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
+    lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
+    lean_task_goal_recovery_cases, lean_vocabulary_values,
 };
+
+fn parse_goal_decision(name: &str) -> Option<GoalDecision> {
+    Some(match name {
+        "none" => GoalDecision::None,
+        "continue" => GoalDecision::Continue,
+        "retry" => GoalDecision::Retry,
+        "pause" => GoalDecision::Pause,
+        "wrapup" => GoalDecision::Wrapup,
+        "abandon_wrapup" => GoalDecision::AbandonWrapup,
+        _ => return None,
+    })
+}
 
 #[test]
 fn rust_goal_status_vocabulary_and_machine_match_lean_contract() {
@@ -49,16 +63,77 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
             case.wrapup_requested,
             case.wrapup_completed,
         );
-        let expected = match case.expected_decision.as_str() {
-            "none" => GoalDecision::None,
-            "continue" => GoalDecision::Continue,
-            "retry" => GoalDecision::Retry,
-            "pause" => GoalDecision::Pause,
-            "wrapup" => GoalDecision::Wrapup,
-            "abandon_wrapup" => GoalDecision::AbandonWrapup,
-            other => panic!("unknown decision {other:?} in Lean case {}", case.name),
-        };
+        let expected = parse_goal_decision(&case.expected_decision).unwrap_or_else(|| {
+            panic!(
+                "unknown decision {:?} in Lean case {}",
+                case.expected_decision, case.name
+            )
+        });
         assert_eq!(actual, expected, "Lean case {}", case.name);
+    }
+}
+
+#[test]
+fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
+    let cases = lean_goal_readiness_gate_cases();
+    assert_eq!(cases.len(), 20, "the goal readiness gate matrix drifted");
+    for case in cases {
+        let observation = match case.observation.as_str() {
+            "ready" => GoalBehaviorObservation::Ready {
+                newer_than_terminal: case.newer_than_terminal,
+            },
+            "backend_recovering" => GoalBehaviorObservation::BackendRecovering,
+            "unavailable" => GoalBehaviorObservation::Unavailable,
+            "unassigned" => GoalBehaviorObservation::Unassigned,
+            "unknown" => GoalBehaviorObservation::Unknown,
+            other => panic!("unknown observation {other:?} in Lean case {}", case.name),
+        };
+        let cause = match case.cause.as_str() {
+            "attempt" => GoalFailureCause::Attempt,
+            "behavior_unavailable" => GoalFailureCause::BehaviorUnavailable,
+            other => panic!("unknown cause {other:?} in Lean case {}", case.name),
+        };
+        let readiness = observe_goal_behavior_readiness(observation, case.settled);
+        let readiness_name = match readiness {
+            GoalBehaviorReadiness::Ready => "ready",
+            GoalBehaviorReadiness::Waiting => "waiting",
+            GoalBehaviorReadiness::Unavailable => "unavailable",
+        };
+        assert_eq!(
+            readiness_name, case.expected_readiness,
+            "Lean case {}",
+            case.name
+        );
+        let facts = GoalContinuationFacts {
+            status: GoalStatus::parse(&case.status)
+                .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name)),
+            terminal: GoalRequestTerminal::parse(&case.terminal)
+                .unwrap_or_else(|| panic!("unknown terminal in Lean case {}", case.name)),
+            session_idle: case.session_idle,
+            child_exists: case.child_exists,
+            budget_reached: case.budget_reached,
+            has_activity: case.has_activity,
+            request_is_wrapup: case.request_is_wrapup,
+            infrastructure_retries: case.infrastructure_retries,
+            wrapup_requested: case.wrapup_requested,
+            wrapup_completed: case.wrapup_completed,
+        };
+        let gated = gate_goal_continuation(observation, case.settled, cause, &facts);
+        let expected = match case.expected_gate.as_str() {
+            "await_readiness" => GoalGatedDecision::AwaitReadiness,
+            "behavior_unavailable" => GoalGatedDecision::BehaviorUnavailable,
+            other => GoalGatedDecision::Decided(
+                parse_goal_decision(other)
+                    .unwrap_or_else(|| panic!("unknown gate {other:?} in Lean case {}", case.name)),
+            ),
+        };
+        assert_eq!(gated, expected, "Lean case {}", case.name);
+        assert_eq!(
+            next_goal_infrastructure_retries(cause, &facts, gated),
+            case.expected_retries,
+            "Lean case {}",
+            case.name
+        );
     }
 }
 

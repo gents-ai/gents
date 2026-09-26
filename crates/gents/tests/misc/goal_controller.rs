@@ -231,7 +231,84 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     })
 }
 
-fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+/// Publish the runtime-authored readiness row GoalSource consumes, with the
+/// router aligned on `generation`.
+async fn publish_behavior_readiness(
+    db: &TestDb,
+    process_state: gents_protocol::row::BehaviorReadinessProcessState,
+    behavior: Option<gents_protocol::row::BehaviorReadinessUnavailableReason>,
+) {
+    use gents_protocol::row::{
+        BehaviorReadinessEntry, BehaviorReadinessSnapshot, BehaviorReadinessState,
+        BEHAVIOR_READINESS_FORMAT_VERSION,
+    };
+    let snapshot = BehaviorReadinessSnapshot {
+        format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+        process_state,
+        active_generation: 1,
+        router_generation: 1,
+        default_behavior_id: crate::support::AGENT_NAME.to_string(),
+        behaviors: vec![BehaviorReadinessEntry {
+            behavior_id: crate::support::AGENT_NAME.to_string(),
+            state: if behavior.is_some() {
+                BehaviorReadinessState::Unavailable
+            } else {
+                BehaviorReadinessState::Ready
+            },
+            reason: behavior,
+        }],
+    };
+    let did = gents::graphql::escape_graphql_string(db.node_identity.did());
+    let snapshot_json =
+        gents::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ upsert_AgentBehaviorReadiness(
+                filter: {{ agent_did: {{ _eq: "{did}" }} }},
+                add: {{ agent_did: "{did}", snapshot_json: "{snapshot_json}", updated_at: "{updated_at}" }},
+                update: {{ snapshot_json: "{snapshot_json}", updated_at: "{updated_at}" }}
+            ) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "publish behavior readiness: {:?}",
+        response.errors
+    );
+}
+
+async fn publish_reconcile_phase(db: &TestDb, phase: &str) {
+    let did = gents::graphql::escape_graphql_string(db.node_identity.did());
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ upsert_AgentRuntime(
+                filter: {{ agent_did: {{ _eq: "{did}" }} }},
+                add: {{ agent_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied" }},
+                update: {{ reconcile_phase: "{phase}", last_reconcile_result: "applied" }}
+            ) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "publish reconcile phase: {:?}",
+        response.errors
+    );
+}
+
+async fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+    publish_behavior_readiness(
+        db,
+        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        None,
+    )
+    .await;
+    unready_source(db)
+}
+
+fn unready_source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     let (tx, rx) = watch::channel(snapshot(db.node_identity.did()));
     let subscriptions: Arc<dyn UpdateSubscriptionSource> =
         Arc::new(MockUpdateSubscriptionSource::new());
@@ -494,7 +571,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     .await
     .expect("set goal");
 
-    let (mut source, _tx) = source(&db);
+    let (mut source, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("lineage continuation timed out")
@@ -523,7 +600,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
             .await
             .unwrap();
         assert_eq!(recovered.requests_recovered, 0);
-        let (mut restarted, _restart_tx) = self::source(&db);
+        let (mut restarted, _restart_tx) = self::source(&db).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
                 .await
@@ -589,7 +666,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
         .expect("set delimiter goal");
     }
 
-    let (mut source, _tx) = source(&db);
+    let (mut source, _tx) = source(&db).await;
     for _ in 0..2 {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
@@ -620,7 +697,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out")
@@ -694,7 +771,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     )
     .await;
 
-    let (mut source, _tx) = source(&db);
+    let (mut source, _tx) = source(&db).await;
     let fired = tokio::time::timeout(Duration::from_secs(2), source.next_fire()).await;
     if !matches!(fired, Ok(Some(_))) {
         let state = db
@@ -758,7 +835,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
         response.errors
     );
 
-    let (mut source, _tx) = source(&db);
+    let (mut source, _tx) = source(&db).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
@@ -783,14 +860,14 @@ async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
     .await
     .expect("set goal");
 
-    let (mut first, _first_tx) = source(&db);
+    let (mut first, _first_tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), first.next_fire())
         .await
         .expect("first source timed out")
         .expect("first continuation");
     drop(first);
 
-    let (mut restarted, _restart_tx) = source(&db);
+    let (mut restarted, _restart_tx) = source(&db).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
             .await
@@ -821,7 +898,7 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     );
     assert!(goal_children(&db).await.is_empty());
 
-    let (mut restarted, _restart_tx) = source(&db);
+    let (mut restarted, _restart_tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
         .await
         .expect("recovery source timed out")
@@ -849,7 +926,7 @@ async fn restart_materializes_claimed_retry_without_charging_it_twice() {
             .expect("atomically charge and claim retry")
     );
 
-    let (mut restarted, _tx) = source(&db);
+    let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
         .await
         .expect("retry recovery timed out")
@@ -886,7 +963,7 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     .await
     .expect("atomically charge and claim wrap-up retry"));
 
-    let (mut restarted, _tx) = source(&db);
+    let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
         .await
         .expect("wrap-up retry recovery timed out")
@@ -1409,7 +1486,7 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(150), source.next_fire())
             .await
@@ -1445,7 +1522,7 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(150), source.next_fire())
             .await
@@ -1636,7 +1713,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 
         // A restart while this wrapup is pending must not publish another child
         // or charge an ordinary infrastructure retry for the failed parent.
-        let (mut restarted, _restart_tx) = self::source(&db);
+        let (mut restarted, _restart_tx) = self::source(&db).await;
         let restarted_fire =
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire()).await;
         assert!(
@@ -1727,7 +1804,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out")
@@ -1778,7 +1855,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
                 .expect("repeat lease recovery");
         assert_eq!(recovered.requests_recovered, 0);
         assert_eq!(recovered.responses_recovered, 0);
-        let (mut restarted, _restart_tx) = self::source(&db);
+        let (mut restarted, _restart_tx) = self::source(&db).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
                 .await
@@ -1907,7 +1984,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
@@ -1963,7 +2040,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         response.errors
     );
 
-    let (mut source, _snapshot_tx) = source(&db);
+    let (mut source, _snapshot_tx) = source(&db).await;
     for expected_children in 1..=3 {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
@@ -2978,7 +3055,7 @@ async fn goal_source_continues_same_second_child_that_sorts_before_root() {
     for parent_id in ["graph-parent", "task-goal-request:parent"] {
         let db = test_db(&format!("goal-head-order-{}", parent_id.replace(':', "-"))).await;
         let (child_id, _) = seed_same_second_canonical_goal_child(&db, parent_id, false).await;
-        let (mut controller, _snapshot_tx) = source(&db);
+        let (mut controller, _snapshot_tx) = source(&db).await;
         let intent = tokio::time::timeout(Duration::from_secs(2), controller.next_fire())
             .await
             .expect("causal child must not be hidden by lexical root ordering")
@@ -3036,4 +3113,363 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         assert_eq!(goal.continuation_sequence(), 2);
         assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     }
+}
+
+async fn canonical_goal_json(db: &TestDb) -> serde_json::Value {
+    serde_json::to_value(
+        load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+/// Routing's pre-claim rejection: terminal without an execution generation.
+async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
+    let doc_id = gents::graphql::escape_graphql_string(doc_id);
+    let reason = gents::graphql::escape_graphql_string(reason);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "pending" }} }},
+                input: {{ lifecycle_state: "failed", failure_reason: "{reason}", terminalized_at: "{}" }}
+            ) {{ _docID execution_generation }} }}"#,
+            chrono::Utc::now().to_rfc3339()
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "reject goal child: {:?}",
+        response.errors
+    );
+    let rows = response.data.unwrap()["update_AgentRequest"].clone();
+    assert_eq!(rows.as_array().map(Vec::len), Some(1), "{rows}");
+    assert!(rows[0]["execution_generation"].is_null());
+}
+
+#[tokio::test]
+async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charge() {
+    use gents_protocol::row::{
+        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+    };
+    let db = test_db("goal-readiness-wait").await;
+    seed_completed_request(&db, "parent-waits-for-readiness").await;
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Wait for the behavior instead of spending retries"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    publish_behavior_readiness(&db, Process::Recovering, None).await;
+    publish_reconcile_phase(&db, "idle").await;
+    let before = canonical_goal_json(&db).await;
+    let (mut source, _tx) = unready_source(&db);
+
+    for (process, reason, phase) in [
+        (Process::Recovering, None, "idle"),
+        (
+            Process::Ready,
+            Some(Reason::RuntimeConfigurationInvalid),
+            "debouncing",
+        ),
+        (
+            Process::Ready,
+            Some(Reason::BackendTemporarilyUnavailable),
+            "idle",
+        ),
+    ] {
+        publish_behavior_readiness(&db, process, reason).await;
+        publish_reconcile_phase(&db, phase).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+                .await
+                .is_err(),
+            "{process:?}/{reason:?}/{phase}: an unready behavior must not receive a continuation"
+        );
+        let waiting = canonical_goal_json(&db).await;
+        assert!(
+            waiting["last_failure"]
+                .as_str()
+                .is_some_and(|reason| reason.starts_with(gents::goal::GOAL_READINESS_WAIT_PREFIX)),
+            "{process:?}/{reason:?}/{phase}: the wait must be recorded: {waiting}"
+        );
+        for field in [
+            "status",
+            "continuation_sequence",
+            "infrastructure_retry_count",
+            "tokens_used",
+        ] {
+            assert_eq!(
+                waiting[field], before[field],
+                "{process:?}/{reason:?}/{phase}: {field}"
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            canonical_goal_json(&db).await,
+            waiting,
+            "{process:?}/{reason:?}/{phase}: an unchanged wait must not rewrite the Goal"
+        );
+        assert!(goal_children(&db).await.is_empty());
+    }
+
+    publish_behavior_readiness(&db, Process::Ready, None).await;
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after readiness recovered")
+        .expect("goal continuation intent");
+    let children = goal_children(&db).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].session_id, SESSION);
+    assert_eq!(
+        children[0].behavior_id.as_deref(),
+        Some(crate::support::AGENT_NAME)
+    );
+    assert_eq!(
+        children[0].caused_by_parent_request_id.as_deref(),
+        Some("parent-waits-for-readiness")
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(goal.continuation_sequence(), 1);
+    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert_eq!(goal.last_failure, None);
+
+    drop(source);
+    let (mut restarted, _restart_tx) = self::source(&db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
+            .await
+            .is_err(),
+        "restart must not duplicate the recovered continuation"
+    );
+    assert_eq!(goal_children(&db).await.len(), 1);
+}
+
+#[tokio::test]
+async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
+    use gents_protocol::row::{
+        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+    };
+    let db = test_db("goal-readiness-race").await;
+    seed_completed_request(&db, "parent-before-race").await;
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Survive readiness races"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    let (mut source, _tx) = source(&db).await;
+
+    // More consecutive races than the infrastructure retry budget allows.
+    for round in 1..=(gents::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
+        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .unwrap_or_else(|_| panic!("round {round}: goal source timed out"))
+            .expect("goal continuation intent");
+        let children = goal_children(&db).await;
+        assert_eq!(children.len(), round);
+        let pending = children
+            .iter()
+            .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
+            .expect("pending goal child");
+        assert_eq!(
+            pending.input.as_ref().unwrap()["goal_continuation"]["wrapup"],
+            false
+        );
+
+        publish_behavior_readiness(
+            &db,
+            Process::Ready,
+            Some(Reason::RuntimeConfigurationInvalid),
+        )
+        .await;
+        publish_reconcile_phase(&db, "debouncing").await;
+        reject_before_claim(
+            &db,
+            &pending.doc_id,
+            Reason::RuntimeConfigurationInvalid.public_message(),
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+                .await
+                .is_err(),
+            "round {round}: a rejected child must wait for readiness"
+        );
+        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            goal.parsed_status(),
+            Some(GoalStatus::Active),
+            "round {round}"
+        );
+        assert_eq!(
+            goal.infrastructure_retry_count.unwrap_or_default(),
+            0,
+            "round {round}"
+        );
+        publish_behavior_readiness(&db, Process::Ready, None).await;
+        publish_reconcile_phase(&db, "idle").await;
+    }
+
+    // Readiness that still says Ready from before a rejection (lagging or
+    // failing publication) must not re-issue: only a later write can.
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after the final race")
+        .expect("goal continuation intent");
+    let children = goal_children(&db).await;
+    let pending = children
+        .iter()
+        .find(|child| child.lifecycle_state.as_deref() == Some("pending"))
+        .expect("pending goal child");
+    reject_before_claim(
+        &db,
+        &pending.doc_id,
+        Reason::RuntimeConfigurationInvalid.public_message(),
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err(),
+        "stale readiness must not re-issue a rejected child"
+    );
+    assert_eq!(goal_children(&db).await.len(), children.len());
+    let waiting = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert!(waiting
+        .last_failure
+        .as_deref()
+        .is_some_and(|reason| reason.contains("not been republished since its rejection")));
+    publish_behavior_readiness(&db, Process::Ready, None).await;
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after readiness was republished")
+        .expect("goal continuation intent");
+    assert_eq!(goal_children(&db).await.len(), children.len() + 1);
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert_eq!(goal.last_failure, None);
+}
+
+#[tokio::test]
+async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
+    use gents_protocol::row::{
+        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+    };
+    let db = test_db("goal-readiness-settled").await;
+    seed_completed_request(&db, "parent-invalid-behavior").await;
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Report a permanently invalid behavior"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    publish_behavior_readiness(
+        &db,
+        Process::Ready,
+        Some(Reason::RuntimeConfigurationInvalid),
+    )
+    .await;
+    publish_reconcile_phase(&db, "idle").await;
+    let (mut source, _tx) = unready_source(&db);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err()
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::Paused));
+    assert_eq!(
+        goal.last_failure.as_deref(),
+        Some("behavior test is unavailable: runtime configuration is invalid")
+    );
+    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
+    assert_eq!(goal.continuation_sequence(), 0);
+    assert!(goal_children(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn claimed_continuation_waits_for_readiness_before_materializing() {
+    use gents_protocol::row::BehaviorReadinessProcessState as Process;
+    let db = test_db("goal-claimed-readiness").await;
+    seed_completed_request(&db, "parent-claimed-waits").await;
+    let goal = set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Hold a durable claim until the behavior is ready"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    assert!(
+        claim_continuation(db.node.as_ref(), &goal, "parent-claimed-waits")
+            .await
+            .expect("claim continuation")
+    );
+    publish_behavior_readiness(&db, Process::Recovering, None).await;
+    let claimed = canonical_goal_json(&db).await;
+    let (mut source, _tx) = unready_source(&db);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err(),
+        "a claimed child must not be published to an unready behavior"
+    );
+    assert!(goal_children(&db).await.is_empty());
+    assert_eq!(
+        canonical_goal_json(&db).await,
+        claimed,
+        "waiting must leave the durable claim untouched"
+    );
+
+    publish_behavior_readiness(&db, Process::Ready, None).await;
+    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("goal source timed out after readiness recovered")
+        .expect("claimed continuation");
+    let children = goal_children(&db).await;
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].caused_by_parent_request_id.as_deref(),
+        Some("parent-claimed-waits")
+    );
 }

@@ -598,6 +598,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::goals::generated_goal_decision_cases_fence_runtime_controller")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_readiness_gate_cases"
+      "GoalReadinessGateCases"
+      "conformance::goals::generated_goal_readiness_gate_cases_fence_retry_accounting")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_transition_cases"
       "GoalTransitionCases"
       "conformance::goals::generated_goal_transition_cases_fence_runtime_state_machine")

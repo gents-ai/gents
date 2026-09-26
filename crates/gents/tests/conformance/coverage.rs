@@ -4,9 +4,10 @@ use crate::lean_vocab_test::{
     lean_canonical_output_projection_cases, lean_canonical_payload_presentation_cases,
     lean_canonical_spawned_target_rejection_cases, lean_canonical_worker_capacity_cases,
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
-    lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
-    lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
-    lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
+    lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
+    lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
+    lean_task_goal_recovery_cases, lean_terminal_diagnostic_presentation_cases,
+    lean_terminal_diagnostic_replay_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
@@ -1372,6 +1373,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "goal_decision_cases".to_string(),
             "GoalDecisionCases".to_string(),
+        ));
+    }
+    if !lean_goal_readiness_gate_cases().is_empty() {
+        emitted.insert((
+            "goal_readiness_gate_cases".to_string(),
+            "GoalReadinessGateCases".to_string(),
         ));
     }
     if !lean_goal_transition_cases().is_empty() {
