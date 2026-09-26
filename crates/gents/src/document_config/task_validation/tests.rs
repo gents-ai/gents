@@ -98,6 +98,8 @@ fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
             "{% if doc.urgent %}{{ now() }}{% endif %}",
             "{{ doc.items | map('nosuchfilter') }}",
             "{% if doc.urgent %}{{ doc.rows | selectattr('id', 'nosuchtest') }}{% endif %}",
+            "{{ doc.rows | select('nosuchtest', doc.threshold) }}",
+            "{{ doc.items | map('nosuchfilter', doc.extra) }}",
         ] {
             let error = task(field, template)
                 .validate()
@@ -126,7 +128,8 @@ fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
         "prompt_template",
         "{{ doc.customer.name | upper }} {{ args.mode | default('review') }} \
          {{ event.correlation }} {{ node.behavior_id }} at {{ ctx.now }}\
-         {% for row in group.docs %} {{ row.title | default('untitled') }}{% endfor %}",
+         {% for row in group.docs %} {{ row.title | default('untitled') }}{% endfor %}\
+         {{ doc.rows | select(args.test_name, doc.threshold) | list }}",
     )
     .validate()
     .unwrap();

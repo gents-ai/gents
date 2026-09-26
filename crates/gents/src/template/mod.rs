@@ -281,18 +281,22 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
 /// `map` resolves a filter, and the `select`/`reject` family a test, from a
 /// string argument while rendering: the only names the engine looks up from a
 /// value rather than from the source. The lookup runs before the piped value is
-/// iterated, so an undefined input does not spare it, and no other builtin
-/// reads an argument as a name.
+/// iterated or any other argument is used, so an undefined input or a dynamic
+/// later argument does not spare it, and no other builtin reads an argument as
+/// a name.
 ///
 /// A keyword argument carries no name - `map(attribute=...)` looks an attribute
 /// up instead - and an argument list too short to hold the name leaves the
 /// builtin nothing to resolve.
 ///
-/// The filter pops the piped value and then one value per argument, each of
-/// which its expression pushes exactly once, so a run of that many constants
-/// ending at the filter pushed the arguments themselves, in order. A conditional
-/// argument compiles a constant per branch and its false branch ends the run, so
-/// `map('a' if c else 'b')` is judged on `b` alone.
+/// The filter pops the piped value and then one value per argument, each
+/// pushed by its own complete expression in source order, so the arguments
+/// after the name are the shortest run of instructions ending at the filter
+/// that pushes exactly that many values. The name is the argument ending just
+/// before that run, and it is a name only when it is a single string constant
+/// that no jump bypasses: a conditional or short-circuit name compiles to a
+/// branch, so which constant reaches the lookup depends on invocation values
+/// and the name is left to fire time.
 fn name_argument(
     instructions: &Instructions<'_>,
     filter_index: u32,
@@ -306,22 +310,132 @@ fn name_argument(
         _ => return None,
     };
     let arguments = u32::from(arguments?).checked_sub(1)?;
-    if arguments < position {
+    let trailing = arguments.checked_sub(position)?;
+    let jumps: Vec<(u32, u32)> = (0..)
+        .map_while(|index| {
+            instructions
+                .get(index)
+                .map(|instruction| (index, instruction))
+        })
+        .filter_map(|(index, instruction)| Some((index, jump_target(instruction)?)))
+        .collect();
+    // A jump from outside `region..filter_index` landing at or after `first`
+    // lets control reach the filter without running the region in order.
+    let entered_from_outside = |region: u32, first: u32| {
+        jumps.iter().any(|&(at, target)| {
+            !(region..filter_index).contains(&at) && (first..=filter_index).contains(&target)
+        })
+    };
+    let trailing_start = (0..=filter_index).rev().find(|&start| {
+        expression_values(instructions, start, filter_index) == Some(trailing)
+            && !entered_from_outside(start, start + 1)
+    })?;
+    let name_index = trailing_start.checked_sub(1)?;
+    let Some(Instruction::LoadConst(value)) = instructions.get(name_index) else {
+        return None;
+    };
+    if entered_from_outside(name_index, name_index) {
         return None;
     }
-    let first = filter_index.checked_sub(arguments)?;
-    let mut resolved = None;
-    for offset in 0..arguments {
-        match instructions.get(first + offset) {
-            Some(Instruction::LoadConst(value)) => {
-                if offset + 1 == position {
-                    resolved = value.as_str().map(str::to_string);
+    let name = value.as_str()?.to_string();
+    Some((use_site, name))
+}
+
+/// How many values the instructions in `start..end` leave on the stack when
+/// they run as self-contained expression code: `None` when they consume a
+/// value pushed before `start`, jump outside `start..=end`, disagree on the
+/// stack height where branches join, or contain anything but expression
+/// instructions with a fixed stack effect.
+fn expression_values(instructions: &Instructions<'_>, start: u32, end: u32) -> Option<u32> {
+    let mut joins: Vec<(u32, u32)> = Vec::new();
+    let mut height = Some(0u32);
+    for index in start..end {
+        height = join_height(height, &joins, index)?;
+        let depth = height?;
+        let instruction = instructions.get(index)?;
+        let (pops, pushes, jump_keeps) = match instruction {
+            Instruction::LoadConst(_) | Instruction::Lookup(_) => (0, 1, None),
+            Instruction::GetAttr(_) | Instruction::Not | Instruction::Neg => (1, 1, None),
+            Instruction::GetItem
+            | Instruction::Add
+            | Instruction::Sub
+            | Instruction::Mul
+            | Instruction::Div
+            | Instruction::IntDiv
+            | Instruction::Rem
+            | Instruction::Pow
+            | Instruction::Eq
+            | Instruction::Ne
+            | Instruction::Gt
+            | Instruction::Gte
+            | Instruction::Lt
+            | Instruction::Lte
+            | Instruction::StringConcat
+            | Instruction::In => (2, 1, None),
+            Instruction::Slice => (4, 1, None),
+            Instruction::CompareAndPreserve(_) | Instruction::Swap => (2, 2, None),
+            Instruction::DupTop => (1, 2, None),
+            Instruction::DiscardTop => (1, 0, None),
+            Instruction::BuildMap(pairs) | Instruction::BuildKwargs(pairs) => {
+                (u32::try_from(*pairs).ok()?.checked_mul(2)?, 1, None)
+            }
+            Instruction::MergeKwargs(count) | Instruction::BuildList(Some(count)) => {
+                (u32::try_from(*count).ok()?, 1, None)
+            }
+            Instruction::UnpackList(count) => (1, u32::try_from(*count).ok()?, None),
+            Instruction::ApplyFilter(_, Some(count), _)
+            | Instruction::PerformTest(_, Some(count), _)
+            | Instruction::CallFunction(_, Some(count))
+            | Instruction::CallMethod(_, Some(count))
+            | Instruction::CallObject(Some(count)) => (u32::from(*count), 1, None),
+            Instruction::JumpIfFalse(target) => (1, 0, Some((*target, depth.checked_sub(1)?))),
+            Instruction::JumpIfFalseOrPop(target) | Instruction::JumpIfTrueOrPop(target) => {
+                (1, 0, Some((*target, depth)))
+            }
+            Instruction::Jump(target) => {
+                joins.push((*target, depth));
+                if !(index + 1..=end).contains(target) {
+                    return None;
                 }
+                height = None;
+                continue;
             }
             _ => return None,
+        };
+        if let Some((target, kept)) = jump_keeps {
+            if !(index + 1..=end).contains(&target) {
+                return None;
+            }
+            joins.push((target, kept));
+        }
+        height = Some(depth.checked_sub(pops)?.checked_add(pushes)?);
+    }
+    join_height(height, &joins, end)?
+}
+
+/// The stack height at `index`, joining the fall-through height with every
+/// jump into it; `Some(None)` when nothing reaches it and `None` when the
+/// arriving heights disagree.
+fn join_height(fall_through: Option<u32>, joins: &[(u32, u32)], index: u32) -> Option<Option<u32>> {
+    let mut height = fall_through;
+    for &(_, arriving) in joins.iter().filter(|(target, _)| *target == index) {
+        match height {
+            Some(existing) if existing != arriving => return None,
+            _ => height = Some(arriving),
         }
     }
-    resolved.map(|name| (use_site, name))
+    Some(height)
+}
+
+fn jump_target(instruction: &Instruction<'_>) -> Option<u32> {
+    match instruction {
+        Instruction::Jump(target)
+        | Instruction::JumpIfFalse(target)
+        | Instruction::JumpIfFalseOrPop(target)
+        | Instruction::JumpIfTrueOrPop(target)
+        | Instruction::Iterate(target) => Some(*target),
+        _ => None,
+    }
 }
 
 /// Names a call resolves to without the environment providing them: the VM

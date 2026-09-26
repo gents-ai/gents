@@ -376,9 +376,16 @@ fn authoring_accepts_a_name_argument_admission_cannot_decide() {
         // resolving it, so an absent name is their result, not a failure.
         "{% if 'nosuchfilter' is filter %}yes{% endif %}",
         "{% if 'nosuchtest' is test %}yes{% endif %}",
-        // A conditional argument compiles both values and is judged on the one
-        // its false branch pushes.
+        "{{ doc.rows | select(doc.test_name, doc.threshold) }}",
+        "{{ doc.rows | selectattr('id', args.test, 3) }}",
+        // A conditional or short-circuit name reaches the lookup as whichever
+        // constant the invocation selects, in either branch order.
         "{{ doc.items | map('nosuchfilter' if doc.conditional else 'lower') }}",
+        "{{ doc.items | map('lower' if doc.conditional else 'nosuchfilter') }}",
+        "{{ doc.rows | select(doc.test_name or 'nosuchtest', doc.threshold) }}",
+        "{{ doc.rows | select('nosuchtest' if doc.conditional else 'gt', doc.threshold) }}",
+        // Named arguments after a registered name carry no name themselves.
+        "{{ doc.rows | selectattr('id', 'gt', doc.threshold if doc.strict else 0) }}",
     ] {
         check_template_vocabulary(template).expect(template);
     }
@@ -398,13 +405,80 @@ fn authoring_accepts_a_call_on_every_name_the_render_scope_resolves() {
 }
 
 #[test]
-fn authoring_judges_a_conditional_name_argument_on_its_false_branch() {
-    let error = check_template_vocabulary(
-        "{{ doc.items | map('lower' if doc.conditional else 'toyaml') }}",
-    )
-    .unwrap_err();
-    assert!(
-        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "toyaml"),
-        "{error}"
-    );
+fn authoring_rejects_a_constant_name_argument_followed_by_dynamic_arguments() {
+    // The builtin resolves its name argument before it uses any later one, so a
+    // dynamic value after the name does not make the name value-dependent.
+    for (template, kind, unknown) in [
+        (
+            "{{ doc.rows | select('nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter', doc.extra) }}",
+            "filter",
+            "nosuchfilter",
+        ),
+        (
+            "{{ doc.rows | reject('nosuchtest', doc.threshold + 1) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | selectattr('id', 'nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | rejectattr(doc.field, 'nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | select('nosuchtest', doc.a if doc.flag else doc.b) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter', doc.extra | default(1), key=doc.k) }}",
+            "filter",
+            "nosuchfilter",
+        ),
+        (
+            "{{ doc.rows | select('nosuchtest', doc.a < doc.b < doc.c) }}",
+            "test",
+            "nosuchtest",
+        ),
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind: found, name } if *found == kind && name == unknown),
+            "{template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn conditional_name_arguments_that_admission_defers_render_for_their_invocations() {
+    for (template, flag) in [
+        (
+            "{{ doc.items | map('lower' if doc.flag else 'nosuchfilter') | join(',') }}",
+            true,
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter' if doc.flag else 'lower') | join(',') }}",
+            false,
+        ),
+    ] {
+        check_template_vocabulary(template).expect(template);
+        let scope = TemplateScope {
+            event: serde_json::Value::Null,
+            doc: Some(serde_json::json!({ "items": ["A", "B"], "flag": flag })),
+            args: None,
+            group: None,
+            node: serde_json::Value::Null,
+            ctx: serde_json::Value::Null,
+        };
+        assert_eq!(render_template(template, &scope).expect(template), "a,b");
+    }
 }
