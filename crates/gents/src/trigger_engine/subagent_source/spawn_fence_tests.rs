@@ -624,7 +624,7 @@ async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
                 "test.spawn_claim_foreign_parent",
                 &format!(
                     r#"mutation {{ create_AgentRequest(input: {{
-                        request_id: "{}", agent_did: "{claimant_did}", behavior_id: "{BEHAVIOR_ID}",
+                        request_id: "{}", agent_did: "{}", behavior_id: "{}",
                         session_id: "foreign-session", content: "claimant",
                         lifecycle_state: "pending", created_at: "2026-09-25T14:35:00Z",
                         subagent_depth: 1,
@@ -633,7 +633,11 @@ async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
                         caused_by_parent_tool_call_id: "{}",
                         caused_by_parent_tool_call_doc_id: "{}"
                     }}) {{ _docID }} }}"#,
-                    fixture.child_id, fixture.tool_call_id, fixture.bridge_doc_id
+                    escape_graphql_string(&fixture.child_id),
+                    escape_graphql_string(&claimant_did),
+                    escape_graphql_string(BEHAVIOR_ID),
+                    escape_graphql_string(&fixture.tool_call_id),
+                    escape_graphql_string(&fixture.bridge_doc_id)
                 ),
             )
             .await
@@ -643,7 +647,7 @@ async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
             .node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                fixture.child_id,
+                escape_graphql_string(&fixture.child_id),
                 crate::watcher::AGENT_REQUEST_FIELDS
             ))
             .await;
@@ -682,7 +686,8 @@ async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
         let response = fixture
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{claimant_doc_id}" }} }}) {{ lifecycle_state }} }}"#
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                escape_graphql_string(&claimant_doc_id)
             ))
             .await;
         let lifecycle_state = &response.data.unwrap()["AgentRequest"][0]["lifecycle_state"];
