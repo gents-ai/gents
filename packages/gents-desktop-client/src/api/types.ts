@@ -22,7 +22,6 @@ import type {
   BehaviorDeleteRequest,
   ContextDeleteRequest,
   BehaviorSaveRequest,
-  CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
   ClaudeLoginResult,
@@ -30,8 +29,7 @@ import type {
   DesktopClientSnapshot,
   EnrollmentRequestView,
   DesktopInterruptRequestRequest,
-  DesktopListSubagentTreeRequest,
-  DesktopPreviewInterruptCascadeRequest,
+  DesktopSessionProvenanceRequest,
   DesktopSessionSnapshot,
   SessionRenameRequest,
   SessionLiveDeltaView,
@@ -53,7 +51,7 @@ import type {
   ScheduleSaveRequest,
   SkillDeleteRequest,
   SkillSaveRequest,
-  SubagentTreeView,
+  SessionProvenanceView,
   TaskDeleteRequest,
   TaskRunRequest,
   TaskRunResult,
@@ -288,18 +286,15 @@ export type DesktopApiAdapter = {
     request: TriggerSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   runTask: (request: TaskRunRequest) => Promise<TaskRunResult>;
-  listSubagentTree: (
-    request: DesktopListSubagentTreeRequest,
-  ) => Promise<SubagentTreeView>;
+  sessionProvenance: (
+    request: DesktopSessionProvenanceRequest,
+  ) => Promise<SessionProvenanceView>;
   listBackendsWithHealth: () => Promise<BackendHealth[]>;
   listMcpServicesWithHealth: () => Promise<MCPServiceHealthView[]>;
   probeMcpService: (serviceId: string) => Promise<McpServiceProbeResult>;
   fetchOperationsSnapshot: (
     request: DesktopOperationsSnapshotRequest,
   ) => Promise<DesktopOperationsSnapshot>;
-  previewInterruptCascade: (
-    request: DesktopPreviewInterruptCascadeRequest,
-  ) => Promise<CascadeCancelPreview>;
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;

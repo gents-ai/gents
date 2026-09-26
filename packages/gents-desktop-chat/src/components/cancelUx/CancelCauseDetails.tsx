@@ -14,7 +14,6 @@ const CAUSE_LABELS: Record<DerivedCancelCauseView["cause"], string> = {
 
 const SOURCE_LABELS: Record<DerivedCancelCauseView["source"], string> = {
   requestInterrupt: "a direct interrupt on this request",
-  parentCascade: "a cascade from the parent request",
   deadline: "the runtime deadline",
   toolLifecycle: "the tool's lifecycle",
   requestLifecycle: "the request's lifecycle state",

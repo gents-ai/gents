@@ -1,7 +1,6 @@
 import type { DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
-  CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
   DesktopClientSnapshot,
@@ -17,7 +16,7 @@ import type {
   NetworkStatusView,
   RequestResendResult,
   RequestTimelineView,
-  SubagentTreeView,
+  SessionProvenanceView,
   TaskRunResult,
   ToolServiceTestResult,
   ToolSurfaceExplanationView,
@@ -319,8 +318,8 @@ export function createDesktopApiAdapter(
       }),
     runTask: (request) =>
       invokeDesktop<TaskRunResult>("desktop_task_run", { request }),
-    listSubagentTree: (request) =>
-      invokeDesktop<SubagentTreeView>("desktop_list_subagent_tree", {
+    sessionProvenance: (request) =>
+      invokeDesktop<SessionProvenanceView>("desktop_session_provenance", {
         request,
       }),
     listBackendsWithHealth: () =>
@@ -335,10 +334,6 @@ export function createDesktopApiAdapter(
       }),
     fetchOperationsSnapshot: (request) =>
       invokeDesktop<DesktopOperationsSnapshot>("desktop_operations_snapshot", {
-        request,
-      }),
-    previewInterruptCascade: (request) =>
-      invokeDesktop<CascadeCancelPreview>("desktop_preview_interrupt_cascade", {
         request,
       }),
     interruptRequest: (request) =>
