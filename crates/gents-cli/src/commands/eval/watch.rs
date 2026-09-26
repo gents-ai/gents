@@ -32,11 +32,17 @@ pub(crate) enum Documents<'a> {
     Locked(String),
 }
 
-/// Whether `error` is the embedded store refusing a second opener: another
-/// process (or this one) holds its directory lock. The texts are regolith's
-/// (`env/db_lock.rs`), which reaches here only as text through the node
-/// builder's error.
+/// Whether `error` is the store refusing a second opener: another process
+/// (or this one) holds it.
+///
+/// A refusal reaches here typed when the home's own store claim caught it
+/// first. The texts are regolith's (`env/db_lock.rs`) and cover the openers
+/// that reach the backend without that claim; they arrive only as text
+/// through the node builder's error.
 pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
+    if error.downcast_ref::<gents::home::StoreLockHeld>().is_some() {
+        return true;
+    }
     const LOCKED: [&str; 2] = [
         "database directory is already locked for read-write access",
         "database directory is already open in this process",
@@ -692,6 +698,27 @@ mod tests {
         );
         let failed = reopen(|| async { Err(uninitialized) }).await;
         assert!(failed.is_err(), "any other failure is the watch's");
+    }
+
+    #[tokio::test]
+    async fn the_homes_own_store_claim_degrades_the_watch() {
+        // The claim refuses before the backend does, so the refusal reaches
+        // the watch typed rather than as regolith's text.
+        let held = anyhow::Error::new(gents::home::StoreLockHeld {
+            home: std::path::PathBuf::from("/h"),
+            holder_pid: Some(4321),
+        });
+        assert!(store_locked(&held));
+        assert!(
+            !format!("{held:#}").contains("already locked"),
+            "the typed refusal is not recognized by regolith's text"
+        );
+
+        let degraded = reopen(|| async { Err(held) }).await.unwrap();
+        assert!(
+            matches!(&degraded, Documents::Locked(reason) if reason.contains("process 4321")),
+            "the reason names the holder"
+        );
     }
 
     #[test]

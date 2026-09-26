@@ -1016,13 +1016,13 @@ mod tests {
     async fn rm_refuses_a_job_directory_that_is_not_under_this_home() {
         let fixture = Fixture::new().await;
         accepted_job(&fixture, "job-1").await;
-        let gents::ConfigAccess::Local(node) = &fixture.ctx.access else {
+        let gents::ConfigAccess::Local(node) = &*fixture.ctx.access else {
             panic!("the fixture is embedded");
         };
         let elsewhere = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
         let other_home = crate::commands::eval::EvalContext {
-            access: gents::ConfigAccess::Local(node.clone()),
+            access: gents::ConfigAccess::Local(node.clone()).into(),
             home_dir: elsewhere.path().to_path_buf(),
             owner: fixture.ctx.owner.clone(),
         };

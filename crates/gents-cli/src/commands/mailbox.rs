@@ -66,7 +66,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
     }))
 }
 
-async fn access_and_principal(args: &MailboxAccessArgs) -> Result<(ConfigAccess, String)> {
+async fn access_and_principal(args: &MailboxAccessArgs) -> Result<(crate::CommandAccess, String)> {
     // The principal comes from the local identity, never a caller-supplied
     // requester flag. Remote storage enforcement remains the paired-client
     // trust boundary documented by the mailbox design.
@@ -80,7 +80,7 @@ async fn list(args: MailboxListArgs) -> Result<()> {
     args.output
         .ensure_supported("mailbox list", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
-    let items = match &access {
+    let items = match &*access {
         ConfigAccess::Local(node) => {
             gents::mailbox::list_mailbox_items(
                 node,
@@ -123,7 +123,7 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
     args.output
         .ensure_supported("mailbox dismiss", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
-    let item = match &access {
+    let item = match &*access {
         ConfigAccess::Local(node) => {
             gents::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?
         }

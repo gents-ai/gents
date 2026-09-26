@@ -52,7 +52,7 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
         .context("resolving agent_did for scoped subagent cancellation")?;
 
-    let snapshots = match &access {
+    let snapshots = match &*access {
         ConfigAccess::Graphql(graphql) => {
             let affected =
                 cancel_subagent_graphql(&access, graphql, &agent_did, &request_id, args.cascade)

@@ -13,7 +13,6 @@ use anyhow::Result;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::EmbeddedExecutor;
 use gents::eval::runner::{RunOptions, TrialExecutor};
-use gents::ConfigAccess;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +20,7 @@ use crate::cli::{EvalCommand, EvalScopeArgs};
 
 /// The launching home a command acts for.
 pub(crate) struct EvalContext {
-    pub(crate) access: ConfigAccess,
+    pub(crate) access: crate::CommandAccess,
     pub(crate) home_dir: PathBuf,
     /// The home's identity: owner of the runs it launches, and `by` on what
     /// it invalidates.

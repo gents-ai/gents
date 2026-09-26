@@ -883,13 +883,13 @@ mod tests {
 
         // Another home sharing the documents does not collect this home's
         // job directory.
-        let gents::ConfigAccess::Local(node) = &fixture.ctx.access else {
+        let gents::ConfigAccess::Local(node) = &*fixture.ctx.access else {
             panic!("the fixture is embedded");
         };
         let elsewhere = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
         let other_home = super::super::EvalContext {
-            access: gents::ConfigAccess::Local(node.clone()),
+            access: gents::ConfigAccess::Local(node.clone()).into(),
             home_dir: elsewhere.path().to_path_buf(),
             owner: fixture.ctx.owner.clone(),
         };
