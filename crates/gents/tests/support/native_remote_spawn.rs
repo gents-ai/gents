@@ -110,10 +110,38 @@ pub async fn wait_for_child(node: &EmbeddedNode, request_id: &str) -> RemoteSpaw
         if let Some(row) = exactly_one(&response, "AgentRequest") {
             return row;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "remote child request was not materialized"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            // Bounded lifecycle evidence only: never dump provider payloads,
+            // prompts, tool arguments, or credentials into failure logs. The
+            // read is time-boxed so an unresponsive database still yields the
+            // materialization timeout rather than hanging the test.
+            let query = format!(
+                r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, limit: 4) {{
+                    _docID request_id lifecycle_state failure_reason subagent_depth
+                    caused_by_parent_tool_call_id
+                }}
+                AgentToolCall(filter: {{ child_request_id: {{ _eq: "{request}" }} }}, limit: 4) {{
+                    _docID request_id tool_call_id lifecycle_state tool_failure_class
+                }}
+            }}"#
+            );
+            let evidence = match tokio::time::timeout(
+                Duration::from_secs(5),
+                gents::graphql::graphql_with_transaction_retry(
+                    node,
+                    &query,
+                    "remote child materialization evidence",
+                ),
+            )
+            .await
+            {
+                Ok(Ok(response)) => format!("data={:?}", response.data),
+                Ok(Err(error)) => format!("evidence read failed: {error:#}"),
+                Err(_) => "evidence read did not finish within 5s".to_string(),
+            };
+            panic!("remote child request {request_id} was not materialized: {evidence}");
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

@@ -22,13 +22,13 @@ use std::collections::{HashMap, HashSet};
 use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
 };
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity_at};
 use crate::support::fixtures::{
     bind_behavior_backend, configure_subagent_behavior, subagent_target,
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::native_remote_spawn::{wait_for_bridge, wait_for_child};
-use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::p2p_waits::{wait_for_connected_peer_at, wait_for_listen_addr_at};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -78,6 +78,8 @@ impl HarnessNode {
 pub struct Harness {
     a: HarnessNode,
     b: HarnessNode,
+    scenario_name: String,
+    current_action: Option<(usize, &'static str)>,
     history: Vec<Observation>,
     generated_bridges: HashMap<String, GeneratedBridge>,
     modeled_parent_request_ids: HashSet<String>,
@@ -102,6 +104,9 @@ struct GeneratedBridge {
 
 #[derive(Debug, Clone, Default)]
 pub struct Observation {
+    /// Modeled boundary this snapshot was sampled at. Invariant violations are
+    /// only actionable when the retained log names that exact boundary.
+    pub origin: String,
     pub a_bridge_rows: Vec<BridgeObservation>,
     pub b_bridge_rows: Vec<BridgeObservation>,
     pub a_rejected_spawn_invocation_ids: Vec<String>,
@@ -165,8 +170,9 @@ impl Harness {
     /// Start the generated R5 runner with real transport. Do not subscribe to
     /// the modeled collections' live P2P topics: their arrival is controlled
     /// by the explicit exact-document push actions below.
-    pub async fn start_two_p2p_nodes() -> Result<Self> {
+    pub async fn start_two_p2p_nodes(scenario: &str) -> Result<Self> {
         super::init_tracing();
+        let boundary = |stage: &str| boundary_label(scenario, None, stage);
         let a = HarnessNode {
             id: "A".to_string(),
             db: test_p2p_db("r5-generated-a").await,
@@ -175,16 +181,20 @@ impl Harness {
             id: "B".to_string(),
             db: test_p2p_db("r5-generated-b").await,
         };
-        let b_address = wait_for_listen_addr(b.db.node.as_ref()).await;
-        let a_address = wait_for_listen_addr(a.db.node.as_ref()).await;
+        let b_address =
+            wait_for_listen_addr_at(b.db.node.as_ref(), &boundary("setup/listen B")).await;
+        let a_address =
+            wait_for_listen_addr_at(a.db.node.as_ref(), &boundary("setup/listen A")).await;
         a.db.node
             .p2p()
-            .context("R5 A has no P2P transport")?
+            .with_context(|| format!("{}: R5 A has no P2P transport", boundary("setup/connect")))?
             .connect_peer(&b_address)
             .await
-            .context("connect R5 generated peers")?;
-        wait_for_connected_peer(a.db.node.as_ref()).await;
-        wait_for_connected_peer(b.db.node.as_ref()).await;
+            .with_context(|| {
+                format!("{}: connect R5 generated peers", boundary("setup/connect"))
+            })?;
+        wait_for_connected_peer_at(a.db.node.as_ref(), &boundary("setup/connected A")).await;
+        wait_for_connected_peer_at(b.db.node.as_ref(), &boundary("setup/connected B")).await;
         // Defra's exact-doc push uses the existing replicator retry guard and
         // otherwise returns Ok without sending. Register a route over only
         // AgentNetwork, never the four modeled R5 collections, so their
@@ -193,7 +203,12 @@ impl Harness {
             from.db
                 .node
                 .p2p()
-                .context("R5 generated peer has no P2P transport")?
+                .with_context(|| {
+                    format!(
+                        "{}: R5 generated peer has no P2P transport",
+                        boundary("setup/push route")
+                    )
+                })?
                 .add_replicator(
                     vec!["AgentNetwork".to_string()],
                     Some(address),
@@ -202,11 +217,18 @@ impl Harness {
                     None,
                 )
                 .await
-                .context("register exact-document push route")?;
+                .with_context(|| {
+                    format!(
+                        "{}: register exact-document push route",
+                        boundary("setup/push route")
+                    )
+                })?;
         }
         let mut harness = Self {
             a,
             b,
+            scenario_name: scenario.to_string(),
+            current_action: None,
             history: Vec::new(),
             generated_bridges: HashMap::new(),
             modeled_parent_request_ids: HashSet::new(),
@@ -219,12 +241,15 @@ impl Harness {
             observed_expired_children: HashSet::new(),
             observed_cancel_ack_events: Vec::new(),
         };
-        harness.record_observation().await?;
+        harness
+            .record_observation("start")
+            .await
+            .with_context(|| boundary("start"))?;
         Ok(harness)
     }
 
     pub async fn start_generated(scenario: &ModeledScenario) -> Result<Self> {
-        let mut harness = Self::start_two_p2p_nodes().await?;
+        let mut harness = Self::start_two_p2p_nodes(&scenario.name).await?;
         anyhow::ensure!(
             scenario.child_lease_secs > 0,
             "R5 modeled child lease must be positive"
@@ -327,7 +352,11 @@ impl Harness {
         let from = self.node(source)?;
         let to = self.node(target)?;
         ensure_physical_document(from, collection, doc_id).await?;
-        let (peer_id, _) = wait_for_peer_identity(to.db.node.as_ref()).await;
+        let (peer_id, _) = wait_for_peer_identity_at(
+            to.db.node.as_ref(),
+            &self.observation_origin(&format!("push {collection} to {target}/peer identity")),
+        )
+        .await;
         from.db
             .node
             .p2p()
@@ -360,7 +389,11 @@ impl Harness {
             // fixture; the first modeled pair observes it without adding a
             // continuous replicator that would collapse the trace windows.
             ("A", "B") => {
-                wait_for_connected_peer(self.a.db.node.as_ref()).await;
+                wait_for_connected_peer_at(
+                    self.a.db.node.as_ref(),
+                    &self.observation_origin("pair A->B/connected A"),
+                )
+                .await;
                 Ok(())
             }
             // Enrollment is the production owner of the durable route from
@@ -369,7 +402,11 @@ impl Harness {
                 if self.generated_pairing_done {
                     return Ok(());
                 }
-                let (a_peer, a_address) = wait_for_peer_identity(self.a.db.node.as_ref()).await;
+                let (a_peer, a_address) = wait_for_peer_identity_at(
+                    self.a.db.node.as_ref(),
+                    &self.observation_origin("pair B->A/peer identity A"),
+                )
+                .await;
                 // This script models each transcript transfer as an explicit
                 // P2P push. Own the base route before enrollment reconciliation
                 // so its broad client template cannot subscribe to those
@@ -890,10 +927,19 @@ impl Harness {
             )
             .await?;
             let did = agent.agent_did().to_string();
+            let progress = agent.shutdown_progress();
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
             let handle = tokio::spawn(agent.run(shutdown_rx));
             crate::support::interrupt::wait_for_runtime_ready(self.b.db.node.as_ref(), &did).await;
-            self.generated_child_agent = Some(BootedAgent::new(shutdown_tx, handle, did));
+            self.generated_child_agent = Some(
+                BootedAgent::new(shutdown_tx, handle, did).with_shutdown_evidence(
+                    format!(
+                        "R5 generated child ({})",
+                        self.observation_origin("child boot")
+                    ),
+                    progress,
+                ),
+            );
         }
         let observed = wait_for_child(self.b.db.node.as_ref(), &physical_child).await;
         anyhow::ensure!(
@@ -1663,12 +1709,19 @@ impl Harness {
                 ModeledAction::CrashNode { node, .. } => Some(node.clone()),
                 _ => None,
             };
+            self.current_action = Some((index, action.op()));
+            tracing::info!(
+                scenario = %scenario.name,
+                action = index,
+                op = action.op(),
+                "R5 modeled action"
+            );
             self.apply_modeled_action(action, scenario)
                 .await
                 .with_context(|| {
                     format!("R5 scenario {} action {index}: {action:?}", scenario.name)
                 })?;
-            self.record_observation_after(crashed)
+            self.record_observation_after(crashed, "after_action")
                 .await
                 .with_context(|| {
                     format!(
@@ -1885,7 +1938,7 @@ impl Harness {
         // owned execution. The caller waits for that readiness before Crash;
         // sample immediately before *any* process teardown so the next
         // observation checks the entire abort + durable reopen boundary.
-        self.record_observation().await?;
+        self.record_observation("pre_crash").await?;
         if id == "B" {
             if let Some(agent) = self.generated_child_agent.take() {
                 agent.crash().await;
@@ -1907,8 +1960,16 @@ impl Harness {
             node.db.process_generation
         };
         if self.generated_child_backend.is_some() {
-            let b_address = wait_for_listen_addr(self.b.db.node.as_ref()).await;
-            let a_address = wait_for_listen_addr(self.a.db.node.as_ref()).await;
+            let b_address = wait_for_listen_addr_at(
+                self.b.db.node.as_ref(),
+                &self.observation_origin(&format!("crash {id}/reopen listen B")),
+            )
+            .await;
+            let a_address = wait_for_listen_addr_at(
+                self.a.db.node.as_ref(),
+                &self.observation_origin(&format!("crash {id}/reopen listen A")),
+            )
+            .await;
             self.a
                 .db
                 .node
@@ -1917,8 +1978,16 @@ impl Harness {
                 .connect_peer(&b_address)
                 .await
                 .context("reconnect R5 peers after crash")?;
-            wait_for_connected_peer(self.a.db.node.as_ref()).await;
-            wait_for_connected_peer(self.b.db.node.as_ref()).await;
+            wait_for_connected_peer_at(
+                self.a.db.node.as_ref(),
+                &self.observation_origin(&format!("crash {id}/reconnected A")),
+            )
+            .await;
+            wait_for_connected_peer_at(
+                self.b.db.node.as_ref(),
+                &self.observation_origin(&format!("crash {id}/reconnected B")),
+            )
+            .await;
             for (from, address) in [(&self.a, &b_address), (&self.b, &a_address)] {
                 from.db
                     .node
@@ -1943,12 +2012,21 @@ impl Harness {
         Ok(())
     }
 
-    async fn record_observation(&mut self) -> Result<()> {
-        self.record_observation_after(None).await
+    fn observation_origin(&self, stage: &str) -> String {
+        boundary_label(&self.scenario_name, self.current_action, stage)
     }
 
-    async fn record_observation_after(&mut self, crashed_node: Option<NodeId>) -> Result<()> {
+    async fn record_observation(&mut self, stage: &str) -> Result<()> {
+        self.record_observation_after(None, stage).await
+    }
+
+    async fn record_observation_after(
+        &mut self,
+        crashed_node: Option<NodeId>,
+        stage: &str,
+    ) -> Result<()> {
         self.history.push(Observation {
+            origin: self.observation_origin(stage),
             a_bridge_rows: load_bridge_rows(&self.a).await?,
             b_bridge_rows: load_bridge_rows(&self.b).await?,
             a_rejected_spawn_invocation_ids: load_rejected_spawn_invocation_ids(&self.a).await?,
@@ -2628,6 +2706,20 @@ async fn exec(node: &HarnessNode, mutation: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// The modeled boundary a harness step runs at, carried by setup failures and
+/// retained observations alike.
+fn boundary_label(scenario: &str, action: Option<(usize, &'static str)>, stage: &str) -> String {
+    let scenario = if scenario.is_empty() {
+        "<unbound>"
+    } else {
+        scenario
+    };
+    match action {
+        Some((index, op)) => format!("scenario={scenario} action={index} op={op} stage={stage}"),
+        None => format!("scenario={scenario} action=<none> stage={stage}"),
+    }
+}
+
 /// Exercise imported-fact projection only; it does not establish that either
 /// peer could authorize the other's write under a production ACP grant.
 pub async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
@@ -2641,7 +2733,7 @@ pub async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> 
     const SESSION: &str = "r5-replicated-ordinal-conflict";
     const ORIGINAL: &str = "original";
     const TWIN: &str = "intruder";
-    let harness = Harness::start_two_p2p_nodes().await?;
+    let harness = Harness::start_two_p2p_nodes(SESSION).await?;
     let agent_did = crate::support::AGENT_DID;
     crate::support::create_agent_message_in_scope(
         harness.a.db.node.as_ref(),

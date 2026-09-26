@@ -30,6 +30,8 @@ pub struct BootedAgent {
     handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     signal_shutdown_on_drop: bool,
     pub agent_did: String,
+    role: String,
+    progress: Option<gents::RuntimeShutdownProgress>,
 }
 
 impl BootedAgent {
@@ -43,7 +45,25 @@ impl BootedAgent {
             handle: Some(handle),
             signal_shutdown_on_drop: true,
             agent_did,
+            role: "agent".to_string(),
+            progress: None,
         }
+    }
+
+    /// Name this runtime's role (e.g. "R5 child r5-cancel") and the run whose
+    /// outstanding awaits an overdue shutdown reports.
+    pub fn with_shutdown_evidence(
+        mut self,
+        role: impl Into<String>,
+        progress: gents::RuntimeShutdownProgress,
+    ) -> Self {
+        self.role = role.into();
+        self.progress = Some(progress);
+        self
+    }
+
+    pub fn set_role(&mut self, role: impl Into<String>) {
+        self.role = role.into();
     }
 
     pub async fn shutdown(mut self) {
@@ -51,13 +71,29 @@ impl BootedAgent {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        tokio::time::timeout(TEST_RUNTIME_SHUTDOWN_TIMEOUT, handle)
-            .await
+        let joined = match tokio::time::timeout(TEST_RUNTIME_SHUTDOWN_TIMEOUT, handle).await {
+            Ok(joined) => joined,
+            Err(error) => {
+                let outstanding = self.progress.as_ref().map_or_else(
+                    || "not observed".to_string(),
+                    |progress| progress.to_string(),
+                );
+                panic!(
+                    "{} {} did not shut down within {TEST_RUNTIME_SHUTDOWN_TIMEOUT:?}: {error}; outstanding: {outstanding}",
+                    self.role, self.agent_did
+                )
+            }
+        };
+        joined
             .unwrap_or_else(|error| {
-                panic!("agent did not shut down within {TEST_RUNTIME_SHUTDOWN_TIMEOUT:?}: {error}")
+                panic!("{} {} task should join: {error}", self.role, self.agent_did)
             })
-            .expect("agent task should join")
-            .expect("agent run should return ok");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} {} run should return ok: {error:#}",
+                    self.role, self.agent_did
+                )
+            });
     }
 
     /// Abort and join the runtime task without sending the graceful shutdown

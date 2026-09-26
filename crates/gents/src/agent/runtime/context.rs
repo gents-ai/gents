@@ -29,6 +29,7 @@ pub(super) struct RuntimeContext {
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
     pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
+    pub(super) shutdown_progress: crate::agent::RuntimeShutdownProgress,
 }
 
 pub(super) struct BehaviorResolution {
@@ -236,6 +237,7 @@ impl RuntimeContext {
             slot_generation,
             request_admission,
         )?
+        .with_shutdown_progress(self.shutdown_progress.clone())
         .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
         .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());

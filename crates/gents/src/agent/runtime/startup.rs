@@ -296,6 +296,9 @@ async fn run_agent_with_runtime_status(
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let terminal_observer = agent.process_state_observer.clone();
+    agent
+        .shutdown_progress
+        .observe_process_state(runtime_status.readiness().subscribe_observation());
     let initialized = runtime_status
         .initialize_startup(agent.default_behavior_id())
         .await;
@@ -383,6 +386,7 @@ async fn run_agent_owned(
     // background task exits unexpectedly, the coordinator closes admission,
     // broadcasts shutdown to the remaining tasks and awaits their joins.
     let (runtime_shutdown_tx, shutdown) = watch::channel(false);
+    let shutdown_progress = agent.shutdown_progress.clone();
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Resolving)
         .await;
@@ -470,6 +474,7 @@ async fn run_agent_owned(
         runtime_status: runtime_status.clone(),
         operator_tool_root: agent.operator_tool_root().map(PathBuf::from),
         enrollment_authority: enrollment_handle.clone(),
+        shutdown_progress: shutdown_progress.clone(),
     };
     let runtime_for_runner = runtime.clone();
     #[cfg(test)]
@@ -755,38 +760,42 @@ async fn run_agent_owned(
     let completion_agent_did = agent.agent_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::SubagentCompletion(
-            crate::background_completion::run_background_completion_observer(
-                completion_node,
-                completion_agent_did,
-                completion_background_executions,
-                completion_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("subagent_completion", async move {
+            BackgroundTaskResult::SubagentCompletion(
+                crate::background_completion::run_background_completion_observer(
+                    completion_node,
+                    completion_agent_did,
+                    completion_background_executions,
+                    completion_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let graph_run_node = agent.node.clone();
     let graph_run_owner_did = agent.agent_did().to_string();
     let graph_run_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::GraphRunReconcile(
-            crate::graph_pipeline::run_graph_run_reconciler(
-                graph_run_node,
-                graph_run_owner_did,
-                graph_run_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("graph_run_reconcile", async move {
+            BackgroundTaskResult::GraphRunReconcile(
+                crate::graph_pipeline::run_graph_run_reconciler(
+                    graph_run_node,
+                    graph_run_owner_did,
+                    graph_run_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let cancel_mirror_node = agent.node.clone();
     let cancel_mirror_snapshot_rx = active_snapshot_rx.clone();
     let cancel_mirror_peer_admission: Arc<dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority> =
         Arc::new(enrollment_handle.clone());
     let cancel_mirror_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
+    background_tasks.spawn(shutdown_progress.track_task("cross_deployment_cancel_mirror", async move {
         BackgroundTaskResult::CrossDeploymentCancelMirror(
             crate::trigger_engine::cross_deployment_cancel_mirror::run_cross_deployment_cancel_mirror(
                 cancel_mirror_node,
@@ -796,83 +805,96 @@ async fn run_agent_owned(
             )
             .await,
         )
-    });
+    }));
 
     let enrollment_node = agent.node.clone();
     let enrollment_identity = agent.principal_arc().identity.clone();
     let enrollment_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::EnrollmentReconcile(
-            crate::agent::p2p_reconcile::run_enrollment_reconciler(
-                enrollment_node,
-                enrollment_identity,
-                enrollment_owner,
-                enrollment_cancel,
+    let enrollment_progress = shutdown_progress.clone();
+    background_tasks.spawn(
+        shutdown_progress.track_task("enrollment_reconcile", async move {
+            BackgroundTaskResult::EnrollmentReconcile(
+                crate::agent::p2p_reconcile::run_enrollment_reconciler(
+                    enrollment_node,
+                    enrollment_identity,
+                    enrollment_owner,
+                    enrollment_cancel,
+                    enrollment_progress,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let pairing_node = agent.node.clone();
     let pairing_identity = agent.principal_arc().identity.clone();
     let pairing_enrollment = enrollment_handle.clone();
     let pairing_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::PairingReconcile(
-            crate::agent::p2p_reconcile::run_pairing_reconciler(
-                pairing_node,
-                pairing_identity,
-                pairing_enrollment,
-                pairing_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("pairing_reconcile", async move {
+            BackgroundTaskResult::PairingReconcile(
+                crate::agent::p2p_reconcile::run_pairing_reconciler(
+                    pairing_node,
+                    pairing_identity,
+                    pairing_enrollment,
+                    pairing_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let registry_node = agent.node.clone();
     let registry_agent_did = agent.agent_did().to_string();
     let registry_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::RegistryHeartbeat(
-            crate::agent::p2p_reconcile::run_registry_heartbeat(
-                registry_node,
-                registry_agent_did,
-                crate::agent::p2p_reconcile::resolve_network_id(),
-                registry_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("registry_heartbeat", async move {
+            BackgroundTaskResult::RegistryHeartbeat(
+                crate::agent::p2p_reconcile::run_registry_heartbeat(
+                    registry_node,
+                    registry_agent_did,
+                    crate::agent::p2p_reconcile::resolve_network_id(),
+                    registry_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let endpoint_node = agent.node.clone();
     let endpoint_identity = agent.principal_arc().identity.clone();
     let endpoint_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::EndpointHeartbeat(
-            crate::agent::p2p_reconcile::run_endpoint_heartbeat(
-                endpoint_node,
-                endpoint_identity,
-                endpoint_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("endpoint_heartbeat", async move {
+            BackgroundTaskResult::EndpointHeartbeat(
+                crate::agent::p2p_reconcile::run_endpoint_heartbeat(
+                    endpoint_node,
+                    endpoint_identity,
+                    endpoint_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let hydration_node = agent.node.clone();
     let hydration_enrollment = enrollment_handle.clone();
     let hydration_identity = agent.principal_arc().identity.clone();
     let hydration_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::SessionHydrationReconcile(
-            crate::agent::p2p_reconcile::run_session_hydration_reconciler(
-                hydration_node,
-                hydration_enrollment,
-                hydration_identity,
-                hydration_cancel,
+    background_tasks.spawn(shutdown_progress.track_task(
+        "session_hydration_reconcile",
+        async move {
+            BackgroundTaskResult::SessionHydrationReconcile(
+                crate::agent::p2p_reconcile::run_session_hydration_reconciler(
+                    hydration_node,
+                    hydration_enrollment,
+                    hydration_identity,
+                    hydration_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        },
+    ));
 
     let persona_request_node = agent.node.clone();
     let persona_request_ceiling = agent
@@ -882,18 +904,20 @@ async fn run_agent_owned(
     let persona_request_authority = enrollment_handle;
     let persona_request_identity = agent.principal_arc().identity.clone();
     let persona_request_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::PersonaRequestReconcile(
-            crate::agent::p2p_reconcile::run_persona_request_reconciler(
-                persona_request_node,
-                persona_request_ceiling,
-                persona_request_authority,
-                persona_request_identity,
-                persona_request_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("persona_request_reconcile", async move {
+            BackgroundTaskResult::PersonaRequestReconcile(
+                crate::agent::p2p_reconcile::run_persona_request_reconciler(
+                    persona_request_node,
+                    persona_request_ceiling,
+                    persona_request_authority,
+                    persona_request_identity,
+                    persona_request_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let directory_node = agent.node.clone();
     let directory_source_did = agent.agent_did().to_string();
@@ -902,17 +926,19 @@ async fn run_agent_owned(
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
     let directory_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::DirectoryProjection(
-            crate::agent::directory_projection::run_directory_projection(
-                directory_node,
-                directory_source_did,
-                directory_ceiling,
-                directory_cancel,
+    background_tasks.spawn(
+        shutdown_progress.track_task("directory_projection", async move {
+            BackgroundTaskResult::DirectoryProjection(
+                crate::agent::directory_projection::run_directory_projection(
+                    directory_node,
+                    directory_source_did,
+                    directory_ceiling,
+                    directory_cancel,
+                )
+                .await,
             )
-            .await,
-        )
-    });
+        }),
+    );
 
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
@@ -921,7 +947,7 @@ async fn run_agent_owned(
     let router_admission_gate = admission_gate.clone();
     let router_runtime_status = runtime_status.clone();
     let router_runtime_snapshot_observer = agent.runtime_snapshot_observer.clone();
-    background_tasks.spawn(async move {
+    background_tasks.spawn(shutdown_progress.track_task("router", async move {
         BackgroundTaskResult::Router(
             super::router::run_router(
                 router_node,
@@ -934,12 +960,12 @@ async fn run_agent_owned(
             )
             .await,
         )
-    });
+    }));
 
     let executor_status_active_snapshot_rx = active_snapshot_rx.clone();
     let executor_status_runtime_status = runtime_status.clone();
     let executor_status_shutdown = shutdown.clone();
-    background_tasks.spawn(async move {
+    background_tasks.spawn(shutdown_progress.track_task("executor_status", async move {
         BackgroundTaskResult::ExecutorStatus(
             crate::runtime_status::run_executor_status_observer(
                 executor_status_active_snapshot_rx,
@@ -948,11 +974,11 @@ async fn run_agent_owned(
             )
             .await,
         )
-    });
+    }));
 
     let reconcile_active_snapshot_tx = active_snapshot_tx.clone();
     let reconcile_shutdown = shutdown.clone();
-    background_tasks.spawn(async move {
+    background_tasks.spawn(shutdown_progress.track_task("reconcile", async move {
         BackgroundTaskResult::Reconcile(
             generation_supervisor
                 .run(
@@ -962,7 +988,7 @@ async fn run_agent_owned(
                 )
                 .await,
         )
-    });
+    }));
 
     if agent.document_runtime_context().is_some() {
         let control_node = agent.node.clone();
@@ -976,7 +1002,7 @@ async fn run_agent_owned(
         let control_tx = reconcile_tx.clone();
         let control_runtime_status = runtime_status.clone();
         let control_shutdown = shutdown.clone();
-        background_tasks.spawn(async move {
+        background_tasks.spawn(shutdown_progress.track_task("control", async move {
             BackgroundTaskResult::Control(
                 super::control_watcher::run_control_watcher(
                     control_node,
@@ -990,7 +1016,7 @@ async fn run_agent_owned(
                 )
                 .await,
             )
-        });
+        }));
     }
 
     let result = tokio::select! {

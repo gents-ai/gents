@@ -284,7 +284,7 @@ pub use admission::BackendAdmissionConfig;
 pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver,
+    ProcessLifecycleState, RuntimeShutdownProgress, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
     probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,

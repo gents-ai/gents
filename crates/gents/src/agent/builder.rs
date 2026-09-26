@@ -288,6 +288,7 @@ impl GentsBuilder {
             plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
                 self.plugin_home,
             )),
+            shutdown_progress: super::RuntimeShutdownProgress::default(),
         })
     }
 }

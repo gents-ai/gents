@@ -22,9 +22,17 @@ fn bs58_sig(signature: &[u8]) -> String {
 }
 
 pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
+    wait_for_peer_identity_at(node, "P2P setup").await
+}
+
+/// `boundary` leads every panic this wait raises, so a failure names the
+/// caller's step without relying on log capture or subscriber filters.
+pub async fn wait_for_peer_identity_at(node: &EmbeddedNode, boundary: &str) -> (String, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let p2p = node.p2p().expect("p2p enabled");
+        let p2p = node
+            .p2p()
+            .unwrap_or_else(|| panic!("{boundary}: p2p enabled"));
         let peer_id = p2p.local_peer_id().await.ok();
         let shareable = p2p.shareable_address().await.ok().flatten();
         if let (Some(peer_id), Some(address)) = (peer_id, shareable) {
@@ -42,7 +50,7 @@ pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
             }
         }
         if Instant::now() >= deadline {
-            panic!("node never exposed a P2P peer identity");
+            panic!("{boundary}: node never exposed a P2P peer identity");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
