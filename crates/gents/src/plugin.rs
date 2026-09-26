@@ -330,6 +330,7 @@ impl PluginRunner {
             "a granted manifold must never carry a listen capability"
         );
 
+        start_wasm_trap_handler_with_signals_blocked();
         let stdin =
             serde_json::to_vec(arguments).context("encoding plugin arguments as canonical JSON")?;
         let request = AfbRunRequest {
@@ -382,6 +383,49 @@ impl PluginRunner {
     /// What the model is shown for this plugin.
     pub fn definition(&self) -> &PackPlugin {
         &self.plugin
+    }
+}
+
+/// Creates Afterburner's first Wasmtime engine on a thread that blocks every
+/// signal, before any plugin runs.
+///
+/// Afterburner's engines keep Wasmtime's macOS default of Mach-port trap
+/// handling. Wasmtime starts that handler's process-wide thread from the first
+/// engine created, and the thread aborts the process when a signal interrupts
+/// its `mach_msg` receive (`MACH_RCV_INTERRUPTED`). The runtime installs signal
+/// handlers (tokio's `SIGCHLD` for child processes), and the kernel may deliver
+/// such a signal to any thread that does not block it. A new thread inherits
+/// its creator's signal mask, so the handler thread started here never
+/// receives one. Opting that engine out of Mach ports instead is not
+/// available: Afterburner exposes no Wasmtime configuration, and Wasmtime
+/// panics on an engine whose trap mode differs from the first one's.
+fn start_wasm_trap_handler_with_signals_blocked() {
+    #[cfg(target_os = "macos")]
+    {
+        static STARTED: std::sync::Once = std::sync::Once::new();
+        STARTED.call_once(|| {
+            let started = std::thread::Builder::new()
+                .name("gents-wasm-trap-init".into())
+                .spawn(|| {
+                    // SAFETY: changes only this short-lived thread's own mask.
+                    unsafe {
+                        let mut all: libc::sigset_t = std::mem::zeroed();
+                        libc::sigfillset(&mut all);
+                        libc::pthread_sigmask(libc::SIG_BLOCK, &all, std::ptr::null_mut());
+                    }
+                    // The same shared engine `run_afb_bytes` uses for a
+                    // wall-clock bound; its failure resurfaces from the run.
+                    let _ = afterburner::wasi::embedder_vm::shared_epoch_vm();
+                })
+                .and_then(|thread| {
+                    thread
+                        .join()
+                        .map_err(|_| std::io::Error::other("the thread panicked"))
+                });
+            if let Err(error) = started {
+                tracing::warn!(%error, "could not start the Wasmtime trap handler with signals blocked");
+            }
+        });
     }
 }
 
