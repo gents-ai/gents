@@ -127,6 +127,7 @@ impl TitleFixture {
             context_window: 8192,
             max_output_tokens: 1024,
             max_turns: 2,
+            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".into(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,
