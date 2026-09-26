@@ -330,7 +330,7 @@ async fn run_contract_with_streaming_cadence(
             stream_visibility_budget,
         )
         .await?;
-        assert_local_pagination(&core, &session, &agent_did).await?;
+        assert_local_pagination(&core, &graphql, &session, &agent_did).await?;
         assert_observer_did_not_overflow(&core).await?;
         anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "reopen replicated runtime principal");
         core.shutdown().await?;
@@ -802,7 +802,72 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     )
 }
 
-async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
+/// Every transcript message this session owns, as the message keys the
+/// authoring runtime holds for the client's exact tenancy scope.
+async fn runtime_transcript_keys(
+    graphql: &str,
+    session: &str,
+    agent: &str,
+    requester: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let filter = format!(
+        r#"session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
+        escape_graphql_string(session),
+        escape_graphql_string(agent),
+        escape_graphql_string(requester),
+    );
+    let response = graphql_query(
+        graphql,
+        &format!("{{ AgentMessage(filter: {{{filter}}}) {{ message_key }} }}"),
+    )
+    .await?;
+    let rows = response
+        .pointer("/data/AgentMessage")
+        .and_then(Value::as_array)
+        .context("runtime transcript query returned no AgentMessage rows")?;
+    rows.iter()
+        .map(|row| {
+            row.get("message_key")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .context("runtime AgentMessage row is missing its message key")
+        })
+        .collect()
+}
+
+async fn local_transcript_keys(
+    core: &ClientCore,
+    session: &str,
+    agent: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let mut keys = std::collections::BTreeSet::new();
+    let mut cursor = None;
+    loop {
+        let page = gents_desktop_core::client::load_session_transcript_page(
+            core.node(),
+            session,
+            Some(agent),
+            Some(core.principal().did()),
+            cursor.as_deref(),
+            Some(gents_desktop_core::client::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
+        )
+        .await?;
+        for message in &page.store.transcript_messages {
+            keys.insert(message.message.message_key.clone());
+            cursor = Some(message.message.message_key.clone());
+        }
+        if page.source_exhausted {
+            return Ok(keys);
+        }
+    }
+}
+
+async fn assert_local_pagination(
+    core: &ClientCore,
+    graphql: &str,
+    session: &str,
+    agent: &str,
+) -> Result<()> {
     timeout(TURN_BUDGET, async {
         use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
         loop {
@@ -815,6 +880,27 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
     })
     .await
     .context("session hydration did not settle before pagination")??;
+    // Hydration completes against the manifest its own request was served, not
+    // against whatever the session holds now: a message the runtime authors
+    // after that manifest reaches the client only over push replication, which
+    // carries each message document independently of the request completion a
+    // turn waits for. The authoring runtime is therefore the only authority for
+    // what local paging has to cover, and it is stable here because every
+    // request in this session is terminal.
+    let expected = runtime_transcript_keys(graphql, session, agent, core.principal().did()).await?;
+    timeout(TURN_BUDGET, async {
+        loop {
+            let local = local_transcript_keys(core, session, agent).await?;
+            if local == expected {
+                return Ok::<_, anyhow::Error>(());
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .with_context(|| {
+        format!("client transcript did not replicate the runtime transcript before pagination: expected={expected:?}")
+    })??;
     let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
     anyhow::ensure!(!before.has_errors(), "local intent query failed");
@@ -853,6 +939,10 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
             "local pagination made no progress"
         );
     }
+    anyhow::ensure!(
+        seen == expected,
+        "local paging must cover the replicated transcript exactly: seen={seen:?}, expected={expected:?}"
+    );
     anyhow::ensure!(
         seen.len() >= 6,
         "three conversation turns must survive local paging: {seen:?}"
