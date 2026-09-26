@@ -1,5 +1,4 @@
 import Proofs.Basic
-import Proofs.PromptAssembly.ClaudeMap
 
 /-!
 # Durable per-turn provider-context reduction (#1127)
@@ -40,15 +39,9 @@ structure SourceBoundary where
   value : Nat
   deriving DecidableEq, Repr
 
-/-- Exact native provider projection. The opaque value identifies the complete
-selected provider body; `taggedRows` associates every input row position with
-its physical source and original block coordinates. `none` means association
-is unknown, not an empty input. Native admission binds this sidecar to the
-same built request body before a full-input rewrite can become durable. -/
+/-- Exact native provider projection. -/
 structure Projection where
   value : Nat
-  taggedRows : Option (List PromptAssembly.ClaudeMap.TaggedReplayRow) := none
-  retired : List PromptAssembly.ClaudeMap.ReplayTag := []
   deriving DecidableEq, Repr
 
 /-- The immutable fact value stored under a reduction key. -/
@@ -63,136 +56,6 @@ structure Fact where
   parent : Option ReductionKey
   pairClosed : Bool
   deriving DecidableEq, Repr
-
-/-- A canonical observation made at the exact pre-rewrite source boundary.
-Native must construct these from physical accepted rows after DID/session and
-high-water validation, not from a caller-supplied claimed identity. -/
-structure SourceObservation where
-  tag : PromptAssembly.ClaudeMap.ReplayTag
-  agentDid : AgentDid
-  sessionId : SessionId
-  sourceBoundary : SourceBoundary
-  deriving DecidableEq, Repr
-
-inductive FullInputRewriteError where
-  | unknownProjection
-  | invalidSidecar
-  | unboundSource
-  | inventedSource
-  | changedAssociation
-  | staleFrontier
-  deriving DecidableEq, Repr
-
-def FullInputRewriteError.toContract : FullInputRewriteError → String
-  | .unknownProjection => "unknown_projection"
-  | .invalidSidecar => "invalid_sidecar"
-  | .unboundSource => "unbound_source"
-  | .inventedSource => "invented_source"
-  | .changedAssociation => "changed_association"
-  | .staleFrontier => "stale_frontier"
-
-private def taggedSources (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
-    List PromptAssembly.ClaudeMap.ReplayTag :=
-  rows.filterMap (·.source)
-
-/-- A retained physical source may lose whole blocks, and the owned tool-call
-repair may change non-reasoning payload. It may not acquire another header,
-reindex surviving blocks, or alter its signed reasoning witness. Exact native
-body transformation remains the provider-input owner's obligation. -/
-def retainedAssociationValid
-    (before : List PromptAssembly.ClaudeMap.TaggedReplayRow)
-    (row : PromptAssembly.ClaudeMap.TaggedReplayRow) : Bool :=
-  match row.source with
-  | none => true
-  | some tag =>
-      match before.filter (fun prior => prior.source == some tag) with
-      | [prior] =>
-          row.physicalHeader == prior.physicalHeader &&
-          decide (List.Sublist row.blockIndices prior.blockIndices) &&
-          (PromptAssembly.ClaudeMap.originalReasoningWitness row).all
-            (fun witness => decide (witness ∈
-              PromptAssembly.ClaudeMap.originalReasoningWitness prior))
-      | _ => false
-
-def retirementForRewrite (prior : List PromptAssembly.ClaudeMap.ReplayTag)
-    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
-    List PromptAssembly.ClaudeMap.ReplayTag :=
-  prior ++ (taggedSources rows).filter PromptAssembly.ClaudeMap.providerReplayTag
-
-theorem prior_retirement_survives_rewrite
-    (prior : List PromptAssembly.ClaudeMap.ReplayTag)
-    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
-    (tag : PromptAssembly.ClaudeMap.ReplayTag) (h : tag ∈ prior) :
-    tag ∈ retirementForRewrite prior rows := by
-  exact List.mem_append.mpr (Or.inl h)
-
-theorem pre_rewrite_provider_source_retired
-    (prior : List PromptAssembly.ClaudeMap.ReplayTag)
-    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
-    (tag : PromptAssembly.ClaudeMap.ReplayTag)
-    (hsource : tag ∈ taggedSources rows)
-    (hprovider : PromptAssembly.ClaudeMap.providerReplayTag tag = true) :
-    tag ∈ retirementForRewrite prior rows := by
-  exact List.mem_append.mpr (Or.inr (List.mem_filter.mpr ⟨hsource, hprovider⟩))
-
-/-- An effective full-input rewrite retires every provider source in its
-pre-rewrite projection, regardless of where that row sat in the retained
-tail. This is the durable rewrite frontier. Prefix compatibility is an
-additional test for later completed turns, never a way to resurrect an old
-source after a summary, repair, or signature-rejection rewrite. -/
-def rewriteFullInput (key : ReductionKey) (boundary : SourceBoundary)
-    (observations : List SourceObservation)
-    (source post : Projection) : Except FullInputRewriteError Projection := do
-  let some before := source.taggedRows | throw .unknownProjection
-  let some after := post.taggedRows | throw .unknownProjection
-  if !(before.all PromptAssembly.ClaudeMap.replayRowIndicesValid) ||
-      !(after.all PromptAssembly.ClaudeMap.replayRowIndicesValid) ||
-      (taggedSources before).length != (taggedSources before).eraseDups.length ||
-      (taggedSources after).length != (taggedSources after).eraseDups.length then
-    throw .invalidSidecar
-  let beforeSources := taggedSources before
-  if !(beforeSources.all fun tag =>
-      (observations.filter fun observation => observation.tag == tag &&
-        observation.agentDid == key.agentDid &&
-        observation.sessionId == key.sessionId &&
-        observation.sourceBoundary == boundary).length == 1) then
-    throw .unboundSource
-  if !(taggedSources after).all (fun tag => decide (tag ∈ beforeSources)) then
-    throw .inventedSource
-  if !(after.all (retainedAssociationValid before)) then
-    throw .changedAssociation
-  return { post with retired := retirementForRewrite source.retired before }
-
-theorem rewriteFullInput_exact_retirement (key : ReductionKey)
-    (boundary : SourceBoundary) (observations : List SourceObservation)
-    (source post result : Projection)
-    (h : rewriteFullInput key boundary observations source post = .ok result) :
-    ∃ before, source.taggedRows = some before ∧
-      result.retired = retirementForRewrite source.retired before := by
-  unfold rewriteFullInput at h
-  cases hbefore : source.taggedRows with
-  | none => simp [hbefore] at h
-  | some before =>
-      cases hafter : post.taggedRows with
-      | none => simp [hbefore, hafter] at h
-      | some after =>
-          simp only [hbefore, hafter, bind_pure_comp, Except.bind] at h
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          cases h
-          exact ⟨before, by simp [hbefore], rfl⟩
-
-/-- The existing immutable Fact owns both exact projections. This preparation
-changes only its postprojection; the ordinary `persist` owner still decides
-fresh/idempotent/conflict and rejects open tool pairs. Session compaction must
-commit its cursor in the same transaction as the prepared Fact. -/
-def prepareFullInputFact (key : ReductionKey) (observations : List SourceObservation)
-    (fact : Fact) : Except FullInputRewriteError Fact := do
-  let checkpoint ← rewriteFullInput key fact.sourceBoundary observations
-    fact.sourceProjection fact.checkpoint
-  return { fact with checkpoint }
 
 abbrev Store := ReductionKey → Option Fact
 
@@ -212,39 +75,6 @@ def bind (store : Store) (key : ReductionKey) (fact : Fact) : Store :=
   simp [bind, h]
 
 end Store
-
-/-- Historical retirement is read from every immutable fact in the complete,
-ordered prior lineage, including facts whose checkpoints have since been
-consumed. Consumption only chooses the active provider-input checkpoint.
-Native must derive lineage membership from exact DID/session-scoped Fact rows;
-omitting a prior key is not a permitted way to drop its retirement. -/
-def retiredInLineage (store : Store) (lineage : List ReductionKey) :
-    List PromptAssembly.ClaudeMap.ReplayTag :=
-  lineage.flatMap fun key =>
-    match store key with
-    | none => []
-    | some fact => fact.checkpoint.retired
-
-def retirementFrontier (store : Store) (lineage : List ReductionKey) :
-    List PromptAssembly.ClaudeMap.ReplayTag :=
-  (retiredInLineage store lineage).eraseDups
-
-theorem retiredInLineage_append (store : Store) (lineage : List ReductionKey)
-    (key : ReductionKey) :
-    retiredInLineage store (lineage ++ [key]) =
-      retiredInLineage store lineage ++
-        (match store key with
-         | none => []
-         | some fact => fact.checkpoint.retired) := by
-  simp [retiredInLineage]
-
-theorem retired_fact_survives_lineage_extension (store : Store)
-    (lineage : List ReductionKey) (key : ReductionKey) (fact : Fact)
-    (tag : PromptAssembly.ClaudeMap.ReplayTag)
-    (hstored : store key = some fact) (hretired : tag ∈ fact.checkpoint.retired) :
-    tag ∈ retiredInLineage store (lineage ++ [key]) := by
-  rw [retiredInLineage_append, hstored]
-  exact List.mem_append.mpr (Or.inr hretired)
 
 inductive PersistOutcome where
   | fresh
@@ -277,85 +107,6 @@ def persist (store : Store) (key : ReductionKey) (fact : Fact) :
     | some stored => if stored = fact then (.idempotent, store) else (.conflict, store)
   else
     (.pairOpen, store)
-
-/-- Full-input rewrites pass through the same immutable create-and-compare
-owner after their physical row associations and frontier have been prepared.
-This does not by itself couple a session CompactionEntry cursor: the native
-transaction must commit that cursor and this Fact in one write gate. -/
-def persistFullInput (store : Store) (lineage : List ReductionKey) (key : ReductionKey)
-    (observations : List SourceObservation) (fact : Fact) :
-    Except FullInputRewriteError (PersistOutcome × Store) := do
-  let prepared ← prepareFullInputFact key observations fact
-  if (store key).isNone &&
-      fact.sourceProjection.retired != retirementFrontier store lineage then
-    throw .staleFrontier
-  return persist store key prepared
-
-/-- A session CompactionEntry's cursor is paired with the exact immutable
-full-input reduction Fact that justified dropping the old provider prefix.
-The model treats each pair as one transaction result; native must use one
-ConfigAccess transaction for both physical creates and their conflict reads. -/
-structure SessionCursorEntry where
-  key : ReductionKey
-  cursor : Nat
-  deriving DecidableEq, Repr
-
-structure SessionRewriteState where
-  store : Store
-  entries : List SessionCursorEntry
-
-def latestSessionCursor (entries : List SessionCursorEntry) : Nat :=
-  (entries.getLast?).map (·.cursor) |>.getD 0
-
-inductive SessionRewriteOutcome where
-  | fresh
-  | idempotent
-  | rewriteRejected (error : FullInputRewriteError)
-  | factConflict
-  | pairOpen
-  | cursorConflict
-  deriving DecidableEq, Repr
-
-def SessionRewriteOutcome.toContract : SessionRewriteOutcome → String
-  | .fresh => "fresh"
-  | .idempotent => "idempotent"
-  | .rewriteRejected error => error.toContract
-  | .factConflict => "fact_conflict"
-  | .pairOpen => "pair_open"
-  | .cursorConflict => "cursor_conflict"
-
-/-- Repair-only rewrites use `persistFullInput` directly; a session summary
-uses this same Fact owner joined to its CompactionEntry cursor. A repeated
-older committed pair remains idempotent after a newer entry, while a lone
-fact or lone cursor is an integrity conflict, never a recovery invitation. -/
-def commitSessionRewrite (state : SessionRewriteState)
-    (lineage : List ReductionKey) (key : ReductionKey)
-    (observations : List SourceObservation) (fact : Fact)
-    (cursor : Nat) : SessionRewriteOutcome × SessionRewriteState :=
-  match persistFullInput state.store lineage key observations fact with
-  | .error error => (.rewriteRejected error, state)
-  | .ok (outcome, updatedStore) =>
-      let entry : SessionCursorEntry := { key, cursor }
-      match outcome with
-      | .fresh =>
-          if cursor > latestSessionCursor state.entries &&
-              !(state.entries.any fun existing => existing.key == key) then
-            (.fresh, { store := updatedStore, entries := state.entries ++ [entry] })
-          else (.cursorConflict, state)
-      | .idempotent =>
-          if entry ∈ state.entries then (.idempotent, state)
-          else (.cursorConflict, state)
-      | .conflict => (.factConflict, state)
-      | .pairOpen => (.pairOpen, state)
-
-theorem invalid_session_rewrite_preserves_state
-    (state : SessionRewriteState) (lineage : List ReductionKey)
-    (key : ReductionKey) (observations : List SourceObservation)
-    (fact : Fact) (cursor : Nat) (error : FullInputRewriteError)
-    (h : persistFullInput state.store lineage key observations fact = .error error) :
-    commitSessionRewrite state lineage key observations fact cursor =
-      (.rewriteRejected error, state) := by
-  simp [commitSessionRewrite, h]
 
 theorem persist_idempotent (store : Store) (key : ReductionKey) (fact : Fact)
     (hpairs : fact.pairClosed = true) (h : store key = some fact) :

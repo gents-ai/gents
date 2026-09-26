@@ -5,6 +5,11 @@ namespace CompletionRetry
 inductive FailureClass
   | transport
   | parseBadRequest
+  /-- The provider rejected replayed reasoning: a Claude thinking signature
+  that no longer binds its prefix or cannot be verified, or Responses
+  encrypted content it cannot decrypt. Resending the identical body fails
+  identically, so this class never resamples. -/
+  | reasoningRejected
   | permanent
   deriving DecidableEq, Repr
 
@@ -18,12 +23,16 @@ inductive FailureOrigin
   /-- A malformed or truncated provider-delivered stream is not a malformed
   local request. This origin applies whether or not a preview item arrived. -/
   | providerStreamMalformed
+  /-- A provider 400 naming a replayed thinking signature or undecryptable
+  encrypted reasoning content. -/
+  | providerReasoningRejected
   deriving DecidableEq, Repr
 
 def FailureOrigin.class : FailureOrigin → FailureClass
   | .localRequestBuild => .permanent
   | .retryableTransport => .transport
   | .providerStreamMalformed => .transport
+  | .providerReasoningRejected => .reasoningRejected
 
 structure Budget where
   transportRetries : Nat

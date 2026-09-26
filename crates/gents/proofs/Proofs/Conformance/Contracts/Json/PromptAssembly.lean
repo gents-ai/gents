@@ -367,6 +367,12 @@ def claudeTaggedReplayRowJson
     ",\"block_indices\":" ++ jsonArray (row.blockIndices.map toString) ++
     ",\"blocks\":" ++ jsonArray (row.blocks.map claudeReplayInputBlockJson) ++ "}"
 
+private def replayFlatItemsJson (items : List PromptAssembly.ClaudeMap.ReplayFlatItem) : String :=
+  jsonArray (items.map fun item =>
+    match item with
+    | .ordinary bytes => "{\"kind\":\"ordinary\",\"bytes\":" ++ claudeBytesJson bytes ++ "}"
+    | .reasoning bytes => "{\"kind\":\"reasoning\",\"bytes\":" ++ claudeBytesJson bytes ++ "}")
+
 private def claudeCheckpointResolutionJson
     (resolution : PromptAssemblyClaudeCheckpointResolution) : String :=
   "{\"tag\":" ++ claudeReplayTagJson resolution.tag ++
@@ -379,8 +385,10 @@ private def claudeCheckpointResolutionJson
        | .responses => jsonString "responses") ++
     ",\"physical_header\":" ++ jsonString resolution.evidence.physicalHeader ++
     ",\"complete\":" ++ (if resolution.evidence.complete then "true" else "false") ++
-    ",\"prefix_compatible\":" ++
-      (if resolution.evidence.prefixCompatible then "true" else "false") ++
+    ",\"captured\":" ++
+      (match resolution.evidence.captured with
+       | none => "null"
+       | some items => replayFlatItemsJson items) ++
     ",\"expected_reasoning\":" ++
       claudeReasoningWitnessJson resolution.evidence.reasoning ++ "}"
 
@@ -416,9 +424,10 @@ def promptAssemblyReasoningSuffixCaseJson
        | .claudeMessages => jsonString "claude_messages"
        | .responses => jsonString "responses") ++
     ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
-    ",\"retired\":" ++ jsonArray (witness.retired.map claudeReplayTagJson) ++
     ",\"resolutions\":" ++
       jsonArray (witness.resolutions.map claudeCheckpointResolutionJson) ++
+    ",\"stage\":" ++ jsonArray (witness.stage.map claudeTaggedReplayRowJson) ++
+    ",\"assembled\":" ++ replayFlatItemsJson witness.assembled ++
     ",\"replay\":" ++ jsonArray (witness.replay.map claudeTaggedReplayRowJson) ++ "}"
 
 def promptAssemblyReasoningSuffixCasesJson : String :=
@@ -428,36 +437,23 @@ def promptAssemblyReplayShapeCaseJson (witness : PromptAssemblyReplayShapeCase) 
   "{\"name\":" ++ jsonString witness.name ++
     ",\"source\":" ++ claudeTaggedReplayRowJson witness.source ++
     ",\"retained_indices\":" ++ jsonArray (witness.retainedIndices.map toString) ++
-    ",\"issuer_family\":" ++ jsonString witness.issuer.family ++
-    ",\"issuer_endpoint\":" ++ jsonString witness.issuer.endpoint ++
-    ",\"wire\":" ++
-      (match witness.wire with
-       | .claudeMessages => jsonString "claude_messages"
-       | .responses => jsonString "responses") ++
-    ",\"retired\":" ++ jsonArray (witness.retired.map claudeReplayTagJson) ++
-    ",\"resolutions\":" ++
-      jsonArray (witness.resolutions.map claudeCheckpointResolutionJson) ++
     ",\"outcome\":" ++ jsonString witness.outcome ++
     ",\"shaped\":" ++
       (match witness.shaped with
        | none => "null"
-       | some row => claudeTaggedReplayRowJson row) ++
-    ",\"replay\":" ++ jsonArray (witness.replay.map claudeTaggedReplayRowJson) ++ "}"
+       | some row => claudeTaggedReplayRowJson row) ++ "}"
 
 def promptAssemblyReplayShapeCasesJson : String :=
   jsonArray (promptAssemblyReplayShapeCases.map promptAssemblyReplayShapeCaseJson)
 
-private def replayPrefixProjectionJson
-    (projection : PromptAssembly.ClaudeMap.ReplayPrefixProjection) : String :=
-  "{\"context\":" ++ claudeBytesJson projection.context ++
-    ",\"messages\":" ++ jsonArray (projection.messages.map claudeBytesJson) ++ "}"
-
 def promptAssemblyReplayPrefixCaseJson
     (witness : PromptAssemblyReplayPrefixCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++
-    ",\"captured\":" ++ replayPrefixProjectionJson witness.captured ++
-    ",\"current\":" ++ replayPrefixProjectionJson witness.current ++
-    ",\"compatible\":" ++ (if witness.compatible then "true" else "false") ++ "}"
+    ",\"captured\":" ++ replayFlatItemsJson witness.captured ++
+    ",\"current\":" ++ replayFlatItemsJson witness.current ++
+    ",\"ordinary_equal\":" ++ (if witness.ordinaryEqual then "true" else "false") ++
+    ",\"reasoning_suffix\":" ++ (if witness.reasoningSuffix then "true" else "false") ++
+    ",\"leading_removal\":" ++ (if witness.leadingRemoval then "true" else "false") ++ "}"
 
 def promptAssemblyReplayPrefixCasesJson : String :=
   jsonArray (promptAssemblyReplayPrefixCases.map promptAssemblyReplayPrefixCaseJson)

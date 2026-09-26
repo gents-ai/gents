@@ -97,14 +97,23 @@ def retryCases : List RetryCase :=
       baseState .retryableTransport "connection reset" 12
   , failureOriginWitness "provider_stream_malformed_requires_retraction"
       baseState .providerStreamMalformed "incomplete content block" 12
+  , failureOriginWitness "provider_reasoning_rejection_requires_retraction"
+      baseState .providerReasoningRejected "invalid thinking signature" 12
+  , witness "reasoning_rejection_moves_directly_to_repair"
+      { baseState with phase := .retracted .reasoningRejected "invalid thinking signature" 12 }
+      .schedule
+  , witness "reasoning_rejection_after_repair_is_exhausted"
+      { baseState with
+          phase := .retracted .reasoningRejected "invalid thinking signature" 12
+          repairUsed := true } .schedule
   ]
 
-theorem retryCases_count : retryCases.length = 21 := by decide
+theorem retryCases_count : retryCases.length = 24 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
-       true, true, true, true, false, true, true, true] := by
+       true, true, true, true, false, true, true, true, true, true, true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -129,5 +138,20 @@ theorem provider_stream_malformed_case_still_enters_retraction :
     ((retryCases.drop 20).head?).bind (fun c => c.post.map (·.phase)) =
       some (.retractRequired .transport "incomplete content block" 12) := by
   native_decide
+
+/-- A rejected replay never resamples the identical body: it enters the one-shot
+repair (which strips all reasoning) or, once that is spent, exhausts. -/
+theorem reasoning_rejection_cases_repair_once :
+    (retryCases.drop 21).map (fun c => c.post.map (·.phase)) =
+      [some (.retractRequired .reasoningRejected "invalid thinking signature" 12),
+       some .repairing, some .exhausted] := by
+  native_decide
+
+theorem reasoning_rejection_never_backs_off (s : State) (error : String) (wake : Time)
+    (after : State) (hphase : s.phase = .retracted .reasoningRejected error wake)
+    (h : step? s .schedule = some after) :
+    after.phase = .repairing ∨ after.phase = .exhausted := by
+  simp only [step?, hphase] at h
+  split at h <;> cases h <;> simp
 
 end CompletionRetry

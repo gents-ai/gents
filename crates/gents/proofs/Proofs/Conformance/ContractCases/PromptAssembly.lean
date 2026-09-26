@@ -991,6 +991,44 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
   ]
 
 
+private def labeled (label : String) (payload : List UInt8) : List UInt8 :=
+  utf8Bytes (label ++ ":") ++ payload
+
+private def partItem : CanonicalOutput.ReasoningPart (List UInt8) → List UInt8
+  | .text payload signature => labeled "thinking" (payload ++ utf8Bytes ("|" ++ signature.getD ""))
+  | .encrypted payload => labeled "encrypted" payload
+  | .redacted payload => labeled "redacted" payload
+  | .summary payload => labeled "summary" payload
+
+private def ordinaryBlock : CanonicalOutput.MessageBlock (List UInt8) → List UInt8
+  | .text payload => labeled "text" payload
+  | .reasoning _ _ => labeled "reasoning" []
+  | .toolCall _ id _ name arguments _ _ => labeled ("tool_use:" ++ id ++ ":" ++ name) arguments
+  | .toolResult _ id _ _ => labeled "tool_result" (utf8Bytes id)
+  | .media _ => labeled "media" []
+
+/-- A representation of one provider request: the context item, then per row a
+message header (Claude only) and its blocks. Like the Claude encoder, a message
+with no rendered block is omitted. It has the structure of the native
+flattening, so the selection owner runs on it unchanged. -/
+def replayCaseAssemble (wire : PromptAssembly.ClaudeMap.ReplayWire) (context : List UInt8)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
+    List PromptAssembly.ClaudeMap.ReplayFlatItem :=
+  .ordinary (labeled "context" context) :: rows.flatMap fun row =>
+    let blocks : List PromptAssembly.ClaudeMap.ReplayFlatItem := row.blocks.flatMap fun block =>
+      match block with
+      | .reasoning _ parts =>
+          match wire with
+          | .claudeMessages => parts.map fun part => .reasoning (partItem part)
+          | .responses => [.reasoning (parts.flatMap partItem)]
+      | .text payload => if payload.isEmpty then [] else [.ordinary (ordinaryBlock (.text payload))]
+      | other => [.ordinary (ordinaryBlock other)]
+    match wire, blocks with
+    | _, [] => []
+    | .claudeMessages, _ =>
+        .ordinary (labeled "message" (utf8Bytes (row.physicalHeader.getD "user"))) :: blocks
+    | .responses, _ => blocks
+
 /-! The checkpoint cases carry canonical coordinates independently of the
 surviving rows. `carrierIds` are observations only, deliberately duplicated in
 the positive case; neither construction nor replay reads them. -/
@@ -1024,9 +1062,7 @@ private def checkpointCase (name : String)
         outcome := PromptAssembly.ClaudeMap.errorName error,
         prefixRows := [], retained := [], replay := [] }
   | .ok checkpoint =>
-      let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
-      match PromptAssembly.ClaudeMap.restoreContiguousReplay checkpoint
-          { family := "claude", endpoint := "messages" } resolve with
+      match PromptAssembly.ClaudeMap.restoreContiguousReplay checkpoint with
       | .error error =>
           { name, required, rows, split, carrierIds, resolutions,
             outcome := PromptAssembly.ClaudeMap.errorName error,
@@ -1054,7 +1090,8 @@ private def checkpointEvidence (turn : Nat) (value : String) :
   { tag := checkpointTag turn,
     evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
       reasoning { family := "claude", endpoint := "messages" } .claudeMessages
-      "header" true true }
+      "header" true
+        (some (replayCaseAssemble .claudeMessages (utf8Bytes "system+tools") [])) }
 
 def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCase :=
   let first := checkpointRow (some (checkpointTag 1)) "first"
@@ -1068,13 +1105,15 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
       evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
         (PromptAssembly.ClaudeMap.reasoningProjection middle.blocks)
         { family := "claude", endpoint := "messages" } .claudeMessages
-        "header" true true }
+        "header" true
+        (some (replayCaseAssemble .claudeMessages (utf8Bytes "system+tools") [])) }
   let thirdEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { tag := checkpointTag 3,
       evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
         (PromptAssembly.ClaudeMap.reasoningProjection second.blocks)
         { family := "claude", endpoint := "messages" } .claudeMessages
-        "header" true true }
+        "header" true
+        (some (replayCaseAssemble .claudeMessages (utf8Bytes "system+tools") [])) }
   let old := checkpointRow none "old"
   let unsignedFirst : PromptAssembly.ClaudeMap.TaggedReplayRow :=
     { first with blocks :=
@@ -1085,7 +1124,8 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
       evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
         (PromptAssembly.ClaudeMap.reasoningProjection unsignedFirst.blocks)
         { family := "claude", endpoint := "messages" } .claudeMessages
-        "header" true true }
+        "header" true
+        (some (replayCaseAssemble .claudeMessages (utf8Bytes "system+tools") [])) }
   let resolutions := [checkpointEvidence 1 "first", checkpointEvidence 2 "second"]
   [ checkpointCase "two-required-same-provider-id" [checkpointTag 1, checkpointTag 2]
       [first, second] 0 ["same-provider-id", "same-provider-id"] resolutions
@@ -1121,31 +1161,255 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
   ]
 
 
-/-- These cases run the same historical suffix owner used by checkpoint restore.
-Durable restart and consumed-checkpoint behavior require the reduction owner. -/
+/-! ## Replay selection cases
+
+Every case carries the durable inputs of one selection (rows, resolved accepted
+evidence with its flattened capture, issuer and wire), the stage rows the owned
+loop must assemble, the assembled body, and the selected rows. Each case is a
+fresh evaluation over durable facts, so it is also the post-restart case: no
+in-memory frontier exists. -/
+
 structure PromptAssemblyReasoningSuffixCase where
   name : String
   issuer : PromptAssembly.ClaudeMap.ReplayIssuer
   wire : PromptAssembly.ClaudeMap.ReplayWire
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
-  retired : List PromptAssembly.ClaudeMap.ReplayTag
   resolutions : List PromptAssemblyClaudeCheckpointResolution
+  stage : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  assembled : List PromptAssembly.ClaudeMap.ReplayFlatItem
   replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
   deriving Repr
 
-private def reasoningSuffixCase (name : String)
+private def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
+    (tag : PromptAssembly.ClaudeMap.ReplayTag) :
+    List PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
+  (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
+
+private def reasoningSuffixCase (name : String) (context : List UInt8)
     (issuer : PromptAssembly.ClaudeMap.ReplayIssuer)
     (wire : PromptAssembly.ClaudeMap.ReplayWire)
     (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
-    (retired : List PromptAssembly.ClaudeMap.ReplayTag)
     (resolutions : List PromptAssemblyClaudeCheckpointResolution) :
     PromptAssemblyReasoningSuffixCase :=
-  let checkpoint : PromptAssembly.ClaudeMap.ReplayCheckpoint :=
-    { required := [], prefixRows := [], retained := rows, retired }
-  let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
-  { name, issuer, wire, rows, retired, resolutions,
-    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix checkpoint
-      issuer wire resolve }
+  let resolve := resolveFrom resolutions
+  let stage := PromptAssembly.ClaudeMap.replayStage rows issuer wire resolve
+  { name, issuer, wire, rows, resolutions, stage,
+    assembled := replayCaseAssemble wire context stage,
+    replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix rows issuer wire
+      resolve (replayCaseAssemble wire context) }
+
+private def turnStartsFrom (offset : Nat) (positions : List Nat) :
+    Nat → List Nat → Option (List Nat)
+  | _, [] => some []
+  | seen, count :: rest => do
+      let position ← positions[seen]?
+      if position < offset then none else
+      let tail ← turnStartsFrom offset positions (seen + count) rest
+      some ((position - offset) :: tail)
+
+/-- The literal provider acceptance rule on a sent body: the prefix before each
+replayed turn equals its accepted producing request with a leading run of
+reasoning removed. -/
+def replaySentAccepted (wire : PromptAssembly.ClaudeMap.ReplayWire)
+    (resolve : PromptAssembly.ClaudeMap.ReplayTag →
+      List PromptAssembly.ClaudeMap.ResolvedReplayEvidence)
+    (sent : List PromptAssembly.ClaudeMap.ReplayFlatItem)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) : Bool :=
+  let groups := PromptAssembly.ClaudeMap.turnGroups rows
+  let counts := groups.map fun group =>
+    (group.candidates.map (PromptAssembly.ClaudeMap.wireReasoningCount wire)).sum
+  match turnStartsFrom (PromptAssembly.ClaudeMap.turnHeaderOffset wire)
+      (PromptAssembly.ClaudeMap.reasoningPositions sent) 0 counts with
+  | none => false
+  | some starts =>
+      (groups.zip starts).all fun entry =>
+        match PromptAssembly.ClaudeMap.turnCaptured resolve entry.1 with
+        | none => false
+        | some captured =>
+            let current := sent.take entry.2
+            current == PromptAssembly.ReplayFrontier.dropLeadingReasoning
+              ((PromptAssembly.ReplayFrontier.anchored captured).length -
+                (PromptAssembly.ReplayFrontier.anchored current).length) captured
+
+inductive ReplayEvent where
+  | user (text : String)
+  | respond (turn : Nat) (reasoning : List String)
+  | reasoningOnly (turn : Nat) (reasoning : List String)
+  | interrupted (turn : Nat) (reasoning : List String)
+  | compact (keep : Nat)
+  | repair
+  | stripRetry
+  | context (value : String)
+  | issuer (family : String)
+  | restart
+  deriving Repr
+
+structure ReplaySim where
+  name : String
+  wire : PromptAssembly.ClaudeMap.ReplayWire
+  context : List UInt8
+  issuer : PromptAssembly.ClaudeMap.ReplayIssuer
+  durable : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  effective : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  resolutions : List PromptAssemblyClaudeCheckpointResolution
+  stripNext : Bool
+  cases : List PromptAssemblyReasoningSuffixCase
+  accepted : Bool
+  /-- Turn numbers replayed in the last selection. -/
+  lastReplayed : List Nat
+
+private def simTag (turn : Nat) : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := 7, source := .provider 2 turn 1 }
+
+private def simPart (wire : PromptAssembly.ClaudeMap.ReplayWire) (value : String) :
+    List (CanonicalOutput.ReasoningPart (List UInt8)) :=
+  match wire with
+  | .claudeMessages =>
+      if value.startsWith "redacted-" then [.redacted (utf8Bytes value)]
+      else if value.startsWith "unsigned-" then [.text (utf8Bytes value) none]
+      else [.text (utf8Bytes value) (some ("sig-" ++ value))]
+  | .responses => [.encrypted (utf8Bytes value), .summary (utf8Bytes ("summary-" ++ value))]
+
+private def stripAllReasoning (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
+    List PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  PromptAssembly.ClaudeMap.stripFirstReasoningRows
+    (PromptAssembly.ClaudeMap.reasoningCandidates rows).length rows
+
+private def replayedTurns (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) : List Nat :=
+  (PromptAssembly.ClaudeMap.turnGroups rows).filterMap fun group =>
+    match group.candidates.head?.bind (·.source) with
+    | some { source := .provider _ turn _, .. } => some turn
+    | _ => none
+
+private def simRespond (sim : ReplaySim) (turn : Nat) (reasoning : List String)
+    (complete : Bool) (answer : Bool := true) : ReplaySim :=
+  let resolve := resolveFrom sim.resolutions
+  let rows := sim.effective
+  let restored :=
+    if sim.stripNext then stripAllReasoning rows
+    else PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix rows sim.issuer sim.wire
+      resolve (replayCaseAssemble sim.wire sim.context)
+  let sent := replayCaseAssemble sim.wire sim.context restored
+  let cases := if sim.stripNext then sim.cases else
+    sim.cases ++ [reasoningSuffixCase (sim.name ++ "/before-turn-" ++ toString turn)
+      sim.context sim.issuer sim.wire rows sim.resolutions]
+  let blocks : List (CanonicalOutput.MessageBlock (List UInt8)) :=
+    reasoning.map (fun value => .reasoning none (simPart sim.wire value)) ++
+      (if answer then [.text (utf8Bytes ("answer-" ++ toString turn))] else [])
+  let row : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { source := some (simTag turn), physicalHeader := some ("h" ++ toString turn),
+      blockIndices := List.range blocks.length, blocks }
+  let evidence : PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
+    { origin := .acceptedProvider,
+      reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness row,
+      issuer := sim.issuer, wire := sim.wire, physicalHeader := "h" ++ toString turn,
+      complete, captured := some sent }
+  { sim with
+    durable := sim.durable ++ [row], effective := sim.effective ++ [row],
+    resolutions := sim.resolutions ++ [{ tag := simTag turn, evidence }],
+    stripNext := false, cases,
+    accepted := sim.accepted && replaySentAccepted sim.wire resolve sent restored,
+    lastReplayed := replayedTurns restored }
+
+private def userRow (text : String) : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source := none, physicalHeader := none, blockIndices := [0],
+    blocks := [.text (utf8Bytes text)] }
+
+private def simStep (sim : ReplaySim) : ReplayEvent → ReplaySim
+  | .user value =>
+      let row := userRow value
+      { sim with durable := sim.durable ++ [row], effective := sim.effective ++ [row] }
+  | .respond turn reasoning => simRespond sim turn reasoning true
+  | .interrupted turn reasoning => simRespond sim turn reasoning false
+  | .reasoningOnly turn reasoning => simRespond sim turn reasoning true false
+  | .compact keep =>
+      let rows := userRow "summary" :: sim.effective.drop (sim.effective.length - keep)
+      { sim with durable := rows, effective := rows }
+  | .repair =>
+      let repaired := match sim.effective with
+        | [] => []
+        | first :: rest =>
+            { first with blocks := first.blocks.map fun block =>
+                match block with
+                | .text payload => .text (payload ++ utf8Bytes "~repaired")
+                | other => other } :: rest
+      { sim with effective := repaired, stripNext := true }
+  | .stripRetry => { sim with stripNext := true }
+  | .context value => { sim with context := utf8Bytes value }
+  | .issuer family => { sim with issuer := { sim.issuer with family } }
+  | .restart => { sim with effective := sim.durable, stripNext := false }
+
+def runReplayScenario (name : String) (wire : PromptAssembly.ClaudeMap.ReplayWire)
+    (events : List ReplayEvent) : ReplaySim :=
+  events.foldl simStep
+    { name, wire, context := utf8Bytes "system+tools",
+      issuer := { family := "claude", endpoint := "route" }, durable := [], effective := [],
+      resolutions := [], stripNext := false, cases := [], accepted := true, lastReplayed := [] }
+
+private def claudeScenario (name : String) (events : List ReplayEvent) : ReplaySim :=
+  runReplayScenario name .claudeMessages events
+
+def replayScenarios : List ReplaySim :=
+  let u := ReplayEvent.user
+  let r := ReplayEvent.respond
+  [ claudeScenario "append-only"
+      [u "a", r 1 ["t1"], u "b", r 2 ["t2"], u "c", r 3 ["t3"], u "d", r 4 []]
+  , claudeScenario "interleaved-blocks"
+      [u "a", r 1 ["t1a", "t1b"], u "b", r 2 ["t2"], u "c", r 3 []]
+  , claudeScenario "keep-tail-compaction"
+      [u "a", r 1 ["t1"], u "b", r 2 ["t2"], .compact 2, u "c", r 3 ["t3"], u "d", r 4 ["t4"],
+       u "e", r 5 []]
+  , claudeScenario "repair-only-rewrite-then-restart"
+      [u "a", r 1 ["t1"], u "b", r 2 ["t2"], .repair, r 3 ["t3"], u "c", r 4 ["t4"],
+       u "d", r 5 [], .restart, u "e", r 6 []]
+  , claudeScenario "strip-and-retry-then-restart"
+      [u "a", r 1 ["t1"], u "b", .stripRetry, r 2 ["t2"], u "c", r 3 ["t3"], .restart,
+       u "d", r 4 []]
+  , claudeScenario "tool-change-then-revert"
+      [u "a", r 1 ["t1"], .context "system+tools-changed", u "b", r 2 ["t2"],
+       .context "system+tools", u "c", r 3 ["t3"], u "d", r 4 []]
+  , claudeScenario "tool-change-without-reasoning-then-revert"
+      [u "a", r 1 ["t1"], .context "system+tools-changed", u "b", r 2 [],
+       .context "system+tools", u "c", r 3 ["t3"], u "d", r 4 []]
+  , claudeScenario "issuer-switch-then-back"
+      [u "a", r 1 ["t1"], .issuer "other-route", u "b", r 2 ["t2"], .issuer "claude",
+       u "c", r 3 ["t3"], u "d", r 4 []]
+  , claudeScenario "interrupted-turn"
+      [u "a", r 1 ["t1"], u "b", .interrupted 2 ["t2"], u "c", r 3 ["t3"], u "d", r 4 [],
+       .restart, u "e", r 5 []]
+  , claudeScenario "reasoning-only-claude-turn"
+      [u "a", r 1 ["t1"], u "b", .reasoningOnly 2 ["t2"], u "c", r 3 ["t3"], u "d", r 4 []]
+  , claudeScenario "redacted-thinking"
+      [u "a", r 1 ["redacted-t1"], u "b", r 2 ["t2"], u "c", r 3 []]
+  , claudeScenario "unsigned-thinking-cuts-run"
+      [u "a", r 1 ["t1"], u "b", r 2 ["unsigned-t2"], u "c", r 3 ["t3"], u "d", r 4 []]
+  , runReplayScenario "responses-encrypted" .responses
+      [u "a", r 1 ["e1"], u "b", r 2 ["e2"], u "c", r 3 []]
+  , runReplayScenario "responses-compaction-and-restart" .responses
+      [u "a", r 1 ["e1"], u "b", r 2 ["e2"], .compact 2, u "c", r 3 ["e3"], .restart,
+       u "d", r 4 []]
+  ]
+
+/-- Every body the scenarios send satisfies the provider acceptance rule. -/
+example : replayScenarios.all (·.accepted) = true := by native_decide
+
+/-- Expected replayed turns in each scenario's final request, checked against
+model execution. -/
+example : replayScenarios.map (fun sim => (sim.name, sim.lastReplayed)) =
+    [ ("append-only", [1, 2, 3])
+    , ("interleaved-blocks", [1, 2])
+    , ("keep-tail-compaction", [3, 4])
+    , ("repair-only-rewrite-then-restart", [])
+    , ("strip-and-retry-then-restart", [2, 3])
+    , ("tool-change-then-revert", [3])
+    , ("tool-change-without-reasoning-then-revert", [1, 3])
+    , ("issuer-switch-then-back", [3])
+    , ("interrupted-turn", [3])
+    , ("reasoning-only-claude-turn", [3])
+    , ("redacted-thinking", [1, 2])
+    , ("unsigned-thinking-cuts-run", [3])
+    , ("responses-encrypted", [1, 2])
+    , ("responses-compaction-and-restart", [3]) ] := by native_decide
 
 private def shapeTwoBlockRow : PromptAssembly.ClaudeMap.TaggedReplayRow :=
   { source := some (checkpointTag 4), physicalHeader := some "header",
@@ -1156,145 +1420,74 @@ private def shapeTwoBlockRow : PromptAssembly.ClaudeMap.TaggedReplayRow :=
 def promptAssemblyReasoningSuffixCases : List PromptAssemblyReasoningSuffixCase :=
   let claude : PromptAssembly.ClaudeMap.ReplayIssuer :=
     { family := "claude", endpoint := "messages" }
-  let responses : PromptAssembly.ClaudeMap.ReplayIssuer :=
-    { family := "openai", endpoint := "responses" }
+  let context := utf8Bytes "system+tools"
   let first := checkpointRow (some (checkpointTag 1)) "first"
   let second := checkpointRow (some (checkpointTag 2)) "second"
   let third := checkpointRow (some (checkpointTag 3)) "third"
   let unknown := checkpointRow none "unknown"
-  let encrypted : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-    { source := some (checkpointTag 3), physicalHeader := some "header",
-      blockIndices := [0, 1],
-      blocks := [.reasoning none [.encrypted (utf8Bytes "sealed"),
-        .summary (utf8Bytes "summary")],
-        .text (utf8Bytes "visible")] }
-  let encryptedEvidence : PromptAssemblyClaudeCheckpointResolution :=
-    { tag := checkpointTag 3,
-      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
-        (PromptAssembly.ClaudeMap.reasoningProjection encrypted.blocks)
-        responses .responses "header" true true }
-  let summaryOnly : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-    { source := encrypted.source, physicalHeader := encrypted.physicalHeader,
-      blockIndices := [0],
-      blocks := [.reasoning none [.summary (utf8Bytes "summary")]] }
-  let redactedOnResponses : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-    { source := encrypted.source, physicalHeader := encrypted.physicalHeader,
-      blockIndices := [0],
-      blocks := [.reasoning none [.redacted (utf8Bytes "redacted")]] }
-  let twoBlocks := shapeTwoBlockRow
   let laterBlock : PromptAssembly.ClaudeMap.TaggedReplayRow :=
-    { source := twoBlocks.source, physicalHeader := twoBlocks.physicalHeader,
+    { source := shapeTwoBlockRow.source, physicalHeader := shapeTwoBlockRow.physicalHeader,
       blockIndices := [1],
       blocks := [.reasoning none [.text (utf8Bytes "late") (some "sig-late")]] }
   let twoBlocksEvidence : PromptAssemblyClaudeCheckpointResolution :=
     { tag := checkpointTag 4,
       evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .acceptedProvider
-        (PromptAssembly.ClaudeMap.reasoningProjection twoBlocks.blocks)
-        claude .claudeMessages "header" true true }
-  let evidence := [checkpointEvidence 1 "first", checkpointEvidence 2 "second",
-    checkpointEvidence 3 "third"]
-  [ reasoningSuffixCase "historical-same-issuer" claude .claudeMessages
-      [first, second, third] [] evidence
-  , reasoningSuffixCase "provider-switch-removes-old-reasoning" responses .responses
-      [first, encrypted] [] [checkpointEvidence 1 "first", encryptedEvidence]
-  , reasoningSuffixCase "middle-unknown-cuts-leading-run" claude .claudeMessages
-      [first, unknown, third] [] evidence
-  , reasoningSuffixCase "retired-input-excludes-earlier-blocks" claude .claudeMessages
-      [first, second, third] [checkpointTag 1, checkpointTag 2] evidence
-  , reasoningSuffixCase "incomplete-physical-close-cuts-run" claude .claudeMessages
-      [first, second, third] []
-      [checkpointEvidence 1 "first",
-       { (checkpointEvidence 2 "second") with evidence :=
-          { (checkpointEvidence 2 "second").evidence with complete := false } },
-       checkpointEvidence 3 "third"]
-  , reasoningSuffixCase "same-wire-different-issuer-family" responses .responses
-      [encrypted] []
-      [{ encryptedEvidence with evidence :=
-        { encryptedEvidence.evidence with issuer :=
-          { family := "grok", endpoint := "responses" } } }]
-  , reasoningSuffixCase "same-issuer-changed-prefix" claude .claudeMessages
-      [first, second, third] []
-      [checkpointEvidence 1 "first",
-       { (checkpointEvidence 2 "second") with evidence :=
-          { (checkpointEvidence 2 "second").evidence with prefixCompatible := false } },
-       checkpointEvidence 3 "third"]
-  , reasoningSuffixCase "responses-summary-without-ciphertext" responses .responses
-      [summaryOnly] []
-      [{ encryptedEvidence with evidence :=
-        { encryptedEvidence.evidence with reasoning :=
-          PromptAssembly.ClaudeMap.reasoningProjection summaryOnly.blocks } }]
-  , reasoningSuffixCase "responses-rejects-foreign-redaction" responses .responses
-      [redactedOnResponses] []
-      [{ encryptedEvidence with evidence :=
-        { encryptedEvidence.evidence with reasoning :=
-          PromptAssembly.ClaudeMap.reasoningProjection redactedOnResponses.blocks } }]
-  , reasoningSuffixCase "original-block-index-survives-deletion" claude .claudeMessages
-      [laterBlock] [] [twoBlocksEvidence]
-  , reasoningSuffixCase "duplicate-original-block-index-rejected" claude .claudeMessages
-      [{ twoBlocks with blockIndices := [0, 0] }] [] [twoBlocksEvidence]
-  , reasoningSuffixCase "reordered-original-block-index-rejected" claude .claudeMessages
-      [{ twoBlocks with blockIndices := [1, 0] }] [] [twoBlocksEvidence]
-  , reasoningSuffixCase "duplicate-physical-candidate-rejected" claude .claudeMessages
-      [laterBlock, laterBlock] [] [twoBlocksEvidence]
-  , reasoningSuffixCase "foreign-accepted-source-cuts-run" claude .claudeMessages
-      [first, second, third] []
-      [checkpointEvidence 1 "first",
-       { (checkpointEvidence 2 "second") with evidence :=
-          { (checkpointEvidence 2 "second").evidence with origin := .foreign } },
-       checkpointEvidence 3 "third"]
-  , reasoningSuffixCase "subscription-label-without-accepted-provider-rejected"
-      claude .claudeMessages [first] []
-      [{ (checkpointEvidence 1 "first") with evidence :=
-        { (checkpointEvidence 1 "first").evidence with origin := .claudeSubscription } }]
-  , reasoningSuffixCase "physical-header-mismatch-cuts-run" claude .claudeMessages
-      [first, second, third] []
-      [checkpointEvidence 1 "first",
-       { (checkpointEvidence 2 "second") with evidence :=
-          { (checkpointEvidence 2 "second").evidence with physicalHeader := "other" } },
-       checkpointEvidence 3 "third"]
-  ]
+        (PromptAssembly.ClaudeMap.reasoningProjection shapeTwoBlockRow.blocks)
+        claude .claudeMessages "header" true
+        (some (replayCaseAssemble .claudeMessages context [])) }
+  let accepted (turn : Nat) (value : String) (prior : List PromptAssembly.ClaudeMap.TaggedReplayRow)
+      (change : PromptAssembly.ClaudeMap.ResolvedReplayEvidence →
+        PromptAssembly.ClaudeMap.ResolvedReplayEvidence := id) :
+      PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag turn,
+      evidence := change { (checkpointEvidence turn value).evidence with
+        captured := some (replayCaseAssemble .claudeMessages context prior) } }
+  [ reasoningSuffixCase "middle-unknown-cuts-leading-run" context claude .claudeMessages
+      [first, unknown, third]
+      [accepted 1 "first" [], accepted 3 "third" [first, unknown]]
+  , reasoningSuffixCase "missing-capture-cuts-run" context claude .claudeMessages
+      [first, second, third]
+      [accepted 1 "first" [], accepted 2 "second" [first] ({ · with captured := none }),
+       accepted 3 "third" [first, second]]
+  , reasoningSuffixCase "incomplete-physical-close-cuts-run" context claude .claudeMessages
+      [first, second, third]
+      [accepted 1 "first" [], accepted 2 "second" [first] ({ · with complete := false }),
+       accepted 3 "third" [first, second]]
+  , reasoningSuffixCase "same-wire-different-issuer" context claude .claudeMessages
+      [first] [accepted 1 "first" [] ({ · with issuer := { family := "claude", endpoint := "proxy" } })]
+  , reasoningSuffixCase "original-block-index-survives-deletion" context claude .claudeMessages
+      [laterBlock] [twoBlocksEvidence]
+  , reasoningSuffixCase "duplicate-original-block-index-rejected" context claude .claudeMessages
+      [{ shapeTwoBlockRow with blockIndices := [0, 0] }] [twoBlocksEvidence]
+  , reasoningSuffixCase "duplicate-physical-candidate-rejected" context claude .claudeMessages
+      [laterBlock, laterBlock] [twoBlocksEvidence]
+  , reasoningSuffixCase "foreign-accepted-source-cuts-run" context claude .claudeMessages
+      [first, second, third]
+      [accepted 1 "first" [], accepted 2 "second" [first] ({ · with origin := .foreign }),
+       accepted 3 "third" [first, second]]
+  , reasoningSuffixCase "physical-header-mismatch-cuts-run" context claude .claudeMessages
+      [first, second, third]
+      [accepted 1 "first" [], accepted 2 "second" [first] ({ · with physicalHeader := "other" }),
+       accepted 3 "third" [first, second]]
+  ] ++ replayScenarios.flatMap (·.cases)
 
 structure PromptAssemblyReplayShapeCase where
   name : String
   source : PromptAssembly.ClaudeMap.TaggedReplayRow
   retainedIndices : List Nat
-  issuer : PromptAssembly.ClaudeMap.ReplayIssuer
-  wire : PromptAssembly.ClaudeMap.ReplayWire
-  retired : List PromptAssembly.ClaudeMap.ReplayTag
-  resolutions : List PromptAssemblyClaudeCheckpointResolution
   outcome : String
   shaped : Option PromptAssembly.ClaudeMap.TaggedReplayRow
-  replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
   deriving Repr
 
 private def replayShapeCase (name : String)
     (source : PromptAssembly.ClaudeMap.TaggedReplayRow)
     (retainedIndices : List Nat) : PromptAssemblyReplayShapeCase :=
-  let issuer : PromptAssembly.ClaudeMap.ReplayIssuer :=
-    { family := "claude", endpoint := "messages" }
-  let wire : PromptAssembly.ClaudeMap.ReplayWire := .claudeMessages
-  let retired : List PromptAssembly.ClaudeMap.ReplayTag := []
-  let resolutions : List PromptAssemblyClaudeCheckpointResolution :=
-    [{ tag := checkpointTag 4,
-       evidence :=
-        { origin := .acceptedProvider,
-          reasoning := PromptAssembly.ClaudeMap.originalReasoningWitness source,
-          issuer, wire, physicalHeader := "header", complete := true,
-          prefixCompatible := true } }]
-  let base : PromptAssemblyReplayShapeCase :=
-    { name, source, retainedIndices, issuer, wire, retired, resolutions,
-      outcome := "", shaped := none, replay := [] }
   match PromptAssembly.ClaudeMap.selectReplayBlocks
       (fun index _ => decide (index ∈ retainedIndices)) source with
-  | .error error => { base with outcome := PromptAssembly.ClaudeMap.errorName error }
-  | .ok shaped =>
-      let checkpoint : PromptAssembly.ClaudeMap.ReplayCheckpoint :=
-        { required := [], prefixRows := [], retained := [shaped], retired }
-      let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
-      { name, source, retainedIndices, issuer, wire, retired, resolutions,
-        outcome := "ok", shaped := some shaped,
-        replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix checkpoint
-          issuer wire resolve }
+  | .error error =>
+      { name, source, retainedIndices,
+        outcome := PromptAssembly.ClaudeMap.errorName error, shaped := none }
+  | .ok shaped => { name, source, retainedIndices, outcome := "ok", shaped := some shaped }
 
 def promptAssemblyReplayShapeCases : List PromptAssemblyReplayShapeCase :=
   [ replayShapeCase "drop-first-original-index-keeps-second" shapeTwoBlockRow [1]
@@ -1313,37 +1506,55 @@ def promptAssemblyReplayShapeCases : List PromptAssemblyReplayShapeCase :=
       { shapeTwoBlockRow with blockIndices := [1, 0] } [1]
   ]
 
-/-- Inputs are already selected from the wire-shaped request. In particular,
-the nested `cache_control` bytes below are conversation payload, not a
-top-level cache-control field eligible for exclusion. -/
+/-- Flat prefix cases for the acceptance checks themselves. -/
 structure PromptAssemblyReplayPrefixCase where
   name : String
-  captured : PromptAssembly.ClaudeMap.ReplayPrefixProjection
-  current : PromptAssembly.ClaudeMap.ReplayPrefixProjection
-  compatible : Bool
+  captured : List PromptAssembly.ClaudeMap.ReplayFlatItem
+  current : List PromptAssembly.ClaudeMap.ReplayFlatItem
+  ordinaryEqual : Bool
+  reasoningSuffix : Bool
+  leadingRemoval : Bool
   deriving Repr
 
 private def replayPrefixCase (name : String)
-    (captured current : PromptAssembly.ClaudeMap.ReplayPrefixProjection) :
+    (captured current : List PromptAssembly.ClaudeMap.ReplayFlatItem) :
     PromptAssemblyReplayPrefixCase :=
+  let anchoredCaptured := PromptAssembly.ReplayFrontier.anchored captured
+  let anchoredCurrent := PromptAssembly.ReplayFrontier.anchored current
   { name, captured, current,
-    compatible := PromptAssembly.ClaudeMap.replayPrefixCompatible captured current }
+    ordinaryEqual := PromptAssembly.ReplayFrontier.ords current ==
+      PromptAssembly.ReplayFrontier.ords captured,
+    reasoningSuffix := anchoredCurrent.isSuffixOf anchoredCaptured,
+    leadingRemoval := current == PromptAssembly.ReplayFrontier.dropLeadingReasoning
+      (anchoredCaptured.length - anchoredCurrent.length) captured }
 
 def promptAssemblyReplayPrefixCases : List PromptAssemblyReplayPrefixCase :=
-  let captured : PromptAssembly.ClaudeMap.ReplayPrefixProjection :=
-    { context := utf8Bytes "system+tools+route",
-      messages := [utf8Bytes "user-one", utf8Bytes "assistant-one"] }
-  [ replayPrefixCase "append-preserves-prefix" captured
-      { captured with messages := captured.messages ++ [utf8Bytes "user-two"] }
-  , replayPrefixCase "system-or-tools-change-breaks-prefix" captured
-      { captured with context := utf8Bytes "changed-system+tools+route" }
-  , replayPrefixCase "changed-message-breaks-prefix" captured
-      { captured with messages := [utf8Bytes "user-one", utf8Bytes "assistant-edited"] }
-  , replayPrefixCase "deleted-message-breaks-prefix" captured
-      { captured with messages := [utf8Bytes "user-one"] }
-  , replayPrefixCase "nested-cache-control-key-is-payload"
-      { captured with messages := [utf8Bytes "{cache_control:one}"] }
-      { captured with messages := [utf8Bytes "{cache_control:two}"] }
+  let o (value : String) : PromptAssembly.ClaudeMap.ReplayFlatItem := .ordinary (utf8Bytes value)
+  let t (value : String) : PromptAssembly.ClaudeMap.ReplayFlatItem := .reasoning (utf8Bytes value)
+  let captured := [o "context", o "user-1", o "assistant", t "r1", o "text-1", o "user-2",
+    o "assistant", t "r2", t "r3", o "text-2", o "user-3"]
+  [ replayPrefixCase "identical" captured captured
+  , replayPrefixCase "leading-run-removed" captured
+      [o "context", o "user-1", o "assistant", o "text-1", o "user-2", o "assistant", t "r2",
+       t "r3", o "text-2", o "user-3"]
+  , replayPrefixCase "all-reasoning-removed" captured (captured.filter fun
+      | .ordinary _ => true | .reasoning _ => false)
+  , replayPrefixCase "middle-block-removed" captured
+      [o "context", o "user-1", o "assistant", t "r1", o "text-1", o "user-2", o "assistant",
+       t "r3", o "text-2", o "user-3"]
+  , replayPrefixCase "reasoning-moved" captured
+      [o "context", o "user-1", o "assistant", o "text-1", t "r1", o "user-2", o "assistant",
+       t "r2", t "r3", o "text-2", o "user-3"]
+  , replayPrefixCase "ordinary-edited" captured
+      [o "context", o "user-1-edited", o "assistant", t "r1", o "text-1", o "user-2",
+       o "assistant", t "r2", t "r3", o "text-2", o "user-3"]
+  , replayPrefixCase "context-changed" captured
+      ((o "context-changed") :: captured.drop 1)
   ]
+
+theorem replayPrefixCases_checks_decide_rule :
+    promptAssemblyReplayPrefixCases.all (fun row =>
+      row.leadingRemoval == (row.ordinaryEqual && row.reasoningSuffix)) = true := by
+  native_decide
 
 end Conformance.ContractCases

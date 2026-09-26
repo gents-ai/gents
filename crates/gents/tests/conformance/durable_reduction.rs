@@ -13,14 +13,11 @@ use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, Provena
 use serde_json::Value;
 
 fn unassociated(prefix: &[Message], suffix: &[Message]) -> ReplayAssociations {
-    let tagged = |messages: &[Message]| {
-        messages
-            .iter()
-            .cloned()
-            .map(gents_loop::loop_stream::TaggedMessage::unassociated)
-            .collect::<Vec<_>>()
-    };
-    ReplayAssociations::from_tagged_split(vec![], &tagged(prefix), &tagged(suffix))
+    ReplayAssociations {
+        required: vec![],
+        prefix_sources: vec![None; prefix.len()],
+        retained_sources: vec![None; suffix.len()],
+    }
 }
 
 fn checkpoint(value: u64) -> Vec<Message> {

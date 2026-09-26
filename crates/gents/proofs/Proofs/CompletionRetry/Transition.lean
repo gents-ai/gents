@@ -19,6 +19,10 @@ inductive Action where
   /-- CanonicalOutput.Execution.acceptAndPublish supplies this accepted header. -/
   | accept (header : Nat)
   | acceptedToolFailure
+  /-- The one-shot repair attempt. Native repair also removes every reasoning
+  block from the provider input: removing all reasoning is a leading run, so the
+  retry is accepted under preserved thinking, and the accepted turn's capture
+  (without the removed reasoning) becomes the replay frontier. -/
   | repairIssue
   /-- Observe usage already accounted by the InferenceCall owner. The native
   accounting bridge supplies completeness and replay idempotency. -/
@@ -59,6 +63,10 @@ def step? (s : State) : Action → Option State
           else if (s.lastParseError = some error ∨
                     s.resampleUsed ≥ s.budget.resampleRetries) ∧
                   s.budget.allowRepair ∧ ¬ s.repairUsed then
+            some { s with phase := .repairing, lastParseError := some error }
+          else some { s with phase := .exhausted }
+      | .retracted .reasoningRejected error _ =>
+          if s.budget.allowRepair ∧ ¬ s.repairUsed then
             some { s with phase := .repairing, lastParseError := some error }
           else some { s with phase := .exhausted }
       | .retracted .permanent _ _ => some { s with phase := .failedPermanent }

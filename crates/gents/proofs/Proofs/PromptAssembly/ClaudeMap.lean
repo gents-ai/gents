@@ -1,5 +1,6 @@
 import Proofs.Transcript.State
 import Proofs.CanonicalOutput.Message
+import Proofs.PromptAssembly.ReplayFrontier
 
 /-!
 # Claude content-block map (Track B / B2)
@@ -77,8 +78,6 @@ inductive MapError where
   | missingRequiredReplay
   | requiredReplayInPrefix
   | invalidReplaySplit
-  | invalidReplayGap
-  | retiredReplayRequired
   deriving DecidableEq, Repr
 
 def errorName : MapError → String
@@ -104,8 +103,6 @@ def errorName : MapError → String
   | .missingRequiredReplay => "missingRequiredReplay"
   | .requiredReplayInPrefix => "requiredReplayInPrefix"
   | .invalidReplaySplit => "invalidReplaySplit"
-  | .invalidReplayGap => "invalidReplayGap"
-  | .retiredReplayRequired => "retiredReplayRequired"
 
 def blockTag : Block → String
   | .text => "text"
@@ -637,40 +634,12 @@ inductive ReplayWire where
   | responses
   deriving DecidableEq, Repr
 
-/-- The structural replay-prefix fields selected from the actual provider
-request. `context` covers system, tools and the resolved route; `messages`
-are ordered wire-shaped conversation payloads after reasoning removal. Cache
-controls and non-prefix request parameters are omitted by that selector, not
-by a recursive key-name scrub: a nested payload key remains part of a message.
-The model treats selected bytes as opaque. Native derives them from the
-canonical JSON projection of the actual built request/capture (whose object
-keys are canonicalized), not a second request serializer. This comparison is
-not a theorem of provider tokenizer behavior, signature acceptance, or retry
-safety. A pre-acceptance provider rejection may trigger only the separately
-owned strip-once retry; accepted tool effects cannot be replayed by it. -/
-structure ReplayPrefixProjection where
-  context : List UInt8
-  messages : List (List UInt8)
-  deriving DecidableEq, Repr
-
-/-- A captured pre-output projection is usable only while its selected
-context is unchanged and its complete prior conversation remains an exact
-prefix of the current reasoning-free provider input. -/
-def replayPrefixCompatible (captured current : ReplayPrefixProjection) : Bool :=
-  captured.context == current.context &&
-    decide (List.IsPrefix captured.messages current.messages)
-
-theorem replayPrefixCompatible_context (captured current : ReplayPrefixProjection)
-    (h : replayPrefixCompatible captured current = true) :
-    captured.context = current.context := by
-  simp [replayPrefixCompatible] at h
-  exact h.1
-
-theorem replayPrefixCompatible_messages (captured current : ReplayPrefixProjection)
-    (h : replayPrefixCompatible captured current = true) :
-    List.IsPrefix captured.messages current.messages := by
-  simp [replayPrefixCompatible] at h
-  exact h.2
+/-- One selected provider-input item: the context item (system, tools and
+route, without non-prefix request parameters or cache hints), then each
+message's header and content blocks, with reasoning blocks as reasoning items.
+Native derives these from the canonical JSON of the actual built request or the
+accepted transport capture, never from a second serializer. -/
+abbrev ReplayFlatItem := ReplayFrontier.FlatItem (List UInt8) (List UInt8)
 
 structure ResolvedReplayEvidence where
   origin : ReplayOrigin
@@ -681,10 +650,9 @@ structure ResolvedReplayEvidence where
   /-- True only for a completed, published physical provider turn. Partial
   received bytes remain audit data and are not replayable under this rule. -/
   complete : Bool
-  /-- Exact compatible system, tools and prior-message projection, excluding
-  cache controls and request parameters. Native assembly/capture must derive
-  this fact; matching issuer alone does not establish it. -/
-  prefixCompatible : Bool
+  /-- The flattened accepted request that produced this turn; `none` when the
+  capture is missing or undecodable, which makes the turn non-replayable. -/
+  captured : Option (List ReplayFlatItem)
   deriving Repr
 
 /-- Each candidate is one native reasoning block in its physical source row.
@@ -744,18 +712,17 @@ def replayableReasoning (wire : ReplayWire)
           | _ => false)
 
 def validReasoningCandidate (issuer : ReplayIssuer) (wire : ReplayWire)
-    (retired : List ReplayTag)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
     (candidate : ReasoningCandidate) : Bool :=
   match candidate.source, candidate.physicalHeader with
   | some tag, some header =>
-      if !providerReplayTag tag || tag ∈ retired then false
+      if !providerReplayTag tag then false
       else match resolve tag with
         | [evidence] =>
             evidence.origin == .acceptedProvider &&
             evidence.issuer == issuer && evidence.wire == wire &&
             evidence.physicalHeader == header &&
-            evidence.complete && evidence.prefixCompatible &&
+            evidence.complete &&
             candidate.indicesComplete &&
             candidate.blockIndex.any (fun index =>
               (index, candidate.parts) ∈ evidence.reasoning) &&
@@ -764,91 +731,13 @@ def validReasoningCandidate (issuer : ReplayIssuer) (wire : ReplayWire)
   | _, _ => false
 
 def validForReplayProjection (issuer : ReplayIssuer) (wire : ReplayWire)
-    (retired : List ReplayTag)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
     (candidates : List ReasoningCandidate) (candidate : ReasoningCandidate) : Bool :=
-  validReasoningCandidate issuer wire retired resolve candidate &&
+  validReasoningCandidate issuer wire resolve candidate &&
     ((candidates.filter fun other =>
       other.source == candidate.source &&
       other.physicalHeader == candidate.physicalHeader &&
       other.blockIndex == candidate.blockIndex).length == 1)
-
-/-- The longest suffix with no invalid reasoning candidate. An unknown source
-is an invalid cutoff, never a reason to promote older reasoning. -/
-def maximalValidReasoningSuffix {α : Type} (valid : α → Bool) : List α → List α
-  | [] => []
-  | head :: tail =>
-      let kept := maximalValidReasoningSuffix valid tail
-      if valid head && kept.length == tail.length then head :: kept else kept
-
-theorem maximalValidReasoningSuffix_is_suffix {α : Type} (valid : α → Bool)
-    (xs : List α) : ∃ dropped, xs = dropped ++ maximalValidReasoningSuffix valid xs := by
-  induction xs with
-  | nil => exact ⟨[], rfl⟩
-  | cons head tail ih =>
-      obtain ⟨dropped, hdropped⟩ := ih
-      by_cases h : (valid head &&
-          (maximalValidReasoningSuffix valid tail).length == tail.length) = true
-      · have hlen : (maximalValidReasoningSuffix valid tail).length = tail.length := by
-          simp at h
-          exact h.2
-        have hdrop : dropped = [] := by
-          have lengths := congrArg List.length hdropped
-          simp only [List.length_append] at lengths
-          have hz : dropped.length = 0 := by omega
-          exact List.length_eq_zero_iff.mp hz
-        subst dropped
-        refine ⟨[], ?_⟩
-        simp only [maximalValidReasoningSuffix, h, ite_true, List.nil_append]
-        exact congrArg (List.cons head) hdropped
-      · refine ⟨head :: dropped, ?_⟩
-        simp only [maximalValidReasoningSuffix, h, ite_false, List.cons_append]
-        exact congrArg (List.cons head) hdropped
-
-theorem maximalValidReasoningSuffix_valid {α : Type} (valid : α → Bool)
-    (xs : List α) : (maximalValidReasoningSuffix valid xs).all valid = true := by
-  induction xs with
-  | nil => rfl
-  | cons head tail ih =>
-      simp only [maximalValidReasoningSuffix]
-      split at *
-      · rename_i h
-        simp only [Bool.and_eq_true] at h
-        simp [h.1, ih]
-      · exact ih
-
-theorem maximalValidReasoningSuffix_preserves_bytes {α : Type} (valid : α → Bool)
-    (bytes : α → List UInt8) (xs : List α) :
-    ∃ dropped, (xs.map bytes) = dropped ++
-      ((maximalValidReasoningSuffix valid xs).map bytes) := by
-  obtain ⟨dropped, h⟩ := maximalValidReasoningSuffix_is_suffix valid xs
-  refine ⟨dropped.map bytes, ?_⟩
-  calc
-    xs.map bytes = (dropped ++ maximalValidReasoningSuffix valid xs).map bytes :=
-      congrArg (List.map bytes) h
-    _ = dropped.map bytes ++ (maximalValidReasoningSuffix valid xs).map bytes := by
-      simp only [List.map_append]
-
-theorem retired_source_never_replays (issuer : ReplayIssuer) (wire : ReplayWire)
-    (retired : List ReplayTag) (resolve : ReplayTag → List ResolvedReplayEvidence)
-    (candidates : List ReasoningCandidate) (candidate : ReasoningCandidate)
-    (tag : ReplayTag)
-    (hkept : candidate ∈ maximalValidReasoningSuffix
-      (validForReplayProjection issuer wire retired resolve candidates) candidates)
-    (hsource : candidate.source = some tag) (hretired : tag ∈ retired) : False := by
-  have hvalid := (List.all_eq_true.mp
-    (maximalValidReasoningSuffix_valid
-      (validForReplayProjection issuer wire retired resolve candidates) candidates))
-    candidate hkept
-  have hbase : validReasoningCandidate issuer wire retired resolve candidate = true := by
-    simp only [validForReplayProjection] at hvalid
-    simp at hvalid
-    exact hvalid.1
-  cases candidate with
-  | mk source header index complete parts =>
-      simp only at hsource
-      subst source
-      cases header <;> simp [validReasoningCandidate, hretired] at hbase
 
 /-- Selection is the same order-preserving filter used by the source owner.
 The independently supplied `required` set is never computed from this list. -/
@@ -971,13 +860,11 @@ structure ReplayCheckpoint where
   required : List ReplayTag
   prefixRows : List TaggedReplayRow
   retained : List TaggedReplayRow
-  retired : List ReplayTag := []
   deriving Repr
 
 /-- Exact `take`/`drop` split and source-association validation. `required`
-bounds an unrewritten protected split; it is not the historical replay selector.
-The selected full-input rewrite is represented by the durable postprojection
-and retired source set, not by this prefix split alone. -/
+names the pending tool round, which a reduction must not summarize; it is not
+a replay selector. -/
 def prepareReplayCheckpoint (required : List ReplayTag)
     (rows : List TaggedReplayRow) (split : Nat) : Except MapError ReplayCheckpoint :=
   if split > rows.length then .error .invalidReplaySplit
@@ -994,17 +881,6 @@ def prepareReplayCheckpoint (required : List ReplayTag)
     .error .missingRequiredReplay
   else
     .ok { required, prefixRows := rows.take split, retained := rows.drop split }
-
-/-- A client-produced summary changes the prefix of every already selected
-signed block, including blocks in the retained suffix. The canonical rows and
-their captured signatures remain audit facts; only provider replay is retired.
-The caller invokes this transition only for an actual nonempty prefix rewrite. -/
-def retireForPrefixRewrite (checkpoint : ReplayCheckpoint) : ReplayCheckpoint :=
-  { checkpoint with
-    required := []
-    retired := checkpoint.retired ++
-      (checkpoint.prefixRows ++ checkpoint.retained).filterMap TaggedReplayRow.source }
-
 
 theorem preparedReplayCheckpoint_exact_split (required : List ReplayTag)
     (rows : List TaggedReplayRow) (split : Nat) (checkpoint : ReplayCheckpoint)
@@ -1200,70 +1076,227 @@ theorem stripFirstReasoningRows_exact_candidates_of_valid (count : Nat)
   exact stripFirstReasoningRows_exact_candidates count rows hvalid
     (stripFirstReasoningRows_preserves_valid count rows hvalid)
 
-/-- The retained provider projection is narrowed by the maximal valid suffix
-over all historical reasoning candidates, never by current request identity.
-The checkpoint's post-rewrite rows and retired tags are durable premises;
-native persistence must bind them atomically to the exact full input rewrite.
-Ordinary blocks remain in place. -/
-def restoreHistoricalReasoningSuffix (checkpoint : ReplayCheckpoint)
-    (issuer : ReplayIssuer) (wire : ReplayWire)
+/-! ## Replay selection over accepted turns
+
+A turn is one physical accepted row's reasoning. Selection has two phases.
+First, the longest suffix of turns whose provenance and payload are valid is
+assembled into the actual provider body (a turn failing those checks cannot be
+encoded, and everything before it is dropped). Second, each assembled turn is
+located in that body and judged against its accepted capture
+(`ReplayFrontier.turnOk`); the longest admissible suffix is replayed. Whole
+turns are kept or dropped, so removal is always a leading run of reasoning. -/
+
+/-- One accepted row's reasoning, with whether the row keeps an encodable
+ordinary block once its reasoning is removed. The Claude encoder omits an empty
+assistant message, which would shift every later ordinary item. -/
+structure TurnGroup where
+  candidates : List ReasoningCandidate
+  ordinary : Bool
+  deriving Repr
+
+def encodableOrdinary : CanonicalOutput.MessageBlock (List UInt8) → Bool
+  | .text payload => !payload.isEmpty
+  | .toolCall .. => true
+  | .reasoning .. | .toolResult .. | .media .. => false
+
+def turnGroups (rows : List TaggedReplayRow) : List TurnGroup :=
+  rows.filterMap fun row =>
+    match reasoningCandidates [row] with
+    | [] => none
+    | group => some { candidates := group, ordinary := row.blocks.any encodableOrdinary }
+
+def groupCandidates (groups : List TurnGroup) : List ReasoningCandidate :=
+  groups.flatMap (·.candidates)
+
+theorem reasoningCandidates_cons (row : TaggedReplayRow) (rest : List TaggedReplayRow) :
+    reasoningCandidates (row :: rest) = reasoningCandidates [row] ++ reasoningCandidates rest := by
+  simp [reasoningCandidates]
+
+theorem turnGroups_candidates (rows : List TaggedReplayRow) :
+    groupCandidates (turnGroups rows) = reasoningCandidates rows := by
+  induction rows with
+  | nil => simp [turnGroups, groupCandidates, reasoningCandidates]
+  | cons row rest ih =>
+      rw [reasoningCandidates_cons, ← ih]
+      unfold turnGroups
+      cases hgroup : reasoningCandidates [row] with
+      | nil => simp [List.filterMap_cons, hgroup, groupCandidates]
+      | cons first others => simp [List.filterMap_cons, hgroup, groupCandidates]
+
+/-- Wire reasoning items one canonical reasoning block renders to: one Claude
+block per part, one Responses `reasoning` item per block. -/
+def wireReasoningCount : ReplayWire → ReasoningCandidate → Nat
+  | .claudeMessages, candidate => candidate.parts.length
+  | .responses, _ => 1
+
+/-- Items between a turn's start and its first reasoning item: the Claude
+assistant message header; Responses has none. -/
+def turnHeaderOffset : ReplayWire → Nat
+  | .claudeMessages => 1
+  | .responses => 0
+
+def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidates : List ReasoningCandidate) (group : TurnGroup) : Bool :=
+  !group.candidates.isEmpty && (wire == .responses || group.ordinary) &&
+    group.candidates.all (validForReplayProjection issuer wire resolve candidates)
+
+def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (group : TurnGroup) : Option (List ReplayFlatItem) :=
+  match group.candidates.head?.bind (·.source) with
+  | none => none
+  | some tag =>
+      match resolve tag with
+      | [evidence] => evidence.captured
+      | _ => none
+
+def reasoningPositions (body : List ReplayFlatItem) : List Nat :=
+  (body.zip (List.range body.length)).filterMap fun entry =>
+    match entry.1 with
+    | .reasoning _ => some entry.2
+    | .ordinary _ => none
+
+abbrev TurnLayout := List (List UInt8) × List (Nat × List UInt8)
+
+def headerAt (offset : Nat) (body : List ReplayFlatItem) (start : Nat) : Bool :=
+  offset == 0 ||
+    (match body[start]? with
+     | some (.ordinary _) => true
+     | _ => false)
+
+def locateTurnsFrom (offset : Nat) (body : List ReplayFlatItem) (positions : List Nat)
+    (anchoredItems : List (Nat × List UInt8)) : Nat → List Nat → Option (List TurnLayout)
+  | _, [] => some []
+  | seen, count :: rest => do
+      let position ← positions[seen]?
+      if position < offset then none else
+      let start := position - offset
+      if !headerAt offset body start then none else
+      let tail ← locateTurnsFrom offset body positions anchoredItems (seen + count) rest
+      some ((ReplayFrontier.ords (body.take start), (anchoredItems.drop seen).take count) :: tail)
+
+/-- Locate each assembled turn's ordinary prefix and anchored reasoning items in
+the actual body. Any disagreement between the expected wire counts and the body
+fails closed. -/
+def locateTurns (offset : Nat) (body : List ReplayFlatItem) (counts : List Nat) :
+    Option (List TurnLayout) :=
+  let positions := reasoningPositions body
+  if counts.sum != positions.length || counts.any (· == 0) then none
+  else locateTurnsFrom offset body positions (ReplayFrontier.anchored body) 0 counts
+
+theorem locateTurnsFrom_length (offset : Nat) (body : List ReplayFlatItem)
+    (positions : List Nat) (anchoredItems : List (Nat × List UInt8)) (seen : Nat)
+    (counts : List Nat) (layouts : List TurnLayout)
+    (h : locateTurnsFrom offset body positions anchoredItems seen counts = some layouts) :
+    layouts.length = counts.length := by
+  induction counts generalizing seen layouts with
+  | nil => simp [locateTurnsFrom] at h; simp [← h]
+  | cons count rest ih =>
+      simp only [locateTurnsFrom, Option.bind_eq_bind] at h
+      cases hpos : positions[seen]? with
+      | none => simp [hpos] at h
+      | some position =>
+          simp only [hpos, Option.some_bind] at h
+          by_cases hlt : position < offset
+          · simp [hlt] at h
+          · by_cases hhdr : headerAt offset body (position - offset) = true
+            · cases htail : locateTurnsFrom offset body positions anchoredItems
+                  (seen + count) rest with
+              | none => simp [hlt, hhdr, htail] at h
+              | some tail =>
+                  simp [hlt, hhdr, htail] at h
+                  subst h
+                  simp [ih _ _ htail]
+            · simp [hlt, hhdr] at h
+
+/-- Accepted turns in order, as the frontier sees them. -/
+def assembledTurns (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidates : List ReasoningCandidate) (groups : List TurnGroup)
+    (layouts : List TurnLayout) : List (ReplayFrontier.Turn (List UInt8) (List UInt8)) :=
+  (groups.zip layouts).map fun entry =>
+    { base := turnBase issuer wire resolve candidates entry.1,
+      prefixOrds := entry.2.1, items := entry.2.2,
+      captured := turnCaptured resolve entry.1 }
+
+/-- Phase one: the longest suffix of turns with valid provenance and payload. -/
+def replayBaseKept (rows : List TaggedReplayRow) (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence) : List TurnGroup :=
+  ReplayFrontier.maxAdmissibleSuffix
+    (fun _ group => turnBase issuer wire resolve (reasoningCandidates rows) group) (turnGroups rows)
+
+/-- The rows the owned loop assembles to locate phase-one turns. -/
+def replayStage (rows : List TaggedReplayRow) (issuer : ReplayIssuer) (wire : ReplayWire)
     (resolve : ReplayTag → List ResolvedReplayEvidence) : List TaggedReplayRow :=
-  let candidates := reasoningCandidates checkpoint.retained
-  let kept := maximalValidReasoningSuffix
-    (validForReplayProjection issuer wire checkpoint.retired resolve candidates) candidates
-  stripFirstReasoningRows (candidates.length - kept.length) checkpoint.retained
+  stripFirstReasoningRows ((reasoningCandidates rows).length -
+    (groupCandidates (replayBaseKept rows issuer wire resolve)).length) rows
 
-theorem restoreHistoricalReasoningSuffix_exact_candidates
-    (checkpoint : ReplayCheckpoint) (issuer : ReplayIssuer) (wire : ReplayWire)
+/-- The replayed turns: a suffix of the physical turn groups. `assemble` is the
+owned loop's actual request builder applied to rows. -/
+def replayedTurnGroups (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) : List TurnGroup :=
+  let baseKept := replayBaseKept rows issuer wire resolve
+  let counts := baseKept.map fun group => (group.candidates.map (wireReasoningCount wire)).sum
+  match locateTurns (turnHeaderOffset wire) (assemble (replayStage rows issuer wire resolve))
+      counts with
+  | none => []
+  | some layouts =>
+      let turns := assembledTurns issuer wire resolve (reasoningCandidates rows) baseKept layouts
+      baseKept.drop
+        (turns.length - (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns).length)
+
+def restoreHistoricalReasoningSuffix (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) : List TaggedReplayRow :=
+  stripFirstReasoningRows
+    ((reasoningCandidates rows).length -
+      (groupCandidates (replayedTurnGroups rows issuer wire resolve assemble)).length) rows
+
+theorem replayedTurnGroups_suffix (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) :
+    replayedTurnGroups rows issuer wire resolve assemble <:+ turnGroups rows := by
+  unfold replayedTurnGroups
+  have hbase : replayBaseKept rows issuer wire resolve <:+ turnGroups rows :=
+    ReplayFrontier.maxAdmissibleSuffix_suffix _ _
+  dsimp only
+  split
+  · exact List.nil_suffix
+  · exact (List.drop_suffix _ _).trans hbase
+
+/-- Replay keeps exactly the reasoning of a suffix of whole accepted turns, byte
+for byte, and drops the leading run before it. -/
+theorem restoreHistoricalReasoningSuffix_exact_candidates (rows : List TaggedReplayRow)
+    (issuer : ReplayIssuer) (wire : ReplayWire)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
-    (hvalid : checkpoint.retained.all replayRowIndicesValid = true) :
-    reasoningCandidates (restoreHistoricalReasoningSuffix checkpoint issuer wire resolve) =
-      maximalValidReasoningSuffix
-        (validForReplayProjection issuer wire checkpoint.retired resolve
-          (reasoningCandidates checkpoint.retained))
-        (reasoningCandidates checkpoint.retained) := by
-  let candidates := reasoningCandidates checkpoint.retained
-  let valid := validForReplayProjection issuer wire checkpoint.retired resolve candidates
-  let kept := maximalValidReasoningSuffix valid candidates
-  obtain ⟨dropped, hdropped⟩ := maximalValidReasoningSuffix_is_suffix valid candidates
-  have hlen : candidates.length - kept.length = dropped.length := by
-    have hc := congrArg List.length hdropped
-    change candidates.length = (dropped ++ kept).length at hc
-    simp only [List.length_append] at hc
-    omega
+    (assemble : List TaggedReplayRow → List ReplayFlatItem)
+    (hvalid : rows.all replayRowIndicesValid = true) :
+    reasoningCandidates (restoreHistoricalReasoningSuffix rows issuer wire resolve assemble) =
+      groupCandidates (replayedTurnGroups rows issuer wire resolve assemble) := by
+  obtain ⟨dropped, hsplit⟩ := replayedTurnGroups_suffix rows issuer wire resolve assemble
   unfold restoreHistoricalReasoningSuffix
-  rw [stripFirstReasoningRows_exact_candidates_of_valid _ _ hvalid]
-  change candidates.drop (candidates.length - kept.length) = kept
-  rw [hlen, hdropped]
-  simp [List.drop_append_eq_append_drop]
-  rfl
+  rw [stripFirstReasoningRows_exact_candidates_of_valid _ _ hvalid, ← turnGroups_candidates,
+    ← hsplit]
+  simp [groupCandidates, List.flatMap_append]
 
-theorem restored_reasoning_never_reenables_retired
-    (checkpoint : ReplayCheckpoint) (issuer : ReplayIssuer) (wire : ReplayWire)
-    (resolve : ReplayTag → List ResolvedReplayEvidence)
-    (hvalid : checkpoint.retained.all replayRowIndicesValid = true)
-    (candidate : ReasoningCandidate) (tag : ReplayTag)
-    (hretired : tag ∈ checkpoint.retired)
-    (hsource : candidate.source = some tag)
-    (hkept : candidate ∈ reasoningCandidates
-      (restoreHistoricalReasoningSuffix checkpoint issuer wire resolve)) : False := by
-  rw [restoreHistoricalReasoningSuffix_exact_candidates checkpoint issuer wire resolve
-    hvalid] at hkept
-  exact retired_source_never_replays issuer wire checkpoint.retired resolve
-    (reasoningCandidates checkpoint.retained) candidate tag hkept hsource hretired
+/-- Every replayed turn passed the capture check against exactly the replayed
+turns before it, so its assembled prefix is its accepted producing prefix with a
+leading run of reasoning removed (`ReplayFrontier.kept_turn_prefix_is_leading_removal`). -/
+theorem replayed_turns_admissible
+    (turns : List (ReplayFrontier.Turn (List UInt8) (List UInt8))) :
+    ReplayFrontier.admissible ReplayFrontier.turnOk
+      (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns) = true :=
+  ReplayFrontier.maxAdmissibleSuffix_admissible _ turns
 
-/-- Claude's native replay codec consumes the common narrowed projection.
-Other provider codecs consume the same `restoreHistoricalReasoningSuffix`
-rows, but must use their own native payload encoder. -/
-def restoreContiguousReplay (checkpoint : ReplayCheckpoint)
-    (issuer : ReplayIssuer)
-    (resolve : ReplayTag → List ResolvedReplayEvidence) :
+/-- Claude's strict replay codec over already selected rows. Selection is
+`restoreHistoricalReasoningSuffix`; this only validates the association split
+and encodes each retained row. -/
+def restoreContiguousReplay (checkpoint : ReplayCheckpoint) :
     Except MapError (List (List ReplayBlock)) := do
   let _ ← prepareReplayCheckpoint []
     (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
-  let rows := restoreHistoricalReasoningSuffix checkpoint issuer .claudeMessages resolve
-  rows.mapM fun row => replayBlocks row.blocks
-
+  checkpoint.retained.mapM fun row => replayBlocks row.blocks
 
 theorem replay_signed_bytes_and_signature (payload : List UInt8) (signature : String)
     (nonempty : signature ≠ "") :
