@@ -2135,6 +2135,16 @@ async fn crash_between_interrupt_latch_and_retain_still_delivers_child_completio
     .await;
     // Crash and join the live runtime so only startup recovery owns the transition.
     runtime.crash().await;
+    // An awaited same-principal spawn carries the foreground unclaimed bound
+    // (#1830); the terminal accounting's background flip must drop it.
+    let armed = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ unclaimed_deadline_at: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(&bridge_doc_id),
+        ))
+        .await;
+    assert!(!armed.has_errors(), "{:?}", armed.errors);
     recover_interrupted_request_after_crash(
         &db.node,
         &interrupted_doc,
@@ -2157,15 +2167,19 @@ async fn crash_between_interrupt_latch_and_retain_still_delivers_child_completio
     let bridge_row = db
         .node
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ await_mode }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ await_mode unclaimed_deadline_at }} }}"#,
             gents::graphql::escape_graphql_string(&bridge_doc_id),
         ))
         .await;
     assert!(!bridge_row.has_errors(), "{:?}", bridge_row.errors);
+    let bridge_row = bridge_row.data.unwrap()["AgentToolCall"][0].clone();
     assert_eq!(
-        bridge_row.data.unwrap()["AgentToolCall"][0]["await_mode"],
-        "background",
+        bridge_row["await_mode"], "background",
         "the interrupted parent's terminal accounting backgrounds its awaited bridge"
+    );
+    assert!(
+        bridge_row["unclaimed_deadline_at"].is_null(),
+        "a same-principal spawn retained in background carries no unclaimed bound"
     );
     assert!(
         !bridge.load_result(db.node.clone()).await.is_empty(),

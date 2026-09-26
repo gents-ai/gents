@@ -24,13 +24,13 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("background called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
-        // Lean `SpawnClaimFence.unclaimedDeadlineApplies` is re-evaluated for
-        // the new mode: a same-principal child waiting in the background has
-        // not failed, so its foreground bound is dropped in this same write.
-        let drop_unclaimed_bound = self.unclaimed_deadline_at.is_some()
-            && self.spawn_target_did.as_deref() == Some(self.agent_did());
+        let flip_fragment = Self::background_flip_unclaimed_fragment(
+            self.spawn_target_did.as_deref(),
+            self.agent_did(),
+        );
+        let drop_unclaimed_bound = !flip_fragment.is_empty();
         let unclaimed_deadline_fragment = if drop_unclaimed_bound {
-            self.clear_unclaimed_deadline_fragment().to_owned()
+            flip_fragment.to_owned()
         } else {
             self.resupply_unclaimed_deadline_fragment()
         };

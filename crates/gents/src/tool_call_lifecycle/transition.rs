@@ -158,6 +158,21 @@ impl ToolCallLifecycle {
         }
     }
 
+    /// Lean `SpawnClaimFence.unclaimedDeadlineApplies` re-evaluated for a
+    /// foreground-to-background flip: a same-principal spawn waiting in the
+    /// background carries no unclaimed bound. Every writer that flips a bridge
+    /// to background includes this fragment in the same write.
+    pub(crate) fn background_flip_unclaimed_fragment(
+        spawn_target_did: Option<&str>,
+        agent_did: &str,
+    ) -> &'static str {
+        if spawn_target_did == Some(agent_did) {
+            ", unclaimed_deadline_at: null"
+        } else {
+            ""
+        }
+    }
+
     fn clear_unclaimed_deadline_fragment(&self) -> &'static str {
         if self.unclaimed_deadline_at.is_some() {
             ", unclaimed_deadline_at: null"
