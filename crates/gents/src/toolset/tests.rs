@@ -454,6 +454,33 @@ impl Drop for EnvVarGuard {
     }
 }
 
+/// Bounds a regression that would otherwise wait on a closed gate forever.
+/// It is a failure bound only; no assertion passes because it elapsed.
+const NATIVE_BLOCKER_HANG_BOUND: Duration = Duration::from_secs(120);
+
+fn blocker_entered_at_nanos(marker: &std::path::Path) -> Option<i64> {
+    let raw = match std::fs::read_to_string(marker) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("reading blocker entry marker {marker:?}: {error}"),
+    };
+    Some(
+        raw.trim()
+            .parse::<i64>()
+            .unwrap_or_else(|error| panic!("blocker entry marker {raw:?}: {error}")),
+    )
+}
+
+async fn await_native_blocker_path(path: &std::path::Path) {
+    tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("native blocker never produced {path:?}"));
+}
+
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
@@ -462,27 +489,106 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     std::fs::write(root.join("second.txt"), "second request\n").unwrap();
     let context = ToolContext::new(root.clone(), false).unwrap();
 
+    // The blocker waits on a gate file the test controls, so it cannot return
+    // on its own while the gate is closed. Only the preempted attempt's gate
+    // stays closed.
     let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-    let _block_ms = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_MS", "200");
     let blocking_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
     let second_tool: Box<dyn crate::llm::tool::ToolDyn> =
         Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
-    let started = Instant::now();
-    let first_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(15);
-    let first_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
-        Some(first_deadline),
-        tokio_util::sync::CancellationToken::new(),
-        crate::tool_call_lifecycle::runtime::call_tool_managed(
-            blocking_tool.as_ref(),
-            r#"{"pattern":"*.txt"}"#.to_string(),
-        ),
-    )
-    .await;
-    let first_elapsed = started.elapsed();
+    // Negative control: with no near deadline, the same blocker is entered,
+    // holds until its gate opens, then returns and writes its release marker.
+    let control_entered = root.join("control-entered");
+    let control_gate = root.join("control-gate");
+    let control_released = root.join("control-released");
+    let control_outcome = {
+        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
+        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
+        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
+        let call = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            crate::tool_call_lifecycle::runtime::call_tool_managed(
+                blocking_tool.as_ref(),
+                r#"{"pattern":"*.txt"}"#.to_string(),
+            ),
+        );
+        let open_gate = async {
+            await_native_blocker_path(&control_entered).await;
+            assert!(
+                !control_released.exists(),
+                "control blocker released before its gate opened"
+            );
+            std::fs::write(&control_gate, b"open").expect("opening control gate");
+        };
+        let (outcome, ()) = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+            tokio::join!(call, open_gate)
+        })
+        .await
+        .expect("control blocker should return once its gate opens");
+        outcome
+    };
+    match &control_outcome {
+        crate::tool_call_lifecycle::ToolOutcome::Completed(text) => {
+            assert!(text.contains("first.txt"), "control glob output: {text}");
+        }
+        other => panic!("control blocker should complete, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&control_released).expect("control release marker"),
+        b"released",
+        "an unpreempted blocker must write its release marker"
+    );
 
-    let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
+    // The deadline must fire after the runner enters the blocker. Entry time
+    // depends on process startup, so an attempt whose deadline fired before
+    // entry witnessed nothing and is repeated with a later deadline; only a
+    // witnessed attempt is asserted on.
+    let gate = root.join("preempt-gate");
+    let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
+    let mut deadline_ms = 25;
+    let mut attempt = 0;
+    let released = loop {
+        let entered = root.join(format!("preempt-entered-{attempt}"));
+        let released = root.join(format!("preempt-released-{attempt}"));
+        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &entered);
+        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &released);
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(deadline_ms);
+        let outcome = tokio::time::timeout(
+            NATIVE_BLOCKER_HANG_BOUND,
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                Some(deadline),
+                tokio_util::sync::CancellationToken::new(),
+                crate::tool_call_lifecycle::runtime::call_tool_managed(
+                    blocking_tool.as_ref(),
+                    r#"{"pattern":"*.txt"}"#.to_string(),
+                ),
+            ),
+        )
+        .await
+        .expect("blocking native tool must terminalize at the request deadline");
+        assert!(
+            matches!(
+                outcome,
+                crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
+            ),
+            "blocking native tool must resolve to a typed timeout, got {outcome:?}"
+        );
+        let deadline_nanos = deadline.timestamp_nanos_opt().expect("deadline in range");
+        if blocker_entered_at_nanos(&entered).is_some_and(|at| at < deadline_nanos) {
+            break released;
+        }
+        attempt += 1;
+        assert!(
+            attempt < 12,
+            "no attempt entered the blocker before its deadline; last deadline {deadline_ms}ms"
+        );
+        deadline_ms *= 2;
+    };
+
+    let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
     let second_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(second_deadline),
         tokio_util::sync::CancellationToken::new(),
@@ -492,25 +598,13 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         ),
     )
     .await;
-    let queue_elapsed = started.elapsed();
-
-    tokio::time::sleep(Duration::from_millis(225)).await;
+    let released_before_queue_advanced = released.exists();
+    let gate_closed_while_queue_advanced = !gate.exists();
     let _ = std::fs::remove_dir_all(&root);
 
     assert!(
-        matches!(
-            first_outcome,
-            crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
-        ),
-        "blocking native tool must resolve to a typed timeout, got {first_outcome:?}"
-    );
-    assert!(
-        first_elapsed < Duration::from_millis(150),
-        "blocking native tool should terminalize at the request deadline, elapsed={first_elapsed:?}"
-    );
-    assert!(
-        queue_elapsed < Duration::from_millis(150),
-        "single-worker queue should advance before the blocking native work returns, elapsed={queue_elapsed:?}"
+        !released_before_queue_advanced && gate_closed_while_queue_advanced,
+        "single-worker queue should advance while the entered blocker cannot return"
     );
     match &second_outcome {
         crate::tool_call_lifecycle::ToolOutcome::Completed(text) => {
