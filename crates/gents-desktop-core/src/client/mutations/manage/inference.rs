@@ -96,11 +96,13 @@ mod tests {
         let mut other = backend.clone();
         other.agent_did = "did:test:other".into();
         upsert_inference_backend(&node, &other).await?;
-        let catalog = BackendModelCatalog {
-            agent_did: None,
-            observed_at: "2026-09-10T00:00:00Z".into(),
-            models: Vec::new(),
-        };
+        // The retained profile below names this model; publication admits a
+        // profile only against its backend's observed catalog.
+        let catalog: BackendModelCatalog = serde_json::from_value(json!({
+            "agent_did": null,
+            "observed_at": "2026-09-10T00:00:00Z",
+            "models": [{"model_name": "model"}],
+        }))?;
         ConfigAccess::transact_local(&node, None, "test.catalog", |txn| {
             let backend = &backend;
             let catalog = catalog.clone();
