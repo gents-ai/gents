@@ -2,27 +2,8 @@ use super::*;
 use crate::identity::KeyIdentity;
 use crate::request_admission::verify_runtime_local_control_receipt;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-pub(super) struct ResumeCase {
-    pub name: String,
-    pub before: Value,
-    pub request: Value,
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub observation: Value,
-    pub commit: bool,
-    pub expected: Value,
-    pub outcome: String,
-    #[serde(default)]
-    // This fixture is also compiled by claimed_publication; only the operator
-    // resume consumer checks this emitted receipt observation.
-    #[allow(dead_code)]
-    pub goal_status: Option<String>,
-}
 
 pub(super) const SESSION: &str = "contract-session";
 pub(super) const PARENT: &str = "contract-parent";
@@ -39,12 +20,7 @@ impl Fixture {
         Self::new_with_parent_state(before, true).await
     }
 
-    #[allow(dead_code)]
-    pub async fn new_with_open_parent(before: &Value) -> Self {
-        Self::new_with_parent_state(before, false).await
-    }
-
-    async fn new_with_parent_state(before: &Value, terminal_parent: bool) -> Self {
+    pub async fn new_with_parent_state(before: &Value, terminal_parent: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
@@ -157,32 +133,6 @@ impl Fixture {
             .unwrap();
         execute(&self.node, &create.graphql_mutation().unwrap()).await;
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
-    }
-    #[allow(dead_code)]
-    pub async fn older_open_request(&self, id: &str) -> crate::watcher::AgentRequest {
-        let mut create = AgentRequestCreate::base(
-            id,
-            self.identity.did(),
-            self.identity.did(),
-            "contract-behavior",
-            SESSION,
-            "Older wait control",
-            "interactive",
-            "2010-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(self.identity.did()),
-        );
-        crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
-            .await
-            .unwrap();
-        execute(&self.node, &create.graphql_mutation().unwrap()).await;
-        crate::watcher::AgentRequest::try_from(
-            request_rows(&self.node)
-                .await
-                .into_iter()
-                .find(|row| row.request_id == id)
-                .unwrap(),
-        )
-        .unwrap()
     }
     pub async fn observe(&self) -> Value {
         let g = load_canonical_goal(&self.node, self.identity.did(), SESSION)

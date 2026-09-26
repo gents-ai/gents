@@ -19,7 +19,18 @@ use support::*;
 
 #[derive(Deserialize)]
 struct PublicationContracts {
-    goal_claimed_publication_cases: Vec<ResumeCase>,
+    goal_claimed_publication_cases: Vec<PublicationCase>,
+}
+
+#[derive(Deserialize)]
+struct PublicationCase {
+    name: String,
+    before: serde_json::Value,
+    request: serde_json::Value,
+    observation: serde_json::Value,
+    commit: bool,
+    expected: serde_json::Value,
+    outcome: String,
 }
 
 async fn run_generated_running_wait() {
@@ -40,7 +51,7 @@ async fn run_generated_running_wait() {
     assert_eq!(case.request["binding"]["predecessor_doc"], 100);
     assert_eq!(case.observation["waits"][0]["reply"], "timed_out_running");
     assert_eq!(case.observation["backgrounds"][0]["state"], "running");
-    let fixture = Fixture::new_with_open_parent(&case.before).await;
+    let fixture = Fixture::new_with_parent_state(&case.before, false).await;
     let mut request = crate::RequestLifecycle::new_with_agent_did(
         fixture.node.clone(),
         "contract-behavior",
@@ -165,13 +176,23 @@ async fn run_generated_wait_observations() {
         .collect();
     assert_eq!(
         cases.len(),
-        19,
+        21,
         "every new generated wait case is owner-bound"
     );
     for case in cases {
-        let fixture = Fixture::new_with_open_parent(&case.before).await;
+        let fixture = Fixture::new_with_parent_state(&case.before, false).await;
         if case.name == "unrelated_wait_cannot_suppress" {
-            let older = fixture.older_open_request("older-wait-parent").await;
+            fixture
+                .other_request("older-wait-parent", "2010-01-01T00:00:00Z", "pending")
+                .await;
+            let older = crate::watcher::AgentRequest::try_from(
+                request_rows(&fixture.node)
+                    .await
+                    .into_iter()
+                    .find(|row| row.request_id == "older-wait-parent")
+                    .unwrap(),
+            )
+            .unwrap();
             let mut older_request = crate::RequestLifecycle::new_with_agent_did(
                 fixture.node.clone(),
                 "contract-behavior",
@@ -348,11 +369,16 @@ async fn run_generated_wait_observations() {
                 None,
                 AwaitMode::Foreground,
                 CancelPolicy::Cascade,
-                true,
+                observed_wait["replied"] != false,
             )
             .await
             .unwrap();
             terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
+            if observed_wait["replied"] == false {
+                // Left pending: parent terminalization cancels it with no reply.
+                turn += 1;
+                continue;
+            }
             match reply {
                 "timed_out_running" => {
                     let reply_handle = if observed_wait["reply_handle"] == "wrong" {
@@ -431,15 +457,30 @@ async fn run_generated_wait_observations() {
             }
             turn += 1;
         }
+        // A turn that fails before its accepted wait starts is the legitimate
+        // runtime path that settles the control without any invocation reply.
+        let unstarted_wait = case.observation["waits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|wait| wait["replied"] == false);
+        let (outcome, failure) = if unstarted_wait {
+            (
+                RequestTerminalOutcome::Failed,
+                Some("provider failed before the accepted wait started"),
+            )
+        } else {
+            (RequestTerminalOutcome::Completed, None)
+        };
         assert_eq!(
             request
                 .terminalize_owned(
-                    RequestTerminalOutcome::Completed,
+                    outcome,
                     gents_protocol::output::TerminalOutput::Message {
                         message_doc_id: terminal_header
                             .expect("accepted parent has assistant header"),
                     },
-                    None,
+                    failure,
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{} terminalize: {error:#}", case.name)),
@@ -490,12 +531,13 @@ async fn run_generated_wait_observations() {
             .await
             .unwrap()
             .unwrap();
+        let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
         let result = publish_claimed_continuation(
             &fixture.node,
             &observed,
             PARENT,
             "Original signed continuation",
-            false,
+            wrapup,
         )
         .await;
         match case.outcome.as_str() {
@@ -509,13 +551,19 @@ async fn run_generated_wait_observations() {
             }
             "deferred" => assert!(result.unwrap().is_none(), "{}", case.name),
             "invalid_evidence" => {
-                let error = result.expect_err(&case.name);
+                assert!(result.unwrap().is_none(), "{}", case.name);
+                let stopped = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 assert!(
-                    error
-                        .downcast_ref::<wait_observation::InvalidWaitObservation>()
-                        .is_some(),
-                    "{} returned unrelated publication error: {error:#}",
+                    stopped
+                        .last_failure
+                        .as_deref()
+                        .is_some_and(|reason| reason.starts_with("invalid Goal wait evidence: ")),
+                    "{} must record why automation stopped: {:?}",
                     case.name,
+                    stopped.last_failure,
                 );
             }
             outcome => panic!("unmapped generated wait outcome {outcome}"),

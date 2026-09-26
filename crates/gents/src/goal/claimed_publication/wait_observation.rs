@@ -7,19 +7,12 @@ use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::tool_call_lifecycle::{query, ToolCallState};
 
-#[derive(Debug)]
-pub(super) struct InvalidWaitObservation(anyhow::Error);
-
-impl std::fmt::Display for InvalidWaitObservation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "invalid Goal wait observation: {:#}", self.0)
-    }
-}
-
-impl std::error::Error for InvalidWaitObservation {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.as_ref())
-    }
+/// Goal wait evidence read inside the publication transaction.
+pub(super) enum WaitEvidence {
+    Absent,
+    Running,
+    /// Fail-closed: the evidence cannot be interpreted.
+    Invalid(anyhow::Error),
 }
 
 fn rows<'a>(response: &'a Value, name: &str) -> Result<&'a Vec<Value>> {
@@ -101,16 +94,18 @@ fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool>
 /// Re-read exact accepted wait controls and targets inside the transaction
 /// that will CAS the Goal and publish its child. A missing target in a complete
 /// scan is a lost/finished process; an unreadable or ambiguous scan is an error.
-pub(super) async fn intentional_wait_still_running(
+pub(super) async fn observe_intentional_wait(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
     agent_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<bool> {
-    observe_waits(txn, parent_doc_id, agent_did, session_id, requester_did)
-        .await
-        .map_err(|error| InvalidWaitObservation(error).into())
+) -> WaitEvidence {
+    match observe_waits(txn, parent_doc_id, agent_did, session_id, requester_did).await {
+        Ok(true) => WaitEvidence::Running,
+        Ok(false) => WaitEvidence::Absent,
+        Err(error) => WaitEvidence::Invalid(error),
+    }
 }
 
 async fn observe_waits(
@@ -173,15 +168,16 @@ async fn observe_waits(
             accepted.lifecycle_state.is_terminal(),
             "terminal Goal parent has an unsettled wait_process control"
         );
-        accepted
-            .result
-            .as_ref()
-            .context("terminal wait_process lacks canonical invocation reply")?;
         if accepted.lifecycle_state != ToolCallState::Completed {
             // Deadline/cancel/failure settlement is a canonical diagnostic, not
             // evidence that an intentional bounded wait observed a running tool.
+            // Terminalization cancels a never-started control without any reply.
             continue;
         }
+        accepted
+            .result
+            .as_ref()
+            .context("completed wait_process lacks canonical invocation reply")?;
         let result = accepted
             .raw_result
             .as_deref()

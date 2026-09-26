@@ -152,7 +152,7 @@ async fn stage_claimed_continuation(
     {
         return Ok(None);
     }
-    if wait_observation::intentional_wait_still_running(
+    match wait_observation::observe_intentional_wait(
         txn,
         parent_row
             .doc_id
@@ -162,9 +162,15 @@ async fn stage_claimed_continuation(
         &goal.session_id,
         parent_row.requester_did.as_deref(),
     )
-    .await?
+    .await
     {
-        return Ok(None);
+        wait_observation::WaitEvidence::Absent => {}
+        wait_observation::WaitEvidence::Running => return Ok(None),
+        wait_observation::WaitEvidence::Invalid(error) => {
+            stop_for_invalid_wait_evidence(txn, &goal, sequence, parent_request_id, &error, now)
+                .await?;
+            return Ok(None);
+        }
     }
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
     if let Some(binding) = crate::graph_pipeline::graph_binding_for_request_in_txn(
@@ -224,6 +230,50 @@ async fn stage_claimed_continuation(
         doc_id: child_doc.to_owned(),
         created: true,
     }))
+}
+
+/// Stop automatic continuation on uninterpretable wait evidence, through the
+/// Goal owner's pause (active) or wrap-up abandonment (budget limited), under
+/// the same claim guard as publication. Both leave the automatic candidate
+/// set, so the write cannot wake another attempt; operator resume clears
+/// `last_failure` and starts a new epoch, so no retry prompt reads it.
+async fn stop_for_invalid_wait_evidence(
+    txn: &ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    sequence: i64,
+    parent_request_id: &str,
+    error: &anyhow::Error,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let state = goal.state().context("goal has an unknown status")?;
+    let reason = format!("invalid Goal wait evidence: {error:#}");
+    tracing::warn!(goal_id = %goal.goal_id, %parent_request_id, %reason, "stopping Goal automation");
+    let reason = escape_graphql_string(&reason);
+    let updated_at = escape_graphql_string(&now.to_rfc3339());
+    let fields = if let Some(post) = state.step(GoalAction::Pause) {
+        format!(
+            r#"status: "{}", active_time_seconds: {}, active_started_at: null, last_failure: "{reason}", updated_at: "{updated_at}""#,
+            post.status.as_str(),
+            goal.current_active_time_seconds(now),
+        )
+    } else if state.step(GoalAction::WrapupAbandoned).is_some() {
+        format!(r#"wrapup_completed: true, last_failure: "{reason}", updated_at: "{updated_at}""#)
+    } else {
+        return Ok(());
+    };
+    let doc_id = escape_graphql_string(&goal.doc_id);
+    let did = escape_graphql_string(&goal.agent_did);
+    let status = escape_graphql_string(&goal.status);
+    let parent_id = escape_graphql_string(parent_request_id);
+    txn.execute(&format!(
+        r#"mutation {{ update_Goal(filter: {{
+        _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{did}" }},
+        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
+        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
+    }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

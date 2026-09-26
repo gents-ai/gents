@@ -6,6 +6,18 @@ use serde_json::json;
 use support::*;
 
 #[derive(Deserialize)]
+struct ResumeCase {
+    name: String,
+    before: serde_json::Value,
+    request: serde_json::Value,
+    commit: bool,
+    expected: serde_json::Value,
+    outcome: String,
+    #[serde(default)]
+    goal_status: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct Contracts {
     pub goal_operator_resume_cases: Vec<ResumeCase>,
     pub goal_config_reactivation_cases: Vec<ConfigCase>,

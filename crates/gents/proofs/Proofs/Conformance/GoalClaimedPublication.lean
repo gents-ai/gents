@@ -25,7 +25,7 @@ def runningTool : BackgroundTool :=
     some "requester", .running⟩
 def timedOutWait : WaitControl :=
   ⟨400, 100, "owner", "session", some "requester", "wait_process",
-    "spawned:300", "spawned:300", .timedOutRunning, true⟩
+    "spawned:300", "spawned:300", .timedOutRunning, true, true⟩
 def waiting : PublicationObservation := ⟨[timedOutWait], some [runningTool]⟩
 def launchedOnly : PublicationObservation := ⟨[], some [runningTool]⟩
 def completedTool : PublicationObservation :=
@@ -60,6 +60,13 @@ def ordinaryToolError : PublicationObservation :=
   { waiting with waits := [{timedOutWait with reply := .argumentError, replyHandle := ""}] }
 def callerDeadlineWait : PublicationObservation :=
   { waiting with waits := [{timedOutWait with reply := .other}] }
+/-- A pending accepted wait that request terminalization cancelled before it
+started: settled, with no invocation reply. -/
+def cancelledBeforeStart : PublicationObservation :=
+  { waiting with waits :=
+      [{timedOutWait with reply := WaitResult.settledDiagnostic, replyHandle := "", replied := false}] }
+def budgetWrapupAbandoned : Snapshot :=
+  { budgetClaimed with goal := {budgetClaimed.goal with wrapupCompleted := true} }
 
 structure PublicationCase where
   name : String
@@ -92,25 +99,25 @@ def cases : List PublicationCase :=
        published, .created⟩
   , ⟨"lost_waited_tool_recovers", claimed, request, lostTool, true, published, .created⟩
   , ⟨"unreadable_target_fails_closed", claimed, request, unreadableTarget, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"ambiguous_same_handle_fails_closed", claimed, request, ambiguousTarget, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"malformed_spawn_origin_fails_closed", claimed, request, malformedOrigin, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"unrelated_wait_cannot_suppress", claimed, request, unrelatedWait, true, published, .created⟩
   , ⟨"foreign_session_target_cannot_suppress", claimed, request, foreignTarget, true, published, .created⟩
   , ⟨"malformed_same_parent_receipt_fails_closed", claimed, request, malformedWait, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"malformed_accepted_wait_error_fails_closed", claimed, request, malformedAcceptedWait, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"forged_nonqualifying_envelope_fails_closed", claimed, request, forgedOtherWait, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"renamed_wait_row_cannot_hide_accepted_control", claimed, request, forgedOtherWait, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"running_then_malformed_wait_fails_closed", claimed, request, malformedLater, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"malformed_then_running_wait_fails_closed", claimed, request, malformedEarlier, true,
-       claimed, .invalidEvidence⟩
+       paused, .invalidEvidence⟩
   , ⟨"valid_wait_tool_error_does_not_suppress", claimed, request, ordinaryToolError, true,
        published, .created⟩
   , ⟨"caller_deadline_wait_does_not_suppress", claimed, request, callerDeadlineWait, true,
@@ -120,6 +127,11 @@ def cases : List PublicationCase :=
   , ⟨"deadline_settled_wait_does_not_suppress", claimed, request,
        {waiting with waits := [{timedOutWait with reply := .settledDiagnostic}]}, true,
        published, .created⟩
+  , ⟨"cancelled_before_start_wait_without_reply_does_not_block", claimed, request,
+       cancelledBeforeStart, true, published, .created⟩
+  , ⟨"budget_wrapup_invalid_evidence_abandons_wrapup", budgetClaimed,
+       {request with expectedStatus := .budgetLimited}, malformedWait, true,
+       budgetWrapupAbandoned, .invalidEvidence⟩
   ]
 
 theorem explicit_cases_replay : ∀ c ∈ cases,
@@ -163,7 +175,8 @@ def waitJson (w : WaitControl) : String :=
   ",\"accepted_handle\":" ++ Conformance.Contracts.jsonString w.acceptedHandle ++
   ",\"reply_handle\":" ++ Conformance.Contracts.jsonString w.replyHandle ++
   ",\"reply\":" ++ Conformance.Contracts.jsonString (match w.reply with | .timedOutRunning => "timed_out_running" | .other => "other" | .argumentError => "argument_error" | .settledDiagnostic => "settled_diagnostic" | .malformed => "malformed") ++
-  ",\"completed\":" ++ (if w.completed then "true" else "false") ++ "}"
+  ",\"terminal\":" ++ (if w.terminal then "true" else "false") ++
+  ",\"replied\":" ++ (if w.replied then "true" else "false") ++ "}"
 
 def observationJson (o : PublicationObservation) : String :=
   "{\"waits\":" ++ Conformance.Contracts.jsonArray (o.waits.map waitJson) ++
