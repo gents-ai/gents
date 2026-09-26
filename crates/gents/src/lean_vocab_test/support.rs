@@ -38,9 +38,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
-    /// Bridge-owner child-terminal failure projections
-    /// (`Conformance.ChildFailureProjections`).
-    pub(crate) child_failure_projections: Vec<LeanChildFailureProjection>,
     /// Multi-resource pairing reconciliation samples
     /// (`Conformance.PairingReconcileCases`).
     pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
@@ -110,6 +107,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
+    /// `Conformance.CausalHopContracts`: materialized hops and admission
+    /// verdicts evaluated by `CausalHop.nextHop`/`CausalHop.admitHop`.
+    pub(crate) causal_hop_contract: LeanCausalHopContract,
     pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
     pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
     pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
@@ -170,23 +170,14 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    pub(crate) reserved_child_materialization_cases: Vec<LeanReservedChildMaterializationCase>,
-    pub(crate) local_parent_depth_cases: Vec<LeanLocalParentDepthCase>,
     // `recovery_equivalence_cases` was deleted from the generated contract:
     // the synthetic recovery-equivalence fixtures are gone and the actual
     // recovery sweep (`recovery_sweep_cases`) is the remaining owner.
     pub(crate) restart_disposition_cases: Vec<LeanRestartDispositionCase>,
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
-    pub(crate) bridge_step_cases: Vec<LeanBridgeStepCase>,
     pub(crate) interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
-    pub(crate) codex_shim_subagent_tool_cases: Vec<LeanCodexShimSubagentToolCase>,
-    pub(crate) codex_shim_subagent_status_cases: Vec<LeanCodexShimSubagentStatusCase>,
-    pub(crate) codex_shim_subagent_visibility_cases: Vec<LeanCodexShimSubagentVisibilityCase>,
-    pub(crate) codex_shim_subagent_metadata_cases: Vec<LeanCodexShimSubagentMetadataCase>,
-    pub(crate) codex_shim_subagent_listing_cases: Vec<LeanCodexShimSubagentListingCase>,
-    pub(crate) codex_shim_subagent_thread_shape_cases: Vec<LeanCodexShimSubagentThreadShapeCase>,
     pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
     pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
     pub(crate) codex_shim_behavior_selection_cases: Vec<LeanCodexShimBehaviorSelectionCase>,
@@ -196,18 +187,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
-    pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
-    pub(crate) descendant_cursor_cases: Vec<LeanDescendantCursorCase>,
-    pub(crate) spawn_fence_cases: Vec<LeanSpawnFenceCase>,
-    pub(crate) spawn_claim_lineage_cases: Vec<LeanSpawnClaimLineageCase>,
-    pub(crate) cancel_child_session_cases: Vec<LeanCancelChildSessionCase>,
-    pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
-    pub(crate) r5_scenario_cases: Vec<serde_json::Value>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
-    pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
-    pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
-    pub(crate) delegated_child_resolution_cases: Vec<LeanDelegatedChildResolutionCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
@@ -324,17 +305,6 @@ pub(crate) struct LeanRootAdmissionCase {
 pub(crate) struct LeanCanonicalPath {
     pub(crate) anchor: String,
     pub(crate) components: Vec<String>,
-}
-
-/// One bridge-owner child-terminal failure projection
-/// (`Conformance.ChildFailureProjections`): the managed-tool state the
-/// background bridge owner projects for one child terminal observation. The
-/// mapping is executed by the bridge owner (`Proofs.Background.Bridge`);
-/// consumers must compare it against production, not restate a second table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanChildFailureProjection {
-    pub(crate) child_state: String,
-    pub(crate) tool_state: String,
 }
 
 /// One observed collection state of the pairing transport owner
@@ -478,8 +448,6 @@ pub(crate) struct LeanNamedTransition {
     pub(crate) name: String,
     pub(crate) from: String,
     pub(crate) to: String,
-    pub(crate) requires_native: bool,
-    pub(crate) requires_child: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -994,7 +962,6 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) signer_matches_target: bool,
     pub(crate) signer_matches_issuer: bool,
     pub(crate) requester_matches_issuer: bool,
-    pub(crate) requester_matches_bridge_author: bool,
     pub(crate) current_approval: bool,
     pub(crate) exact_generation: bool,
     pub(crate) authorization_fresh: bool,
@@ -1004,13 +971,42 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) source_binding_current: bool,
     pub(crate) trigger_config_document_binding_current: bool,
     pub(crate) source_document_binding_current: bool,
-    pub(crate) source_tool_call_binding_current: bool,
     pub(crate) target_policy_allows: bool,
-    pub(crate) bridge_author_binding_current: bool,
-    pub(crate) bridge_author_authorization_fresh: bool,
-    pub(crate) target_cross_principal_policy_allows: bool,
+    pub(crate) peer_authority_allows: bool,
+    pub(crate) hop_within_bound: bool,
     pub(crate) expected_admitted: bool,
     pub(crate) expected_disposition: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCausalHopContract {
+    pub(crate) default_max_request_hop: u32,
+    pub(crate) step_cases: Vec<LeanCausalHopStepCase>,
+    pub(crate) chain_cases: Vec<LeanCausalHopChainCase>,
+}
+
+/// One materialization step: `cause` is `root`, `tool_call` or `continuation`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCausalHopStepCase {
+    pub(crate) name: String,
+    pub(crate) cause: String,
+    pub(crate) predecessor_hop: u32,
+    pub(crate) max_request_hop: u32,
+    pub(crate) expected_hop: u32,
+    pub(crate) expected_admitted: bool,
+}
+
+/// A chain materialized from hop zero; expectations are per request.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCausalHopChainCase {
+    pub(crate) name: String,
+    pub(crate) max_request_hop: u32,
+    pub(crate) causes: Vec<String>,
+    pub(crate) expected_hops: Vec<u32>,
+    pub(crate) expected_admitted: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1044,8 +1040,6 @@ mod compaction_canonical_projection;
 mod compaction_projection_join;
 #[path = "composed_invariants.rs"]
 mod composed_invariants;
-#[path = "descendant_graph.rs"]
-mod descendant_graph;
 #[path = "durable_reduction.rs"]
 mod durable_reduction;
 #[path = "eval.rs"]
@@ -1072,8 +1066,6 @@ mod self_config;
 mod session_documents;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
-#[path = "spawn_claim_fence.rs"]
-mod spawn_claim_fence;
 #[path = "task_hooks.rs"]
 mod task_hooks;
 #[path = "title.rs"]
@@ -1093,7 +1085,6 @@ pub(crate) use command_identity_queue::*;
 pub(crate) use compaction_canonical_projection::*;
 pub(crate) use compaction_projection_join::*;
 pub(crate) use composed_invariants::*;
-pub(crate) use descendant_graph::*;
 pub(crate) use durable_reduction::*;
 pub(crate) use eval::*;
 pub(crate) use event_delivery::*;
@@ -1107,7 +1098,6 @@ pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
-pub(crate) use spawn_claim_fence::*;
 pub(crate) use task_hooks::*;
 pub(crate) use title::*;
 pub(crate) use tool_policy::*;
@@ -1401,17 +1391,12 @@ pub(crate) fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadline
         .unwrap_or_else(|| panic!("Lean queue/deadline case {name:?} was not emitted"))
 }
 
+pub(crate) fn lean_causal_hop_contract() -> &'static LeanCausalHopContract {
+    &lean_contract_snapshot().causal_hop_contract
+}
+
 pub(crate) fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
-}
-
-pub(crate) fn lean_reserved_child_materialization_cases(
-) -> &'static [LeanReservedChildMaterializationCase] {
-    &lean_contract_snapshot().reserved_child_materialization_cases
-}
-
-pub(crate) fn lean_local_parent_depth_cases() -> &'static [LeanLocalParentDepthCase] {
-    &lean_contract_snapshot().local_parent_depth_cases
 }
 
 pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
@@ -1432,10 +1417,6 @@ pub(crate) fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWor
 
 pub(crate) fn lean_tool_output_paging_cases() -> &'static [LeanToolOutputPagingCase] {
     &lean_contract_snapshot().tool_output_paging_cases
-}
-
-pub(crate) fn lean_bridge_step_cases() -> &'static [LeanBridgeStepCase] {
-    &lean_contract_snapshot().bridge_step_cases
 }
 
 pub(crate) fn lean_interrupt_disposition_cases() -> &'static [LeanInterruptDispositionCase] {
@@ -1462,35 +1443,6 @@ pub(crate) fn lean_codex_shim_projection_case(
         .iter()
         .find(|case| case.witness == witness)
         .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_subagent_tool_cases() -> &'static [LeanCodexShimSubagentToolCase] {
-    &lean_contract_snapshot().codex_shim_subagent_tool_cases
-}
-
-pub(crate) fn lean_codex_shim_subagent_status_cases() -> &'static [LeanCodexShimSubagentStatusCase]
-{
-    &lean_contract_snapshot().codex_shim_subagent_status_cases
-}
-
-pub(crate) fn lean_codex_shim_subagent_visibility_cases(
-) -> &'static [LeanCodexShimSubagentVisibilityCase] {
-    &lean_contract_snapshot().codex_shim_subagent_visibility_cases
-}
-
-pub(crate) fn lean_codex_shim_subagent_metadata_cases(
-) -> &'static [LeanCodexShimSubagentMetadataCase] {
-    &lean_contract_snapshot().codex_shim_subagent_metadata_cases
-}
-
-pub(crate) fn lean_codex_shim_subagent_listing_cases() -> &'static [LeanCodexShimSubagentListingCase]
-{
-    &lean_contract_snapshot().codex_shim_subagent_listing_cases
-}
-
-pub(crate) fn lean_codex_shim_subagent_thread_shape_cases(
-) -> &'static [LeanCodexShimSubagentThreadShapeCase] {
-    &lean_contract_snapshot().codex_shim_subagent_thread_shape_cases
 }
 
 pub(crate) fn lean_codex_shim_reasoning_projection_cases(
@@ -1532,40 +1484,12 @@ pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase
     &lean_contract_snapshot().r6_backgrounding_cases
 }
 
-pub(crate) fn lean_descendant_graph_cases() -> &'static [LeanDescendantGraphCase] {
-    &lean_contract_snapshot().descendant_graph_cases
-}
-
-pub(crate) fn lean_descendant_cursor_cases() -> &'static [LeanDescendantCursorCase] {
-    &lean_contract_snapshot().descendant_cursor_cases
-}
-
-pub(crate) fn lean_spawn_fence_cases() -> &'static [LeanSpawnFenceCase] {
-    &lean_contract_snapshot().spawn_fence_cases
-}
-
-pub(crate) fn lean_spawn_claim_lineage_cases() -> &'static [LeanSpawnClaimLineageCase] {
-    &lean_contract_snapshot().spawn_claim_lineage_cases
-}
-
-pub(crate) fn lean_cancel_child_session_cases() -> &'static [LeanCancelChildSessionCase] {
-    &lean_contract_snapshot().cancel_child_session_cases
-}
-
 pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
     lean_contract_snapshot()
         .r6_backgrounding_cases
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
-}
-
-pub(crate) fn lean_r5_cross_principal_cases() -> &'static [LeanR5CrossPrincipalCase] {
-    &lean_contract_snapshot().r5_cross_principal_cases
-}
-
-pub(crate) fn lean_r5_scenario_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().r5_scenario_cases
 }
 
 pub(crate) fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWitness] {
@@ -1599,14 +1523,6 @@ pub(crate) fn lean_composed_invariant_witness_by_scenario(
         })
 }
 
-pub(crate) fn lean_cancel_propagation_cases() -> &'static [LeanCancelPropagationCase] {
-    &lean_contract_snapshot().cancel_propagation_cases
-}
-
-pub(crate) fn lean_child_failure_projections() -> &'static [LeanChildFailureProjection] {
-    &lean_contract_snapshot().child_failure_projections
-}
-
 pub(crate) fn lean_r6_background_theorem_witnesses() -> &'static [LeanBackgroundTheoremWitness] {
     &lean_contract_snapshot().r6_background_theorem_witnesses
 }
@@ -1621,10 +1537,6 @@ pub(crate) fn lean_r6_background_theorem_witness(
         .unwrap_or_else(|| {
             panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
         })
-}
-
-pub(crate) fn lean_subagent_delegation_graph_cases() -> &'static [LeanSubagentDelegationGraphCase] {
-    &lean_contract_snapshot().subagent_delegation_graph_cases
 }
 
 pub(crate) fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
@@ -1719,153 +1631,23 @@ pub(crate) struct LeanInterruptQueueObservation {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanWorkerCapacityCase {
     pub(crate) name: String,
-    pub(crate) world_fixture: String,
-    pub(crate) world: LeanWorkerCapacityWorld,
     pub(crate) pre: LeanWorkerCapacityState,
     pub(crate) operation: LeanWorkerCapacityOperation,
     pub(crate) expected: Option<LeanWorkerCapacityState>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityWorld {
-    pub(crate) request_id: u64,
-    pub(crate) session_id: u64,
-    pub(crate) lease: LeanRequestExecutionWorld,
-    pub(crate) claim: Option<LeanWorkerCapacityClaim>,
-    pub(crate) queue_active: Option<u64>,
-    pub(crate) retry_request: u64,
-    pub(crate) current_claim: bool,
-    pub(crate) accepted_messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
-    pub(crate) selected_tool: Option<LeanWorkerCapacityTool>,
-    pub(crate) control_tool: Option<LeanWorkerCapacityControlTool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityClaim {
-    pub(crate) physical_request: u64,
-    pub(crate) logical_request: u64,
-    pub(crate) session: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityTool {
-    pub(crate) document: u64,
-    pub(crate) request_doc: u64,
-    pub(crate) session: u64,
-    pub(crate) accepted_sequence: u64,
-    pub(crate) state: String,
-    pub(crate) await_mode: String,
-    pub(crate) canonical_tool_delivered: bool,
-    pub(crate) child_request_id: Option<u64>,
-    pub(crate) accepted_header_binds_generation: bool,
-    pub(crate) accepted_header_binds_tool: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityControlTool {
-    pub(crate) document: u64,
-    pub(crate) state: String,
-    pub(crate) current_wait_control: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacitySessionOwner {
-    pub(crate) session_id: String,
-    pub(crate) agent_did: String,
-    pub(crate) requester_did: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityViewer {
-    pub(crate) root_request_id: u64,
-    pub(crate) root_principal: u64,
-    pub(crate) root_session_id: u64,
-    pub(crate) lineage_id: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityEdge {
-    pub(crate) root_request_id: u64,
-    pub(crate) root_session_id: u64,
-    pub(crate) parent_request_id: u64,
-    pub(crate) parent_tool_call_id: u64,
-    pub(crate) child_request_id: u64,
-    pub(crate) child_session_id: Option<u64>,
-    pub(crate) owner_principal: u64,
-    pub(crate) control_principal: u64,
-    pub(crate) child_principal: u64,
-    pub(crate) behavior_id: u64,
-    pub(crate) lineage_id: u64,
-    pub(crate) await_mode: String,
-    pub(crate) materialization: String,
-    pub(crate) lifecycle: String,
-    pub(crate) bridge_durable: bool,
-    pub(crate) physical_corroborated: bool,
-    pub(crate) direct_from_root: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacitySelection {
-    pub(crate) viewer: LeanWorkerCapacityViewer,
-    pub(crate) caller_owner: LeanWorkerCapacitySessionOwner,
-    pub(crate) bridge_owner: LeanWorkerCapacitySessionOwner,
-    pub(crate) edge: LeanWorkerCapacityEdge,
-    pub(crate) bridge_document: u64,
-    pub(crate) control_document: u64,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanWorkerCapacityState {
     pub(crate) active_limit: usize,
-    pub(crate) parked_limit: usize,
     pub(crate) active: Vec<[u64; 2]>,
-    pub(crate) parked: Vec<[u64; 2]>,
-    pub(crate) dependencies: Vec<LeanWorkerCapacityDependency>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanWorkerCapacityDependency {
-    pub(crate) ticket: [u64; 2],
-    pub(crate) document: u64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanWorkerCapacityOperation {
-    AdmitFresh {
-        ticket: [u64; 2],
-    },
-    WaitForChild {
-        generation: u64,
-        document: u64,
-    },
-    ResumeAfterChild {
-        generation: u64,
-        cancellation_allows: bool,
-    },
-    WaitForExistingChild {
-        generation: u64,
-        document: u64,
-        selection: LeanWorkerCapacitySelection,
-    },
-    ResumeAfterExistingChild {
-        generation: u64,
-        selection: LeanWorkerCapacitySelection,
-        cancellation_allows: bool,
-    },
-    Release {
-        ticket: [u64; 2],
-    },
+    Acquire { ticket: [u64; 2] },
+    Release { ticket: [u64; 2] },
 }
 
 pub(crate) fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCase] {

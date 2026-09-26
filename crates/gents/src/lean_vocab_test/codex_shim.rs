@@ -15,65 +15,6 @@ pub(crate) struct LeanCodexShimProjectionCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentToolCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) projected_item_kind: String,
-    pub(crate) collab_tool: Option<String>,
-    pub(crate) reciprocal_link: bool,
-    pub(crate) projection_settled: bool,
-    pub(crate) link_settle_expired: bool,
-    pub(crate) runtime_tool_status: Option<String>,
-    pub(crate) projected_collab_status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentStatusCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) request_state: String,
-    pub(crate) projected_agent_status: String,
-    pub(crate) terminal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentVisibilityCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) authorized: bool,
-    pub(crate) loaded: bool,
-    pub(crate) projection_mode: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentMetadataCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) runtime_model: Option<String>,
-    pub(crate) runtime_reasoning_effort: Option<String>,
-    pub(crate) projected_model: Option<String>,
-    pub(crate) projected_reasoning_effort: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentListingCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) source_kind: String,
-    pub(crate) authorized: bool,
-    pub(crate) listed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCodexShimSubagentThreadShapeCase {
-    pub(crate) witness: String,
-    pub(crate) lean_theorems: Vec<String>,
-    pub(crate) parent_thread_id: String,
-    pub(crate) native_source_parent: Option<String>,
-    pub(crate) replay_stages: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanCodexShimReasoningProjectionCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,

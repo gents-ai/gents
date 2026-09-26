@@ -42,6 +42,8 @@ pub(crate) struct LeanTitleRequestAdmissionCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleRequest {
+    /// Signed causal hop; the native adapter maps it to `subagent_depth`.
+    pub(crate) hop: u32,
     pub(crate) request_id: String,
     pub(crate) purpose: LeanRequestPurpose,
     pub(crate) target_agent: String,
@@ -111,7 +113,6 @@ pub(crate) struct LeanTitleAdmission {
     pub(crate) issuer_did: String,
     pub(crate) source_request_id: String,
     pub(crate) runtime_source_kind: String,
-    pub(crate) bridge_author_did: String,
     pub(crate) signature_valid: bool,
     pub(crate) model_signed_fields_hex: Vec<String>,
     pub(crate) model_expected_fields_hex: Vec<String>,
@@ -123,7 +124,6 @@ pub(crate) struct LeanTitleRuntimeEvidence {
     pub(crate) source_kind: String,
     pub(crate) issuer_did: String,
     pub(crate) source_request_id: String,
-    pub(crate) bridge_author_did: String,
     pub(crate) target_agent: String,
     pub(crate) target_runtime_attestation_valid: bool,
     pub(crate) source_binding_current: bool,

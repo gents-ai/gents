@@ -15,10 +15,7 @@ use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::{HookAction, ToolCallHookAction};
-use gents::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallLifecycle,
-    MAX_SUBAGENT_DEPTH,
-};
+use gents::tool_call_lifecycle::{AwaitMode, CancelCause, FailureClass};
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, write_manual_agent_request,
     BackgroundToolRegistry, DefraSessionHook, DefraStreamWriter, DefraWatcher, FailurePolicy,
@@ -39,38 +36,29 @@ use admission_slot_accounting::{
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_bridge_step_cases, lean_cancel_child_session_cases,
-    lean_cancel_propagation_cases, lean_client_behavior_readiness_cases,
+    lean_backend_health_cases, lean_client_behavior_readiness_cases,
     lean_codex_shim_behavior_selection_cases, lean_codex_shim_binding_cases,
     lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
     lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_subagent_listing_cases,
-    lean_codex_shim_subagent_metadata_cases, lean_codex_shim_subagent_status_cases,
-    lean_codex_shim_subagent_thread_shape_cases, lean_codex_shim_subagent_tool_cases,
-    lean_codex_shim_subagent_visibility_cases, lean_codex_shim_thread_status_cases,
+    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_thread_status_cases,
     lean_codex_shim_tool_metadata_cases, lean_codex_shim_turn_lifecycle_cases,
     lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
     lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
-    lean_descendant_cursor_cases, lean_descendant_graph_cases,
     lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
     lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
     lean_interrupt_disposition_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
-    lean_r4c_background_work_case, lean_r4c_background_work_cases,
-    lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_reserved_child_materialization_cases,
-    lean_restart_disposition_cases, lean_spawn_claim_lineage_cases, lean_spawn_fence_cases,
-    lean_startup_readiness_cases, lean_state_machine_contract,
-    lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
-    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
+    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
+    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
+    lean_startup_readiness_cases, lean_state_machine_contract, lean_tool_output_paging_cases,
+    lean_transcript_case, lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
     fetch_message_snapshots_for_session, fetch_request_lineage_snapshot,
     fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
-    fetch_session_snapshot, fetch_tool_call_snapshots_for_session, MessageSnapshot,
-    RequestLineageSnapshot, RequestSnapshot, ToolCallSnapshot,
+    fetch_session_snapshot, MessageSnapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
     build_request, create_agent_session, create_request, create_request_with_signed_fields,
@@ -85,8 +73,6 @@ mod backend_health;
 mod background;
 #[path = "conformance/callback_lifecycle.rs"]
 mod callback_lifecycle;
-#[path = "conformance/cancel_propagation.rs"]
-mod cancel_propagation;
 #[path = "conformance/client_runtime.rs"]
 mod client_runtime;
 #[path = "conformance/codex_shim.rs"]
@@ -127,14 +113,10 @@ mod lsp;
 mod mailbox;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
-#[path = "conformance/native_remote_spawn.rs"]
-mod native_remote_spawn;
 #[path = "conformance/p2p_observability.rs"]
 mod p2p_observability;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
-#[path = "conformance/r5_cross_principal.rs"]
-mod r5_cross_principal;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
 #[path = "conformance/replicated_request_convergence.rs"]
@@ -160,11 +142,6 @@ fn lean_executable_contracts_cover_initial_domains() {
 #[tokio::test]
 async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
-}
-
-#[test]
-fn generated_reserved_child_materialization_cases_are_derived() {
-    recovery_sweeps::generated_reserved_child_materialization_cases_are_derived();
 }
 
 #[tokio::test]
@@ -211,76 +188,6 @@ async fn drain_wakeups_never_interrupts_foreign_replica() {
 #[tokio::test]
 async fn generated_r6_backgrounding_case_metadata_matches_export() {
     background::generated_r6_backgrounding_case_metadata_matches_export().await;
-}
-
-#[test]
-fn delegation_depth_matches_runtime_limit() {
-    background::delegation_depth_matches_runtime_limit();
-}
-
-#[test]
-fn generated_r5_cross_principal_cases_drive_production_dispatch() {
-    std::thread::Builder::new()
-        .name("r5-cross-principal-conformance".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build r5 cross-deployment runtime")
-                .block_on(
-                    r5_cross_principal::generated_r5_cross_principal_cases_drive_production_dispatch(),
-                );
-        })
-        .expect("spawn r5 cross-deployment conformance thread")
-        .join()
-        .expect("r5 cross-deployment conformance thread panicked");
-}
-
-// Drives two full agents and two P2P nodes. A single-threaded executor lets one
-// agent's shutdown starve behind a blocking DefraDB call on the other's, which the
-// 30s shutdown bound then reports as a hang. The std::thread wrapper stays:
-// block_on polls the root future on this thread, and thread_stack_size sizes only
-// the spawned workers, so the 16 MiB stack the fixture setup and teardown run on
-// comes from here.
-#[test]
-fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
-    std::thread::Builder::new()
-        .name("native-remote-spawn-conformance".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .thread_stack_size(16 * 1024 * 1024)
-                .enable_all()
-                .build()
-                .expect("build native remote-spawn runtime")
-                .block_on(
-                    native_remote_spawn::generated_remote_spawn_contract_drives_native_seam(),
-                );
-        })
-        .expect("spawn native remote-spawn conformance thread")
-        .join()
-        .expect("native remote-spawn conformance thread panicked");
-}
-
-// This integration fence drives two live runtimes and two P2P nodes. Match the
-// production multi-thread executor so cancellation progress cannot be starved
-// behind a blocking DefraDB operation on the test's coordinator thread.
-#[test]
-fn cancel_propagation_cases_drive_production_interrupt() {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .thread_stack_size(16 * 1024 * 1024)
-        .enable_all()
-        .build()
-        .expect("build cancel-propagation runtime")
-        .block_on(cancel_propagation::cancel_propagation_cases_drive_production_interrupt());
-}
-
-#[test]
-fn unmaterialized_child_status_matches_runtime_vocabulary() {
-    background::unmaterialized_child_status_matches_runtime_vocabulary();
 }
 
 #[test]
@@ -481,8 +388,6 @@ mod pairing_reconcile;
 mod persona_request;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
-#[path = "conformance/r5_scenarios.rs"]
-mod r5_scenarios;
 #[path = "conformance/rendered_capture.rs"]
 mod rendered_capture;
 #[path = "conformance/scope_templates.rs"]
@@ -491,7 +396,5 @@ mod scope_templates;
 mod self_config;
 #[path = "conformance/structure.rs"]
 mod structure;
-#[path = "conformance/subagent_source.rs"]
-mod subagent_source;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;

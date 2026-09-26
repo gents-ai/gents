@@ -445,7 +445,7 @@ live-mailbox-eval:
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle
 	$(CARGO) test -p gents --test e2e_runtime
-	$(CARGO) test -p gents --test e2e_subagent
+	$(CARGO) test -p gents --test e2e_background
 	$(CARGO) test -p gents --test e2e_triggers
 
 test-cli:

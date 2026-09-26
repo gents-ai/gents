@@ -33,12 +33,14 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
 /// `requestRecoverySweepReachable`, cited as
 /// `boundary.request.recovery-sweep-reachable`).
 ///
-/// These were previously published as `illegal`, which made the emitted
-/// contract assert that Rust has no writer for edges the product performs.
+/// Corrupt-generation revocation (`CanonicalOutput.Execution.revokeCorrupt`
+/// with outcome `dead`) is the only writer of these edges: request recovery
+/// revokes an expired generation whose canonical output is definitively
+/// unreconstructable.
 fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("claimed", "dead") | ("processing", "dead") => {
-            Some("ToolCallLifecycle::reconcile_subagent_liveness")
+            Some("RequestLifecycle::repair_terminal_requests")
         }
         _ => None,
     }
@@ -55,11 +57,11 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 /// Drive the real recovery sweep named by the contract and assert it persists the
 /// modelled post-state.
 ///
-/// The two `-> dead` edges run inside `reconcile_subagent_liveness`, which needs a
-/// running-bridge plus expired-child fixture. Their runtime drive lives in
-/// `production_request_writers_only_reach_contracted_edges` below (the
-/// `subagent_liveness` writer against real bridge fixtures); driving them from
-/// THIS generated-case test remains open, tracked in #994.
+/// The two `-> dead` edges are written only by corrupt-generation revocation,
+/// which needs a definitively corrupt canonical output. The generated
+/// `corrupt_twin_revocation_*` canonical execution cases drive that writer
+/// through the native revocation owner; driving them from THIS generated-case
+/// test remains open, tracked in #994.
 async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
     let _ = case;
 }
@@ -554,61 +556,6 @@ fn coalesce_input(key: &str) -> String {
     .to_string()
 }
 
-async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let escaped_deadline = escape_graphql_string(deadline);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                input: {{ deadline: "{escaped_deadline}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "set deadline failed: {:?}", resp.errors);
-}
-
-/// A foreground bridge used when a generated request-transition case only
-/// exercises child terminalization. Foreground bridges are projected by their
-/// in-memory waiter, so this fixture needs no fabricated parent edge.
-async fn create_running_subagent_bridge(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
-    child_request_id: &str,
-) {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let escaped_child = escape_graphql_string(child_request_id);
-    let started_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "{escaped_session_id}:{escaped_tool_call_id}",
-                session_id: "{escaped_session_id}",
-                message_sequence: 1,
-                tool_name: "spawn_subagent",
-                tool_call_id: "{escaped_tool_call_id}",
-                args: "{{}}",
-                result: "",
-                status: "running",
-                lifecycle_state: "running",
-                cancel_policy: "cascade",
-                await_mode: "foreground",
-                child_request_id: "{escaped_child}",
-                started_at: "{started_at}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create subagent bridge failed: {:?}",
-        resp.errors
-    );
-}
-
 async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
@@ -645,11 +592,13 @@ async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
 /// `lifecycle_state` predicate on the terminal transition): this test then
 /// reports `production writers reached interrupted -> completed`.
 ///
-/// Coverage: every legal edge except `processing -> processing`, plus all three
-/// `recoveryReachable` edges. The two sweeps are driven against real auxiliary
-/// fixtures — `reconcile_coalesced_pending_request` against an older survivor
-/// under the same coalesce key, and `reconcile_subagent_liveness` against a
-/// running bridge whose child deadline has lapsed.
+/// Coverage: every legal edge except `processing -> processing`, plus the
+/// `pending -> dead` expiry edge. The coalesce sweep is driven against a real
+/// auxiliary fixture: `reconcile_coalesced_pending_request` against an older
+/// survivor under the same coalesce key. The `claimed/processing -> dead`
+/// corrupt-generation revocation edges need a definitively corrupt canonical
+/// output and are driven by the generated `corrupt_twin_revocation_*`
+/// canonical execution cases.
 ///
 /// `continueProcessing` is an identity transition in the Lean owner. Immutable
 /// output appends do not change request lifecycle state, so they add no edge
@@ -667,7 +616,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "interrupted",
         "workspaceBindingPending",
     ];
-    const WRITERS: [&str; 12] = [
+    const WRITERS: [&str; 11] = [
         "claim",
         "admission_reject",
         "claim_after_ttl_lapse",
@@ -678,7 +627,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "interrupt",
         "repair_terminal_requests",
         "coalesce_pending",
-        "subagent_liveness",
         "bind_workspace",
     ];
 
@@ -736,7 +684,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             if start == "processing"
                 && matches!(
                     writer,
-                    "complete" | "fail" | "interrupt" | "subagent_liveness"
+                    "complete" | "fail" | "interrupt"
                 )
             {
                 crate::support::begin_owned_execution(&mut lifecycle, &db.node)
@@ -779,20 +727,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     )
                     .await;
                     let _ = survivor_doc_id;
-                }
-                "subagent_liveness" => {
-                    // An expired child of a running bridge: a live executor
-                    // enforces its own deadline, so a lapsed non-terminal row
-                    // means the executor is gone.
-                    let past = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-                    set_request_deadline(&db.node, &doc_id, &past).await;
-                    create_running_subagent_bridge(
-                        &db.node,
-                        &session_id,
-                        &format!("bridge-{request_id}"),
-                        &request_id,
-                    )
-                    .await;
                 }
                 _ => {}
             }
@@ -865,10 +799,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     )
                     .await;
                 }
-                "subagent_liveness" => {
-                    let _ =
-                        ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID).await;
-                }
                 "bind_workspace" => {
                     let _ = gents::__test_internals::activate_workspace_bound_request(
                         &db.node, &doc_id,
@@ -896,11 +826,9 @@ async fn production_request_writers_only_reach_contracted_edges() {
         ("pending", "interrupted"),
         ("pending", "superseded"),
         ("claimed", "processing"),
-        ("claimed", "dead"),
         ("claimed", "failed"),
         ("claimed", "interrupted"),
         ("processing", "completed"),
-        ("processing", "dead"),
         ("processing", "failed"),
         ("processing", "interrupted"),
     ]
@@ -1392,7 +1320,6 @@ async fn scheduled_materialization_persists_trigger_lineage() {
         .is_some_and(|signature| !signature.is_empty()));
 }
 
-use gents::tool_call_lifecycle::ToolCallLifecycle;
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();

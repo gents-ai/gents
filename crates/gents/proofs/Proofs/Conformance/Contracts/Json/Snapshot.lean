@@ -64,6 +64,7 @@ import Proofs.Conformance.Contracts.Json.ExecutionGate
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
+import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
@@ -345,6 +346,8 @@ def snapshotJson : String :=
       ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
+    ++ "\"causal_hop_contract\":"
+      ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"

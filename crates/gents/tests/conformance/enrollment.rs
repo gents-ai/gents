@@ -12,7 +12,7 @@ use gents_protocol::request_admission::{
 };
 
 use crate::lean_vocab_test::{
-    lean_agent_request_admission_cases, lean_enrollment_cases, lean_enrollment_digest_cases,
+    lean_agent_request_admission_cases, lean_causal_hop_contract, lean_enrollment_cases, lean_enrollment_digest_cases,
     lean_enrollment_durable_projection_cases, lean_enrollment_encoding_cases,
     LeanEnrollmentTraceStep,
 };
@@ -24,6 +24,8 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
         !cases.is_empty(),
         "Lean emitted no AgentRequest admission cases"
     );
+    let mut admitted_kinds = std::collections::BTreeSet::new();
+    let mut refused_over_hop_kinds = std::collections::BTreeSet::new();
     for case in cases {
         let kind = AgentRequestAdmissionKind::try_from(case.kind.as_str())
             .unwrap_or_else(|error| panic!("{}: {error}: {:?}", case.name, case.kind));
@@ -42,7 +44,6 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             signer_matches_target: case.signer_matches_target,
             signer_matches_issuer: case.signer_matches_issuer,
             requester_matches_issuer: case.requester_matches_issuer,
-            requester_matches_bridge_author: case.requester_matches_bridge_author,
             current_approval: case.current_approval,
             exact_generation: case.exact_generation,
             authorization_fresh: case.authorization_fresh,
@@ -52,11 +53,9 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             source_binding_current: case.source_binding_current,
             trigger_config_document_binding_current: case.trigger_config_document_binding_current,
             source_document_binding_current: case.source_document_binding_current,
-            source_tool_call_binding_current: case.source_tool_call_binding_current,
             target_policy_allows: case.target_policy_allows,
-            bridge_author_binding_current: case.bridge_author_binding_current,
-            bridge_author_authorization_fresh: case.bridge_author_authorization_fresh,
-            target_cross_principal_policy_allows: case.target_cross_principal_policy_allows,
+            peer_authority_allows: case.peer_authority_allows,
+            hop_within_bound: case.hop_within_bound,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)
             == AgentRequestAdmissionDisposition::Admit;
@@ -69,6 +68,80 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             "{}",
             case.name
         );
+        if case.expected_admitted {
+            admitted_kinds.insert(kind.as_str());
+        } else if !case.hop_within_bound {
+            refused_over_hop_kinds.insert(kind.as_str());
+        }
+    }
+    // Every admission branch, including cross-principal `Peer` messaging, is
+    // exercised by an admitted row, and the causal-hop bound refuses a row the
+    // other evidence would admit on both same-principal and peer branches.
+    for kind in [
+        AgentRequestAdmissionKind::Enrollment,
+        AgentRequestAdmissionKind::LocalSelf,
+        AgentRequestAdmissionKind::RuntimeInternal,
+        AgentRequestAdmissionKind::Peer,
+    ] {
+        assert!(
+            admitted_kinds.contains(kind.as_str()),
+            "Lean emitted no admitted {} row",
+            kind.as_str()
+        );
+    }
+    for kind in [
+        AgentRequestAdmissionKind::LocalSelf,
+        AgentRequestAdmissionKind::Peer,
+    ] {
+        assert!(
+            refused_over_hop_kinds.contains(kind.as_str()),
+            "Lean emitted no hop-bound refusal for {}",
+            kind.as_str()
+        );
+    }
+}
+
+/// The materializer is the single writer of the signed hop
+/// (`AgentRequest.subagent_depth`) and admission bounds it by the target's
+/// `max_request_hop`; both must evaluate exactly as `CausalHop` does.
+#[test]
+fn generated_causal_hop_cases_match_native_materializer() {
+    use gents::{next_request_hop, request_hop_within_bound, RequestHopCause};
+
+    let contract = lean_causal_hop_contract();
+    assert_eq!(
+        contract.default_max_request_hop,
+        gents::document_config::DEFAULT_MAX_REQUEST_HOP
+    );
+    let cause = |name: &str| match name {
+        "root" => RequestHopCause::Root,
+        "tool_call" => RequestHopCause::ToolCall,
+        "continuation" => RequestHopCause::Continuation,
+        other => panic!("unknown Lean causal-hop cause {other:?}"),
+    };
+    assert!(!contract.step_cases.is_empty());
+    for case in &contract.step_cases {
+        let hop = next_request_hop(cause(&case.cause), case.predecessor_hop);
+        assert_eq!(hop, case.expected_hop, "{}", case.name);
+        assert_eq!(
+            request_hop_within_bound(case.max_request_hop, hop),
+            case.expected_admitted,
+            "{}",
+            case.name
+        );
+    }
+    assert!(!contract.chain_cases.is_empty());
+    for chain in &contract.chain_cases {
+        let mut hop = 0;
+        let mut hops = Vec::new();
+        let mut admitted = Vec::new();
+        for name in &chain.causes {
+            hop = next_request_hop(cause(name), hop);
+            hops.push(hop);
+            admitted.push(request_hop_within_bound(chain.max_request_hop, hop));
+        }
+        assert_eq!(hops, chain.expected_hops, "{}", chain.name);
+        assert_eq!(admitted, chain.expected_admitted, "{}", chain.name);
     }
 }
 

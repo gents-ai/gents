@@ -14,8 +14,6 @@ mod backend_auth_config;
 mod backend_auth_startup;
 #[path = "misc/client_authored_collections_fence.rs"]
 mod client_authored_collections_fence;
-#[path = "misc/descendant_graph.rs"]
-mod descendant_graph;
 #[path = "misc/goal_controller.rs"]
 mod goal_controller;
 #[path = "misc/legacy_authority_absence.rs"]

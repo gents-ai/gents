@@ -13,137 +13,38 @@ pub(crate) struct LeanToolOutputProjectionCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "witness", deny_unknown_fields)]
 pub(crate) enum LeanR4cBackgroundWorkCase {
-    #[serde(rename = "r4c.list_subagents.lineage_rejects")]
-    ListSubagentsLineageRejects {
-        caller_request_id: String,
-        sibling_request_id: String,
-        sibling_child_id: String,
-        caller_sees_sibling_child: bool,
-    },
-    #[serde(rename = "r4c.read_subagent_transcript.cursor_advances")]
-    ReadTranscriptCursorAdvances {
-        child_session_id: String,
-        first_since_sequence: usize,
-        first_through_sequence: usize,
-        first_next_sequence: usize,
-        second_since_sequence: usize,
-        second_through_sequence: usize,
-        no_gap: bool,
-        no_overlap: bool,
-    },
-    #[serde(rename = "r4c.read_subagent_transcript.hides_bridge_rows")]
-    ReadTranscriptHidesBridgeRows {
-        child_session_id: String,
-        bridge_call_id: String,
-        rendered_transcript: String,
-    },
     #[serde(rename = "r4c.read_tool_output.canonical_source_reconstruction")]
     ReadToolOutputCanonicalSourceReconstruction {
         tool_call_id: String,
         canonical_source: String,
         cases: Vec<LeanToolOutputProjectionCase>,
     },
-    #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
-    SteerAppendPreservesLineage {
-        caller_request_id: String,
-        caller_request_doc_id: String,
-        child_session_id: String,
-        queued_request_id: String,
-        caused_by_parent_request_id: String,
-        caused_by_parent_request_doc_id: String,
-        caused_by_parent_tool_call_id_present: bool,
-        caused_by_parent_tool_call_doc_id_present: bool,
-        lineage_admissible: bool,
-        depth_zero_lineage_admissible: bool,
-        background_completion_depth_zero_admissible: bool,
-        queue_source: String,
-        queue_policy: String,
-    },
-    #[serde(rename = "r4c.steer_subagent.interrupt_composes")]
-    SteerInterruptComposes {
-        caller_request_id: String,
-        child_session_id: String,
-        interrupted_active_request_id: String,
-        drained_wake_up_request_ids: Vec<String>,
-        drained_wake_up_queue_key: String,
-        queued_request_id: String,
-        queue_interrupted_request_id: String,
-    },
-    #[serde(rename = "r4c.list_subagents.unmaterialized_child_visible")]
-    UnmaterializedChildVisible {
-        caller_request_id: String,
-        bridge_tool_call_id: String,
-        child_request_id: String,
-        child_materialized: bool,
-        bridge_lifecycle_state: String,
-        listed_status: String,
-        listed_under_all_filter: bool,
-        listed_under_running_filter: bool,
-        read_lifecycle_state: String,
-        read_terminal: bool,
-        wait_retryable: bool,
-    },
 }
 
 impl LeanR4cBackgroundWorkCase {
     pub(crate) fn witness(&self) -> &'static str {
         match self {
-            Self::ListSubagentsLineageRejects { .. } => "r4c.list_subagents.lineage_rejects",
-            Self::ReadTranscriptCursorAdvances { .. } => {
-                "r4c.read_subagent_transcript.cursor_advances"
-            }
-            Self::ReadTranscriptHidesBridgeRows { .. } => {
-                "r4c.read_subagent_transcript.hides_bridge_rows"
-            }
             Self::ReadToolOutputCanonicalSourceReconstruction { .. } => {
                 "r4c.read_tool_output.canonical_source_reconstruction"
-            }
-            Self::SteerAppendPreservesLineage { .. } => {
-                "r4c.steer_subagent.append_preserves_lineage"
-            }
-            Self::SteerInterruptComposes { .. } => "r4c.steer_subagent.interrupt_composes",
-            Self::UnmaterializedChildVisible { .. } => {
-                "r4c.list_subagents.unmaterialized_child_visible"
             }
         }
     }
 }
 
-/// Executable bridge-step witness (#937): one concrete subagent-bridge
-/// fixture, one bridge event, and the outcome computed by running the Lean
-/// `Subagent.BridgedState.step` on it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanBridgeStepCase {
-    pub(crate) name: String,
-    pub(crate) event: String,
-    pub(crate) child_state: String,
-    pub(crate) parent_state: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) bridge_committed: bool,
-    pub(crate) bridge_state: String,
-    pub(crate) legal: bool,
-    pub(crate) post_tool_state: Option<String>,
-    pub(crate) post_child_interrupt_set: bool,
-    #[allow(dead_code)]
-    pub(crate) theorem: String,
-}
-
 /// Interrupt disposition witness computed by the Lean
-/// `Subagent.Interrupt.interruptTool` for one owned tool-call shape.
+/// `Background.Interrupt.interruptTool` for one owned tool-call shape.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanInterruptDispositionCase {
     pub(crate) name: String,
     pub(crate) state: String,
     pub(crate) await_mode: String,
-    pub(crate) child_linked: bool,
-    pub(crate) cancel_policy: String,
     pub(crate) disposition: String,
     pub(crate) post_state: String,
     pub(crate) post_await_mode: String,
 }
 
 /// Paging witness over the retained output window (#937): inputs plus the
-/// slice outputs computed from the Lean `Subagent.ToolOutput.readSlice`
+/// slice outputs computed from the Lean `Background.ToolOutput.readSlice`
 /// model, consumed against `read_retained_output_slice`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolOutputPagingCase {
@@ -172,8 +73,6 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) pre_live_count: usize,
     pub(crate) max_backgrounded: usize,
     pub(crate) await_mode: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) child_request_id: Option<String>,
     pub(crate) terminal_state: String,
     pub(crate) result: Option<String>,
     pub(crate) reason: Option<String>,
@@ -189,7 +88,7 @@ pub(crate) struct LeanR6BackgroundingCase {
     /// Lean's opaque numeric redrive source request id (`wake.requestId`).
     #[serde(default)]
     pub(crate) redrive_source_request_id: Option<u64>,
-    /// Before/after subagent depth: redrive preserves the failed source's depth.
+    /// Before/after causal hop: redrive preserves the failed source's hop.
     #[serde(default)]
     pub(crate) pre_depth: Option<u64>,
     #[serde(default)]
@@ -220,50 +119,6 @@ pub(crate) struct LeanR6BackgroundingCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanR5CrossPrincipalCase {
-    pub(crate) name: String,
-    pub(crate) route: String,
-    pub(crate) action: String,
-    pub(crate) parent_principal: String,
-    pub(crate) child_principal: String,
-    pub(crate) parent_request_id: String,
-    pub(crate) parent_tool_call_id: String,
-    pub(crate) child_request_id: String,
-    pub(crate) target_behavior_id: String,
-    pub(crate) await_mode: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) parent_trigger_persisted: bool,
-    pub(crate) child_materialized: bool,
-    pub(crate) child_owned_by_target_principal: bool,
-    pub(crate) caused_by_parent_request_id_matches: bool,
-    pub(crate) caused_by_parent_tool_call_id_matches: bool,
-    pub(crate) caused_by_trigger_kind: String,
-    pub(crate) cross_principal_routing_fired: bool,
-    pub(crate) same_principal_fallback: bool,
-    pub(crate) unclaimed_deadline_set: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanCancelPropagationCase {
-    pub(crate) name: String,
-    pub(crate) route: String,
-    pub(crate) action: String,
-    pub(crate) parent_principal: String,
-    pub(crate) child_principal: String,
-    pub(crate) parent_request_id: String,
-    pub(crate) parent_tool_call_id: String,
-    pub(crate) child_request_id: String,
-    pub(crate) bridge_collection: String,
-    pub(crate) child_request_collection: String,
-    pub(crate) cancel_intent_written_on_bridge: bool,
-    pub(crate) bridge_cancel_replicates_to_host: bool,
-    pub(crate) host_interrupts_child: bool,
-    pub(crate) child_interrupt_intent_replicates_to_coordinator: bool,
-    pub(crate) cancel_ack_returns_to_coordinator: bool,
-    pub(crate) no_third_party_rows: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanBackgroundTheoremWitness {
     pub(crate) theorem_name: String,
     pub(crate) witness_kind: String,
@@ -291,24 +146,6 @@ impl LeanBackgroundTheoremWitness {
 pub(crate) struct LeanBackgroundTheoremKindField {
     pub(crate) key: String,
     pub(crate) value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanSubagentDelegationGraphCase {
-    pub(crate) name: String,
-    pub(crate) theorem_name: String,
-    pub(crate) property: String,
-    pub(crate) witness_kind: String,
-    pub(crate) max_depth: usize,
-    pub(crate) path_length: usize,
-    pub(crate) parent_depth: usize,
-    pub(crate) terminal_depth: usize,
-    pub(crate) cascade_path: bool,
-    pub(crate) acyclic: bool,
-    pub(crate) bounded: bool,
-    pub(crate) cascade_covered: bool,
-    pub(crate) edge_theorem: String,
-    pub(crate) cascade_edge_theorem: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

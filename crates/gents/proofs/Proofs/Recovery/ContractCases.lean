@@ -72,6 +72,27 @@ def orphanedBackgroundRecoveryCase
     notificationReason := notificationReason
   }
 
+/-- Session-message recovery witness: the recovering owner observed `cause`
+    for a running `create_session`/`send_message` row. The exported post-state
+    is computed by `sessionMessageRecover`, and the observed cause is exported
+    so the native fixture builds that exact premise. -/
+def sessionMessageRecoveryCase
+    (name : String) (cause : SessionMessageRecoveryCause) : RecoverySweepCase :=
+  let row : SessionMessageRecoveryRow :=
+    { call := { r6NativeToolFixture with operation := .sessionMessage }
+    , cause := cause }
+  let recovered := sessionMessageRecover row
+  { (recoveryCase
+      sessionMessageRecoverySweep
+      name
+      row.call.state.toDefraDB
+      recovered.call.state.toDefraDB
+      "session-message-stack-observer-arm"
+      (sessionMessageRecoveryMeasure row)
+      (sessionMessageRecoveryMeasure recovered)) with
+    recoveryCause := some cause.toContract
+  }
+
 def recoverySweepCases : List RecoverySweepCase :=
   [ recoveryCase
       requestRecoverySweep
@@ -163,36 +184,18 @@ def recoverySweepCases : List RecoverySweepCase :=
       "failed"
       "failed"
       "r6-cross-turn-background-process-durability"
-  , recoveryCase
-      sessionMessageRecoverySweep
-      "session_message_request_completed_to_completed"
-      "running"
-      "completed"
-      "session-message-stack-observer-arm"
-  , recoveryCase
-      sessionMessageRecoverySweep
-      "session_message_request_failed_to_failed"
-      "running"
-      "failed"
-      "session-message-stack-observer-arm"
-  , recoveryCase
-      sessionMessageRecoverySweep
-      "session_message_request_interrupted_to_cancelled"
-      "running"
-      "cancelled"
-      "session-message-stack-observer-arm"
-  , recoveryCase
-      sessionMessageRecoverySweep
-      "session_message_request_dead_to_failed"
-      "running"
-      "failed"
-      "session-message-stack-observer-arm"
-  , recoveryCase
-      sessionMessageRecoverySweep
-      "session_message_deadline_exceeded_to_timed_out"
-      "running"
-      "timedOut"
-      "session-message-stack-observer-arm"
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_to_completed" .requestCompleted
+  , sessionMessageRecoveryCase
+      "session_message_request_failed_to_failed" .requestFailed
+  , sessionMessageRecoveryCase
+      "session_message_request_interrupted_to_cancelled" .requestInterrupted
+  , sessionMessageRecoveryCase
+      "session_message_request_dead_to_failed" .requestDead
+  , sessionMessageRecoveryCase
+      "session_message_request_superseded_to_failed" .requestSuperseded
+  , sessionMessageRecoveryCase
+      "session_message_deadline_exceeded_to_timed_out" .deadlineExceeded
   , recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"

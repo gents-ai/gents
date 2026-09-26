@@ -132,33 +132,6 @@ fn assertion_message_identifies_sources_and_differences() {
     assert!(message.contains("extra Lean values (absent from Rust): [\"two\"]"));
 }
 
-/// Standalone decoding validation for the new bridge-owner fixture category:
-/// the loader must decode one projection per child terminal observation, so a
-/// generator regression that drops a row fails here instead of silently
-/// shrinking coverage. The projection values themselves belong to the bridge
-/// owner; the background consumer compares them against production.
-#[test]
-fn decodes_child_failure_projections_for_every_bridge_terminal() {
-    let projections = lean_child_failure_projections();
-    let mut child_states: Vec<&str> = projections
-        .iter()
-        .map(|projection| projection.child_state.as_str())
-        .collect();
-    child_states.sort_unstable();
-    child_states.dedup();
-    assert_eq!(
-        child_states.len(),
-        projections.len(),
-        "child failure projections must decode one row per child terminal: {child_states:?}"
-    );
-    assert_eq!(
-        child_states,
-        ["dead", "failed", "interrupted", "superseded"],
-        "child failure projections must cover the bridge owner's full child-terminal \
-         vocabulary; a missing row means the failure mapping is only partially covered"
-    );
-}
-
 /// Standalone decoding validation for the multi-resource pairing samples that
 /// replace the retired phase-table fixtures: every sample is a modeled
 /// transport transition, so before/after must share one non-empty desired

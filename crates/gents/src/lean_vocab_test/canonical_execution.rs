@@ -118,9 +118,6 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
     pub(crate) principal: u64,
-    pub(crate) subagent_depth: u64,
-    pub(crate) workspace: Option<LeanCanonicalDelegatedWorkspace>,
-    pub(crate) remote_routes: Vec<LeanCanonicalRemoteRoute>,
     pub(crate) lease: LeanRequestExecutionWorld,
     pub(crate) transcript_session_id: u64,
     pub(crate) next_sequence: u64,
@@ -128,23 +125,6 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
     pub(crate) tool_calls: Vec<u64>,
     pub(crate) in_flight: Vec<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanCanonicalRemoteRoute {
-    pub(crate) call: u64,
-    pub(crate) target: u64,
-    pub(crate) behavior: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanCanonicalRemoteTarget {
-    pub(crate) call: u64,
-    pub(crate) coordinator: u64,
-    pub(crate) target: u64,
-    pub(crate) behavior: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,76 +141,6 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) failure_class: Option<String>,
     pub(crate) persistence: String,
     pub(crate) await_mode: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) child_request_id: Option<u64>,
-    pub(crate) spawn_behavior_id: Option<u64>,
-    pub(crate) delegated_workspace: Option<LeanCanonicalDelegatedWorkspace>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanCanonicalDelegatedWorkspace {
-    pub(crate) workspace_id: u64,
-    pub(crate) workspace_owner_agent_did: u64,
-    pub(crate) workspace_seal_hash: Option<u64>,
-    pub(crate) workspace_authority: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanDelegatedChildResolutionCase {
-    pub(crate) name: String,
-    pub(crate) parent_depth: u32,
-    pub(crate) parent_agent: u64,
-    pub(crate) child_agent: u64,
-    pub(crate) delegated_input: Option<LeanDelegatedChildInput>,
-    pub(crate) parent_workspace: Option<LeanCanonicalDelegatedWorkspace>,
-    pub(crate) choice: LeanDelegatedChildChoice,
-    pub(crate) expected: Option<LeanDelegatedChildResult>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum LeanDelegatedChildChoice {
-    None,
-    Inherit {
-        workspace: LeanObservedChildWorkspace,
-    },
-    Bind {
-        workspace: LeanObservedChildWorkspace,
-        requested_authority: Option<String>,
-    },
-    Provision {
-        observed_parent: LeanObservedChildWorkspace,
-        parent_path_exact: bool,
-        created_child: Option<LeanObservedChildWorkspace>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanObservedChildWorkspace {
-    pub(crate) workspace_id: u64,
-    pub(crate) workspace_owner_agent_did: u64,
-    pub(crate) workspace_seal_hash: Option<u64>,
-    pub(crate) state: String,
-    pub(crate) available: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanDelegatedChildInput {
-    pub(crate) source_close_doc_id: u64,
-    pub(crate) source_stream: u64,
-    pub(crate) arguments: String,
-    pub(crate) parent_subagent_depth: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanDelegatedChildResult {
-    pub(crate) child_depth: u32,
-    pub(crate) child_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
 /// A background tool spawned by an already running parent tool. It shares the
@@ -251,9 +161,6 @@ pub(crate) struct LeanCanonicalSpawnedToolAdmission {
     pub(crate) failure_class: Option<String>,
     pub(crate) persistence: String,
     pub(crate) await_mode: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) child_request_id: Option<u64>,
-    pub(crate) spawn_behavior_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,16 +172,14 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
-        targets: Vec<LeanCanonicalRemoteTarget>,
         admissions: Vec<LeanCanonicalToolAdmission>,
     },
-    AcceptRemote {
+    AcceptBackground {
         actor: u64,
         now: u64,
         generation: u64,
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
-        targets: Vec<LeanCanonicalRemoteTarget>,
         admissions: Vec<LeanCanonicalToolAdmission>,
     },
     Dispatch {
@@ -384,7 +289,6 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         closing: LeanCanonicalSegment,
         message: LeanCanonicalMessage<LeanPayloadSpec>,
-        targets: Vec<LeanCanonicalRemoteTarget>,
         admissions: Vec<LeanCanonicalToolAdmission>,
     },
     BackgroundTool {
@@ -447,7 +351,7 @@ impl LeanCanonicalExecutionOperation {
     pub(crate) fn actor_and_now(&self) -> (u64, u64) {
         match self {
             Self::AcceptForeground { actor, now, .. }
-            | Self::AcceptRemote { actor, now, .. }
+            | Self::AcceptBackground { actor, now, .. }
             | Self::Dispatch { actor, now, .. }
             | Self::CloseForegroundTool { actor, now, .. }
             | Self::CompleteForegroundTool { actor, now, .. }
@@ -485,7 +389,6 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) terminal_selection: Option<LeanTerminalSelection>,
     pub(crate) tool_state: Option<String>,
     pub(crate) tool_stuck_since: Option<u64>,
-    pub(crate) tool_cancel_intent_at: Option<u64>,
     pub(crate) in_flight: bool,
     pub(crate) next_sequence: u64,
     pub(crate) accepted_sequence: Option<u64>,
@@ -613,36 +516,30 @@ mod tests {
     }
 
     #[test]
-    fn generated_remote_route_cases_decode_behavior_and_workspace() {
+    fn generated_background_accept_cases_decode_background_admissions() {
         let cases = &super::super::lean_contract_snapshot().canonical_execution_gate_cases;
-        let case = cases
+        let admissions = cases
             .iter()
-            .find(|case| {
-                matches!(case,
-                LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                    if name == "real_spawn_route_workspace_drift_rejected_on_replay")
+            .filter_map(|case| match case {
+                LeanCanonicalExecutionCase::NativeExecution { operations, .. }
+                | LeanCanonicalExecutionCase::ModelExecution { operations, .. } => Some(operations),
+                LeanCanonicalExecutionCase::TraceSummary { .. } => None,
             })
-            .expect("Lean exports immutable remote workspace replay case");
-        let LeanCanonicalExecutionCase::NativeExecution {
-            seed, operations, ..
-        } = case
-        else {
-            unreachable!()
-        };
-        assert_eq!(seed.remote_routes[0].behavior, 8);
-        let LeanCanonicalExecutionOperation::AcceptRemote {
-            targets,
-            admissions,
-            ..
-        } = &operations[0]
-        else {
-            panic!("first step must accept remote admission")
-        };
-        assert_eq!(targets[0].behavior, 8);
-        let workspace = admissions[0]
-            .delegated_workspace
-            .as_ref()
-            .expect("remote admission carries workspace source");
-        assert_eq!(workspace.workspace_authority, "readOnly");
+            .flatten()
+            .filter_map(|operation| match operation {
+                LeanCanonicalExecutionOperation::AcceptBackground { admissions, .. } => {
+                    Some(admissions)
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(
+            !admissions.is_empty(),
+            "Lean exports background accept admissions"
+        );
+        assert!(admissions
+            .iter()
+            .all(|admission| admission.await_mode == "background"));
     }
 }

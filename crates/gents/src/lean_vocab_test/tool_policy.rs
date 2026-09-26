@@ -15,12 +15,6 @@ pub(crate) struct LeanToolPolicyWriteGrant {
 
 /// Lean `ToolPolicy.ContractCases.SurfaceView`: the JSON projection of one
 /// resolved surface under fixed probes and known key universes.
-///
-/// `cross_principal` is the Lean and canonical-config name
-/// (`SubagentTools.allow_cross_principal`). Production `ToolPolicySurface`
-/// still carries the field as `cross_deployment` until the runtime rename
-/// lands, so the conformance codec maps between the two names explicitly
-/// instead of hiding the difference behind a serde alias.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) file_rank: u8,
@@ -31,10 +25,7 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) memory: bool,
     pub(crate) session_history: bool,
     pub(crate) context_budget: bool,
-    pub(crate) spawn: bool,
-    pub(crate) steering: bool,
-    pub(crate) background: bool,
-    pub(crate) cross_principal: bool,
+    pub(crate) session_messages: bool,
     pub(crate) skills: bool,
     pub(crate) lsp: bool,
     pub(crate) bash_mode: u8,

@@ -34,26 +34,17 @@ mod process_control_scope;
 #[path = "tests/r4c_private_support.rs"]
 mod r4c_private_support;
 
-#[path = "../../tests/e2e_subagent/r4c_steer_subagent.rs"]
-mod r4c_steer_subagent;
-
 #[path = "tests/r4_subagent_control.rs"]
 mod r4_subagent_control;
 
 #[path = "tests/r4_wait_subagent_guard.rs"]
 mod r4_wait_subagent_guard;
 
-#[path = "../../tests/e2e_subagent/r4c_list_subagents.rs"]
-mod r4c_list_subagents;
-
-#[path = "../../tests/e2e_subagent/r4c_list_background_tools.rs"]
+#[path = "tests/r4c_list_background_tools.rs"]
 mod r4c_list_background_tools;
 
-#[path = "../../tests/e2e_subagent/r4c_read_tool_output.rs"]
+#[path = "tests/r4c_read_tool_output.rs"]
 mod r4c_read_tool_output;
-
-#[path = "../../tests/e2e_subagent/r4c_read_subagent_transcript.rs"]
-mod r4c_read_subagent_transcript;
 
 struct HookExecutionFixture {
     lifecycle: crate::lifecycle::RequestLifecycle,

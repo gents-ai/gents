@@ -183,23 +183,21 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         22
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 63);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 36);
+    assert_eq!(lean_recovery_sweep_cases().len(), 29);
     // The synthetic RecoveryEquivalence contract was deleted from Lean; the
     // recovery sweep cases above are the actual recovery guarantee.
     assert_eq!(lean_transcript_cases().len(), 11);
-    assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
-    assert_eq!(lean_cancel_propagation_cases().len(), 1);
 }
 
 #[tokio::test]
-async fn agent_tool_call_has_cross_principal_coordination_fields() {
-    let db = crate::support::test_db("agent-tool-call-r5-fields").await;
+async fn agent_tool_call_carries_only_generic_background_fields() {
+    let db = crate::support::test_db("agent-tool-call-background-fields").await;
     let response = db
         .node
         .execute(
@@ -228,14 +226,28 @@ async fn agent_tool_call_has_cross_principal_coordination_fields() {
         })
         .unwrap_or_default();
     for field in [
-        "unclaimed_deadline_at",
-        "cancel_cascade_intent_at",
-        "cancel_pending_remote_ack",
+        "await_mode",
         "cancel_cause",
         "stuck_since",
-        "spawn_target_did",
+        "spawned_by_tool_call_doc_id",
+        "completion_notification_delivered_at",
     ] {
         assert!(names.contains(field), "AgentToolCall missing field {field}");
+    }
+    // A started session is an ordinary background row: no child binding,
+    // delegation, cancel mirror or claim fence is persisted on the call.
+    for field in [
+        "child_request_id",
+        "spawn_target_did",
+        "spawn_behavior_id",
+        "delegated_input",
+        "delegated_workspace",
+        "cancel_policy",
+        "cancel_cascade_intent_at",
+        "cancel_pending_remote_ack",
+        "unclaimed_deadline_at",
+    ] {
+        assert!(!names.contains(field), "AgentToolCall retains field {field}");
     }
 }
 
@@ -509,12 +521,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     if !snapshot.root_admission_cases.is_empty() {
         emitted.insert(("root_admission_cases".into(), "RootAdmissionCases".into()));
-    }
-    if !snapshot.child_failure_projections.is_empty() {
-        emitted.insert((
-            "child_failure_projections".into(),
-            "ChildFailureProjections".into(),
-        ));
     }
     if !snapshot.request_transition_cases.is_empty() {
         emitted.insert((
@@ -957,18 +963,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "MailboxHandoffCases".to_string(),
         ));
     }
-    if !snapshot.reserved_child_materialization_cases.is_empty() {
-        emitted.insert((
-            "reserved_child_materialization_cases".to_string(),
-            "ReservedChildMaterializationCases".to_string(),
-        ));
-    }
-    if !snapshot.local_parent_depth_cases.is_empty() {
-        emitted.insert((
-            "local_parent_depth_cases".to_string(),
-            "LocalParentDepthCases".to_string(),
-        ));
-    }
     if !lean_restart_disposition_cases().is_empty() {
         emitted.insert((
             "restart_disposition_cases".to_string(),
@@ -979,12 +973,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "tool_output_paging_cases".to_string(),
             "ToolOutputPagingCases".to_string(),
-        ));
-    }
-    if !lean_bridge_step_cases().is_empty() {
-        emitted.insert((
-            "bridge_step_cases".to_string(),
-            "BridgeStepCases".to_string(),
         ));
     }
     if !lean_interrupt_disposition_cases().is_empty() {
@@ -1291,42 +1279,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CodexShimProjectionCases".to_string(),
         ));
     }
-    if !lean_codex_shim_subagent_tool_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_tool_cases".to_string(),
-            "CodexShimSubagentToolCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_subagent_status_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_status_cases".to_string(),
-            "CodexShimSubagentStatusCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_subagent_visibility_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_visibility_cases".to_string(),
-            "CodexShimSubagentVisibilityCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_subagent_metadata_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_metadata_cases".to_string(),
-            "CodexShimSubagentMetadataCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_subagent_listing_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_listing_cases".to_string(),
-            "CodexShimSubagentListingCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_subagent_thread_shape_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_subagent_thread_shape_cases".to_string(),
-            "CodexShimSubagentThreadShapeCases".to_string(),
-        ));
-    }
     if !lean_codex_shim_reasoning_projection_cases().is_empty() {
         emitted.insert((
             "codex_shim_reasoning_projection_cases".to_string(),
@@ -1387,25 +1339,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R6BackgroundingCases".to_string(),
         ));
     }
-    if !snapshot.r5_cross_principal_cases.is_empty() {
-        emitted.insert((
-            "r5_cross_principal_cases".into(),
-            "R5CrossPrincipalCases".into(),
-        ));
-    }
-    if !snapshot.r5_scenario_cases.is_empty() {
-        emitted.insert(("r5_scenario_cases".into(), "R5Scenarios".into()));
-    }
     if !lean_composed_invariant_witnesses().is_empty() {
         emitted.insert((
             "composed_invariant_witnesses".to_string(),
             "ComposedInvariantWitnesses".to_string(),
-        ));
-    }
-    if !lean_cancel_propagation_cases().is_empty() {
-        emitted.insert((
-            "cancel_propagation_cases".to_string(),
-            "CancelPropagationCases".to_string(),
         ));
     }
     if !lean_r6_background_theorem_witnesses().is_empty() {
@@ -1416,51 +1353,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "r6_background_theorem_witnesses".to_string(),
             "CascadeCancelsChildTheoremWitness".to_string(),
-        ));
-    }
-    if !lean_subagent_delegation_graph_cases().is_empty() {
-        emitted.insert((
-            "subagent_delegation_graph_cases".to_string(),
-            "SubagentDelegationGraphCases".to_string(),
-        ));
-    }
-    if !lean_contract_snapshot()
-        .delegated_child_resolution_cases
-        .is_empty()
-    {
-        emitted.insert((
-            "delegated_child_resolution_cases".to_string(),
-            "DelegatedChildResolutionCases".to_string(),
-        ));
-    }
-    if !lean_descendant_graph_cases().is_empty() {
-        emitted.insert((
-            "descendant_graph_cases".to_string(),
-            "DescendantGraphCases".to_string(),
-        ));
-    }
-    if !lean_cancel_child_session_cases().is_empty() {
-        emitted.insert((
-            "cancel_child_session_cases".to_string(),
-            "CancelChildSessionCases".to_string(),
-        ));
-    }
-    if !lean_descendant_cursor_cases().is_empty() {
-        emitted.insert((
-            "descendant_cursor_cases".to_string(),
-            "DescendantCursorCases".to_string(),
-        ));
-    }
-    if !lean_spawn_fence_cases().is_empty() {
-        emitted.insert((
-            "spawn_fence_cases".to_string(),
-            "SpawnFenceCases".to_string(),
-        ));
-    }
-    if !lean_spawn_claim_lineage_cases().is_empty() {
-        emitted.insert((
-            "spawn_claim_lineage_cases".to_string(),
-            "SpawnClaimLineageCases".to_string(),
         ));
     }
     if !lean_goal_decision_cases().is_empty() {
@@ -1581,6 +1473,14 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "agent_request_admission_cases".to_string(),
             "AgentRequestAdmissionCases".to_string(),
+        ));
+    }
+    if !snapshot.causal_hop_contract.step_cases.is_empty()
+        && !snapshot.causal_hop_contract.chain_cases.is_empty()
+    {
+        emitted.insert((
+            "causal_hop_contract".to_string(),
+            "CausalHopContract".to_string(),
         ));
     }
     if !snapshot.title_request_admission_cases.is_empty() {
