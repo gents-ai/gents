@@ -5,6 +5,7 @@ export type { SessionHydrationView } from "../generated/SessionHydrationView.js"
 export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
 export type { SessionLiveTextPatchView } from "../generated/SessionLiveTextPatchView.js";
 export type { SessionProjectionRevisionView } from "../generated/SessionProjectionRevisionView.js";
+export type { SessionTranscriptDenialView } from "../generated/SessionTranscriptDenialView.js";
 export type { GoalView } from "../generated/GoalView.js";
 export type { MessageView } from "../generated/MessageView.js";
 export type { PendingTurnView } from "../generated/PendingTurnView.js";

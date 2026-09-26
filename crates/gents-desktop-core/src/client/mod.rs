@@ -32,8 +32,8 @@ pub use principal_identity::PrincipalIdentity;
 pub use query::{
     fetch_doc_patch, load_agent_scoped_snapshot, load_session_context_store,
     load_session_context_store_on, load_session_diagnostics_store, load_session_transcript_page,
-    load_session_transcript_page_on, session_transcript_requester_scope,
-    CanonicalTranscriptDependencies, SessionTranscriptQueryPage,
+    load_session_transcript_page_on, session_transcript_denial, session_transcript_requester_scope,
+    CanonicalTranscriptDependencies, SessionTranscriptDenial, SessionTranscriptQueryPage,
     DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use store::{ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView};

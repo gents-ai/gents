@@ -332,3 +332,55 @@ async fn operator_reads_a_local_subagent_session_under_its_own_scope() {
         Some(desktop)
     );
 }
+
+#[test]
+fn a_session_no_scope_can_read_is_reported_instead_of_looking_empty() {
+    let agent = "did:test:agent";
+    let desktop = "did:test:desktop";
+
+    // A subagent the agent admitted for itself, reached without operator
+    // authority: the principal scope is the only one this client can present
+    // and it cannot match the child's rows.
+    let child = session_row("child", agent, Some(agent));
+    assert_eq!(
+        session_transcript_denial(Some(&child), Some(agent), Some(desktop), false),
+        Some(SessionTranscriptDenial::AgentOwnedWithoutOperatorAccess)
+    );
+    // The same session under operator authority reads under the agent's scope.
+    assert_eq!(
+        session_transcript_denial(Some(&child), Some(agent), Some(desktop), true),
+        None
+    );
+
+    // Another principal's session is refused, with or without operator access.
+    let other = session_row("other", agent, Some("did:test:other"));
+    assert_eq!(
+        session_transcript_denial(Some(&other), Some(agent), Some(desktop), true),
+        Some(SessionTranscriptDenial::RequesterScopeMismatch)
+    );
+    assert_eq!(
+        session_transcript_denial(Some(&other), Some(agent), Some(desktop), false),
+        Some(SessionTranscriptDenial::RequesterScopeMismatch)
+    );
+
+    // A session with no requester scope records absence, which the principal
+    // scope also cannot present.
+    let unscoped = session_row("unscoped", agent, None);
+    assert_eq!(
+        session_transcript_denial(Some(&unscoped), Some(agent), Some(desktop), true),
+        Some(SessionTranscriptDenial::RequesterScopeMismatch)
+    );
+
+    // The principal's own session reads normally, so an empty read there is an
+    // empty session and never a denial.
+    let own = session_row("own", agent, Some(desktop));
+    assert_eq!(
+        session_transcript_denial(Some(&own), Some(agent), Some(desktop), true),
+        None
+    );
+    // Without the session row this owner states nothing.
+    assert_eq!(
+        session_transcript_denial(None, Some(agent), Some(desktop), true),
+        None
+    );
+}

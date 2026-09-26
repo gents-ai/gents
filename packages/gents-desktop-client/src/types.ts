@@ -104,6 +104,7 @@ export type {
   SessionLiveDeltaView,
   SessionLiveTextPatchView,
   SessionProjectionRevisionView,
+  SessionTranscriptDenialView,
   GoalView,
   MessageView,
   PendingTurnView,
