@@ -51,11 +51,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
-    pub(super) fn spawn_conversation_title_generation(
-        &self,
-        request: &AgentRequest,
-        shutdown: watch::Receiver<bool>,
-    ) {
+    pub(super) fn spawn_conversation_title_generation(&self, request: &AgentRequest) {
         // A generated title is optional presentation metadata, not part of the
         // requested agent result. Budgeted requests therefore skip this
         // out-of-band provider call instead of giving it a second allowance or
@@ -67,12 +63,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             );
             return;
         }
-        let task = self.title_task();
+        let node = Arc::clone(&self.node);
         let parent = request.clone();
         tokio::spawn(Box::pin(async move {
-            let result = async {
+            let result: Result<()> = async {
                 if !session::session_needs_generated_title(
-                    task.node.as_ref(),
+                    node.as_ref(),
                     &parent.agent_did,
                     parent.requester_did.as_deref(),
                     &parent.session_id,
@@ -81,19 +77,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 {
                     return Ok(());
                 }
-                let title = crate::lifecycle::materialize::write_pending_title_request(
-                    task.node.as_ref(),
+                crate::lifecycle::materialize::write_pending_title_request(
+                    node.as_ref(),
                     &parent,
                     parent.content.clone(),
                 )
                 .await?;
-                task.run(title, shutdown).await
+                Ok(())
             }
             .await;
             if let Err(error) = result {
                 tracing::warn!(
                     error = %error,
-                    "failed to execute owned conversation title request"
+                    "failed to create owned conversation title request"
                 );
             }
         }));

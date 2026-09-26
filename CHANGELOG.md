@@ -112,6 +112,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- Title audits dispatch only through the runtime watcher, preventing duplicate
+  claim attempts while retaining received reasoning (#1916).
+
 - Stateless (`store:false`) Responses requests to xAI/Grok and ChatGPT Codex
   now always request `include: ["reasoning.encrypted_content"]`, even with no
   reasoning effort configured, so replayed reasoning resolves without

@@ -162,7 +162,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
-            self.spawn_conversation_title_generation(&request, shutdown.clone());
+            self.spawn_conversation_title_generation(&request);
 
             let selected_skill_ids = &request.input.selected_skill_ids;
             let skill_reminders = self
