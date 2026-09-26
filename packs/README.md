@@ -10,6 +10,7 @@ gents pack show code_review
 gents pack install code_review --home <initialized-home>
 gents graph run code_review --repo . --base origin/main --head HEAD
 gents pack install mailbox --home <initialized-home>
+gents pack remove mailbox --home <initialized-home>
 gents pack prune mailbox
 gents pack scenario run pipeline --http-port 19191 --keep-home
 ```
@@ -50,6 +51,11 @@ other half of its coordinate (`acme/shipping_plugins`). It is optional and
 `gents` when absent, so a first-party pack does not repeat it. A pack's
 plugins install under the pack's namespace, so two packs from different
 namespaces may each carry a `format_check` without one replacing the other.
+Within one namespace, a plugin record is owned by the pack coordinate that
+installed it: installing a same-named plugin from a different pack is
+refused, naming both packs, and only that pack's own reinstall or update
+replaces its record. `gents pack remove` releases only what its own
+coordinate owns.
 
 `kind` is `documents`, `graph`, `assets`, or `plugins`. A `plugins` pack
 installs no documents of its own: it exists to ship capabilities. Its plugins
@@ -120,10 +126,13 @@ gents plugin run acme/format_check --input '{"path":"src"}'
 gents plugin remove acme/format_check
 ```
 
-Installing an `assets` or `plugins` pack installs its plugins into the same
+Installing a pack of any kind installs the plugins it declares into the same
 store `gents plugin install` uses, so a plugin that arrived inside a pack is
-runnable by name exactly like one installed alone. A `documents` or `graph`
-pack does not install plugins yet.
+runnable by name exactly like one installed alone. `documents` and `graph`
+packs install their plugins the same way `assets` and `plugins` packs do,
+before writing their own documents or graph. If that later write fails, the
+plugin records this install just wrote are restored to what they were
+before it, so the pack install is all-or-nothing from the operator's view.
 
 A built pack is one `.pack` file: a gzip-compressed tar any archive tool can
 list. Its first entry, `pack.json`, states the format version, the pack digest,

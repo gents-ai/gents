@@ -42,15 +42,23 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
 /// from different namespaces may each carry a `format_check`, and
 /// recording both under one default namespace would have the second
 /// silently replace the first.
+///
+/// `pack_coordinate` (`{namespace}/{name}` of the pack this plugin ships
+/// in) is refused when the record already belongs to a different pack: see
+/// [`store::check_plugin_ownership`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_from_pack(
     home: &std::path::Path,
     pack_namespace: &str,
+    pack_coordinate: &str,
     pack_version: &str,
+    pack_digest: &str,
     plugin: &gents::pack::PackPlugin,
     artifact_bytes: &[u8],
     instructions: Option<String>,
     consent: bool,
 ) -> Result<store::InstalledPlugin> {
+    store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
     let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
     use sha2::{Digest, Sha256};
     gents::plugin::PluginRunner::compile(artifact_bytes, plugin)
@@ -66,6 +74,8 @@ pub(crate) fn install_from_pack(
         declaration: plugin.clone(),
         granted,
         instructions,
+        owner_pack_coordinate: Some(pack_coordinate.to_owned()),
+        owner_pack_digest: Some(pack_digest.to_owned()),
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -82,8 +92,10 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
 
     let registry = crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token_flag =
+        crate::commands::pack::registry::resolve_token_flag(args.token, args.token_stdin)?;
     let token = crate::commands::pack::account::resolve_publish_token(
-        args.token.as_deref(),
+        token_flag.as_deref(),
         &registry,
         &home,
     )?;

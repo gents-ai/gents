@@ -16,8 +16,8 @@ use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginBudget, PluginOutcome, PluginRunner};
 
 /// Bytes of admitted artifacts kept in memory before the cache starts over.
-// vertexia: the whole cache is dropped past the budget; per-entry eviction if
-// agents ever call more distinct plugins than fit.
+// The whole cache is dropped past the budget; per-entry eviction is the
+// upgrade if agents ever call more distinct plugins than fit.
 const ADMITTED_BYTES_BUDGET: u64 = 512 * 1024 * 1024;
 
 struct Admitted {

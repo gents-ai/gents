@@ -466,13 +466,17 @@ fn prune(args: PackPruneArgs) -> Result<()> {
 
 /// Admits and stores every plugin a pack ships in `home`'s plugin store, the
 /// one `gents plugin install` uses, so a plugin that arrived inside a pack
-/// runs by name like one installed alone.
+/// runs by name like one installed alone. `pack_digest` is the pack's own
+/// content digest, recorded on each plugin's record for operator visibility
+/// (see [`super::plugin::store::InstalledPlugin::owner_pack_digest`]).
 pub(crate) fn install_pack_plugins<'a>(
     home: &std::path::Path,
     manifest: &PackManifest,
+    pack_digest: &str,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
 ) -> Result<Vec<super::plugin::store::InstalledPlugin>> {
+    let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
         .metadata
         .plugins
@@ -486,7 +490,9 @@ pub(crate) fn install_pack_plugins<'a>(
             super::plugin::install_from_pack(
                 home,
                 &manifest.metadata.namespace,
+                &pack_coordinate,
                 &manifest.version,
+                pack_digest,
                 plugin,
                 asset(&plugin.artifact)?,
                 instructions,
@@ -494,6 +500,69 @@ pub(crate) fn install_pack_plugins<'a>(
             )
         })
         .collect()
+}
+
+/// Every plugin `manifest` would install and its plugin-store record before
+/// any write, so a failure later in the same pack install can restore
+/// exactly what was there (or remove what was not) instead of leaving an
+/// orphaned plugin record behind. `None` means the name was not installed.
+pub(crate) fn snapshot_pack_plugin_records(
+    home: &std::path::Path,
+    manifest: &PackManifest,
+) -> Vec<(
+    String,
+    String,
+    Option<super::plugin::store::InstalledPlugin>,
+)> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            let previous =
+                super::plugin::store::read_record(home, &manifest.metadata.namespace, &plugin.name)
+                    .ok();
+            (
+                manifest.metadata.namespace.clone(),
+                plugin.name.clone(),
+                previous,
+            )
+        })
+        .collect()
+}
+
+/// Restores each `(namespace, name)` plugin record to what [`snapshot_pack_plugin_records`]
+/// observed before the install that must now be undone: the previous record is
+/// put back, or removed if there was none. Best-effort and never fails the
+/// caller: a restore that cannot complete is logged loudly rather than
+/// masking the original error that triggered the rollback.
+pub(crate) fn rollback_pack_plugin_records(
+    home: &std::path::Path,
+    previous: &[(
+        String,
+        String,
+        Option<super::plugin::store::InstalledPlugin>,
+    )],
+) {
+    for (namespace, name, record) in previous {
+        let result = match record {
+            Some(record) => super::plugin::store::write_record(home, record),
+            None => match super::plugin::store::read_record(home, namespace, name) {
+                Ok(_) => super::plugin::store::remove_record(home, namespace, name).map(|_| ()),
+                // Never written by this install (it failed before reaching
+                // this plugin, or this plugin failed itself): nothing to undo.
+                Err(_) => Ok(()),
+            },
+        };
+        if let Err(error) = result {
+            tracing::error!(
+                namespace,
+                name,
+                error = %error,
+                "failed to roll back a plugin record after a failed pack install",
+            );
+        }
+    }
 }
 
 /// The node and the owner a pack command acts for.
@@ -533,12 +602,18 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     .await?;
     if !report.plugins.is_empty() {
         let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        let pack_coordinate = format!("{namespace}/{name}");
         for plugin in &report.plugins {
-            // Another install may have replaced it since; only this pack's
-            // own artifact is forgotten.
-            if super::plugin::store::read_record(&home, namespace, &plugin.name)
-                .is_ok_and(|record| record.digest == plugin.digest)
-            {
+            // A registry or local pack install may have replaced the name
+            // with its own plugin since; only a record this pack's own
+            // coordinate still owns is removed.
+            if super::plugin::store::owns_plugin_record(
+                &home,
+                namespace,
+                &plugin.name,
+                &pack_coordinate,
+                &plugin.digest,
+            ) {
                 super::plugin::store::remove_record(&home, namespace, &plugin.name)?;
             }
         }
@@ -746,8 +821,9 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
                 .await
                 .context("pack install schemas")?;
-            let plugins = if pack.manifest().metadata.plugins.is_empty() {
-                Vec::new()
+            let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            let (plugins, plugin_rollback) = if pack.manifest().metadata.plugins.is_empty() {
+                (Vec::new(), Vec::new())
             } else {
                 // A plugin runs on the host of the node that calls it; a
                 // remote node's host is not reachable from here.
@@ -757,13 +833,16 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                      there with --home",
                     pack.manifest().name
                 );
-                let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-                install_pack_plugins(
-                    &home,
+                let rollback = snapshot_pack_plugin_records(&plugin_home, pack.manifest());
+                let installed = install_pack_plugins(
+                    &plugin_home,
                     pack.manifest(),
+                    pack.digest(),
                     |path| pack.asset(path),
                     args.grant_authority,
-                )?
+                )
+                .inspect_err(|_| rollback_pack_plugin_records(&plugin_home, &rollback))?;
+                (installed, rollback)
             };
             let identity = gents::pack::PackIdentity::new(
                 pack.manifest(),
@@ -776,14 +855,25 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     })
                     .collect(),
             );
-            let apply = gents::pack::install_pack_documents(
+            // From here, a document-transaction failure must not leave the
+            // plugins installed above orphaned: the operator sees this pack
+            // install as one atomic step, so its filesystem side effect is
+            // undone along with the write that never landed.
+            let apply = match gents::pack::install_pack_documents(
                 &access,
                 &owner,
                 &identity,
                 &desired,
                 args.drift.policy(),
             )
-            .await?;
+            .await
+            {
+                Ok(apply) => apply,
+                Err(error) => {
+                    rollback_pack_plugin_records(&plugin_home, &plugin_rollback);
+                    return Err(error);
+                }
+            };
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "source": pack.label(),
@@ -833,6 +923,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             let installed_plugins = install_pack_plugins(
                 &home,
                 pack.manifest(),
+                pack.digest(),
                 |path| pack.asset(path),
                 args.grant_authority,
             )?;
@@ -1110,5 +1201,92 @@ mod tests {
         ] {
             assert!(parse_inference_slot_bindings(&invalid).is_err());
         }
+    }
+
+    /// A `plugins`-kind manifest with one plugin, named after `pack_name`
+    /// and shipping under `plugin_name`.
+    fn plugin_manifest(
+        namespace: &str,
+        pack_name: &str,
+        plugin_name: &str,
+        version: &str,
+    ) -> PackManifest {
+        serde_json::from_value(json!({
+            "manifest_version": 1, "name": pack_name, "namespace": namespace, "version": version,
+            "description": "test plugin pack", "authors": [namespace], "tags": [], "kind": "plugins",
+            "assets": ["README.md", format!("plugins/{plugin_name}.afb")],
+            "plugins": [{
+                "name": plugin_name, "description": "test", "artifact": format!("plugins/{plugin_name}.afb"),
+                "language": "rust", "input_schema": {"type": "object"},
+            }],
+        }))
+        .unwrap()
+    }
+
+    /// #1721 item 1: a step after plugin install fails (here, standing in
+    /// for `install_pack_documents` failing) must leave the plugin store
+    /// exactly as it was before this install attempt, not orphan whatever
+    /// it just wrote.
+    #[test]
+    fn a_failure_after_plugin_install_rolls_back_to_exactly_the_previous_records() {
+        let home = tempfile::tempdir().unwrap();
+        let echo_v1 = super::super::plugin::testing::build_plugin_afb(
+            "echo",
+            b"fn main() { println!(\"{{}}\"); }",
+        );
+        let asset_v1 = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/echo.afb")
+                .then_some(echo_v1.as_slice())
+                .context("unexpected asset")
+        };
+
+        // A prior install this pack coordinate already owns.
+        let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
+        install_pack_plugins(home.path(), &v1, "sha256:v1", asset_v1, false).unwrap();
+        let before = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
+
+        // An update whose install fails after the plugin step must roll all
+        // the way back to `before`, exactly as `install()` does when
+        // `install_pack_documents` errors.
+        let echo_v2 = super::super::plugin::testing::build_plugin_afb(
+            "echo",
+            b"fn main() { println!(\"{{\\\"v\\\":2}}\"); }",
+        );
+        let asset_v2 = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/echo.afb")
+                .then_some(echo_v2.as_slice())
+                .context("unexpected asset")
+        };
+        let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
+        let rollback = snapshot_pack_plugin_records(home.path(), &v2);
+        install_pack_plugins(home.path(), &v2, "sha256:v2", asset_v2, false).unwrap();
+        let mid = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
+        assert_ne!(
+            mid, before,
+            "the reinstall must actually have changed the record"
+        );
+        rollback_pack_plugin_records(home.path(), &rollback);
+        assert_eq!(
+            super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap(),
+            before
+        );
+
+        // A pack installing a name for the first time leaves nothing behind
+        // when the same kind of failure happens: rollback removes it.
+        let new_plugin = super::super::plugin::testing::build_plugin_afb(
+            "brandnew",
+            b"fn main() { println!(\"{{}}\"); }",
+        );
+        let asset_new = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/brandnew.afb")
+                .then_some(new_plugin.as_slice())
+                .context("unexpected asset")
+        };
+        let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
+        let rollback = snapshot_pack_plugin_records(home.path(), &first_time);
+        install_pack_plugins(home.path(), &first_time, "sha256:new", asset_new, false).unwrap();
+        assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_ok());
+        rollback_pack_plugin_records(home.path(), &rollback);
+        assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
     }
 }

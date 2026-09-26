@@ -33,6 +33,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let installed = crate::commands::pack::install_pack_plugins(
         &home,
         manifest,
+        &pack.digest,
         |path| pack.archive.asset(path),
         args.grant_authority,
     )?;
@@ -89,14 +90,14 @@ mod tests {
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
         );
-        let (base_url, downloads) = serve_fake_pack("echo", &version, bytes, digest).await;
+        let (base_url, state) = serve_fake_pack("echo", &version, bytes, digest).await;
         let home = tempfile::tempdir().unwrap();
 
         install(args(&format!("{namespace}/echo"), base_url, home.path()))
             .await
             .expect("install must succeed");
 
-        assert_eq!(downloads.load(Ordering::SeqCst), 1);
+        assert_eq!(state.downloads.load(Ordering::SeqCst), 1);
         let record = store::read_record(home.path(), &namespace, "echo").expect("recorded");
         assert_eq!(record.version, version);
         assert_eq!(record.language, "rust");
@@ -201,6 +202,7 @@ mod instruction_tests {
         crate::commands::pack::install_pack_plugins(
             home.path(),
             archive.manifest(),
+            archive.digest(),
             |path| archive.asset(path),
             false,
         )

@@ -18,8 +18,9 @@ use crate::workspace::{
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    strip_secret_fields, succeeded_missing_result, succeeded_repair_cutoff,
-    validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
+    create_callback_result_mutation, strip_secret_fields, succeeded_missing_result,
+    succeeded_repair_cutoff, update_invocation_mutation, validate_callback_binding,
+    CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
     CallbackResultInvocationRow,
 };
 use super::run::{
@@ -1065,6 +1066,102 @@ fn canonical_action_plan_sorts_object_keys() {
     assert!(abi < actions, "{canonical}");
     let parsed = parse_action_plan_json(&canonical).unwrap();
     assert_eq!(parsed, plan);
+}
+
+/// An absent optional field renders as a GraphQL `null`, never as `""`: an
+/// empty string is a real (if odd) value, while a genuinely unset field must
+/// stay unset so a later query can tell the two apart.
+#[test]
+fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let result = CallbackResultDoc {
+        result_id: "res-1".to_owned(),
+        invocation_id: "inv-1".to_owned(),
+        binding_id: None,
+        owner_agent_did: "did:key:zWriter".to_owned(),
+        workspace_id: None,
+        work_unit_id: None,
+        caused_by_correlation: None,
+        created_at: Some("2024-01-01T00:00:00Z".to_owned()),
+    };
+    let mutation = create_callback_result_mutation(&result);
+    assert!(mutation.contains("binding_id: null,"), "{mutation}");
+    assert!(mutation.contains("workspace_id: null,"), "{mutation}");
+    assert!(mutation.contains("work_unit_id: null,"), "{mutation}");
+    assert!(
+        mutation.contains("caused_by_correlation: null,"),
+        "{mutation}"
+    );
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let present = CallbackResultDoc {
+        binding_id: Some("bind-1".to_owned()),
+        workspace_id: Some("ws-1".to_owned()),
+        work_unit_id: Some("unit-1".to_owned()),
+        caused_by_correlation: Some("corr-1".to_owned()),
+        ..result
+    };
+    let mutation = create_callback_result_mutation(&present);
+    assert!(mutation.contains(r#"binding_id: "bind-1","#), "{mutation}");
+    assert!(mutation.contains(r#"workspace_id: "ws-1","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"work_unit_id: "unit-1","#),
+        "{mutation}"
+    );
+    assert!(
+        mutation.contains(r#"caused_by_correlation: "corr-1","#),
+        "{mutation}"
+    );
+}
+
+/// Same rule for `CallbackInvocation`'s update: `action_plan`, `error` and
+/// `claimed_at` are nullable, and clearing them must write `null`.
+#[test]
+fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let origin = crate::document_config::CallbackInvocationOrigin::Event {
+        binding_id: "bind-1".into(),
+        source_collection: "WorkUnit".into(),
+        source_doc_id: "doc-1".into(),
+        source_version: Some("created".into()),
+    };
+    let invocation = CallbackInvocationDoc {
+        invocation_id: "inv-1".into(),
+        owner_agent_did: "did:key:zWriter".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: origin.clone(),
+        caused_by_correlation: None,
+        idempotency_key: "key-1".into(),
+        lifecycle_state: LIFECYCLE_PENDING.into(),
+        attempts: Some(1),
+        action_plan: None,
+        action_journal: None,
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let mutation = update_invocation_mutation(&invocation, None);
+    assert!(mutation.contains("action_plan: null,"), "{mutation}");
+    assert!(mutation.contains("error: null,"), "{mutation}");
+    assert!(mutation.contains("claimed_at: null,"), "{mutation}");
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let failed = CallbackInvocationDoc {
+        origin,
+        lifecycle_state: LIFECYCLE_FAILED.into(),
+        attempts: Some(2),
+        action_plan: Some("[]".into()),
+        action_journal: Some("[]".into()),
+        error: Some("boom".into()),
+        claimed_at: Some("2024-01-01T00:00:00Z".into()),
+        ..invocation
+    };
+    let mutation = update_invocation_mutation(&failed, Some("running"));
+    assert!(mutation.contains(r#"action_plan: "[]","#), "{mutation}");
+    assert!(mutation.contains(r#"error: "boom","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"claimed_at: "2024-01-01T00:00:00Z","#),
+        "{mutation}"
+    );
 }
 
 /// Workspace packs select one binding's results with

@@ -97,7 +97,10 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
         }));
     }
     let distribution = gents::pack::resolve_pack(&args.package)?;
-    if !distribution.manifest.metadata.plugins.is_empty() {
+    let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let plugin_rollback = if distribution.manifest.metadata.plugins.is_empty() {
+        Vec::new()
+    } else {
         // A plugin runs on the host of the node that calls it; a remote
         // node's host is not reachable from here.
         anyhow::ensure!(
@@ -106,16 +109,28 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
              with --home",
             args.package
         );
-        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        let rollback =
+            super::pack::snapshot_pack_plugin_records(&plugin_home, &distribution.manifest);
         super::pack::install_pack_plugins(
-            &home,
+            &plugin_home,
             &distribution.manifest,
+            &distribution.digest,
             |path| distribution.asset(path),
             args.grant_authority,
-        )?;
-    }
+        )
+        .inspect_err(|_| super::pack::rollback_pack_plugin_records(&plugin_home, &rollback))?;
+        rollback
+    };
+    // A failure past this point must not leave the plugins installed above
+    // orphaned: undo them along with the graph install that never landed.
     let receipt =
-        install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;
+        match install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                super::pack::rollback_pack_plugin_records(&plugin_home, &plugin_rollback);
+                return Err(error);
+            }
+        };
     let previous = load_active_graph_plan_with_access(&access, &owner_did, &receipt.graph_id)
         .await?
         .map(|plan| plan.digest);

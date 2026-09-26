@@ -644,7 +644,8 @@ pub async fn create_pending_invocation(
         "idempotency_key": invocation.idempotency_key,
         "caused_by_correlation": invocation.caused_by_correlation,
         "lifecycle_state": "pending", "attempts": 0,
-        "action_plan": "", "action_journal": "[]", "error": "", "claimed_at": "", "created_at": now
+        "action_plan": null, "action_journal": "[]", "error": null, "claimed_at": null,
+        "created_at": now
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
@@ -695,9 +696,6 @@ pub(super) fn update_invocation_mutation(
         })
         .unwrap_or_default();
     let journal = invocation.action_journal.as_deref().unwrap_or("[]");
-    let plan = invocation.action_plan.as_deref().unwrap_or("");
-    let error = invocation.error.as_deref().unwrap_or("");
-    let claimed_at = invocation.claimed_at.as_deref().unwrap_or("");
     format!(
         r#"mutation {{
             update_CallbackInvocation(
@@ -709,10 +707,10 @@ pub(super) fn update_invocation_mutation(
                 input: {{
                     lifecycle_state: "{state}",
                     attempts: {attempts},
-                    action_plan: "{plan}",
+                    {plan}
                     action_journal: "{journal}",
-                    error: "{error}",
-                    claimed_at: "{claimed_at}"
+                    {error}
+                    {claimed_at}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -720,11 +718,19 @@ pub(super) fn update_invocation_mutation(
         owner = escape_graphql_string(&invocation.owner_agent_did),
         state = escape_graphql_string(&invocation.lifecycle_state),
         attempts = invocation.attempts.unwrap_or(0),
-        plan = escape_graphql_string(plan),
+        plan = optional_graphql_string_field("action_plan", invocation.action_plan.as_deref()),
         journal = escape_graphql_string(journal),
-        error = escape_graphql_string(error),
-        claimed_at = escape_graphql_string(claimed_at),
+        error = optional_graphql_string_field("error", invocation.error.as_deref()),
+        claimed_at = optional_graphql_string_field("claimed_at", invocation.claimed_at.as_deref()),
     )
+}
+
+/// `name: "value",` when `value` is present, `name: null,` when it is
+/// absent. An absent optional field is a genuine null, never `""`.
+fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
+        .unwrap_or_else(|| format!("{name}: null,"))
 }
 
 pub async fn update_invocation(
@@ -743,30 +749,30 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
         .created_at
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let binding_id = result.binding_id.as_deref().unwrap_or("");
-    let workspace = result.workspace_id.as_deref().unwrap_or("");
-    let work_unit_id = result.work_unit_id.as_deref().unwrap_or("");
-    let correlation = result.caused_by_correlation.as_deref().unwrap_or("");
     format!(
         r#"mutation {{
             create_CallbackResult(input: {{
                 result_id: "{result_id}",
                 invocation_id: "{invocation_id}",
-                binding_id: "{binding_id}",
+                {binding_id}
                 owner_agent_did: "{owner}",
-                workspace_id: "{workspace}",
-                work_unit_id: "{work_unit_id}",
-                caused_by_correlation: "{correlation}",
+                {workspace}
+                {work_unit_id}
+                {correlation}
                 created_at: "{created_at}"
             }}) {{ _docID }}
         }}"#,
         result_id = escape_graphql_string(&result.result_id),
         invocation_id = escape_graphql_string(&result.invocation_id),
-        binding_id = escape_graphql_string(binding_id),
+        binding_id = optional_graphql_string_field("binding_id", result.binding_id.as_deref()),
         owner = escape_graphql_string(&result.owner_agent_did),
-        workspace = escape_graphql_string(workspace),
-        work_unit_id = escape_graphql_string(work_unit_id),
-        correlation = escape_graphql_string(correlation),
+        workspace = optional_graphql_string_field("workspace_id", result.workspace_id.as_deref()),
+        work_unit_id =
+            optional_graphql_string_field("work_unit_id", result.work_unit_id.as_deref()),
+        correlation = optional_graphql_string_field(
+            "caused_by_correlation",
+            result.caused_by_correlation.as_deref()
+        ),
         created_at = escape_graphql_string(&now),
     )
 }

@@ -140,7 +140,7 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
         return Ok(Record::default());
     };
     let documents: Vec<RecordedDocument> =
-        serde_json::from_value(row["documents"].clone()).unwrap_or_default();
+        decode_record_field(row, "documents", owner, coordinate)?;
     Ok(Record {
         doc_id: row["_docID"].as_str().map(str::to_owned),
         digest: row["digest"].as_str().map(str::to_owned),
@@ -148,9 +148,28 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .into_iter()
             .map(|document| (key(&document.collection, &document.id), document))
             .collect(),
-        plugins: serde_json::from_value(row["plugins"].clone()).unwrap_or_default(),
-        history: serde_json::from_value(row["history"].clone()).unwrap_or_default(),
+        plugins: decode_record_field(row, "plugins", owner, coordinate)?,
+        history: decode_record_field(row, "history", owner, coordinate)?,
     })
+}
+
+/// Decodes `row[field]` as `T`, defaulting only a genuinely absent (missing
+/// or null) field; a present-but-malformed field fails loudly naming the
+/// record and field, rather than silently reading as empty.
+fn decode_record_field<T: serde::de::DeserializeOwned + Default>(
+    row: &Value,
+    field: &str,
+    owner: &str,
+    coordinate: &str,
+) -> Result<T> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(T::default()),
+        Some(value) => serde_json::from_value(value.clone()).with_context(|| {
+            format!(
+                "installation record {coordinate:?} for {owner:?} has a malformed {field} field"
+            )
+        }),
+    }
 }
 
 async fn live_digest(
@@ -414,20 +433,31 @@ pub async fn list_installed_packs(
 ) -> Result<Vec<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ coordinate version digest }} }}"#,
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;
-    Ok(response["data"][RECORD]
+    response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
         .iter()
-        .map(|row| InstalledPack {
-            coordinate: row["coordinate"].as_str().unwrap_or_default().to_owned(),
-            version: row["version"].as_str().unwrap_or_default().to_owned(),
-            digest: row["digest"].as_str().unwrap_or_default().to_owned(),
+        .map(|row| {
+            Ok(InstalledPack {
+                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
+                version: required_record_field_str(row, "version")?.to_owned(),
+                digest: required_record_field_str(row, "digest")?.to_owned(),
+            })
         })
-        .collect())
+        .collect()
+}
+
+/// A required string field of an installation record, failing loudly and
+/// naming the record's document ID when it is missing or not a string.
+fn required_record_field_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
+    row.get(field).and_then(Value::as_str).with_context(|| {
+        let doc_id = row.get("_docID").and_then(Value::as_str).unwrap_or("?");
+        format!("installation record {doc_id} has a missing or malformed {field} field")
+    })
 }
 
 /// The documents of `config` an install writes: all but the principal,

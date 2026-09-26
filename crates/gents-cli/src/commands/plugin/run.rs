@@ -137,6 +137,8 @@ mod tests {
                 &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
             )
             .unwrap(),
+            owner_pack_coordinate: None,
+            owner_pack_digest: None,
         }
     }
 
@@ -172,7 +174,9 @@ mod tests {
         super::super::install_from_pack(
             home.path(),
             "team",
+            "team/echo",
             "1.0.0",
+            "sha256:test-pack-digest",
             &declaration,
             &bytes,
             None,
@@ -197,7 +201,9 @@ mod tests {
         assert!(super::super::install_from_pack(
             empty_home.path(),
             "team",
+            "team/echo",
             "1.0.0",
+            "sha256:test-pack-digest",
             &invalid.declaration,
             &bytes,
             None,
@@ -254,7 +260,9 @@ mod tests {
         let error = super::super::install_from_pack(
             home.path(),
             "team",
+            "team/echo",
             "1.0.0",
+            "sha256:test-pack-digest",
             &declaration,
             &bytes,
             None,
@@ -270,7 +278,9 @@ mod tests {
         let record = super::super::install_from_pack(
             home.path(),
             "team",
+            "team/echo",
             "1.0.0",
+            "sha256:test-pack-digest",
             &declaration,
             &bytes,
             None,
@@ -281,7 +291,9 @@ mod tests {
         super::super::install_from_pack(
             home.path(),
             "team",
+            "team/echo",
             "1.0.1",
+            "sha256:test-pack-digest-2",
             &declaration,
             &bytes,
             None,

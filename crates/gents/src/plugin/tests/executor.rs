@@ -24,6 +24,8 @@ pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
         declaration,
         granted: None,
         instructions: None,
+        owner_pack_coordinate: None,
+        owner_pack_digest: None,
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)

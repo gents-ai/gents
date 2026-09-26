@@ -124,7 +124,9 @@ struct StdoutToStderr {
 impl StdoutToStderr {
     fn start() -> Result<Self> {
         use std::io::Write;
-        std::io::stdout().flush().context("flushing standard output")?;
+        std::io::stdout()
+            .flush()
+            .context("flushing standard output")?;
         #[cfg(unix)]
         {
             // SAFETY: dup/dup2 on the process's own standard descriptors; each

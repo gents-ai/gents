@@ -197,9 +197,9 @@ pub const PLUGIN_ARTIFACT_PREFIX: &str = "plugins/";
 /// fully bounded, while a hand-built Ruby-source `.afb` is not - so a
 /// language name alone cannot answer it.
 ///
-/// vertexia: kept in sync by hand with afterburner's own list; the ceiling
-/// is a shared, lightweight language-id crate both sides could depend on if
-/// this ever drifts.
+/// Kept in sync by hand with afterburner's own list; the ceiling is a
+/// shared, lightweight language-id crate both sides could depend on if this
+/// ever drifts.
 pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
     "js",
     "javascript",

@@ -101,6 +101,18 @@ pub struct InstalledPlugin {
     /// from the pack at call time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// `{namespace}/{name}` of the pack install that owns this record (a
+    /// standalone `gents plugin install` is the plugin's own single-plugin
+    /// pack). `None` for a record written before this field existed; such a
+    /// record is treated as unowned and never refuses a reinstall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_pack_coordinate: Option<String>,
+    /// The owning pack's content digest at the time this record was
+    /// written, kept for operator visibility only; ownership is decided by
+    /// coordinate alone so an update or reinstall of the same pack always
+    /// replaces its own record regardless of version or digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_pack_digest: Option<String>,
 }
 
 impl InstalledPlugin {
@@ -110,6 +122,51 @@ impl InstalledPlugin {
             .clone()
             .unwrap_or_else(crate::plugin::Manifold::sealed)
     }
+}
+
+/// Refuses to overwrite `namespace/name`'s existing record when it is owned
+/// by a different pack coordinate than `pack_coordinate`; an unowned record
+/// (written before ownership was tracked) or one owned by the same
+/// coordinate (an update or reinstall) is not refused. Registry and local
+/// packs share one plugin store keyed by `namespace/name`
+/// ([`InstalledPlugin`]'s own doc), so without this check installing one
+/// pack could silently steal a name another pack's install still owns.
+pub fn check_plugin_ownership(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    pack_coordinate: &str,
+) -> Result<()> {
+    let Ok(existing) = read_record(home, namespace, name) else {
+        return Ok(());
+    };
+    match existing.owner_pack_coordinate {
+        Some(owner) if owner != pack_coordinate => Err(anyhow::anyhow!(
+            "{namespace}/{name} is already installed by pack {owner}; installing it from {pack_coordinate} \
+             would overwrite that pack's plugin. Remove {owner} first, or install it again to replace its own plugin."
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `namespace/name`'s installed record is owned by `pack_coordinate`:
+/// its `owner_pack_coordinate` matches, or it has no owner on record (written
+/// before ownership was tracked) and still holds the artifact `digest` that
+/// pack installed. `gents pack remove` uses this to remove only what its own
+/// pack owns, leaving a name another install still owns untouched.
+pub fn owns_plugin_record(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    pack_coordinate: &str,
+    digest: &str,
+) -> bool {
+    read_record(home, namespace, name).is_ok_and(|record| {
+        match record.owner_pack_coordinate.as_deref() {
+            Some(owner) => owner == pack_coordinate,
+            None => record.digest == digest,
+        }
+    })
 }
 
 /// The grant to record when `plugin` is installed as `namespace/name`,
@@ -247,5 +304,125 @@ mod tests {
             store_path(home, digest).expect_err(&format!("{digest:?} must be refused"));
         }
         store_path(home, &"a".repeat(64)).expect("a real digest is fine");
+    }
+
+    fn sample_record(
+        namespace: &str,
+        name: &str,
+        owner_pack_coordinate: Option<&str>,
+    ) -> InstalledPlugin {
+        InstalledPlugin {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+            version: "1.0.0".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            language: "rust".into(),
+            declaration: crate::pack::PackPlugin {
+                name: name.to_owned(),
+                description: "test".into(),
+                artifact: format!("plugins/{name}.afb"),
+                source: None,
+                language: "rust".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                manifold: None,
+                instructions: None,
+            },
+            granted: None,
+            instructions: None,
+            owner_pack_coordinate: owner_pack_coordinate.map(str::to_owned),
+            owner_pack_digest: owner_pack_coordinate.map(|_| "sha256:pack".to_owned()),
+        }
+    }
+
+    /// A record owned by a different pack coordinate refuses installing
+    /// over it, naming both packs so the operator can act.
+    #[test]
+    fn ownership_refuses_a_different_pack_coordinate() {
+        let home = tempfile::tempdir().unwrap();
+        write_record(
+            home.path(),
+            &sample_record("acme", "echo", Some("acme/widget")),
+        )
+        .unwrap();
+
+        let error = check_plugin_ownership(home.path(), "acme", "echo", "acme/gadget").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("acme/widget"), "{message}");
+        assert!(message.contains("acme/gadget"), "{message}");
+    }
+
+    /// The same coordinate (an update or reinstall) is never refused, and
+    /// neither is a name with no owner on record (written before ownership
+    /// was tracked, or never installed).
+    #[test]
+    fn ownership_allows_the_same_coordinate_and_an_unowned_or_absent_record() {
+        let home = tempfile::tempdir().unwrap();
+        check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").unwrap();
+
+        write_record(
+            home.path(),
+            &sample_record("acme", "echo", Some("acme/widget")),
+        )
+        .unwrap();
+        check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").unwrap();
+
+        write_record(home.path(), &sample_record("acme", "unowned", None)).unwrap();
+        check_plugin_ownership(home.path(), "acme", "unowned", "acme/anything").unwrap();
+    }
+
+    /// `gents pack remove` (via [`owns_plugin_record`]) removes only a
+    /// record its own coordinate owns, never another pack's; a record with no
+    /// coordinate on record is its own only while it holds the same artifact.
+    #[test]
+    fn owns_plugin_record_is_true_only_for_the_owning_coordinate() {
+        let home = tempfile::tempdir().unwrap();
+        write_record(
+            home.path(),
+            &sample_record("acme", "widget-echo", Some("acme/widget")),
+        )
+        .unwrap();
+        write_record(
+            home.path(),
+            &sample_record("acme", "gadget-echo", Some("acme/gadget")),
+        )
+        .unwrap();
+        write_record(home.path(), &sample_record("acme", "legacy-echo", None)).unwrap();
+        let legacy_digest = format!("sha256:{}", "a".repeat(64));
+
+        assert!(owns_plugin_record(
+            home.path(),
+            "acme",
+            "widget-echo",
+            "acme/widget",
+            &legacy_digest
+        ));
+        assert!(!owns_plugin_record(
+            home.path(),
+            "acme",
+            "gadget-echo",
+            "acme/widget",
+            &legacy_digest
+        ));
+        assert!(owns_plugin_record(
+            home.path(),
+            "acme",
+            "legacy-echo",
+            "acme/widget",
+            &legacy_digest
+        ));
+        assert!(!owns_plugin_record(
+            home.path(),
+            "acme",
+            "legacy-echo",
+            "acme/widget",
+            "sha256:another-artifact"
+        ));
+        assert!(!owns_plugin_record(
+            home.path(),
+            "acme",
+            "not-installed",
+            "acme/widget",
+            &legacy_digest
+        ));
     }
 }

@@ -192,3 +192,99 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     assert_eq!(row["version"], "2");
     assert_eq!(row["history"], json!([identity("1").digest]));
 }
+
+async fn installation_doc_id(access: &ConfigAccess) -> String {
+    access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap()["data"]["PackInstallation"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn corrupt_installation_field(
+    access: &ConfigAccess,
+    doc_id: &str,
+    field: &str,
+    value: Value,
+) {
+    let mut input = serde_json::Map::new();
+    input.insert(field.to_owned(), value);
+    let variables = json!({ "input": Value::Object(input) });
+    let variables = &variables;
+    let response = access
+        .transact("test.corrupt_installation_field", |txn| {
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    &format!(
+                        r#"mutation($input: {RECORD}MutationInputArg!) {{ update_{RECORD}(docID: "{}", input: $input) {{ _docID }} }}"#,
+                        doc_id
+                    ),
+                    variables,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        response.get("errors").is_none_or(Value::is_null),
+        "{response}"
+    );
+}
+
+/// A `plugins`/`documents`/`history` field that decodes (present, not null)
+/// but does not match its expected shape must fail loudly, naming the
+/// record, rather than silently reading as an empty list.
+#[tokio::test]
+async fn a_malformed_plugins_field_fails_loudly_instead_of_reading_as_empty() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let doc_id = installation_doc_id(&access).await;
+    corrupt_installation_field(&access, &doc_id, "plugins", json!({"not": "an array"})).await;
+
+    let error = install(
+        &access,
+        "2",
+        &config(&[("alpha", "Alpha 2")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("malformed plugins field"),
+        "{error:#}"
+    );
+}
+
+/// `list_installed_packs` reports every record's coordinate, version and
+/// digest; a record missing one must fail loudly naming the record, not
+/// silently report an empty string a caller could mistake for real data.
+#[tokio::test]
+async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let doc_id = installation_doc_id(&access).await;
+    corrupt_installation_field(&access, &doc_id, "version", Value::Null).await;
+
+    let error = list_installed_packs(&access, OWNER).await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("malformed version field"),
+        "{error:#}"
+    );
+}
