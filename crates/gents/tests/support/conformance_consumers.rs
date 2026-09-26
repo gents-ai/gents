@@ -420,6 +420,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_provider_eof_cases_fence_production_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "lean_vocab_test::task_hooks_policy::generated_task_hook_admission_cases_fence_production_validation",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/task_hooks_policy.rs",
+            module_path: "lean_vocab_test::task_hooks_policy",
+            function: "generated_task_hook_admission_cases_fence_production_validation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lean_vocab_test::task_hooks_policy::generated_task_hook_cases_fence_the_modeled_phase_vocabulary",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/task_hooks_policy.rs",
+            module_path: "lean_vocab_test::task_hooks_policy",
+            function: "generated_task_hook_cases_fence_the_modeled_phase_vocabulary",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate",
             package: "gents",
             source_path: "crates/gents/tests/conformance/graph_pipeline.rs",

@@ -138,6 +138,12 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing]
     , deferred := []
     }
+  , { feature := "task-hooks"
+    , required := [Surface.runtimeInternal]
+    , deferred :=
+        [ (Surface.operatorUi,
+           "Desktop already edits and displays Task.hooks; there is no runtime observation to project until the host executor records attempts.") ]
+    }
   , { feature := "pairing-reconcile"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -725,6 +731,23 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger"
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "task_hook_admission_cases"
+      "TaskHookAdmissionCases"
+      "lean_vocab_test::task_hooks_policy::generated_task_hook_admission_cases_fence_production_validation")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "task_hook_run_cases"
+      "TaskHookRunCases"
+      "lean_vocab_test::task_hooks_policy::generated_task_hook_cases_fence_the_modeled_phase_vocabulary"
+      "The consumer binds the emitted phase vocabulary to the production TaskHookPhase encoding and replays admission over every trace. Native timeout resolution is deferred with sequencing: the model-resolved effective timeout is emitted for the future executor and enforced by nothing here. Phase ordering, the before-hook gate on claim-to-processing, after_success gating of successful completion and interrupted-recovery selection are equally unbound, because no host executor consumes these traces yet (#1600).")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "task_hook_recovery_cases"
+      "TaskHookRecoveryCases"
+      "lean_vocab_test::task_hooks_policy::generated_task_hook_cases_fence_the_modeled_phase_vocabulary"
+      "Recovery selection of remaining cleanup from observed attempts has no native owner. Binding it needs the host executor's durable attempt observations, not a test-local replay of recoveryCleanup.")
+      "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_progress_cases"
       "RequestProgressCases"
