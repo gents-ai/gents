@@ -1491,6 +1491,7 @@ mod tests {
             host_identity.clone(),
             authority_owner,
             authority_cancel.clone(),
+            Default::default(),
         ));
         host_admin
             .add_replicator(

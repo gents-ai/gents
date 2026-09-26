@@ -192,7 +192,10 @@ pub async fn boot_same_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5Sa
     )
     .await
     .expect("build same-principal R5 runtime");
-    let parent = boot_prepared_accepted_turn(&db, prepared, agent).await;
+    let mut parent = boot_prepared_accepted_turn(&db, prepared, agent).await;
+    parent
+        .runtime
+        .set_role(format!("R5 same-principal parent {}", spec.name));
     R5SamePrincipalRuntime {
         db,
         parent,
@@ -323,6 +326,7 @@ pub async fn boot_cross_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5A
     // authority are durable, so the first observed bridge is evaluated against
     // the same admitted peer facts as the production deployment boundary.
     let (child_shutdown, child_rx) = tokio::sync::watch::channel(false);
+    let child_progress = child_agent.shutdown_progress();
     let child_handle = tokio::spawn(child_agent.run(child_rx));
     super::interrupt::wait_for_runtime_ready(child_db.node.as_ref(), &child_agent_did).await;
     let snapshot_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -341,7 +345,8 @@ pub async fn boot_cross_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5A
             spec.target_behavior_id
         );
     }
-    let child = BootedAgent::new(child_shutdown, child_handle, child_agent_did.clone());
+    let child = BootedAgent::new(child_shutdown, child_handle, child_agent_did.clone())
+        .with_shutdown_evidence(format!("R5 child {}", spec.name), child_progress);
 
     let parent_behavior_id = format!("{}-parent-behavior", spec.name);
     configure_subagent_behavior(
@@ -401,7 +406,8 @@ pub async fn boot_cross_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5A
     )
     .await
     .expect("build R5 parent runtime");
-    let parent = boot_prepared_accepted_turn(&parent_db, prepared, parent_agent).await;
+    let mut parent = boot_prepared_accepted_turn(&parent_db, prepared, parent_agent).await;
+    parent.runtime.set_role(format!("R5 parent {}", spec.name));
 
     R5AcceptedRuntime {
         parent_db,

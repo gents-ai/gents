@@ -208,11 +208,13 @@ pub async fn boot_prepared_accepted_turn(
     agent: Gents,
 ) -> AcceptedTurnRuntime {
     let agent_did = agent.agent_did().to_string();
+    let progress = agent.shutdown_progress();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     AcceptedTurnRuntime {
-        runtime: BootedAgent::new(shutdown_tx, handle, agent_did),
+        runtime: BootedAgent::new(shutdown_tx, handle, agent_did)
+            .with_shutdown_evidence("accepted-turn agent", progress),
         backend: prepared.backend,
     }
 }

@@ -37,6 +37,7 @@ pub mod persona_presets;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
+mod shutdown_progress;
 pub(crate) mod stream_processor;
 #[cfg(test)]
 mod supervision;
@@ -52,6 +53,7 @@ pub(crate) use builder::PendingAgentBehavior;
 pub use builder::{BehaviorBuilder, GentsBuilder};
 #[cfg(test)]
 pub(crate) use document_view::load_document_runtime_view;
+pub use shutdown_progress::RuntimeShutdownProgress;
 
 /// Focused daemon seam for a persisted owned request and deterministic model.
 /// It does not exercise RuntimeContext's provider/client assembly, but shares
@@ -216,6 +218,7 @@ pub struct Gents {
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    shutdown_progress: RuntimeShutdownProgress,
 }
 
 impl Gents {
@@ -297,6 +300,7 @@ impl Gents {
             plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
                 options.plugin_home,
             )),
+            shutdown_progress: RuntimeShutdownProgress::default(),
         })
     }
 
@@ -327,6 +331,12 @@ impl Gents {
 
     pub fn agent_did(&self) -> &str {
         &self.principal.agent_did
+    }
+
+    /// What a run of this runtime is still awaiting; clones observe the same
+    /// run. Diagnostic only.
+    pub fn shutdown_progress(&self) -> RuntimeShutdownProgress {
+        self.shutdown_progress.clone()
     }
 
     pub fn default_behavior_id(&self) -> &str {

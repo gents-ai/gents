@@ -306,6 +306,7 @@ pub async fn run_enrollment_reconciler(
     identity: Arc<dyn AgentIdentity>,
     mut owner: EnrollmentAuthorityOwner,
     cancel: CancellationToken,
+    progress: crate::agent::RuntimeShutdownProgress,
 ) -> Result<()> {
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
     let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
@@ -314,6 +315,7 @@ pub async fn run_enrollment_reconciler(
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    let initial = progress.enrollment_await("initial sweep");
     sweep_enrollment(
         &node,
         &identity,
@@ -323,17 +325,20 @@ pub async fn run_enrollment_reconciler(
         &mut delivered,
     )
     .await;
+    drop(initial);
     loop {
         tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
+                let _awaiting = progress.enrollment_await("periodic sweep");
                 sweep_enrollment(&node, &identity, &store, &pairing_admin, &owner, &mut delivered).await;
             }
             command = owner.commands.recv() => {
                 let Some(command) = command else {
                     continue;
                 };
+                let _awaiting = progress.enrollment_await("authority command");
                 handle_authority_command(&store, &owner, command).await;
             }
             message = subscription.recv() => {
@@ -345,6 +350,7 @@ pub async fn run_enrollment_reconciler(
                 if dropped > 0 {
                     tracing::warn!(dropped, "enrollment update subscription dropped messages");
                 }
+                let _awaiting = progress.enrollment_await("update sweep");
                 sweep_enrollment(&node, &identity, &store, &pairing_admin, &owner, &mut delivered).await;
             }
         }

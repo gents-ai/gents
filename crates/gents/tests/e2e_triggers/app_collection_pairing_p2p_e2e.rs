@@ -1514,6 +1514,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
         server_identity.clone(),
         authority_owner,
         enrollment_cancel.clone(),
+        gents::RuntimeShutdownProgress::default(),
     ));
     wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30)).await;
     install_control_only_authenticated_hydration_route(

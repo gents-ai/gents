@@ -144,6 +144,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     operator_tool_root: Option<PathBuf>,
     request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
+    shutdown_progress: crate::agent::RuntimeShutdownProgress,
 }
 
 enum HandleRequestOutcome {
@@ -205,7 +206,16 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             operator_tool_root: None,
             request_admission,
             root_execution_guard: None,
+            shutdown_progress: Default::default(),
         })
+    }
+
+    pub(super) fn with_shutdown_progress(
+        mut self,
+        shutdown_progress: crate::agent::RuntimeShutdownProgress,
+    ) -> Self {
+        self.shutdown_progress = shutdown_progress;
+        self
     }
 
     pub(super) fn with_compactor(mut self, compactor: Arc<dyn ReductionEngine>) -> Self {
@@ -351,6 +361,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 None
             };
 
+            let _active = self
+                .shutdown_progress
+                .process_request(&behavior_id, &trace_attrs.request_id);
             let process =
                 self.process_request(request, shutdown.clone())
                     .instrument(tracing::info_span!(
