@@ -582,21 +582,30 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
             .await
             .unwrap()
             .expect("configured backend document");
+    let advertised = |model_name: &str| crate::document_config::AdvertisedModel {
+        model_name: model_name.into(),
+        display_name: None,
+        context_window: None,
+        max_context_window: None,
+        max_output_tokens: None,
+        reasoning_efforts: None,
+    };
+    let catalog = |observed_at: &str, models: Vec<crate::document_config::AdvertisedModel>| {
+        crate::document_config::BackendModelCatalog {
+            agent_did: None,
+            observed_at: observed_at.into(),
+            models,
+        }
+    };
+    // The spare profile is published while its model is advertised; a later
+    // discovery drops that model, which leaves the profile permanently invalid.
     crate::backend_registry::record_model_catalog(
         node.as_ref(),
         &backend,
-        crate::document_config::BackendModelCatalog {
-            agent_did: None,
-            observed_at: "2026-01-01T00:00:00Z".into(),
-            models: vec![crate::document_config::AdvertisedModel {
-                model_name: "default".into(),
-                display_name: None,
-                context_window: None,
-                max_context_window: None,
-                max_output_tokens: None,
-                reasoning_efforts: None,
-            }],
-        },
+        catalog(
+            "2026-01-01T00:00:00Z",
+            vec![advertised("default"), advertised("retired-model")],
+        ),
     )
     .await
     .unwrap();
@@ -627,7 +636,7 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
                     "agent_did": agent_did,
                     "profile_id": spare_profile_id,
                     "backend_id": "backend-settle",
-                    "model_name": "never-advertised-model"
+                    "model_name": "retired-model"
                 }),
             ),
             (
@@ -641,6 +650,13 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
         ],
     )
     .await;
+    crate::backend_registry::record_model_catalog(
+        node.as_ref(),
+        &backend,
+        catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),
+    )
+    .await
+    .unwrap();
 
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
