@@ -6,8 +6,8 @@ use crate::lean_vocab_test::{
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
     lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
-    lean_task_goal_recovery_cases,
-    lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
+    lean_task_goal_recovery_cases, lean_terminal_diagnostic_presentation_cases,
+    lean_terminal_diagnostic_replay_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
