@@ -251,6 +251,7 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
     ++ "\"branch_fields_exact\":" ++ boolJson case.branchFieldsExact ++ ","
     ++ "\"pending_deadline_absent\":" ++ boolJson case.pendingDeadlineAbsent ++ ","
     ++ "\"request\":{"
+    ++ "\"hop\":" ++ toString request.hop ++ ","
     ++ "\"request_id\":" ++ jsonString request.requestId ++ ","
     ++ "\"purpose\":" ++ jsonString request.purpose.toWire ++ ","
     ++ "\"target_agent\":" ++ jsonString request.targetAgent ++ ","

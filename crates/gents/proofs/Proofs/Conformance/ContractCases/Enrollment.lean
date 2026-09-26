@@ -256,7 +256,7 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let wrongParent := { titleRequest with
     parentFields := titleParentFields { titleParentLink with documentId := "forged-doc" } }
   let toolParent := { titleRequest with
-    parentFields := textFieldsToBytes ["0", "some", titleParentLink.requestId,
+    parentFields := textFieldsToBytes ["some", titleParentLink.requestId,
       "some", titleParentLink.documentId, "some", "forged-tool", "some", "forged-tool-doc"] }
   let queuedQueue : RequestQueue := { source := .user, policy := .append }
   let queued := { titleRequest with input := ({ queue := some queuedQueue } : RequestInput) }

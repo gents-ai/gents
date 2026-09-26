@@ -51,11 +51,12 @@ structure TitleParentEvidence where
   physicalBindingCurrent : Bool
   deriving DecidableEq, Repr
 
-/-- Abstract signed semantic fields. Native `push_option` uses byte tags 1/0;
-the native adapter must map the typed link through its existing encoder, not
-interpret these model labels as the native signature payload bytes. -/
+/-- Abstract signed semantic fields for the parent lineage only; the hop is the
+separate `hopField`. Native `push_option` uses byte tags 1/0; the native adapter
+must map the typed link through its existing encoder, not interpret these model
+labels as the native signature payload bytes. -/
 def titleParentFields (link : TitleParentLink) : CanonicalFields :=
-  textFieldsToBytes ["0", "some", link.requestId, "some", link.documentId, "none", "none"]
+  textFieldsToBytes ["some", link.requestId, "some", link.documentId, "none", "none"]
 
 /-- Exact immutable request semantics covered by the request signature. -/
 structure AgentRequestSemantics where
@@ -79,11 +80,12 @@ structure AgentRequestSemantics where
   workspace : RequestWorkspace
   deriving DecidableEq, Repr
 
-/-- Abstract signed encoding of the causal hop: one field whose length is the
-hop. Native signing pushes `subagent_depth` through its existing decimal text
-encoder; the adapter maps the typed hop through that encoder rather than
-interpreting these model bytes as the native payload. Both are injective, so a
-changed hop always changes the signed fields. -/
+/-- Abstract signed element for the causal hop, the only hop in the signed
+fields. As with `titleParentFields`, these model bytes (one field whose length
+is the hop) are not the native signature payload: native signing encodes the
+hop through its existing decimal `subagent_depth` encoder, and the adapter maps
+the typed `hop` (emitted as a typed JSON field) to that encoder. Both encodings
+are injective, so a changed hop always changes the signed fields. -/
 def hopField (hop : Nat) : WireBytes := List.replicate hop 0
 
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
