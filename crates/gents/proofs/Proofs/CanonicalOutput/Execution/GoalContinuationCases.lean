@@ -30,7 +30,7 @@ def physicalBinding (status : Goals.Status := .active) : GoalContinuation.Bindin
   { goalDocument := 70, goalOwner := "owner", goalSession := "session"
   , observedStatus := status, executionAgent := 1, executionSession := 1
   , parentDocument := 10, parentLogical := 10, childDocument := 200, childRequester := none
-  , childEntry := goalEntry, observation := ⟨[], some []⟩, authenticated := true }
+  , childEntry := goalEntry, observation := ⟨[], some [], false⟩, authenticated := true }
 
 def parentLease : RequestExecutionLease.World Generation :=
   { request := .completed, lease := .terminal 7 .completed, usedGenerations := [7]

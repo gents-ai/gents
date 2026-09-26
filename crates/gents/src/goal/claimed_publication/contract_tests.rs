@@ -176,7 +176,7 @@ async fn run_generated_wait_observations() {
         .collect();
     assert_eq!(
         cases.len(),
-        21,
+        22,
         "every new generated wait case is owner-bound"
     );
     for case in cases {
@@ -532,14 +532,23 @@ async fn run_generated_wait_observations() {
             .unwrap()
             .unwrap();
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
-        let result = publish_claimed_continuation(
+        let publication = publish_claimed_continuation(
             &fixture.node,
             &observed,
             PARENT,
             "Original signed continuation",
             wrapup,
-        )
-        .await;
+        );
+        let result = if case.observation["storage_failed"] == true {
+            // Fail the waited-target read inside the publication transaction.
+            ConfigApplyTxn::with_read_storage_failure(
+                "await_mode child_request_id spawned_by_tool_call_doc_id",
+                publication,
+            )
+            .await
+        } else {
+            publication.await
+        };
         match case.outcome.as_str() {
             "created" => {
                 let receipt = result.unwrap().expect(&case.name);
@@ -550,6 +559,25 @@ async fn run_generated_wait_observations() {
                 );
             }
             "deferred" => assert!(result.unwrap().is_none(), "{}", case.name),
+            "unavailable" => {
+                let error = result.expect_err(&case.name);
+                assert!(
+                    crate::config_client::is_transaction_step_unavailable(&error),
+                    "{}: {error:#}",
+                    case.name
+                );
+                assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
+                let retried = publish_claimed_continuation(
+                    &fixture.node,
+                    &observed,
+                    PARENT,
+                    "Original signed continuation",
+                    wrapup,
+                )
+                .await
+                .unwrap();
+                assert!(retried.is_none(), "{} retry still observes the wait", case.name);
+            }
             "invalid_evidence" => {
                 assert!(result.unwrap().is_none(), "{}", case.name);
                 let stopped = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)

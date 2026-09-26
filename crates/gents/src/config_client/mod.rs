@@ -35,6 +35,14 @@ pub(crate) mod write_telemetry;
 
 pub(crate) use graphql::ensure_query_document;
 
+/// A transaction step this owner classified as unavailable (a conflict that
+/// outlived its retries, a storage failure, or a step timeout), as opposed to
+/// data the step returned.
+pub(crate) fn is_transaction_step_unavailable(error: &anyhow::Error) -> bool {
+    retry::classified_transaction_conflict(error).is_some()
+        || retry::is_transaction_storage_failure(error)
+}
+
 #[cfg(test)]
 pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool {
     retry::classified_transaction_conflict(error).is_some()

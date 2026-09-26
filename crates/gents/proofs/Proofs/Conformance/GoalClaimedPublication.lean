@@ -19,15 +19,15 @@ def changedWatermark : Snapshot := {claimed with lastContinuedFrom := some 30}
 def recoveredLater : Snapshot :=
   {published with goal := {published.goal with status := .paused}, sequence := 3,
                   lastContinuedFrom := some 30, latestRequest := 40}
-def noWait : PublicationObservation := ⟨[], some []⟩
+def noWait : PublicationObservation := ⟨[], some [], false⟩
 def runningTool : BackgroundTool :=
   ⟨301, .spawned 300 "300:spawned-background", "spawned:300", "owner", "session",
     some "requester", .running⟩
 def timedOutWait : WaitControl :=
   ⟨400, 100, "owner", "session", some "requester", "wait_process",
     "spawned:300", "spawned:300", .timedOutRunning, true, true⟩
-def waiting : PublicationObservation := ⟨[timedOutWait], some [runningTool]⟩
-def launchedOnly : PublicationObservation := ⟨[], some [runningTool]⟩
+def waiting : PublicationObservation := ⟨[timedOutWait], some [runningTool], false⟩
+def launchedOnly : PublicationObservation := ⟨[], some [runningTool], false⟩
 def completedTool : PublicationObservation :=
   { waiting with backgrounds := some [{runningTool with state := .terminal}] }
 def pendingTool : PublicationObservation :=
@@ -129,6 +129,8 @@ def cases : List PublicationCase :=
        published, .created⟩
   , ⟨"cancelled_before_start_wait_without_reply_does_not_block", claimed, request,
        cancelledBeforeStart, true, published, .created⟩
+  , ⟨"wait_evidence_storage_failure_retries_without_transition", claimed, request,
+       {waiting with storageFailed := true}, true, claimed, .unavailable⟩
   , ⟨"budget_wrapup_invalid_evidence_abandons_wrapup", budgetClaimed,
        {request with expectedStatus := .budgetLimited}, malformedWait, true,
        budgetWrapupAbandoned, .invalidEvidence⟩
@@ -152,6 +154,7 @@ private def outcomeJson : Outcome → String
   | .conflict => "conflict" | .rolledBack => "rolled_back"
   | .created => "created" | .recovered => "recovered"
   | .deferred => "deferred" | .invalidEvidence => "invalid_evidence"
+  | .unavailable => "unavailable"
 
 def backgroundJson (b : BackgroundTool) : String :=
   "{\"doc_id\":" ++ toString b.docId ++ ",\"origin\":" ++
@@ -183,7 +186,8 @@ def observationJson (o : PublicationObservation) : String :=
   ",\"backgrounds\":" ++
     (match o.backgrounds with
     | none => "null"
-    | some rows => Conformance.Contracts.jsonArray (rows.map backgroundJson)) ++ "}"
+    | some rows => Conformance.Contracts.jsonArray (rows.map backgroundJson)) ++
+  ",\"storage_failed\":" ++ (if o.storageFailed then "true" else "false") ++ "}"
 
 def requestJson (r : ClaimedRequest) : String :=
   let base := Conformance.GoalOperatorResumeContracts.requestJson r.toRequest

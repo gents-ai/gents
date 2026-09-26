@@ -11,8 +11,10 @@ use crate::tool_call_lifecycle::{query, ToolCallState};
 pub(super) enum WaitEvidence {
     Absent,
     Running,
-    /// Fail-closed: the evidence cannot be interpreted.
+    /// Fail-closed: the evidence was read but cannot be interpreted.
     Invalid(anyhow::Error),
+    /// A read failed at the transaction owner; nothing is known yet.
+    Unavailable(anyhow::Error),
 }
 
 fn rows<'a>(response: &'a Value, name: &str) -> Result<&'a Vec<Value>> {
@@ -93,7 +95,7 @@ fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool>
 
 /// Re-read exact accepted wait controls and targets inside the transaction
 /// that will CAS the Goal and publish its child. A missing target in a complete
-/// scan is a lost/finished process; an unreadable or ambiguous scan is an error.
+/// scan is a lost/finished process; an undecodable or ambiguous scan is invalid.
 pub(super) async fn observe_intentional_wait(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
@@ -104,6 +106,9 @@ pub(super) async fn observe_intentional_wait(
     match observe_waits(txn, parent_doc_id, agent_did, session_id, requester_did).await {
         Ok(true) => WaitEvidence::Running,
         Ok(false) => WaitEvidence::Absent,
+        Err(error) if crate::config_client::is_transaction_step_unavailable(&error) => {
+            WaitEvidence::Unavailable(error)
+        }
         Err(error) => WaitEvidence::Invalid(error),
     }
 }

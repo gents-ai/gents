@@ -166,6 +166,8 @@ async fn stage_claimed_continuation(
     {
         wait_observation::WaitEvidence::Absent => {}
         wait_observation::WaitEvidence::Running => return Ok(None),
+        // No Goal write: the claim stays and the next reconciliation retries.
+        wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
         wait_observation::WaitEvidence::Invalid(error) => {
             stop_for_invalid_wait_evidence(txn, &goal, sequence, parent_request_id, &error, now)
                 .await?;
