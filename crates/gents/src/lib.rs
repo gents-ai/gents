@@ -404,7 +404,8 @@ pub use session::load_history;
 pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use template::{
-    parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
+    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
+    TemplateScope, VariableRef,
 };
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{

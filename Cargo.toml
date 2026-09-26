@@ -91,7 +91,11 @@ identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "b77
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
-minijinja = { version = "2", default-features = false, features = ["builtins", "serde", "unstable_machinery"] }
+# `unstable_machinery` carries no semver guarantee. The vocabulary walk in
+# `check_template_vocabulary` (crates/gents/src/template/mod.rs) matches every
+# instruction variant with no catch-all, so a minijinja release that adds or
+# reshapes one fails the workspace build until that match is extended.
+minijinja = { version = "2", default-features = false, features = ["builtins", "json", "serde", "unstable_machinery"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }

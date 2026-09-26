@@ -170,6 +170,25 @@ source consistency checks, not a separate runtime compatibility version.
 - Collection introspection now names a non-nillable field `Int!` instead of
   reporting the bare `NON_NULL` wrapper kind, so `defra_query` discovery and the
   new obligation check both read the field's actual type (#1735).
+- Task `prompt_template` and `goal_objective_template` are refused at configure
+  time when they name a filter, test or function the template engine does not
+  provide, instead of being accepted and failing on every trigger fire with
+  `template render error: unknown filter`. Every name the template spells out is
+  checked, so a conditional branch does not hide one, and so is the filter or
+  test `map`, `select`, `reject`, `selectattr` and `rejectattr` resolve from a
+  quoted argument. Names still reported only when the task fires: a method call
+  on a value (`{{ doc.name.upper() }}`); a call on a name the template binds
+  only in a branch that did not run
+  (`{% if doc.fmt %}{% set f = doc.fmt %}{% endif %}{{ f() }}`); and one of
+  those filter arguments whenever a single quoted literal is not what reaches
+  the lookup - a dynamic value (`{{ items | map(doc.filter_name) }}`), a
+  conditional or short-circuit (`{{ items | map('a' if doc.flag else 'b') }}`),
+  an argument splat (`{{ items | map(*args.spec) }}`), or a later argument
+  carrying one (`{{ items | map('nosuchfilter', range(*doc.z)) }}`) (#1744).
+- Task templates can use `tojson`. The template engine's `json` feature is
+  enabled, so the filter the configurator already emits resolves instead of
+  being rejected. It escapes `<`, `>`, `&` and `'` as `\uXXXX` sequences, which
+  reach the model as written (#1744).
 - A pack scenario sidecar reference can no longer resolve outside its pack
   directory: the CLI holds sidecar paths to the same canonical asset-path rule
   the pack loader uses (#1642).

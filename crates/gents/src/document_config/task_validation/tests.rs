@@ -81,3 +81,56 @@ fn task_hook_admission_matches_existing_lean_guards() {
         .validate()
         .unwrap();
 }
+
+#[test]
+fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
+    let task = |field: &str, template: &str| {
+        let mut value = json!({"agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
+            "prompt_template":"{{ doc.name }}"});
+        value[field] = json!(template);
+        serde_json::from_value::<Task>(value).unwrap()
+    };
+    for field in ["prompt_template", "goal_objective_template"] {
+        for template in [
+            "{{ doc.correlation | toyaml }}",
+            "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
+            "{{ now() }}",
+            "{% if doc.urgent %}{{ now() }}{% endif %}",
+            "{{ doc.items | map('nosuchfilter') }}",
+            "{% if doc.urgent %}{{ doc.rows | selectattr('id', 'nosuchtest') }}{% endif %}",
+            "{{ doc.rows | select('nosuchtest', doc.threshold) }}",
+            "{{ doc.items | map('nosuchfilter', doc.extra) }}",
+        ] {
+            let error = task(field, template)
+                .validate()
+                .expect_err(&format!("accepted {field}={template}"));
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(field)
+                    && message.contains("names an unknown filter, test or function"),
+                "{message}"
+            );
+        }
+    }
+    // Vocabulary is judged before the reference catalog, so a template that
+    // fails both reports the name.
+    let both = task("prompt_template", "{{ ctx.not_available | toyaml }}")
+        .validate()
+        .expect_err("accepted an unknown filter over an unavailable reference");
+    let message = format!("{both:#}");
+    assert!(
+        message.contains("names an unknown filter, test or function"),
+        "{message}"
+    );
+    // Every scope root a fire can supply, including fields only the invocation
+    // knows, stays authorable.
+    task(
+        "prompt_template",
+        "{{ doc.customer.name | upper }} {{ args.mode | default('review') }} \
+         {{ event.correlation }} {{ node.behavior_id }} at {{ ctx.now }}\
+         {% for row in group.docs %} {{ row.title | default('untitled') }}{% endfor %}\
+         {{ doc.rows | select(args.test_name, doc.threshold) | list }}",
+    )
+    .validate()
+    .unwrap();
+}
