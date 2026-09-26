@@ -93,8 +93,6 @@ impl ConfigReferences {
         Self::from_documents(agent_did, documents)
     }
 
-    /// Validate the full retained candidate, including unchanged inbound links.
-    /// Membership checks permit cycles and impose no collection ordering.
     /// A profile and the backend it selects, decoded from this snapshot, for
     /// admission against the backend's advertised catalog. `None` when the
     /// profile is absent.
@@ -128,6 +126,8 @@ impl ConfigReferences {
             .collect()
     }
 
+    /// Validate the full retained candidate, including unchanged inbound links.
+    /// Membership checks permit cycles and impose no collection ordering.
     pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;

@@ -281,8 +281,9 @@ pub(crate) async fn validate_desired_state_plan(
 
 /// Profiles this plan writes, or whose backend it writes, are admitted against
 /// the backend's advertised catalog read in the same transaction, through the
-/// owner runtime resolution uses. A preview therefore rejects what the runtime
-/// would reject, such as a context window above the advertised maximum.
+/// owner runtime resolution uses. Preview and publication both run it, so
+/// neither accepts what the runtime would reject, such as a context window
+/// above the advertised maximum.
 async fn validate_advertised_profiles(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -677,9 +678,9 @@ pub async fn apply_desired_state_plan(
         .collect::<Result<_>>()?;
     owners.extend(plan.removals().iter().map(|(_, owner, _)| owner.as_str()));
     for owner in owners {
-        crate::ConfigReferences::load_in_txn(txn, owner)
-            .await?
-            .validate()?;
+        let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
+        references.validate()?;
+        validate_advertised_profiles(txn, plan, owner, &references).await?;
     }
     Ok(counts)
 }
