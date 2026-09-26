@@ -1450,7 +1450,7 @@ mod tests {
         assert_eq!(wake.agent_did, admission.agent_did);
         assert_eq!(
             wake.max_total_tokens, None,
-            "fixture allows the daemon's auxiliary title task"
+            "fixture allows the daemon to create an auxiliary title request"
         );
         assert!(
             crate::session::session_needs_generated_title(
@@ -1461,7 +1461,7 @@ mod tests {
             )
             .await
             .expect("read fixture session title"),
-            "fixture starts with a placeholder title so its auxiliary title task can be drained"
+            "fixture starts with a placeholder title so title work is created"
         );
 
         let prompt_builder = LayeredPromptBuilder::for_behavior(
@@ -1508,27 +1508,47 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon.process_request(wake.clone(), shutdown_rx).await;
 
-        // The title task is spawned separately by process_request. This wait
-        // observes its existing durable session-title owner before shutdown;
-        // title generation is not a background-wake acceptance condition.
+        // This direct daemon fixture has no watcher/router. The creator must
+        // publish title work, but cannot dispatch its provider call here.
+        let session_id = crate::graphql::escape_graphql_string(&wake.session_id);
+        let agent_did = crate::graphql::escape_graphql_string(&admission.agent_did);
+        let title_purpose = crate::graphql::escape_graphql_string(
+            gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str(),
+        );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                if !crate::session::session_needs_generated_title(
-                    &node,
-                    &admission.agent_did,
-                    wake.requester_did.as_deref(),
-                    &wake.session_id,
-                )
-                .await
-                .expect("observe auxiliary title task")
-                {
+                let response = crate::config_client::ConfigAccess::Local(node.clone())
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
+                    ))
+                    .await
+                    .expect("observe pending title request");
+                let rows = response["data"]["AgentRequest"]
+                    .as_array()
+                    .expect("title request rows");
+                if !rows.is_empty() {
+                    assert_eq!(rows.len(), 1, "one title request for the wake session");
+                    assert_eq!(rows[0]["lifecycle_state"], "pending");
+                    assert_eq!(rows[0]["caused_by_parent_request_id"], wake.request_id);
+                    assert_eq!(rows[0]["caused_by_parent_request_doc_id"], wake.doc_id);
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
         .await
-        .expect("auxiliary title task must settle before test shutdown");
+        .expect("daemon must persist pending title work before test shutdown");
+        assert!(
+            crate::session::session_needs_generated_title(
+                &node,
+                &admission.agent_did,
+                wake.requester_did.as_deref(),
+                &wake.session_id,
+            )
+            .await
+            .expect("read title pending session"),
+            "creator cannot update the title without watcher dispatch"
+        );
 
         let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
         let captured = provider_inputs.lock().expect("wake provider input capture");
@@ -1539,7 +1559,7 @@ mod tests {
             title_calls.load(Ordering::SeqCst),
             diagnostic
         );
-        assert!(title_calls.load(Ordering::SeqCst) <= 1);
+        assert_eq!(title_calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             title_shape_mismatches.load(Ordering::SeqCst),
             0,

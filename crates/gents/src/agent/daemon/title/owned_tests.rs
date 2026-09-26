@@ -988,7 +988,8 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             daemon.spawn_conversation_title_generation(&fixture.parent);
             let old_doc_id = fixture.title.doc_id.clone();
             let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
-            let purpose = RequestPurpose::TitleAudit.as_str();
+            let purpose =
+                crate::graphql::escape_graphql_string(RequestPurpose::TitleAudit.as_str());
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             loop {
                 let response = ConfigAccess::Local(fixture.node.clone())
