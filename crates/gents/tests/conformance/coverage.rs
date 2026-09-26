@@ -1381,6 +1381,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SpawnFenceCases".to_string(),
         ));
     }
+    if !lean_spawn_claim_lineage_cases().is_empty() {
+        emitted.insert((
+            "spawn_claim_lineage_cases".to_string(),
+            "SpawnClaimLineageCases".to_string(),
+        ));
+    }
     if !lean_goal_decision_cases().is_empty() {
         emitted.insert((
             "goal_decision_cases".to_string(),

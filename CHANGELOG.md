@@ -191,6 +191,11 @@ source consistency checks, not a separate runtime compatibility version.
   is claimed later is refused or interrupted instead of running unsupervised,
   and `list_subagents` reports such a spawn as `stopping` until its child has
   stopped (#1807).
+- A spawn's cancel intent now refuses the claim only of the child its bridge
+  receipt resolves through parent lineage and target principal, as the cancel
+  mirror and acknowledgement already did. A pending request that names the
+  bridge with another parent or principal is no longer interrupted by it
+  (#1922).
 - Desktop: starting or restarting the local agent from Local server settings,
   Add agent, or the menu bar no longer reports a runtime that is still
 - Desktop: starting or restarting the local agent from Local server settings

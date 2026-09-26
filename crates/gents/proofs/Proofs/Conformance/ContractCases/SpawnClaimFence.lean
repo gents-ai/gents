@@ -134,4 +134,29 @@ theorem spawnFenceCases_replayable :
         (· != "cross_late_claim_won_race_stays_unsettled") := by
   native_decide
 
+/-- A pending row claimed against a spawn bridge whose lineage it names:
+    whether its parent lineage and principal corroborate the bridge receipt,
+    whether the bridge carries a cancel intent, and whether the claim gate
+    refuses it. -/
+structure SpawnClaimLineageCase where
+  name : String
+  parentCorroborates : Bool
+  targetCorroborates : Bool
+  bridgeIntent : Bool
+  refused : Bool
+  deriving Repr
+
+def spawnClaimLineageCase (name : String) (parent target intent : Bool) :
+    SpawnClaimLineageCase :=
+  { name, parentCorroborates := parent, targetCorroborates := target
+  , bridgeIntent := intent
+  , refused := claimFencedByIntent ⟨parent, target⟩ intent }
+
+def spawnClaimLineageCases : List SpawnClaimLineageCase :=
+  [ spawnClaimLineageCase "bridge_child_refused_by_intent" true true true
+  , spawnClaimLineageCase "bridge_child_without_intent_claims" true true false
+  , spawnClaimLineageCase "wrong_parent_claims_despite_intent" false true true
+  , spawnClaimLineageCase "wrong_target_claims_despite_intent" true false true
+  ]
+
 end Conformance.ContractCases

@@ -1346,6 +1346,11 @@ def caseCoverage : List CoverageEntry :=
       "SpawnFenceCases"
       "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_fence_cases_replay_native_owners")
       "background-tools" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "spawn_claim_lineage_cases"
+      "SpawnClaimLineageCases"
+      "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_claim_lineage_cases_drive_claim_gate")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "descendant_graph_cases"
       "DescendantGraphCases"

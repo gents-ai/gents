@@ -1246,6 +1246,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_spawn_fence_cases_replay_native_owners",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_claim_lineage_cases_drive_claim_gate",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/subagent_source/spawn_fence_tests.rs",
+            module_path: "trigger_engine::subagent_source::spawn_fence_tests",
+            function: "generated_spawn_claim_lineage_cases_drive_claim_gate",
+        },
+        ConformanceConsumer::RustTest {
             id: "hook::tests::r4c_steer_subagent::generated_cancel_child_session_cases_drive_cancel_subagent",
             package: "gents",
             source_path: "crates/gents/tests/e2e_subagent/r4c_steer_subagent.rs",
