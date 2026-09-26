@@ -977,3 +977,355 @@ async fn preview_window(
         })
         .await
 }
+
+fn obligation_surface(
+    owner: &str,
+    surface_id: &str,
+    collection: &str,
+    count_field: &str,
+) -> DesiredStateApplyDocument {
+    let surface = json!({
+        "surface_id": surface_id,
+        "agent_did": owner,
+        "entries": {"entries": [{
+            "tool_name": "write_outcome",
+            "collection": collection,
+            "description": "Write one outcome document.",
+            "fields": [
+                {"name": "text", "required": true},
+                {"name": count_field, "required": true},
+            ],
+            "output_obligation": {
+                "scope": "request",
+                "minimum_writes": 1,
+                "expected_count_field": count_field,
+            },
+        }]},
+    });
+    let surface: crate::document_config::DatastoreToolSurfaceDocument =
+        serde_json::from_value(surface).expect("canonical surface");
+    let value = serde_json::to_value(surface).expect("canonical surface value");
+    DesiredStateApplyDocument {
+        collection: Collection::DatastoreToolSurface,
+        add: value.clone(),
+        update: value,
+    }
+}
+
+async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    node.add_schema(
+        "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
+    )
+    .await?;
+    Ok(node)
+}
+
+#[tokio::test]
+async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+
+    for (count_field, reported_type) in [
+        ("flag", "Boolean"),
+        ("tags", "LIST"),
+        ("required_tags", "LIST"),
+    ] {
+        let refused = apply(
+            &access,
+            vec![obligation_surface(
+                owner,
+                "outcomes",
+                "ObligationOutcome",
+                count_field,
+            )],
+        )
+        .await
+        .err()
+        .expect("the field can never carry the expected count");
+        let diagnostic = format!("{refused:#}");
+        assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
+        assert!(diagnostic.contains(reported_type), "{diagnostic}");
+    }
+
+    let absent_field = apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "outcomes",
+            "ObligationOutcome",
+            "missing",
+        )],
+    )
+    .await
+    .err()
+    .expect("the count field must exist on the target collection");
+    assert!(
+        format!("{absent_field:#}").contains("does not exist on ObligationOutcome"),
+        "{absent_field:#}"
+    );
+
+    // The read-only preflight refuses the same configuration, so a self-config
+    // preview reports it before anyone asks to publish.
+    let plan = DesiredStateApplyPlan::new(vec![obligation_surface(
+        owner,
+        "outcomes",
+        "ObligationOutcome",
+        "flag",
+    )])?;
+    let previewed = access
+        .transact("test.obligation.preview", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .err()
+        .expect("preflight refuses the same obligation");
+    assert!(
+        format!("{previewed:#}").contains("expected_count_field"),
+        "{previewed:#}"
+    );
+
+    assert!(
+        crate::list_datastore_tool_surfaces(&node, owner)
+            .await?
+            .is_empty(),
+        "a refused obligation publishes no surface"
+    );
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+
+    let mut refused = Vec::new();
+    for (surface_id, count_field) in [
+        ("int-count", "total"),
+        ("string-count", "expected_total"),
+        ("float32-count", "ratio"),
+        ("float64-count", "amount"),
+        ("json-count", "payload"),
+        ("datetime-count", "observed_at"),
+        ("blob-count", "attachment"),
+        ("id-count", "marker"),
+        ("non-null-int-count", "required_total"),
+        ("non-null-string-count", "required_label"),
+    ] {
+        if let Err(error) = apply(
+            &access,
+            vec![obligation_surface(
+                owner,
+                surface_id,
+                "ObligationOutcome",
+                count_field,
+            )],
+        )
+        .await
+        {
+            refused.push(format!("{count_field}: {error:#}"));
+        }
+    }
+    assert!(refused.is_empty(), "{refused:#?}");
+    // A collection that does not exist yet cannot refute the obligation.
+    apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "unregistered",
+            "ObligationOutcomeLater",
+            "total",
+        )],
+    )
+    .await?;
+
+    let surfaces = crate::list_datastore_tool_surfaces(&node, owner).await?;
+    assert_eq!(surfaces.len(), 11, "{surfaces:?}");
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+
+    // A String field's reported type cannot separate a canonical decimal
+    // count from prose, so a String count field is accepted.
+    apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "reported",
+            "ObligationOutcome",
+            "result",
+        )],
+    )
+    .await?;
+
+    let surfaces = crate::list_datastore_tool_surfaces(&node, owner).await?;
+    assert_eq!(surfaces.len(), 1, "{surfaces:?}");
+    node.shutdown().await;
+    Ok(())
+}
+
+/// A plan document whose create payload names `add_field` and whose replacement
+/// names `update_field`; the plan only requires the two to share an identity.
+fn obligation_surface_payloads(
+    owner: &str,
+    surface_id: &str,
+    add_field: &str,
+    update_field: &str,
+) -> DesiredStateApplyDocument {
+    let add = obligation_surface(owner, surface_id, "ObligationOutcome", add_field).add;
+    let update = obligation_surface(owner, surface_id, "ObligationOutcome", update_field).update;
+    DesiredStateApplyDocument {
+        collection: Collection::DatastoreToolSurface,
+        add,
+        update,
+    }
+}
+
+async fn published_count_field(
+    node: &EmbeddedNode,
+    owner: &str,
+    surface_id: &str,
+) -> Result<String> {
+    let surface = crate::list_datastore_tool_surfaces(node, owner)
+        .await?
+        .into_iter()
+        .find(|surface| surface.surface_id == surface_id)
+        .expect("surface is published");
+    let Some(crate::document_config::SurfaceToolDecl::Create(decl)) =
+        surface.entries.unwrap_or_default().into_iter().next()
+    else {
+        panic!("surface publishes its create tool");
+    };
+    Ok(decl
+        .output_obligation
+        .and_then(|obligation| obligation.expected_count_field)
+        .expect("obligation keeps its count field"))
+}
+
+#[tokio::test]
+async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+
+    let refused = apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "created", "flag", "total",
+        )],
+    )
+    .await
+    .err()
+    .expect("a creation publishes the add payload, whose count field is a Boolean");
+    assert!(
+        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
+        "{refused:#}"
+    );
+    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
+        owner, "created", "flag", "total",
+    )])?;
+    let previewed = access
+        .transact("test.obligation.preview.add", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .err()
+        .expect("preflight judges the same add payload");
+    assert!(
+        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
+        "{previewed:#}"
+    );
+    assert!(crate::list_datastore_tool_surfaces(&node, owner)
+        .await?
+        .is_empty());
+
+    apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "created", "total", "flag",
+        )],
+    )
+    .await?;
+    assert_eq!(
+        published_count_field(&node, owner, "created").await?,
+        "total"
+    );
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+    apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "replaced",
+            "ObligationOutcome",
+            "total",
+        )],
+    )
+    .await?;
+
+    let refused = apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "replaced", "amount", "flag",
+        )],
+    )
+    .await
+    .err()
+    .expect("a replacement publishes the update payload, whose count field is a Boolean");
+    assert!(
+        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
+        "{refused:#}"
+    );
+    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
+        owner, "replaced", "amount", "flag",
+    )])?;
+    let previewed = access
+        .transact("test.obligation.preview.update", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .err()
+        .expect("preflight judges the same update payload");
+    assert!(
+        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
+        "{previewed:#}"
+    );
+    assert_eq!(
+        published_count_field(&node, owner, "replaced").await?,
+        "total"
+    );
+
+    apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "replaced", "flag", "amount",
+        )],
+    )
+    .await?;
+    assert_eq!(
+        published_count_field(&node, owner, "replaced").await?,
+        "amount"
+    );
+    node.shutdown().await;
+    Ok(())
+}

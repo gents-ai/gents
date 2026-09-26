@@ -18,8 +18,9 @@ use crate::graphql::escape_graphql_string;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaField {
     pub name: String,
-    /// Best-effort type display: the named type when present (e.g. `String`,
-    /// `DateTime`), otherwise the type kind (e.g. `LIST`).
+    /// The field's GraphQL type spelling: the named type, suffixed with `!`
+    /// when the field is non-nillable (e.g. `String`, `DateTime`, `Int!`),
+    /// otherwise the wrapper kind (e.g. `LIST`).
     pub type_name: String,
 }
 
@@ -55,7 +56,7 @@ impl CollectionSchema {
 pub fn introspection_query(collection: &str) -> Result<String> {
     validate_identifier(collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;
     Ok(format!(
-        r#"{{ __type(name: "{name}") {{ fields {{ name type {{ name kind }} }} }} }}"#,
+        r#"{{ __type(name: "{name}") {{ fields {{ name type {{ name kind ofType {{ name kind }} }} }} }} }}"#,
         name = escape_graphql_string(collection)
     ))
 }
@@ -69,17 +70,40 @@ pub fn parse_collection_schema(data: Option<&Value>) -> Option<CollectionSchema>
             .iter()
             .filter_map(|f| {
                 let name = f.get("name")?.as_str()?.to_string();
-                let ty = f.get("type");
-                let type_name = ty
-                    .and_then(|t| t.get("name"))
-                    .and_then(Value::as_str)
-                    .or_else(|| ty.and_then(|t| t.get("kind")).and_then(Value::as_str))
-                    .unwrap_or("unknown")
-                    .to_string();
-                Some(SchemaField { name, type_name })
+                Some(SchemaField {
+                    name,
+                    type_name: field_type_name(f.get("type")),
+                })
             })
             .collect(),
     })
+}
+
+/// GraphQL reports a non-nillable field as a `NON_NULL` wrapper with no name of
+/// its own, so its named type has to be read out of `ofType`. Re-rendering it
+/// as `Name!` keeps [`SchemaField::type_name`] in the spelling
+/// `crate::defra_write` reads a field type from; DefraDB wraps a collection
+/// field's named type in at most one `NON_NULL`, so one `ofType` level resolves
+/// every shape it emits. A `LIST` keeps its kind: no list value is one of the
+/// single scalars callers ask about.
+fn field_type_name(ty: Option<&Value>) -> String {
+    if let Some(name) = named_type(ty) {
+        return name.to_string();
+    }
+    if type_kind(ty) == Some("NON_NULL") {
+        if let Some(inner) = named_type(ty.and_then(|ty| ty.get("ofType"))) {
+            return format!("{inner}!");
+        }
+    }
+    type_kind(ty).unwrap_or("unknown").to_string()
+}
+
+fn named_type(ty: Option<&Value>) -> Option<&str> {
+    ty?.get("name")?.as_str()
+}
+
+fn type_kind(ty: Option<&Value>) -> Option<&str> {
+    ty?.get("kind")?.as_str()
 }
 
 /// The shared "no such collection" message, used by both the failure
@@ -219,8 +243,8 @@ mod tests {
     /// aggregates, and real fields, matching what DefraDB actually returns.
     fn tool_call_schema() -> CollectionSchema {
         schema_from(&[
-            ("AVG", "Float"),
-            ("COUNT", "Int"),
+            ("AVG", "Float!"),
+            ("COUNT", "Int!"),
             ("GROUP", "LIST"),
             ("_deleted", "Boolean"),
             ("_docID", "ID"),
@@ -249,6 +273,10 @@ mod tests {
         let q = introspection_query("AgentToolCall").unwrap();
         assert!(q.contains(r#"__type(name: "AgentToolCall")"#), "{q}");
         assert!(q.contains("fields"), "{q}");
+        assert!(
+            q.contains("ofType"),
+            "a non-null field needs its inner type: {q}"
+        );
     }
 
     #[test]
@@ -286,6 +314,37 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// The shapes DefraDB emits for a non-nillable field and for both list
+    /// forms, as a live `__type` query returns them.
+    #[test]
+    fn parse_names_a_non_null_field_and_keeps_list_kinds() {
+        let data = json!({
+            "__type": {
+                "fields": [
+                    { "name": "required_total", "type": {
+                        "kind": "NON_NULL", "name": null,
+                        "ofType": { "kind": "SCALAR", "name": "Int", "ofType": null } } },
+                    { "name": "required_label", "type": {
+                        "kind": "NON_NULL", "name": null,
+                        "ofType": { "kind": "SCALAR", "name": "String", "ofType": null } } },
+                    { "name": "tags", "type": {
+                        "kind": "LIST", "name": null,
+                        "ofType": { "kind": "SCALAR", "name": "String", "ofType": null } } },
+                    { "name": "required_tags", "type": {
+                        "kind": "LIST", "name": null,
+                        "ofType": { "kind": "NON_NULL", "name": null,
+                                    "ofType": { "kind": "SCALAR", "name": "String" } } } },
+                    { "name": "GROUP", "type": {
+                        "kind": "LIST", "name": null,
+                        "ofType": { "kind": "OBJECT", "name": "AgentToolCall", "ofType": null } } }
+                ]
+            }
+        });
+        let schema = parse_collection_schema(Some(&data)).expect("type exists");
+        let types: Vec<&str> = schema.fields.iter().map(|f| f.type_name.as_str()).collect();
+        assert_eq!(types, vec!["Int!", "String!", "LIST", "LIST", "LIST"]);
     }
 
     #[test]

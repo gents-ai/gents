@@ -243,6 +243,7 @@ pub(crate) async fn validate_desired_state_plan(
         owners.insert(document_identity(document.collection, &document.add)?.0);
     }
     owners.extend(plan.removals().iter().map(|(_, owner, _)| owner.as_str()));
+    let mut count_fields = CountFieldSchemas::new();
     for owner in owners {
         let retained = crate::ConfigReferences::load_in_txn(txn, owner).await?;
         let mut candidate: BTreeMap<_, _> = retained
@@ -260,6 +261,10 @@ pub(crate) async fn validate_desired_state_plan(
             } else {
                 &document.add
             };
+            if document.collection == Collection::DatastoreToolSurface {
+                validate_output_obligation_count_fields(txn, replacement, &mut count_fields)
+                    .await?;
+            }
             candidate.insert(key, replacement.clone());
         }
         for (collection, document_owner, id) in plan.removals() {
@@ -317,6 +322,96 @@ async fn validate_advertised_profiles(
         )
         .await?;
         crate::config::advertised_model_for_profile(&backend, &profile, observation.as_ref())?;
+    }
+    Ok(())
+}
+
+/// Introspected field types per target collection; `None` for a collection the
+/// schema does not have yet.
+type CountFieldSchemas = BTreeMap<String, Option<BTreeMap<String, String>>>;
+
+/// The runtime reads an obligation's expected count from the durable arguments
+/// of each completed write, not from the stored document, so whether a count it
+/// can parse could ever reach `expected_count_field` follows from that field's
+/// GraphQL type as `defra_query::schema` reports it;
+/// [`crate::defra_write::can_hold_canonical_count`] owns that question.
+/// Refusing at publication precedes the runtime failure, which differs by
+/// refused class: a `Boolean` or scalar-list field still resolves a write-tool
+/// argument schema, so the tool registers, a write completes, and the
+/// obligation fails only at completion, after the work ran; a relation-typed or
+/// absent field resolves none, so `BoundedWriteTool` is not well formed,
+/// `ToolSurface::build_tools` refuses to register it, and no write completes at
+/// all. A relation list is relation-typed, not a scalar list.
+/// The target collection's schema is observable here, inside the publishing
+/// transaction; the structural owner
+/// (`WriteToolDecl::output_obligation_is_well_formed`) has no schema access.
+///
+/// `candidate` is the surface exactly as it will be stored: a plan carries a
+/// create and a replacement payload that need only agree on identity, and the
+/// row's presence in this transaction decides which one is written.
+async fn validate_output_obligation_count_fields(
+    txn: &ConfigApplyTxn<'_>,
+    candidate: &Value,
+    introspected: &mut CountFieldSchemas,
+) -> Result<()> {
+    let surface_id = candidate
+        .get("surface_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let entries = crate::document_config::deserialize_optional_surface_tools(
+        candidate.get("entries").cloned().unwrap_or(Value::Null),
+    )?;
+    for entry in entries.unwrap_or_default() {
+        let crate::document_config::SurfaceToolDecl::Create(decl) = entry else {
+            continue;
+        };
+        let Some(field) = decl
+            .output_obligation
+            .as_ref()
+            .and_then(|obligation| obligation.expected_count_field.as_deref())
+        else {
+            continue;
+        };
+        // A malformed collection name is the structural owner's diagnostic,
+        // not an introspection failure.
+        let Ok(query) = crate::defra_query::schema::introspection_query(&decl.collection) else {
+            continue;
+        };
+        if !introspected.contains_key(&decl.collection) {
+            let response = txn.execute(&query).await?;
+            let fields = crate::defra_query::schema::parse_collection_schema(response.get("data"))
+                .map(|schema| {
+                    schema
+                        .fields
+                        .into_iter()
+                        .map(|field| (field.name, field.type_name))
+                        .collect::<BTreeMap<_, _>>()
+                });
+            introspected.insert(decl.collection.clone(), fields);
+        }
+        // Introspection cannot see a collection that does not exist yet,
+        // and publishing a surface ahead of its schema is legitimate.
+        // Nothing revalidates the obligation when that schema arrives, so a
+        // surface published in that order is never checked here. A package
+        // that installs the target collection's own schema takes this path
+        // in its preflight, because `ensure_package_schemas` runs after it;
+        // only the publishing transaction sees the installed schema.
+        let Some(fields) = introspected[&decl.collection].as_ref() else {
+            continue;
+        };
+        match fields.get(field).map(String::as_str) {
+            Some(reported) if crate::defra_write::can_hold_canonical_count(reported) => {}
+            Some(reported) => anyhow::bail!(
+                "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} names a {reported} field of {}, which cannot carry the count; the runtime parses an integer or its canonical decimal spelling out of the call argument",
+                decl.tool_name,
+                decl.collection,
+            ),
+            None => anyhow::bail!(
+                "DatastoreToolSurface {surface_id} tool {:?} output_obligation.expected_count_field {field:?} does not exist on {}",
+                decl.tool_name,
+                decl.collection,
+            ),
+        }
     }
     Ok(())
 }
@@ -607,6 +702,7 @@ pub async fn apply_desired_state_plan(
     plan: &DesiredStateApplyPlan,
 ) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
+    let mut count_fields = CountFieldSchemas::new();
     let mut counts = DesiredStateApplyCounts::default();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
@@ -639,6 +735,9 @@ pub async fn apply_desired_state_plan(
                 mint_recreate_identity(&document.add),
             )
         };
+        if document.collection == Collection::DatastoreToolSurface {
+            validate_output_obligation_count_fields(txn, &input, &mut count_fields).await?;
+        }
         let response = txn
             .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
             .await?;
