@@ -419,6 +419,7 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> Resolv
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
         tools: BehaviorToolConfig::meta_only(),
         compaction: None,

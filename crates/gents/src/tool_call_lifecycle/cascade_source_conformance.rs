@@ -159,6 +159,7 @@ fn source_snapshot(case: &Case) -> ActiveRuntimeSnapshot {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
         tools: crate::BehaviorToolConfig::default(),
         compaction: None,

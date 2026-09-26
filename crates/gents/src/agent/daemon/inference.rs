@@ -11,9 +11,10 @@ use tracing::Instrument;
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
 use crate::compaction::ReductionOptions;
-use crate::config::ResolvedBehavior;
+use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
+use crate::llm::rig_compat::{classify_stream_failure, StreamFailureKind};
 use crate::streaming::StreamWriter;
 use crate::watcher::AgentRequest;
 
@@ -21,6 +22,25 @@ type RequestDeadline = Option<DateTime<Utc>>;
 
 fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<&str>) -> bool {
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Harbor (`scripts/harbor/run_gents.sh`) matches
+/// `"agent stream failed: PromptError: MaxTurnError: "` as a fixed byte string;
+/// `agent/loop_stream/tests/streaming.rs` pins the `PromptError: MaxTurnError: `
+/// half of it on rig's own `Display`. The provenance clause is therefore only
+/// ever appended after that unmodified `Display`, never substituted into it.
+fn stream_failure_reason(
+    error_display: &str,
+    failure: StreamFailureKind,
+    provenance: MaxTurnsProvenance,
+) -> String {
+    match failure {
+        StreamFailureKind::MaxTurns => format!(
+            "agent stream failed: {error_display} ({})",
+            provenance.describe()
+        ),
+        StreamFailureKind::Other => format!("agent stream failed: {error_display}"),
+    }
 }
 
 fn request_deadline_remaining(deadline: RequestDeadline) -> Option<Duration> {
@@ -193,6 +213,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
+                let max_turns_provenance = self.behavior.max_turns_provenance;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
                     aggregate_token_budget,
@@ -547,7 +568,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
-                            let error_reason = format!("agent stream failed: {}", error);
+                            let error_reason = stream_failure_reason(
+                                &error.to_string(),
+                                classify_stream_failure(&error),
+                                max_turns_provenance,
+                            );
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 error_reason
                             )));
@@ -645,8 +670,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 mod tests {
     use super::{
         assemble_request_context_message, await_with_request_deadline,
-        ensure_request_deadline_open, request_deadline_remaining,
-        terminal_response_has_visible_output, BehaviorDaemon,
+        ensure_request_deadline_open, request_deadline_remaining, stream_failure_reason,
+        terminal_response_has_visible_output, BehaviorDaemon, MaxTurnsProvenance,
+        StreamFailureKind,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
@@ -668,6 +694,75 @@ mod tests {
         Arc,
     };
     use std::time::Duration;
+
+    /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
+    /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
+    /// parenthesised limit is pinned by
+    /// `tests/e2e_subagent/child_turn_limit.rs`.
+    const MAX_TURNS_DISPLAY: &str = "PromptError: MaxTurnError: (reached max turn limit: 1000)";
+    const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
+
+    #[test]
+    fn max_turns_failure_message_reports_default_provenance_and_keeps_pinned_prefix() {
+        let reason = stream_failure_reason(
+            MAX_TURNS_DISPLAY,
+            StreamFailureKind::MaxTurns,
+            MaxTurnsProvenance::Default,
+        );
+        assert!(
+            reason.starts_with(PINNED_PREFIX),
+            "must preserve the pinned Harbor/streaming-test prefix: {reason}"
+        );
+        assert!(
+            reason.contains("built-in default"),
+            "must name the default provenance: {reason}"
+        );
+    }
+
+    #[test]
+    fn max_turns_failure_message_reports_execution_profile_provenance() {
+        let reason = stream_failure_reason(
+            MAX_TURNS_DISPLAY,
+            StreamFailureKind::MaxTurns,
+            MaxTurnsProvenance::ExecutionProfile,
+        );
+        assert!(reason.starts_with(PINNED_PREFIX));
+        assert!(
+            reason.contains("InferenceExecution document"),
+            "must name the document that owns the limit: {reason}"
+        );
+    }
+
+    #[test]
+    fn max_turns_failure_message_reports_builder_provenance_without_naming_a_document() {
+        let reason = stream_failure_reason(
+            MAX_TURNS_DISPLAY,
+            StreamFailureKind::MaxTurns,
+            MaxTurnsProvenance::BuilderOverride,
+        );
+        assert!(reason.starts_with(PINNED_PREFIX));
+        assert!(
+            reason.contains("BehaviorBuilder::max_turns"),
+            "must name the programmatic knob: {reason}"
+        );
+        assert!(
+            reason.contains("no InferenceExecution document"),
+            "must not send the operator to a document that does not exist: {reason}"
+        );
+    }
+
+    #[test]
+    fn max_turns_clause_is_absent_from_other_stream_failures() {
+        let reason = stream_failure_reason(
+            "CompletionError: ProviderError: boom",
+            StreamFailureKind::Other,
+            MaxTurnsProvenance::Default,
+        );
+        assert_eq!(
+            reason,
+            "agent stream failed: CompletionError: ProviderError: boom"
+        );
+    }
 
     #[derive(Clone)]
     struct RoutedReplyModel;
@@ -884,6 +979,7 @@ mod tests {
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
+            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,

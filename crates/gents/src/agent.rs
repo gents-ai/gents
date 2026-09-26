@@ -445,6 +445,7 @@ pub(crate) fn behavior_config_from_documents(
         config.validate()?;
     }
     let backend = inference.backend.backend_fields();
+    let resolved_max_turns = inference.max_turns()?;
     Ok(ResolvedBehavior {
         behavior_id: behavior.behavior_id.clone(),
         principal,
@@ -457,7 +458,8 @@ pub(crate) fn behavior_config_from_documents(
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
         context_window: inference.context_window()?,
         max_output_tokens: inference.max_output_tokens()?,
-        max_turns: inference.max_turns()?,
+        max_turns: resolved_max_turns.value,
+        max_turns_provenance: resolved_max_turns.provenance,
         max_total_tokens,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())

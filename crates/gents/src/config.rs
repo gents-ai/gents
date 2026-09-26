@@ -12,7 +12,7 @@ use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
-pub const DEFAULT_MAX_TURNS: usize = 250;
+pub const DEFAULT_MAX_TURNS: usize = 1_000;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 // Moved to gents-loop (G-1): compaction's own default/clamp constants.
@@ -57,6 +57,7 @@ pub struct ResolvedBehavior {
     pub context_window: usize,
     pub max_output_tokens: usize,
     pub max_turns: usize,
+    pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
     pub tools: BehaviorToolConfig,
     /// Canonical compaction selection; absence uses runtime defaults.
@@ -131,13 +132,11 @@ impl ResolvedInference {
         )
     }
 
-    pub fn max_turns(&self) -> Result<usize> {
-        positive_inference_limit(
+    pub fn max_turns(&self) -> Result<ResolvedMaxTurns> {
+        resolve_max_turns(
             self.execution
                 .as_ref()
                 .and_then(|execution| execution.max_turns),
-            DEFAULT_MAX_TURNS,
-            "max_turns",
         )
     }
 
@@ -167,6 +166,49 @@ fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> 
         Some(value) if value > 0 => Ok(usize::try_from(value)?),
         Some(_) => anyhow::bail!("{field} must be positive"),
     }
+}
+
+/// Which owner set the effective `max_turns`. A behavior resolved from
+/// documents may have no `InferenceExecution` document at all, and a behavior
+/// built programmatically has none by construction, so the three cases name
+/// different knobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaxTurnsProvenance {
+    Default,
+    ExecutionProfile,
+    BuilderOverride,
+}
+
+impl MaxTurnsProvenance {
+    pub fn describe(self) -> &'static str {
+        match self {
+            MaxTurnsProvenance::Default => {
+                "no max_turns is configured for this behavior; this is the built-in default, raised by setting max_turns on an InferenceExecution document bound to the behavior's inference profile, or through BehaviorBuilder::max_turns for a behavior built programmatically"
+            }
+            MaxTurnsProvenance::ExecutionProfile => {
+                "max_turns is set explicitly by the InferenceExecution document bound to this behavior's inference profile"
+            }
+            MaxTurnsProvenance::BuilderOverride => {
+                "max_turns was set programmatically through BehaviorBuilder::max_turns; no InferenceExecution document controls it"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedMaxTurns {
+    pub value: usize,
+    pub provenance: MaxTurnsProvenance,
+}
+
+fn resolve_max_turns(configured: Option<i64>) -> Result<ResolvedMaxTurns> {
+    let provenance = if configured.is_some() {
+        MaxTurnsProvenance::ExecutionProfile
+    } else {
+        MaxTurnsProvenance::Default
+    };
+    let value = positive_inference_limit(configured, DEFAULT_MAX_TURNS, "max_turns")?;
+    Ok(ResolvedMaxTurns { value, provenance })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -346,6 +388,12 @@ impl std::fmt::Debug for ResolvedBehavior {
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
+            // Included for the same reason as `skills`: reconcile and slot
+            // selection compare `{behavior:?}`, so a provenance-only edit
+            // (unset <-> an explicit value equal to the default) would
+            // otherwise fingerprint identically and leave the running slot
+            // reporting the previous provenance.
+            .field("max_turns_provenance", &self.max_turns_provenance)
             .field("system_prompt", &self.system_prompt)
             .field("tools", &self.tools)
             .field("compaction", &self.compaction)
@@ -462,6 +510,7 @@ mod tests {
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,
+            max_turns_provenance: MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: BehaviorToolConfig::meta_only(),
             compaction: None,
@@ -523,7 +572,65 @@ mod tests {
 
     #[test]
     fn default_max_turns_supports_long_running_agents() {
-        assert_eq!(DEFAULT_MAX_TURNS, 250);
+        assert_eq!(DEFAULT_MAX_TURNS, 1_000);
+    }
+
+    #[test]
+    fn max_turns_resolves_default_provenance_when_unset() {
+        let resolved = resolve_max_turns(None).expect("default resolves");
+        assert_eq!(resolved.value, DEFAULT_MAX_TURNS);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::Default);
+    }
+
+    #[test]
+    fn max_turns_resolves_explicit_provenance_when_set() {
+        let resolved = resolve_max_turns(Some(40)).expect("explicit value resolves");
+        assert_eq!(resolved.value, 40);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
+    }
+
+    #[test]
+    fn max_turns_keeps_a_persisted_explicit_value_below_the_new_default() {
+        let resolved = resolve_max_turns(Some(250)).expect("persisted value resolves");
+        assert_eq!(resolved.value, 250);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
+    }
+
+    #[test]
+    fn max_turns_explicitly_set_to_the_default_value_is_still_explicit() {
+        let configured =
+            i64::try_from(DEFAULT_MAX_TURNS).expect("default fits in the authored field");
+        let resolved = resolve_max_turns(Some(configured)).expect("explicit value resolves");
+        assert_eq!(resolved.value, DEFAULT_MAX_TURNS);
+        assert_eq!(resolved.provenance, MaxTurnsProvenance::ExecutionProfile);
+    }
+
+    #[test]
+    fn max_turns_rejects_non_positive_explicit_value_regardless_of_provenance() {
+        let error = resolve_max_turns(Some(0)).expect_err("zero must still be rejected");
+        assert!(error.to_string().contains("max_turns must be positive"));
+    }
+
+    #[test]
+    fn max_turns_provenance_descriptions_name_a_reachable_knob() {
+        let default = MaxTurnsProvenance::Default.describe();
+        assert!(default.contains("built-in default"));
+        // A default-limit behavior may have been built either way, so the
+        // advice has to cover both routes to a higher limit.
+        assert!(default.contains("InferenceExecution document"));
+        assert!(
+            default.contains("BehaviorBuilder::max_turns"),
+            "a programmatically built behavior has no document to edit: {default}"
+        );
+        assert!(MaxTurnsProvenance::ExecutionProfile
+            .describe()
+            .contains("InferenceExecution document"));
+        let builder = MaxTurnsProvenance::BuilderOverride.describe();
+        assert!(builder.contains("BehaviorBuilder::max_turns"));
+        assert!(
+            builder.contains("no InferenceExecution document"),
+            "a builder-supplied limit must not point the operator at a document: {builder}"
+        );
     }
 
     #[test]

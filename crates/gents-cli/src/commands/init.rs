@@ -12,7 +12,7 @@ use gents::config_client::{
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
-    HostTools, InferenceBackend, Tools,
+    HostTools, InferenceBackend, InferenceExecution, Tools,
 };
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
@@ -817,12 +817,15 @@ async fn initialize_runtime_home(
         tags: Vec::new(),
     };
     let inference_profile_id = default_inference_profile_id_for_behavior(&default_behavior_id);
-    let inference_profile = standard_inference_profile(
+    let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
+    let inference_execution = standard_inference_execution(agent_did, &inference_execution_id);
+    let mut inference_profile = standard_inference_profile(
         agent_did,
         &inference_profile_id,
         &backend_id,
         &model_name.to_string(),
     );
+    inference_profile.execution_id = Some(inference_execution_id);
     // Canonical chain: behavior -> context (system prompt, tools, compaction)
     // and behavior -> inference profile. No backend/model copies on the
     // behavior.
@@ -864,12 +867,14 @@ async fn initialize_runtime_home(
         return Err(anyhow::anyhow!("seeded Tools document: {error}"));
     }
     backend_doc.validate()?;
+    inference_execution.validate()?;
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_agent(agent_did);
     let documents = vec![
         replacement(Collection::InferenceBackend, &backend_doc)?,
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
+        replacement(Collection::InferenceExecution, &inference_execution)?,
         replacement(Collection::InferenceProfile, &inference_profile)?,
         replacement(Collection::AgentBehavior, &behavior)?,
         replacement(Collection::Tools, &wide_open_tools_document(agent_did))?,
@@ -1221,11 +1226,9 @@ fn resolve_tool_root_for_package(
     }
 }
 
-/// Canonical init profile: sampling and execution budget fields the legacy
-/// flat profile carried are now owned by referenced `InferenceSampling`/
-/// `InferenceExecution` documents. Init seeds the profile alone and leaves
-/// both references unset so the canonical defaults own those bounds — no
-/// duplicate flat fields, no invented sub-documents.
+/// Sampling stays unbound. `initialize_runtime_home` binds the execution
+/// document this leaves unset, because the self-config tool can only edit an
+/// execution its profile already names.
 fn standard_inference_profile(
     agent_did: &str,
     profile_id: &str,
@@ -1245,6 +1248,21 @@ fn standard_inference_profile(
         sampling_id: None,
         execution_id: None,
         tags: Vec::new(),
+    }
+}
+
+fn default_inference_execution_id_for_profile(profile_id: &str) -> String {
+    format!("{profile_id}-execution")
+}
+
+/// Every limit stays unset so the canonical defaults keep owning each bound;
+/// the document exists only so the configurator has an execution to reach.
+fn standard_inference_execution(agent_did: &str, execution_id: &str) -> InferenceExecution {
+    InferenceExecution {
+        agent_did: agent_did.to_string(),
+        execution_id: execution_id.to_string(),
+        display_name: Some("Default".to_string()),
+        ..Default::default()
     }
 }
 
@@ -1527,6 +1545,157 @@ mod tests {
         );
         assert_eq!(tools.tools_id, "drift-tools");
         assert!(tools.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_freshly_initialized_profile_resolves_to_the_default_turn_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
+        let owner = identity.did().to_string();
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(owner.clone())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+
+        let behavior_id = default_behavior_id_for_agent(&owner);
+        let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
+        let execution_id = default_inference_execution_id_for_profile(&profile_id);
+        let backend_id = default_backend_id_for_agent(&owner);
+        let backend = json!({"agent_did": owner, "backend_id": backend_id, "name": "Local",
+            "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+            "auth": {"kind": "unauthenticated"}, "enabled": true});
+        let behavior = json!({"agent_did": owner, "behavior_id": behavior_id,
+            "inference_profile_id": profile_id, "enabled": true});
+        let mut profile = standard_inference_profile(&owner, &profile_id, &backend_id, "model");
+        profile.execution_id = Some(execution_id.clone());
+        let documents = vec![
+            DesiredStateApplyDocument {
+                collection: Collection::InferenceBackend,
+                add: backend.clone(),
+                update: backend,
+            },
+            replacement(
+                Collection::InferenceExecution,
+                &standard_inference_execution(&owner, &execution_id),
+            )
+            .unwrap(),
+            replacement(Collection::InferenceProfile, &profile).unwrap(),
+            DesiredStateApplyDocument {
+                collection: Collection::AgentBehavior,
+                add: behavior.clone(),
+                update: behavior,
+            },
+        ];
+        publish_home_config(&access, &owner, "Agent", &behavior_id, true, documents)
+            .await
+            .unwrap();
+        gents::backend_registry::set_backend_probe_status_with_last_probe(
+            &node,
+            &owner,
+            &backend_id,
+            gents::HEALTHY_PROBE_STATUS,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let agent = gents::Gents::from_default_behavior_documents(
+            node.clone(),
+            identity,
+            gents::DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap();
+        let resolved = agent
+            .behaviors()
+            .iter()
+            .find(|resolved| resolved.behavior_id == behavior_id)
+            .expect("init default behavior resolves");
+        assert_eq!(resolved.max_turns, gents::config::DEFAULT_MAX_TURNS);
+        assert_eq!(resolved.max_turns, 1_000);
+        assert_eq!(
+            resolved.max_turns_provenance,
+            gents::config::MaxTurnsProvenance::Default
+        );
+    }
+
+    /// The grant exercised here is the configurator's own profile category;
+    /// its no-lockout and preview guardrails are separate policy, not this
+    /// fence.
+    #[tokio::test]
+    async fn the_engineer_sets_max_turns_on_a_freshly_initialized_home() {
+        use gents::llm::tool::ToolDyn;
+
+        let temp = tempfile::tempdir().unwrap();
+        let identity: Arc<dyn gents::AgentIdentity> =
+            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
+        let owner = identity.did().to_string();
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(owner.clone())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+
+        let args = init_args();
+        let tool_package = resolve_initial_tool_package(&args).unwrap();
+        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
+            .await
+            .expect("a fresh home initializes");
+
+        let categories = setup_steward_self_config()
+            .self_config_categories
+            .expect("the configurator grant names its categories");
+        assert!(categories.iter().any(|category| category == "profile"));
+        let tools = gents::self_config::build_self_config_tools(
+            node.clone(),
+            owner.clone(),
+            Some(identity.clone()),
+            &gents::tool_surface::SelfConfigToolConfig {
+                enabled: true,
+                behavior_id: summary.default_behavior_id.clone(),
+                categories: categories.into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        let config = tools
+            .iter()
+            .find(|tool| tool.name() == gents::self_config::CONFIG_TOOL_NAME)
+            .expect("the configurator registers its config tool");
+        config
+            .call(
+                json!({"argv":["profile","edit","execution","--set","max_turns=250"]}).to_string(),
+            )
+            .await
+            .expect("a freshly initialized home binds an execution the configurator can edit");
+
+        let agent = gents::Gents::from_default_behavior_documents(
+            node.clone(),
+            identity,
+            gents::DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap();
+        let resolved = agent
+            .behaviors()
+            .iter()
+            .find(|resolved| resolved.behavior_id == summary.default_behavior_id)
+            .expect("init default behavior resolves")
+            .clone();
+        assert_eq!(resolved.max_turns, 250);
+        assert_eq!(
+            resolved.max_turns_provenance,
+            gents::config::MaxTurnsProvenance::ExecutionProfile
+        );
     }
 
     #[tokio::test]
