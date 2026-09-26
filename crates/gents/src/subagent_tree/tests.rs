@@ -702,3 +702,49 @@ async fn subagent_tree_rooted_at_a_document_is_that_exact_request() -> anyhow::R
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_document_root_is_unambiguous_when_its_principal_reuses_the_request_id(
+) -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    for session in ["sess-first", "sess-second"] {
+        create_root_request(
+            node.as_ref(),
+            "req-root",
+            session,
+            "did:test:amy",
+            "amy-general",
+        )
+        .await;
+    }
+    let rows = node
+        .execute(r#"{ AgentRequest(filter: { session_id: { _eq: "sess-first" } }) { _docID } }"#)
+        .await;
+    let first = rows.data.as_ref().expect("rows")["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("first request document")
+        .to_string();
+    let accesses = [SubagentTreeAccess {
+        label: None,
+        access: ConfigAccess::Local(node.clone()),
+    }];
+
+    let tree = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&first),
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        tree.partial_errors.is_empty(),
+        "the walk starts from the chosen document, not the shared logical id: {:?}",
+        tree.partial_errors
+    );
+    assert_eq!(tree.root_request_id, "req-root");
+    assert_eq!(tree.nodes.len(), 1, "{:?}", tree.nodes);
+    assert_eq!(tree.nodes[0].session_id.as_deref(), Some("sess-first"));
+    Ok(())
+}

@@ -20,8 +20,8 @@ use serde::Deserialize;
 
 use crate::config_client::ConfigAccess;
 use crate::descendant_graph::{
-    resolve_descendant_graph, resolve_principal_descendant_graph, DescendantEdge,
-    DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
+    resolve_descendant_graph_from_document, DescendantEdge, DescendantGraphAccess, DescendantQuery,
+    MAX_DESCENDANT_PAGE_LIMIT,
 };
 use crate::graphql::escape_graphql_string;
 
@@ -244,15 +244,19 @@ pub async fn build_subagent_tree_from(
         }
     }
 
-    // A document root that no access resolved has no logical id to walk from.
+    // Descendants are walked from the resolved physical root on every access;
+    // a root that no access resolved has nothing to walk from.
     let root_request_id = logical_root.unwrap_or_default();
     let root_request_id = root_request_id.as_str();
     let mut canonical =
         BTreeMap::<(String, String, String), (Option<String>, DescendantEdge)>::new();
     for (index, entry) in accesses.iter().enumerate() {
-        if root_request_id.is_empty() {
+        let Some(root_doc_id) = root_doc_id
+            .as_deref()
+            .filter(|_| !root_request_id.is_empty())
+        else {
             break;
-        }
+        };
         if dead_accesses.contains(&index) {
             continue;
         }
@@ -264,12 +268,14 @@ pub async fn build_subagent_tree_from(
                 ..DescendantQuery::all(root_request_id)
             };
             let access = DescendantGraphAccess::Config(&entry.access);
-            let page = match match agent_did {
-                Some(agent_did) => {
-                    resolve_principal_descendant_graph(access, &query, agent_did).await
-                }
-                None => resolve_descendant_graph(access, &query).await,
-            } {
+            let page = match resolve_descendant_graph_from_document(
+                access,
+                &query,
+                root_doc_id,
+                agent_did,
+            )
+            .await
+            {
                 Ok(page) => page,
                 Err(error) => {
                     record_dead_access(

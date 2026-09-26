@@ -322,33 +322,47 @@ pub async fn resolve_descendant_graph(
     access: DescendantGraphAccess<'_>,
     query: &DescendantQuery,
 ) -> Result<DescendantPage> {
-    resolve_root_descendant_graph(access, query, None).await
-}
-
-/// [`resolve_descendant_graph`] with the root bound to one principal: the root
-/// is the unique request with this logical id owned by `agent_did`, so another
-/// principal's request reusing the id is never walked. Descendants then follow
-/// that root's physical document identity as usual.
-pub async fn resolve_principal_descendant_graph(
-    access: DescendantGraphAccess<'_>,
-    query: &DescendantQuery,
-    agent_did: &str,
-) -> Result<DescendantPage> {
-    resolve_root_descendant_graph(access, query, Some(agent_did)).await
-}
-
-async fn resolve_root_descendant_graph(
-    access: DescendantGraphAccess<'_>,
-    query: &DescendantQuery,
-    agent_did: Option<&str>,
-) -> Result<DescendantPage> {
     let root_id = nonempty(Some(query.root_request_id.as_str()))
         .context("descendant graph root_request_id is required")?;
-    let root = match agent_did {
-        None => load_unique_request(&access, root_id).await?,
-        Some(agent_did) => load_unique_principal_request(&access, root_id, agent_did).await?,
+    let root = load_unique_request(&access, root_id)
+        .await?
+        .with_context(|| format!("root AgentRequest {root_id} not found"))?;
+    let edges = collect_descendant_edges(&access, root, query.scope).await?;
+    page_descendant_edges(query, edges)
+}
+
+/// Traverse from an exact root document, bound to `agent_did` when given. The
+/// root is loaded by `_docID` alone, so another request reusing its logical
+/// id, of this principal or another, is never the root and never makes it
+/// ambiguous. The document must still carry the queried logical id.
+pub async fn resolve_descendant_graph_from_document(
+    access: DescendantGraphAccess<'_>,
+    query: &DescendantQuery,
+    root_doc_id: &str,
+    agent_did: Option<&str>,
+) -> Result<DescendantPage> {
+    let root_doc_id =
+        nonempty(Some(root_doc_id)).context("descendant root document is required")?;
+    let mut filter = format!(r#"_docID:{{_eq:"{}"}}"#, escape_graphql_string(root_doc_id));
+    if let Some(agent_did) = agent_did {
+        let agent_did = nonempty(Some(agent_did)).context("principal agent_did is required")?;
+        filter.push_str(&format!(
+            r#", agent_did:{{_eq:"{}"}}"#,
+            escape_graphql_string(agent_did)
+        ));
     }
-    .with_context(|| format!("root AgentRequest {root_id} not found"))?;
+    let mut rows = load_requests_filtered(&access, filter).await?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "root AgentRequest document {root_doc_id} is missing within scope"
+    );
+    let root = rows.pop().expect("one root");
+    anyhow::ensure!(
+        root.request_id == query.root_request_id,
+        "root AgentRequest document {root_doc_id} is request {} not {}",
+        root.request_id,
+        query.root_request_id
+    );
     let edges = collect_descendant_edges(&access, root, query.scope).await?;
     page_descendant_edges(query, edges)
 }
@@ -1133,30 +1147,6 @@ async fn load_unique_request(
         1 => Ok(rows.into_iter().next()),
         count => anyhow::bail!(
             "request_id {request_id} is ambiguous across {count} AgentRequest documents"
-        ),
-    }
-}
-
-async fn load_unique_principal_request(
-    access: &DescendantGraphAccess<'_>,
-    request_id: &str,
-    agent_did: &str,
-) -> Result<Option<AgentRequestRow>> {
-    let agent_did = nonempty(Some(agent_did)).context("principal agent_did is required")?;
-    let rows = load_requests_filtered(
-        access,
-        format!(
-            r#"request_id:{{_eq:"{}"}}, agent_did:{{_eq:"{}"}}"#,
-            escape_graphql_string(request_id),
-            escape_graphql_string(agent_did)
-        ),
-    )
-    .await?;
-    match rows.len() {
-        0 => Ok(None),
-        1 => Ok(rows.into_iter().next()),
-        count => anyhow::bail!(
-            "request_id {request_id} is ambiguous across {count} AgentRequest documents of {agent_did}"
         ),
     }
 }
