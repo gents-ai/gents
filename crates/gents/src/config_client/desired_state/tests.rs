@@ -1156,9 +1156,8 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     let access = ConfigAccess::Local(node.clone());
     let owner = "did:key:obligation-owner";
 
-    // #1735 reported `expected_count_field: result` against a String `result`
-    // field. A declared type cannot separate a String holding a canonical
-    // decimal count from one holding prose, so this rule does not refuse it.
+    // A String field's reported type cannot separate a canonical decimal
+    // count from prose, so a String count field is accepted.
     apply(
         &access,
         vec![obligation_surface(
