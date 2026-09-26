@@ -268,7 +268,6 @@
       "consumer_paths": [
         "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
         "crates/gents/tests/conformance/background.rs",
-        "crates/gents/tests/e2e_subagent/r4_subagent_completion.rs",
         "crates/gents/src/background_tools.rs"
       ],
       "native_status": "pending",

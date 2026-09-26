@@ -8,7 +8,7 @@ use defra_node::EmbeddedNode;
 async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode cancel_policy child_request_id lifecycle_state cancel_cause status }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode lifecycle_state cancel_cause status }} }}"#,
             crate::graphql::escape_graphql_string(doc_id)
         ))
         .await;
@@ -32,6 +32,11 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         .iter()
         .filter(|case| case.group == "native_lifecycle")
     {
+        let session_message = match case.operation.as_deref() {
+            Some("sessionMessage") => true,
+            Some("nativeCommand") => false,
+            other => panic!("{}: unhandled modeled tool operation {other:?}", case.name),
+        };
         let mut admission = published_admission(PublishedAdmissionOptions {
             name: format!("background-{}", case.name),
             await_mode: if case.action == "background" {
@@ -39,6 +44,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
             } else {
                 AwaitMode::Background
             },
+            tool_name: session_message.then(|| crate::toolset::CREATE_SESSION_TOOL_NAME.to_owned()),
             start_running: true,
             ..Default::default()
         })
@@ -48,6 +54,14 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let request_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
         match case.action.as_str() {
             "background" => admission.tool.background().await.unwrap(),
+            // A started session is background-only: its result arrives as a
+            // message, so no caller can wait on it in the foreground.
+            "foreground" => assert_eq!(
+                admission.tool.foreground().await.is_ok(),
+                case.legal,
+                "{}",
+                case.name
+            ),
             // Lean's abstract `.complete` action is implemented for an
             // accepted background native row by the bridge completion owner;
             // `complete` is intentionally reserved for foreground native
@@ -68,18 +82,13 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let actual = row(&admission.node, &tool_doc_id).await;
         assert_eq!(actual["request_doc_id"], request_doc_id, "{}", case.name);
         assert_eq!(actual["await_mode"], case.await_mode, "{}", case.name);
-        assert_eq!(actual["cancel_policy"], case.cancel_policy, "{}", case.name);
-        assert_eq!(
-            actual["child_request_id"].as_str(),
-            case.child_request_id.as_deref(),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            actual["lifecycle_state"], case.terminal_state,
-            "{}",
-            case.name
-        );
+        let lifecycle_state = if case.legal {
+            case.terminal_state.as_str()
+        } else {
+            // A refused transition leaves the running row untouched.
+            "running"
+        };
+        assert_eq!(actual["lifecycle_state"], lifecycle_state, "{}", case.name);
         if let Some(expected) = case.result.as_deref() {
             let presentation = super::load_tool_call_presentation(
                 &ConfigAccess::Local(admission.node.clone()),

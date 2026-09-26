@@ -5,7 +5,7 @@ use std::time::Duration;
 use gents::defra_node::{EmbeddedNode, QueryResponse};
 use gents::{
     ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource,
-    ResolvedEventTrigger, ResolvedTask, SubagentSource, TriggerSource, Watcher,
+    ResolvedEventTrigger, ResolvedTask, TriggerSource, Watcher,
 };
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,6 @@ use super::support::mock_subscription::MockUpdateSubscriptionSource;
 const EVENT_SOURCE_COLLECTION: &str = "EventDeliveryDoc";
 const EVENT_SOURCE_TRIGGER_ID: &str = "event-delivery-trigger";
 const EVENT_SOURCE_TASK_ID: &str = "event-delivery-task";
-const SUBAGENT_CHILD_BEHAVIOR: &str = "event-delivery-child";
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -99,7 +98,7 @@ pub(super) fn event_delivery_source_instances_match_runtime() {
 pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     let traces = lean_event_delivery_convergence_traces();
     assert!(
-        traces.len() >= 3,
+        traces.len() >= lean_event_delivery_source_instances().len(),
         "Expected at least one convergence trace per source"
     );
 
@@ -168,7 +167,10 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
 
     let trace_instances: std::collections::HashSet<&str> =
         traces.iter().map(|t| t.instance_name.as_str()).collect();
-    for name in &["Watcher", "EventSource", "SubagentSource"] {
+    for name in lean_event_delivery_source_instances()
+        .iter()
+        .map(|instance| instance.name.as_str())
+    {
         assert!(
             trace_instances.contains(name),
             "Expected a convergence trace for instance `{}`",
@@ -193,7 +195,6 @@ struct ProductionEventDeliveryDriver {
 enum ProductionRuntime {
     Watcher { watcher: DefraWatcher },
     EventSource,
-    SubagentSource,
 }
 
 impl ProductionEventDeliveryDriver {
@@ -247,23 +248,6 @@ impl ProductionEventDeliveryDriver {
                     doc_ids: HashMap::new(),
                 }
             }
-            "SubagentSource" => {
-                install_subagent_source_fixture(db.node.as_ref(), db.node_identity.did())
-                    .await
-                    .expect("install SubagentSource event-delivery fixture");
-                Self {
-                    source,
-                    db,
-                    mock_subs,
-                    runtime: ProductionRuntime::SubagentSource,
-                    cancel,
-                    _snapshot_tx: None,
-                    runner: None,
-                    emitted_rx: None,
-                    emitted_buffer: Vec::new(),
-                    doc_ids: HashMap::new(),
-                }
-            }
             other => panic!("unhandled event-delivery source {other:?}"),
         };
         driver.seed_world(world).await.unwrap_or_else(|err| {
@@ -273,31 +257,6 @@ impl ProductionEventDeliveryDriver {
             )
         });
         driver
-    }
-
-    async fn start_subagent_source_for_rescan(&mut self) {
-        assert!(matches!(&self.runtime, ProductionRuntime::SubagentSource));
-        assert!(self.runner.is_none(), "SubagentSource already started");
-        // Lean's SubagentSource trace persists its bridge before rescanTick.
-        // Keep this observer absent while the public publisher accepts the
-        // bridge, then start it only after the publisher has crashed. The
-        // mock update sent with no subscriber is intentionally lost: the
-        // source must discover and emit the durable running row by rescan.
-        let (runner, emitted_rx, snapshot_tx) = spawn_subagent_source_runner(
-            self.db.node.clone(),
-            self.db.node_identity.clone(),
-            self.mock_subs.clone(),
-            self.cancel.clone(),
-        );
-        assert!(
-            self.mock_subs
-                .wait_for_subscribers(1, Duration::from_secs(2))
-                .await,
-            "SubagentSource runner did not open its mock subscription"
-        );
-        self._snapshot_tx = Some(snapshot_tx);
-        self.runner = Some(runner);
-        self.emitted_rx = Some(emitted_rx);
     }
 
     async fn seed_world(
@@ -346,7 +305,6 @@ impl ProductionEventDeliveryDriver {
                 .await
             }
             "EventSource" => self.create_event_delivery_doc(doc).await?,
-            "SubagentSource" => self.create_subagent_tool_call_doc(doc).await?,
             other => return Err(format!("unsupported source {other:?}")),
         };
         self.doc_ids.insert(doc.to_string(), doc_id);
@@ -374,147 +332,10 @@ impl ProductionEventDeliveryDriver {
             .ok_or_else(|| format!("add_{EVENT_SOURCE_COLLECTION} returned no _docID"))
     }
 
-    async fn create_subagent_tool_call_doc(&self, doc: &str) -> Result<String, String> {
-        let parent_request_id = format!("event-delivery-parent-{doc}");
-        let parent_session_id = format!("event-delivery-session-{doc}");
-        let prompt = format!("event delivery parent {doc}");
-        let expected_args = serde_json::json!({
-            "name": SUBAGENT_CHILD_BEHAVIOR,
-            "prompt": "materialize event-delivery child",
-            "await_mode": "background",
-        });
-        let args = expected_args.to_string();
-        let prepared = crate::support::accepted_turn::prepare_accepted_turn(
-            &self.db,
-            crate::support::accepted_turn::AcceptedTurnSpec {
-                backend_id: "event-delivery-subagent-backend",
-                model: "event-delivery-subagent-model",
-                parent_behavior_id: AGENT_NAME,
-                // Keep the target out of the publisher runtime's source
-                // snapshot. The separate SubagentSource under test owns the
-                // rescan and child materialization.
-                configured_behavior_ids: &[AGENT_NAME],
-                request_id: &parent_request_id,
-                session_id: &parent_session_id,
-                prompt: &prompt,
-                accepted_chunks: vec![crate::support::streaming_backend::StreamChunk::tool_call(
-                    doc,
-                    "spawn_subagent",
-                    args,
-                )],
-                child_plans: Vec::new(),
-                valid_until: None,
-                subagent_depth: Some(0),
-                request_setup: None,
-            },
-        )
-        .await;
-        // A completed parent can terminalize its still-unmaterialized bridge
-        // before the rescan observes it. Hold the next provider response after
-        // canonical acceptance, then crash the publisher once the durable
-        // bridge is running. This leaves a genuine running-source premise.
-        prepared.backend.enable_dynamic_followups(&prompt);
-        let identity: Arc<dyn gents::AgentIdentity> = self.db.node_identity.clone();
-        let agent = gents::Gents::from_default_behavior_documents(
-            self.db.node.clone(),
-            identity,
-            gents::DocumentRuntimeOptions {
-                tool_ceiling: gents::ToolCeiling::meta_only(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("build event-delivery accepted-turn publisher");
-        let runtime =
-            crate::support::accepted_turn::boot_prepared_accepted_turn(&self.db, prepared, agent)
-                .await;
-        let request_id = escape_graphql_string(&parent_request_id);
-        let observed_bridge = tokio::time::timeout(DELIVERY_TIMEOUT, async {
-            loop {
-                let response = self.db.node.execute(&format!(
-                    r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ _docID request_id request_doc_id requester_did tool_call_id tool_call_key lifecycle_state child_request_id spawn_behavior_id await_mode }} }}"#,
-                )).await;
-                assert!(!response.has_errors(), "accepted bridge query: {:?}", response.errors);
-                let rows = response.data.as_ref()
-                    .and_then(|data| data["AgentToolCall"].as_array())
-                    .expect("accepted bridge query omitted AgentToolCall rows");
-                assert!(rows.len() <= 1, "one accepted bridge per modeled source document");
-                if let Some(row) = rows.first() {
-                    if row["lifecycle_state"] == "running" {
-                        assert_eq!(row["request_id"], parent_request_id);
-                        assert_eq!(row["tool_call_id"], doc, "native tool ID must match the modeled source key");
-                        assert_eq!(row["spawn_behavior_id"], SUBAGENT_CHILD_BEHAVIOR);
-                        assert_eq!(row["await_mode"], "background");
-                        assert!(row["request_doc_id"].as_str().is_some_and(|id| !id.is_empty()));
-                        assert!(row["child_request_id"].as_str().is_some_and(|id| !id.is_empty()));
-                        break (
-                            row["_docID"].as_str().expect("accepted tool physical identity").to_owned(),
-                            row["requester_did"].as_str().map(str::to_owned),
-                        );
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        let (doc_id, requester_did) = match observed_bridge {
-            Ok(bridge) => bridge,
-            Err(_) => {
-                let observed = self.db.node.execute(&format!(
-                    r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{lifecycle_state failure_reason}}
-                    AgentToolCall(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{_docID requester_did lifecycle_state denial_reason tool_failure_class}} }}"#
-                )).await;
-                let tool = observed
-                    .data
-                    .as_ref()
-                    .and_then(|data| data["AgentToolCall"].as_array())
-                    .and_then(|rows| rows.first());
-                let presentation = match tool.and_then(|row| row["_docID"].as_str()) {
-                    Some(tool_doc_id) => Some(
-                        gents::tool_call_lifecycle::load_tool_call_presentation(
-                            &gents::ConfigAccess::Local(self.db.node.clone()),
-                            tool_doc_id,
-                            self.db.node_identity.did(),
-                            &parent_session_id,
-                            tool.and_then(|row| row["requester_did"].as_str()),
-                        )
-                        .await
-                        .map(|value| value.result)
-                        .map_err(|error| error.to_string()),
-                    ),
-                    None => None,
-                };
-                runtime.crash().await;
-                return Err(format!(
-                    "accepted SubagentSource bridge {doc:?} did not reach running: data={:?}, errors={:?}, presentation={presentation:?}",
-                    observed.data, observed.errors,
-                ));
-            }
-        };
-        let accepted_arguments = gents::tool_call_lifecycle::load_tool_call_arguments(
-            &gents::ConfigAccess::Local(self.db.node.clone()),
-            &doc_id,
-            self.db.node_identity.did(),
-            &parent_session_id,
-            requester_did.as_deref(),
-        )
-        .await
-        .expect("running bridge must reconstruct its unique canonical accepted header");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&accepted_arguments)
-                .expect("accepted arguments are canonical JSON"),
-            expected_args,
-            "accepted header must retain the exact modeled spawn arguments"
-        );
-        runtime.crash().await;
-        Ok(doc_id)
-    }
-
     fn publish_update(&self, doc: &str) -> Result<(), String> {
         let collection = match self.source.name {
             "Watcher" => "AgentRequest",
             "EventSource" => EVENT_SOURCE_COLLECTION,
-            "SubagentSource" => "AgentToolCall",
             other => return Err(format!("unsupported source {other:?}")),
         };
         let collection_id = self.collection_id(collection)?;
@@ -537,9 +358,6 @@ impl ProductionEventDeliveryDriver {
     }
 
     async fn drive_rescan(&mut self, expected_docs: &[String]) -> Result<(), String> {
-        if matches!(&self.runtime, ProductionRuntime::SubagentSource) && self.runner.is_none() {
-            self.start_subagent_source_for_rescan().await;
-        }
         match &mut self.runtime {
             ProductionRuntime::Watcher { watcher } => {
                 for expected in expected_docs {
@@ -554,7 +372,7 @@ impl ProductionEventDeliveryDriver {
                 }
                 Ok(())
             }
-            ProductionRuntime::EventSource | ProductionRuntime::SubagentSource => {
+            ProductionRuntime::EventSource => {
                 for expected in expected_docs {
                     let expected = self.production_doc_id(expected)?;
                     self.wait_for_emitted_doc_buffered(&expected, DELIVERY_TIMEOUT)
@@ -580,7 +398,7 @@ impl ProductionEventDeliveryDriver {
                 }
                 Ok(request.request_id)
             }
-            ProductionRuntime::EventSource | ProductionRuntime::SubagentSource => {
+            ProductionRuntime::EventSource => {
                 let expected = self.production_doc_id(doc)?;
                 self.wait_for_emitted_doc(&expected, DELIVERY_TIMEOUT)
                     .await?;
@@ -599,7 +417,6 @@ impl ProductionEventDeliveryDriver {
                 .get(doc)
                 .cloned()
                 .ok_or_else(|| format!("doc {doc:?} has no runtime row")),
-            "SubagentSource" => Ok(doc.to_string()),
             other => Err(format!("unsupported source {other:?}")),
         }
     }
@@ -710,43 +527,6 @@ fn spawn_event_source_runner(
     (runner, rx, snapshot_tx)
 }
 
-fn spawn_subagent_source_runner(
-    node: Arc<EmbeddedNode>,
-    identity: Arc<dyn gents::AgentIdentity>,
-    mock_subs: MockUpdateSubscriptionSource,
-    cancel: CancellationToken,
-) -> (
-    tokio::task::JoinHandle<()>,
-    mpsc::Receiver<String>,
-    watch::Sender<Arc<ActiveRuntimeSnapshot>>,
-) {
-    let snapshot = active_snapshot_without_event_triggers(identity);
-    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
-    let mut source = SubagentSource::with_subscription_source_for_test(
-        Arc::new(mock_subs),
-        snapshot_rx,
-        node,
-        HashSet::new(),
-        cancel,
-    )
-    .with_rescan_interval(RESCAN_TEST_INTERVAL);
-    let (tx, rx) = mpsc::channel(16);
-    let runner = tokio::spawn(async move {
-        while let Some(intent) = source.next_fire().await {
-            if let Some(doc_id) = intent
-                .event_vars
-                .get("trigger_id")
-                .and_then(serde_json::Value::as_str)
-            {
-                if tx.send(doc_id.to_string()).await.is_err() {
-                    break;
-                }
-            }
-        }
-    });
-    (runner, rx, snapshot_tx)
-}
-
 async fn poll_watcher(watcher: &mut DefraWatcher) -> Result<AgentRequest, String> {
     tokio::time::timeout(DELIVERY_TIMEOUT, watcher.next_request())
         .await
@@ -765,43 +545,6 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
     node.add_schema(schema)
         .await
         .expect("add_schema for EventDeliveryDoc");
-}
-
-async fn install_subagent_source_fixture(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<(), String> {
-    const TOOL_SELECTION_ID: &str = "event-delivery-subagent-tools";
-
-    support::fixtures::configure_subagent_behavior(
-        node,
-        agent_did,
-        SUBAGENT_CHILD_BEHAVIOR,
-        "event-delivery-subagent-child-tools",
-        Vec::new(),
-        false,
-        false,
-        None,
-    )
-    .await;
-    support::fixtures::configure_subagent_behavior(
-        node,
-        agent_did,
-        AGENT_NAME,
-        TOOL_SELECTION_ID,
-        vec![support::fixtures::subagent_target(
-            agent_did,
-            SUBAGENT_CHILD_BEHAVIOR,
-            agent_did,
-            SUBAGENT_CHILD_BEHAVIOR,
-        )],
-        true,
-        true,
-        None,
-    )
-    .await;
-
-    Ok(())
 }
 
 fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
@@ -837,52 +580,6 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         HashMap::from([(trigger.trigger_id.clone(), trigger)]),
         HashMap::from([(task.task_id.clone(), task)]),
     )
-}
-
-fn active_snapshot_without_event_triggers(
-    identity: Arc<dyn gents::AgentIdentity>,
-) -> Arc<ActiveRuntimeSnapshot> {
-    let agent_did = identity.did().to_string();
-    let principal = Arc::new(gents::RuntimePrincipal {
-        agent_did: agent_did.clone(),
-        identity,
-        default_behavior_id: AGENT_NAME.to_string(),
-        display_name: None,
-        enabled: true,
-    });
-    Arc::new(ActiveRuntimeSnapshot {
-        generation: 1,
-        principal: Some(principal.clone()),
-        local_did: agent_did,
-        default_behavior_id: AGENT_NAME.to_string(),
-        behaviors: HashMap::from([
-            (
-                AGENT_NAME.to_string(),
-                Arc::new(crate::support::fixtures::test_behavior_for_principal(
-                    AGENT_NAME,
-                    principal.clone(),
-                )),
-            ),
-            (
-                SUBAGENT_CHILD_BEHAVIOR.to_string(),
-                Arc::new(crate::support::fixtures::test_behavior_for_principal(
-                    SUBAGENT_CHILD_BEHAVIOR,
-                    principal,
-                )),
-            ),
-        ]),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
-        dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
-    })
 }
 
 fn active_snapshot(

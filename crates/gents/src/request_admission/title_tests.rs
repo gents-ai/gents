@@ -135,11 +135,11 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     assert_eq!(evidence.source_request_id, parent.request_id);
     let parent_fields = model_text_fields(&case.request.model_parent_fields_hex);
     assert!(
-        matches!(parent_fields.len(), 7 | 9),
+        matches!(parent_fields.len(), 6 | 8),
         "title parent tuple shape"
     );
-    assert_eq!(parent_fields[2], parent.request_id);
-    assert_eq!(parent_fields[4], parent.document_id);
+    assert_eq!(parent_fields[1], parent.request_id);
+    assert_eq!(parent_fields[3], parent.document_id);
     let target = identity.did();
     let requester = if case.request.requester_did == case.request.target_agent {
         target
@@ -187,10 +187,6 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
                 &case.admission.source_request_id,
             )
         }
-        ("runtime-internal", "local-child") => AgentRequestAdmissionRecord::runtime_local_child(
-            target,
-            &case.admission.source_request_id,
-        ),
         ("local-self", _) => AgentRequestAdmissionRecord::local_self(target),
         other => panic!("unsupported generated admission branch: {other:?}"),
     };
@@ -208,17 +204,18 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     );
     create.max_retries = 0;
     create.input = native_input(case);
-    create.caused_by_parent_request_id = Some(parent_fields[2].clone());
+    create.subagent_depth = case.request.hop;
+    create.caused_by_parent_request_id = Some(parent_fields[1].clone());
     create.caused_by_parent_request_doc_id = Some(parent_doc_id);
-    if parent_fields[5] == "some" {
-        assert_eq!(parent_fields.len(), 9);
-        assert_eq!(parent_fields[7], "some");
-        create.caused_by_parent_tool_call_id = Some(parent_fields[6].clone());
-        create.caused_by_parent_tool_call_doc_id = Some(parent_fields[8].clone());
+    if parent_fields[4] == "some" {
+        assert_eq!(parent_fields.len(), 8);
+        assert_eq!(parent_fields[6], "some");
+        create.caused_by_parent_tool_call_id = Some(parent_fields[5].clone());
+        create.caused_by_parent_tool_call_doc_id = Some(parent_fields[7].clone());
     } else {
-        assert_eq!(parent_fields.len(), 7);
+        assert_eq!(parent_fields.len(), 6);
+        assert_eq!(parent_fields[4], "none");
         assert_eq!(parent_fields[5], "none");
-        assert_eq!(parent_fields[6], "none");
     }
     if !case.request.model_retry_fields_hex.is_empty() {
         create.retry_parent_request =

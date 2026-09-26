@@ -1,17 +1,9 @@
-//! Background bridge conformance at the production projector and child-source
-//! seams. Native admissions come from canonical assistant publication.
+//! Background process-control conformance at the production hook seam.
+//! Native admissions come from canonical assistant publication.
 
-use crate::background_completion::{
-    project_background_subagent_completion, BackgroundCompletionOutcome,
-};
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
-use crate::lean_vocab_test::{lean_bridge_step_cases, LeanBridgeStepCase};
-use crate::streaming::SpawnAdmissionPlan;
-use crate::tool_call_lifecycle::admission_fixture::{
-    complete_child, published_admission, PublishedAdmissionOptions,
-};
-use crate::tool_call_lifecycle::{AwaitMode, CancelCause, CancelPolicy, ToolCallLifecycle};
+use crate::tool_call_lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
 struct PendingTool;
@@ -40,13 +32,6 @@ impl crate::llm::tool::ToolDyn for PendingTool {
     }
 }
 
-async fn set_request_state(node: &crate::defra_node::EmbeddedNode, request_id: &str, state: &str) {
-    let request_id = escape_graphql_string(request_id);
-    let state = escape_graphql_string(state);
-    let response = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-}
-
 async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Option<String> {
     let tool_id = escape_graphql_string(tool_id);
     let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#)).await;
@@ -55,78 +40,6 @@ async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Op
         .unwrap()
         .unwrap();
     row["lifecycle_state"].as_str().map(str::to_owned)
-}
-
-async fn bridge_fixture(
-    case: &LeanBridgeStepCase,
-) -> (
-    crate::tool_call_lifecycle::admission_fixture::PublishedAdmission,
-    String,
-) {
-    let child_id = format!("bridge-step-child-{}", case.name);
-    let cancel_policy = match case.cancel_policy.as_str() {
-        "cascade" => CancelPolicy::Cascade,
-        "detach" => CancelPolicy::Detach,
-        other => panic!("unknown modeled cancel policy {other}"),
-    };
-    let mut admission = published_admission(PublishedAdmissionOptions {
-        name: format!("bridge-step-{}", case.name),
-        real_identity: true,
-        await_mode: AwaitMode::Background,
-        cancel_policy,
-        spawn_plan: Some(SpawnAdmissionPlan {
-            tool_call_id: "bridge-native-tool".into(),
-            child_request_id: child_id.clone(),
-            spawn_target_did: "overridden-by-fixture".into(),
-            spawn_behavior_id: "general".into(),
-            delegated_workspace: None,
-            await_mode: AwaitMode::Background,
-        }),
-        ..Default::default()
-    })
-    .await
-    .expect("publish accepted bridge");
-    crate::test_support::install_test_behavior(&admission.node, &admission.agent_did, "general")
-        .await;
-    admission
-        .tool
-        .publish_background_receipt("child started")
-        .await
-        .unwrap();
-    let parent_doc_id = admission
-        .tool
-        .request_doc_id()
-        .expect("accepted parent doc id")
-        .to_owned();
-    let tool_doc_id = admission
-        .tool
-        .doc_id()
-        .expect("accepted tool doc id")
-        .to_owned();
-    crate::tool_call_lifecycle::create_subagent_request_with_request_id(
-        admission.node.as_ref(),
-        child_id.clone(),
-        format!("request-bridge-step-{}", case.name),
-        parent_doc_id,
-        admission.tool.tool_call_id().to_owned(),
-        tool_doc_id,
-        0,
-        admission.agent_did.clone(),
-        "general".into(),
-        format!("prompt for {}", case.name),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .expect("materialize canonical bridge child");
-    if case.parent_state == "interrupted" {
-        set_request_state(
-            &admission.node,
-            &format!("request-bridge-step-{}", case.name),
-            "interrupted",
-        )
-        .await;
-    }
-    (admission, child_id)
 }
 
 async fn publish_hook_action(
@@ -425,101 +338,4 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     assert_eq!(cancelled["status"], "cancelled");
     node.shutdown().await;
     std::fs::remove_dir_all(path).unwrap();
-}
-
-#[tokio::test]
-async fn generated_bridge_steps_drive_real_background_projector_and_cascade() {
-    let cases = lean_bridge_step_cases();
-    assert_eq!(cases.len(), 11);
-    let mut driven = 0;
-    for case in cases {
-        if !case.bridge_committed {
-            assert!(!case.legal);
-            assert!(case.post_tool_state.is_none());
-            continue;
-        }
-        let (mut admission, child_id) = bridge_fixture(case).await;
-        match case.event.as_str() {
-            "bridge_complete" | "bridge_failure" => {
-                if case.child_state == "completed" {
-                    complete_child(
-                        &admission.node,
-                        &child_id,
-                        &admission.agent_did,
-                        "bridge child final",
-                    )
-                    .await;
-                } else {
-                    set_request_state(&admission.node, &child_id, &case.child_state).await;
-                }
-                let outcome = project_background_subagent_completion(
-                    admission.node.clone(),
-                    &child_id,
-                    &admission.agent_did,
-                )
-                .await
-                .expect("project durable child terminal");
-                let state = tool_state(&admission.node, admission.tool.tool_call_id()).await;
-                if case.legal {
-                    assert!(
-                        matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
-                        "{}: {outcome:?}",
-                        case.name
-                    );
-                    assert_eq!(
-                        state.as_deref(),
-                        case.post_tool_state.as_deref(),
-                        "{}",
-                        case.name
-                    );
-                } else if case.child_state == "processing" {
-                    assert!(
-                        matches!(outcome, BackgroundCompletionOutcome::NotTerminal),
-                        "{}: {outcome:?}",
-                        case.name
-                    );
-                    assert_eq!(state.as_deref(), Some("running"), "{}", case.name);
-                } else {
-                    assert_eq!(case.child_state, "completed", "{}", case.name);
-                    assert!(
-                        matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
-                        "{}: {outcome:?}",
-                        case.name
-                    );
-                    assert_eq!(state.as_deref(), Some("completed"), "{}", case.name);
-                }
-            }
-            "bridge_cancel_cascade" => {
-                set_request_state(&admission.node, &child_id, "processing").await;
-                if case.bridge_state == "running" {
-                    assert!(!case.legal, "{}", case.name);
-                    assert!(
-                        admission.tool.bridge_cancel_cascade().await.is_err(),
-                        "{}",
-                        case.name
-                    );
-                } else {
-                    assert_eq!(case.bridge_state, "cancelled", "{}", case.name);
-                    admission
-                        .tool
-                        .cancel_during_run(CancelCause::UserCancelled)
-                        .await
-                        .unwrap();
-                    let intent = admission.tool.bridge_cancel_cascade().await.unwrap();
-                    if case.post_child_interrupt_set {
-                        assert!(case.legal, "{}", case.name);
-                        assert_eq!(intent.unwrap().child_request_id, child_id, "{}", case.name);
-                    } else {
-                        assert!(!case.legal, "{}", case.name);
-                        assert!(intent.is_none(), "{}", case.name);
-                    }
-                }
-            }
-            other => panic!("unhandled modeled bridge event {other}"),
-        }
-        driven += 1;
-        admission.node.shutdown().await;
-        std::fs::remove_dir_all(&admission.path).unwrap();
-    }
-    assert_eq!(driven, 10);
 }

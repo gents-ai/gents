@@ -1156,14 +1156,13 @@ mod tests {
             "notOwned" => ProcessStopOutcome::NotOwned,
             other => panic!("unknown Lean stop outcome {other}"),
         };
-        let row = |deadline: bool, unclaimed: bool| -> RunningToolCallRow {
+        let row = |deadline: bool| -> RunningToolCallRow {
             serde_json::from_value(serde_json::json!({
                 "_docID": "tool-doc",
                 "session_id": "session",
                 "tool_call_id": "spawned:parent",
                 "await_mode": "background",
                 "deadline_at": if deadline { "2020-01-01T00:00:00Z" } else { "2999-01-01T00:00:00Z" },
-                "unclaimed_deadline_at": if unclaimed { Some("2020-01-01T00:00:00Z") } else { None },
             }))
             .unwrap()
         };
@@ -1177,7 +1176,6 @@ mod tests {
             RecoveryOutcome::Cancelled => "parentInterrupted",
             RecoveryOutcome::Failed => "parentTerminal",
             RecoveryOutcome::BackgroundInterrupted => "TerminalizeBackgroundedAsInterrupted",
-            RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "unclaimedCrossPrincipalSpawn",
             RecoveryOutcome::ProcessLost => "processLost",
             RecoveryOutcome::TaskDeleted => "taskDeleted",
         };
@@ -1190,11 +1188,11 @@ mod tests {
                 "otherTerminal" => RequestLifecycleState::Failed,
                 _ => continue,
             };
-            if case.await_mode != "background" || case.child_linked {
+            if case.await_mode != "background" || case.session_message {
                 continue;
             }
             let outcome = classify_orphaned_background_tool(
-                &row(case.deadline_expired, case.unclaimed_expired),
+                &row(case.deadline_expired),
                 &parent(parent_state),
                 verdict(&case.process_outcome),
                 false,
@@ -1234,10 +1232,7 @@ mod tests {
                 continue;
             };
             let outcome = classify_orphaned_background_tool(
-                &row(
-                    case.deadline_expired == Some(true),
-                    case.unclaimed_expired == Some(true),
-                ),
+                &row(case.deadline_expired == Some(true)),
                 &parent(parent_state),
                 verdict(process),
                 task_deleted,

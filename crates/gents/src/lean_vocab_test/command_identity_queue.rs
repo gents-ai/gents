@@ -288,7 +288,6 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) measure_before: usize,
     pub(crate) measure_after: usize,
     pub(crate) deadline_expired: Option<bool>,
-    pub(crate) unclaimed_expired: Option<bool>,
     pub(crate) parent_live: Option<bool>,
     pub(crate) parent_interrupted: Option<bool>,
     pub(crate) parent_terminal: Option<bool>,
@@ -298,46 +297,6 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) recovery_cause: Option<String>,
     pub(crate) notification_reason: Option<String>,
     pub(crate) deadline_audit_ref: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanReservedChildBinding {
-    pub(crate) child: usize,
-    pub(crate) agent: usize,
-    pub(crate) behavior: usize,
-    pub(crate) parent_request: usize,
-    pub(crate) parent_request_doc: usize,
-    pub(crate) parent_tool: usize,
-    pub(crate) parent_tool_doc: usize,
-    pub(crate) payload: usize,
-    pub(crate) depth: usize,
-    pub(crate) workspace: Option<super::canonical_execution::LeanCanonicalDelegatedWorkspace>,
-    pub(crate) admission: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanReservedChildMaterializationCase {
-    pub(crate) name: String,
-    pub(crate) stored: Vec<LeanReservedChildBinding>,
-    pub(crate) candidate: LeanReservedChildBinding,
-    pub(crate) expected_decision: String,
-    pub(crate) expected_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum LeanLocalParentDepthExpected {
-    Admitted { child_depth: u32 },
-    Rejected { reason: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanLocalParentDepthCase {
-    pub(crate) name: String,
-    pub(crate) supplied_parent_depth: u32,
-    pub(crate) stored_parent_depth: Option<i64>,
-    pub(crate) expected: LeanLocalParentDepthExpected,
 }
 
 /// Startup restart-disposition witness (#937): the shape of one running
@@ -350,19 +309,14 @@ pub(crate) struct LeanRestartDispositionCase {
     pub(crate) name: String,
     pub(crate) rust_function: String,
     pub(crate) await_mode: String,
-    pub(crate) cancel_policy: String,
-    pub(crate) child_linked: bool,
+    /// The row records a `create_session`/`send_message` delivery.
+    pub(crate) session_message: bool,
     pub(crate) parent_observation: String,
     pub(crate) deadline_expired: bool,
-    pub(crate) unclaimed_expired: bool,
     pub(crate) process_outcome: String,
-    pub(crate) child_observed: bool,
-    pub(crate) bridge_cancel_intent: Option<bool>,
-    pub(crate) bridge_ack_pending: Option<bool>,
     pub(crate) disposition: String,
     pub(crate) cause: Option<String>,
     pub(crate) terminal_state: Option<String>,
-    pub(crate) post_await_mode: Option<String>,
     pub(crate) notification_reason: Option<String>,
     pub(crate) queue_source: Option<String>,
     pub(crate) queue_key_prefix: Option<String>,

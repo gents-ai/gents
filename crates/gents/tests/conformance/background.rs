@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 43);
+    assert_eq!(cases.len(), 45);
 
     let names = cases
         .iter()
@@ -14,17 +14,19 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
         names,
         [
             "no_goal_preserves_background_wake",
-            "active_goal_owns_background_continuation",
-            "paused_goal_does_not_background_resume",
-            "blocked_goal_does_not_background_resume",
-            "usage_limited_goal_does_not_background_resume",
-            "budget_limited_goal_owns_wrapup",
-            "complete_goal_does_not_background_resume",
+            "active_goal_keeps_background_wake",
+            "paused_goal_keeps_background_wake",
+            "blocked_goal_keeps_background_wake",
+            "usage_limited_goal_keeps_background_wake",
+            "budget_limited_goal_keeps_background_wake",
+            "complete_goal_keeps_background_wake",
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_explicit_cancel_projects_explicit_cancel",
+            "native_background_row_foregrounds",
+            "session_message_row_refuses_foreground",
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
@@ -68,9 +70,9 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "{}",
             case.name
         );
-        // This export also contains foreground wait callers and child-linked
-        // cases. Their mode, policy and linkage are modeled inputs consumed by
-        // the relevant native owner tests, not uniform background defaults.
+        // This export also contains foreground wait callers. Their mode is a
+        // modeled input consumed by the relevant native owner tests, not a
+        // uniform background default.
     }
 
     let admit = lean_r6_backgrounding_case("background_tool_budget_count_7_admits_spawn");
@@ -290,36 +292,6 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
         dispatch_deadline.reason.as_deref(),
         Some("caller_deadline_exceeded")
     );
-}
-
-pub(super) fn delegation_depth_matches_runtime_limit() {
-    let cases = lean_subagent_delegation_graph_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            case.max_depth,
-            usize::try_from(MAX_SUBAGENT_DEPTH).expect("MAX_SUBAGENT_DEPTH fits usize"),
-            "{}: Lean and runtime delegation depth limits differ",
-            case.name,
-        );
-    }
-}
-
-pub(super) fn unmaterialized_child_status_matches_runtime_vocabulary() {
-    let LeanR4cBackgroundWorkCase::UnmaterializedChildVisible {
-        listed_status,
-        read_lifecycle_state,
-        ..
-    } = lean_r4c_background_work_case("r4c.list_subagents.unmaterialized_child_visible")
-    else {
-        panic!("unmaterialized child witness variant drifted");
-    };
-    for status in [listed_status, read_lifecycle_state] {
-        assert_eq!(
-            status,
-            gents::__test_internals::AWAITING_CHILD_MATERIALIZATION
-        );
-    }
 }
 
 // The retired volatile-registry dispatch witness is intentionally not a native

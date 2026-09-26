@@ -398,7 +398,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "AwaitMode"
-      "conformance::tool_call::lean_emits_await_mode_and_cancel_policy_vocabularies")
+      "conformance::tool_call::lean_emits_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
@@ -732,6 +732,11 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases"
       "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "CausalHopContract"
+      "conformance::enrollment::generated_causal_hop_cases_match_native_materializer")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"
@@ -1153,7 +1158,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
-      "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner")
+      "tool_call_lifecycle::recovery_conformance::generated_session_message_restart_dispositions_use_canonical_admission_owner")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r6_background_cases"
@@ -1176,7 +1181,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "r6_background_cases"
       "R6BackgroundingCases"
-      "e2e_subagent::r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row"
+      "e2e_background::r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row"
       "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1192,7 +1197,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_linked_recovery_cases_use_accepted_spawn")
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_session_message_recovery_cases_use_accepted_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"

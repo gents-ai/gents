@@ -268,8 +268,6 @@ mod background_conformance;
 #[cfg(test)]
 mod background_hook_conformance;
 #[cfg(test)]
-mod cascade_source_conformance;
-#[cfg(test)]
 pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
@@ -288,8 +286,6 @@ pub use recovery::{
     OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
     ToolCallRecoveryReport,
 };
-#[cfg(test)]
-pub(crate) use subagent_request::create_subagent_request_with_request_id_and_workspace;
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,

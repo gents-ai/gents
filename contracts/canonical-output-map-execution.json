@@ -90,7 +90,7 @@
   },
   {
     "id":"execution.trace-restart","constructors":["SessionComposition.Trace.restart"],"model_symbols":[{"file":"crates/gents/proofs/Proofs/CanonicalOutput/Execution/RestartRecovery.lean","symbol":"CanonicalOutput.Execution.RestartRecovery.commit"}],
-    "generated_groups":["recovery_sweep_cases","r6_backgrounding_cases"],"fixture_status":"not_exported","native_owner_paths":["crates/gents/src/startup_recovery.rs","crates/gents/src/lifecycle/background_wake_recovery.rs","crates/gents/src/background_completion/reconciliation.rs"],"consumer_paths":["crates/gents/tests/conformance/recovery_sweeps.rs","crates/gents/tests/e2e_subagent/r6_background_recovery.rs"],"native_status":"pending",
+    "generated_groups":["recovery_sweep_cases","r6_backgrounding_cases"],"fixture_status":"not_exported","native_owner_paths":["crates/gents/src/startup_recovery.rs","crates/gents/src/lifecycle/background_wake_recovery.rs","crates/gents/src/background_completion/reconciliation.rs"],"consumer_paths":["crates/gents/tests/conformance/recovery_sweeps.rs","crates/gents/tests/e2e_background/r6_background_recovery.rs"],"native_status":"pending",
     "required_cases":["Restart requires authenticated physical tool and registry orphan classification.","One gate closes Partial, publishes notification and queues wake.","No output, host stop or provider reply is invented."],"retired_bindings":[]
   },
   {

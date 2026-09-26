@@ -57,8 +57,10 @@ def r6NativeStepCase
     (action : ToolExecution.ToolCallContext.Action)
     (result reason : Option String := none) : R6BackgroundingCase :=
   let base :=
-    r6Case name "native_lifecycle" actionName false 1 "rejected"
-      result reason
+    { r6Case name "native_lifecycle" actionName false 1 "rejected"
+        result reason with
+      awaitMode := pre.awaitMode.toDefraDB
+      operation := some pre.operation.toDefraDB }
   match ToolExecution.ToolCallContext.step? pre action with
   | none => base
   | some post =>
@@ -417,6 +419,16 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (.cancelDuringRun .userCancelled)
       none
       (some "explicit_cancel")
+  , r6NativeStepCase
+      "native_background_row_foregrounds"
+      "foreground"
+      r6NativeToolFixture
+      .foreground
+  , r6NativeStepCase
+      "session_message_row_refuses_foreground"
+      "foreground"
+      { r6NativeToolFixture with operation := .sessionMessage }
+      .foreground
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
@@ -546,6 +558,10 @@ theorem r6BackgroundingCases_pinned :
           "completed", none, none)
       , ("tool_kind_explicit_cancel_projects_explicit_cancel",
           true, "background", "cancelled", none, none)
+      , ("native_background_row_foregrounds", true, "foreground",
+          "running", none, none)
+      , ("session_message_row_refuses_foreground", false, "background",
+          "rejected", none, none)
       , ("background_recovery_running_live_parent_to_cancelled", true,
           "background", "cancelled", some "background_completion",
           some "background_completion:900")

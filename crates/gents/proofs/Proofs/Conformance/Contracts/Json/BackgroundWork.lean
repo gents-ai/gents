@@ -134,7 +134,8 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"goal_status\":" ++ jsonOptionalString witness.goalStatus ++ ","
     ++ "\"notification_persisted\":" ++ jsonOptionalBool witness.notificationPersisted ++ ","
     ++ "\"wake_created\":" ++ jsonOptionalBool witness.wakeCreated ++ ","
-    ++ "\"redrive_allowed\":" ++ jsonOptionalBool witness.redriveAllowed
+    ++ "\"redrive_allowed\":" ++ jsonOptionalBool witness.redriveAllowed ++ ","
+    ++ "\"operation\":" ++ jsonOptionalString witness.operation
     ++ "}"
 
 def backgroundTheoremWitnessJson (witness : BackgroundTheoremWitness) : String :=

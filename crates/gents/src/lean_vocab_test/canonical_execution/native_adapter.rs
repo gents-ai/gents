@@ -65,341 +65,6 @@ fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
     u64::try_from(elapsed).context("native timestamp precedes fixture epoch")
 }
 
-fn modeled_principal_did(
-    symbolic: u64,
-    local: u64,
-    physical_local: &str,
-    remote_dids: &HashMap<u64, String>,
-) -> String {
-    if symbolic == local {
-        physical_local.to_owned()
-    } else {
-        remote_dids
-            .get(&symbolic)
-            .cloned()
-            .unwrap_or_else(|| format!("did:test:lean:principal-{symbolic}"))
-    }
-}
-
-fn seed_workspace_lineage(
-    seed: &LeanCanonicalExecutionSeed,
-    physical_local: &str,
-    remote_dids: &HashMap<u64, String>,
-) -> Option<crate::lifecycle::WorkspaceLineage> {
-    seed.workspace
-        .as_ref()
-        .map(|workspace| crate::lifecycle::WorkspaceLineage {
-            workspace_id: Some(format!("lean-workspace-{}", workspace.workspace_id)),
-            workspace_owner_agent_did: Some(modeled_principal_did(
-                workspace.workspace_owner_agent_did,
-                seed.principal,
-                physical_local,
-                remote_dids,
-            )),
-            workspace_authority: Some(workspace.workspace_authority.clone()),
-            workspace_seal_hash: workspace
-                .workspace_seal_hash
-                .map(|seal| format!("lean-seal-{seal}")),
-        })
-}
-
-fn seed_delegated_workspace(
-    seed: &LeanCanonicalExecutionSeed,
-    physical_local: &str,
-    remote_dids: &HashMap<u64, String>,
-) -> Option<gents_protocol::output::DelegatedWorkspace> {
-    let lineage = seed_workspace_lineage(seed, physical_local, remote_dids)?;
-    Some(gents_protocol::output::DelegatedWorkspace {
-        workspace_id: lineage.workspace_id?,
-        workspace_owner_agent_did: lineage.workspace_owner_agent_did?,
-        workspace_authority: lineage.workspace_authority?,
-        workspace_seal_hash: lineage.workspace_seal_hash,
-    })
-}
-
-async fn seed_workspace_documents(
-    node: &EmbeddedNode,
-    seed: &LeanCanonicalExecutionSeed,
-    principal: &str,
-    remote_dids: &HashMap<u64, String>,
-) -> Result<Option<tempfile::TempDir>> {
-    let Some(lineage) = seed_workspace_lineage(seed, principal, remote_dids) else {
-        return Ok(None);
-    };
-    let workspace_id = lineage
-        .workspace_id
-        .context("modeled workspace omitted identity")?;
-    let owner = lineage
-        .workspace_owner_agent_did
-        .context("modeled workspace omitted owner")?;
-    let path_guard = tempfile::tempdir().context("native workspace placement directory")?;
-    let host_path = path_guard.path().join("workspace");
-    std::fs::create_dir(&host_path).context("create native workspace placement")?;
-    let workspace = crate::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])?,
-        workspace_id: workspace_id.clone(),
-        work_unit_id: format!("lean-work-unit-{}", seed.request_id),
-        repository_id: format!("lean-repository-{}", seed.request_id),
-        base_sha: "lean-base".to_owned(),
-        branch: format!("lean-branch-{}", seed.request_id),
-        creation_policy: "git_worktree_diff".to_owned(),
-        adapter: "git_worktree".to_owned(),
-        owner_agent_did: owner.clone(),
-        writer_principal: principal.to_owned(),
-        integrator_principal: principal.to_owned(),
-        instruction_manifest: "{}".to_owned(),
-        seal_hash: lineage.workspace_seal_hash,
-        lifecycle_state: "ready".to_owned(),
-        caused_by_invocation_id: format!("lean-invocation-{}", seed.request_id),
-        caused_by_correlation: format!("lean-correlation-{}", seed.request_id),
-    };
-    let placement = crate::workspace::WorkspacePlacementDoc {
-        workspace_id,
-        owner_agent_did: owner,
-        host_path: host_path.to_string_lossy().into_owned(),
-        repository_placement_id: format!("lean-repository-placement-{}", seed.request_id),
-        adapter: "git_worktree".to_owned(),
-        adapter_version: "1".to_owned(),
-        dirty_base: false,
-        dirty_base_summary: String::new(),
-        provisioning_state: "ready".to_owned(),
-        observed_tree_hash: String::new(),
-    };
-    for mutation in [
-        crate::workspace::isolated_workspace_upsert_mutation(&workspace),
-        crate::workspace::workspace_placement_upsert_mutation(
-            &placement,
-            &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        ),
-    ] {
-        let response = node.execute(&mutation).await;
-        anyhow::ensure!(
-            !response.has_errors(),
-            "seed native workspace documents: {:?}",
-            response.errors
-        );
-    }
-    Ok(Some(path_guard))
-}
-
-async fn install_signed_ancestor_target(node: &EmbeddedNode, principal: &str) -> Result<()> {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let tools = serde_json::json!({
-        "agent_did": principal,
-        "tools_id": "general:tools",
-        "subagents": {"spawn_enabled": true, "target_ids": ["lean-child-target"]},
-    });
-    let target = serde_json::json!({
-        "target_id": "lean-child-target",
-        "agent_did": principal,
-        "target_agent_did": principal,
-        "behavior_id": "general",
-        "name": "child",
-    });
-    let plan = DesiredStateApplyPlan::new(vec![
-        DesiredStateApplyDocument {
-            collection: crate::Collection::Tools,
-            add: tools.clone(),
-            update: tools,
-        },
-        DesiredStateApplyDocument {
-            collection: crate::Collection::SubagentTarget,
-            add: target.clone(),
-            update: target,
-        },
-    ])?;
-    ConfigAccess::transact_local(node, None, "lean.signed_ancestor_target", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
-    .await?;
-    Ok(())
-}
-
-/// Build every nonzero depth through a signed root, accepted native spawn
-/// bridges, and the production child-request owner. Only the last child is
-/// left pending for the modeled durable claim in `initialize`.
-async fn seed_signed_ancestor_chain(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn AgentIdentity>,
-    seed: &LeanCanonicalExecutionSeed,
-    remote_dids: &HashMap<u64, String>,
-) -> Result<(String, String)> {
-    let target_depth = u32::try_from(seed.subagent_depth).context("modeled depth exceeds u32")?;
-    anyhow::ensure!(
-        target_depth > 0 && target_depth <= crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH,
-        "native ancestor fixture requires a supported nonzero depth"
-    );
-    let principal = identity.did().to_owned();
-    let root_id = format!("lean-ancestor-{}-0", seed.request_id);
-    let root_session_id = format!("lean-ancestor-session-{}", seed.request_id);
-    let root_spec = crate::lifecycle::RequestSpec {
-        workspace: seed_workspace_lineage(seed, &principal, remote_dids),
-        ..crate::lifecycle::RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            crate::lifecycle::RequestIdentity {
-                requester_did: None,
-                request_id: root_id.clone(),
-                agent_did: principal.clone(),
-                behavior_id: "general".to_owned(),
-                session_id: root_session_id,
-                content: "lean ancestor".to_owned(),
-                execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
-                created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&principal),
-        )
-    };
-    let root = crate::lifecycle::build_signed_request(
-        root_spec,
-        crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
-    )
-    .await?;
-    let response = node
-        .execute(&root.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "create signed ancestor: {:?}",
-        response.errors
-    );
-    let root_doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
-        .and_then(|row| row.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .context("signed ancestor omitted physical identity")?
-        .to_owned();
-    let root_row = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&root_doc_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    anyhow::ensure!(
-        !root_row.has_errors(),
-        "read signed ancestor: {:?}",
-        root_row.errors
-    );
-    let root_row = crate::graphql::first_row::<AgentRequestRow>(&root_row, "AgentRequest")?
-        .context("signed ancestor disappeared")?;
-    let queued: crate::watcher::AgentRequest = root_row.try_into()?;
-    let verified = crate::request_admission::verify_fresh_local_self_request(
-        node,
-        identity.as_ref(),
-        &queued,
-        "general",
-    )
-    .await
-    .map_err(anyhow::Error::from)?;
-    let mut parent = crate::lifecycle::RequestLifecycle::new_with_agent_did(
-        node.clone(),
-        "general",
-        &principal,
-        verified,
-        300,
-    );
-    anyhow::ensure!(
-        parent.claim().await? == crate::lifecycle::ClaimOutcome::Claimed,
-        "signed ancestor was not claimable"
-    );
-
-    for parent_depth in 0..target_depth {
-        let tool_call_id = format!("lean-ancestor-tool-{}-{parent_depth}", seed.request_id);
-        let child_id = if parent_depth + 1 == target_depth {
-            format!("lean-request-{}", seed.request_id)
-        } else {
-            format!("lean-ancestor-{}-{}", seed.request_id, parent_depth + 1)
-        };
-        let tool =
-            crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-                node.clone(),
-                &mut parent,
-                &principal,
-                0,
-                crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
-                &tool_call_id,
-                serde_json::json!({"name":"child", "prompt":"work", "await_mode":"background"}),
-                Some(crate::streaming::SpawnAdmissionPlan {
-                    tool_call_id: tool_call_id.clone(),
-                    child_request_id: child_id.clone(),
-                    spawn_target_did: principal.clone(),
-                    spawn_behavior_id: "general".to_owned(),
-                    delegated_workspace: seed_delegated_workspace(seed, &principal, remote_dids),
-                    await_mode: crate::tool_call_lifecycle::AwaitMode::Background,
-                }),
-                crate::tool_call_lifecycle::AwaitMode::Background,
-                crate::tool_call_lifecycle::CancelPolicy::Cascade,
-                false,
-            )
-            .await?;
-        let parent_doc_id = parent.request().doc_id.clone();
-        let parent_id = parent.request().request_id.clone();
-        let tool_doc_id = tool
-            .doc_id()
-            .context("ancestor spawn omitted tool identity")?
-            .to_owned();
-        crate::tool_call_lifecycle::create_subagent_request_with_request_id_and_workspace(
-            node,
-            child_id.clone(),
-            parent_id,
-            parent_doc_id,
-            tool_call_id,
-            tool_doc_id,
-            parent_depth,
-            principal.clone(),
-            "general".to_owned(),
-            "work".to_owned(),
-            None,
-            seed_workspace_lineage(seed, &principal, remote_dids),
-        )
-        .await?;
-        let child = node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&child_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        anyhow::ensure!(!child.has_errors(), "read signed child: {:?}", child.errors);
-        let child = crate::graphql::first_row::<AgentRequestRow>(&child, "AgentRequest")?
-            .context("signed child disappeared")?;
-        anyhow::ensure!(
-            child.subagent_depth == Some(i64::from(parent_depth + 1)),
-            "signed child owner did not advance depth"
-        );
-        if parent_depth + 1 == target_depth {
-            return Ok((
-                child
-                    .doc_id
-                    .context("signed child omitted physical identity")?,
-                child
-                    .session_id
-                    .context("signed child omitted session identity")?,
-            ));
-        }
-        let queued: crate::watcher::AgentRequest = child.try_into()?;
-        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
-            node.clone(),
-            identity.clone(),
-            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
-        );
-        let verified = verifier
-            .verify_fresh(&queued, "general")
-            .await
-            .map_err(anyhow::Error::from)?;
-        parent = crate::lifecycle::RequestLifecycle::new_with_agent_did(
-            node.clone(),
-            "general",
-            &principal,
-            verified,
-            300,
-        );
-        anyhow::ensure!(
-            parent.claim().await? == crate::lifecycle::ClaimOutcome::Claimed,
-            "signed intermediate child was not claimable"
-        );
-    }
-    unreachable!("nonzero depth returns its final child")
-}
-
 // Native session sequences are one-based; the Lean allocator starts at zero.
 // Normalize only the representation, preserving order and reservation gaps.
 fn modeled_sequence(value: u64) -> Result<u64> {
@@ -418,15 +83,10 @@ pub(crate) struct NativeCanonicalExecutionAdapter;
 pub(crate) struct NativeCanonicalExecution {
     node: Arc<EmbeddedNode>,
     _identity_guard: tempfile::TempDir,
-    remote_dids: HashMap<u64, String>,
-    _workspace_guard: Option<tempfile::TempDir>,
     fixture_epoch_seconds: i64,
     request_doc_id: String,
     request_id: u64,
-    principal_id: u64,
-    subagent_depth: u64,
     query_document: u64,
-    remote_routes: Vec<crate::lean_vocab_test::LeanCanonicalRemoteRoute>,
     transcript_session_id: u64,
     next_sequence: u64,
     session_id: String,
@@ -440,15 +100,6 @@ pub(crate) struct NativeCanonicalExecution {
     modeled_message_keys: HashMap<String, String>,
     canonical_message_keys: HashMap<String, String>,
     tool_ids: HashMap<String, u64>,
-    accepted_spawns: HashMap<
-        u64,
-        (
-            crate::streaming::AcceptedToolCall,
-            u64,
-            crate::tool_call_lifecycle::AwaitMode,
-            crate::tool_call_lifecycle::CancelPolicy,
-        ),
-    >,
 }
 
 impl NativeCanonicalExecution {
@@ -1327,7 +978,7 @@ impl NativeCanonicalExecution {
             .transpose()?;
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let tools = self.node.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since cancel_cascade_intent_at }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since }} }}"#,
         )).await;
         anyhow::ensure!(
             !tools.has_errors(),
@@ -1346,7 +997,6 @@ impl NativeCanonicalExecution {
         );
         let mut tool_state = None;
         let mut tool_stuck_since = None;
-        let mut tool_cancel_intent_at = None;
         let mut in_flight = false;
         let mut physical_tool_request = None;
         let mut accepted_sequence = None;
@@ -1396,11 +1046,6 @@ impl NativeCanonicalExecution {
                 // `stuck_since`; retaining a running row after that is valid.
                 in_flight =
                     state == "running" && await_mode == "foreground" && tool_stuck_since.is_none();
-                tool_cancel_intent_at = tool
-                    .get("cancel_cascade_intent_at")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|value| self.modeled_time(value))
-                    .transpose()?;
                 physical_tool_request = Some(self.request_id);
                 accepted_sequence = Some(sequence);
             }
@@ -1439,7 +1084,6 @@ impl NativeCanonicalExecution {
             terminal_selection,
             tool_state: self.tool_state.clone(),
             tool_stuck_since,
-            tool_cancel_intent_at,
             in_flight,
             next_sequence: self.next_sequence,
             accepted_sequence,
@@ -1514,59 +1158,31 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 None,
             )?);
             let principal = identity.did().to_owned();
-            let mut remote_dids = HashMap::new();
-            let mut remote_symbols = seed
-                .remote_routes
-                .iter()
-                .map(|route| route.target)
-                .collect::<Vec<_>>();
-            if let Some(workspace) = &seed.workspace {
-                remote_symbols.push(workspace.workspace_owner_agent_did);
-            }
-            remote_symbols.sort_unstable();
-            remote_symbols.dedup();
-            for symbolic in remote_symbols {
-                if symbolic != seed.principal {
-                    let remote = crate::KeyIdentity::load_or_create(
-                        key_dir.path().join(format!("agent-{symbolic}.key")),
-                        None,
-                    )?;
-                    remote_dids.insert(symbolic, remote.did().to_owned());
-                }
-            }
             let node = Arc::new(EmbeddedNode::builder().build().await?);
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_behavior(&node, &principal, "general").await;
-            let workspace_guard =
-                seed_workspace_documents(&node, seed, &principal, &remote_dids).await?;
-            if seed.subagent_depth > 0 {
-                install_signed_ancestor_target(&node, &principal).await?;
-            }
-            let (request_doc_id, session_id) = if seed.subagent_depth == 0 {
+            let (request_doc_id, session_id) = {
                 let create = crate::lifecycle::build_signed_request(
-                    crate::lifecycle::RequestSpec {
-                        workspace: seed_workspace_lineage(seed, &principal, &remote_dids),
-                        ..crate::lifecycle::RequestSpec::new(
-                            gents_protocol::request_admission::RequestPurpose::Normal,
-                    crate::lifecycle::RequestIdentity {
-                        requester_did: None,
-                        request_id: request_id.clone(),
-                        agent_did: principal.clone(),
-                        behavior_id: "general".to_owned(),
-                        session_id: initial_session_id.clone(),
-                        content: "lean native execution".to_owned(),
-                        execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
-                        created_at: seed_creation_time
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    },
-                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                        &principal,
+                    crate::lifecycle::RequestSpec::new(
+                        gents_protocol::request_admission::RequestPurpose::Normal,
+                        crate::lifecycle::RequestIdentity {
+                            requester_did: None,
+                            request_id: request_id.clone(),
+                            agent_did: principal.clone(),
+                            behavior_id: "general".to_owned(),
+                            session_id: initial_session_id.clone(),
+                            content: "lean native execution".to_owned(),
+                            execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                            created_at: seed_creation_time
+                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        },
+                        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                            &principal,
+                        ),
                     ),
-                )
-                    },
                     crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
-            )
-            .await?;
+                )
+                .await?;
                 let response = node
                     .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
                     .await;
@@ -1583,21 +1199,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .context("native request create omitted its physical identity")?
                         .to_owned();
                 (request_doc_id, initial_session_id)
-            } else {
-                seed_signed_ancestor_chain(&node, &identity, seed, &remote_dids).await?
             };
-            // The real child owner authors ancestors at wall time. Translate
-            // only this fixture's modeled clock after those writes, so the
-            // modeled final claim cannot precede its signed creation.
-            let fixture_epoch_seconds = if seed.subagent_depth == 0 {
-                FIXTURE_EPOCH_SECONDS
-            } else {
-                Utc::now()
-                    .timestamp()
-                    .checked_add(1)
-                    .and_then(|value| value.checked_sub(i64::try_from(seed.lease.now).ok()?))
-                    .context("native modeled clock offset overflow")?
-            };
+            let fixture_epoch_seconds = FIXTURE_EPOCH_SECONDS;
             let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
             let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
             let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
@@ -1613,26 +1216,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 "native signed request was not pending"
             );
             let queued: crate::watcher::AgentRequest = row.try_into()?;
-            let verified = if seed.subagent_depth == 0 {
-                crate::request_admission::verify_fresh_local_self_request(
-                    &node,
-                    identity.as_ref(),
-                    &queued,
-                    "general",
-                )
-                .await
-                .map_err(anyhow::Error::from)?
-            } else {
-                let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
-                    node.clone(),
-                    identity.clone(),
-                    crate::agent::p2p_reconcile::enrollment_authority_channel().1,
-                );
-                verifier
-                    .verify_fresh(&queued, "general")
-                    .await
-                    .map_err(anyhow::Error::from)?
-            };
+            let verified = crate::request_admission::verify_fresh_local_self_request(
+                &node,
+                identity.as_ref(),
+                &queued,
+                "general",
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
             let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
                 node.clone(),
                 "general",
@@ -1710,15 +1301,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             Ok(NativeCanonicalExecution {
                 node,
                 _identity_guard: key_dir,
-                remote_dids,
-                _workspace_guard: workspace_guard,
                 fixture_epoch_seconds,
                 request_doc_id,
                 request_id: seed.request_id,
-                principal_id: seed.principal,
-                subagent_depth: seed.subagent_depth,
                 query_document: 0,
-                remote_routes: seed.remote_routes.clone(),
                 transcript_session_id: seed.transcript_session_id,
                 next_sequence: seed.next_sequence,
                 session_id,
@@ -1732,7 +1318,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 modeled_message_keys: HashMap::new(),
                 canonical_message_keys: HashMap::new(),
                 tool_ids: HashMap::new(),
-                accepted_spawns: HashMap::new(),
             })
         })
     }
@@ -1941,33 +1526,15 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "native dispatch adapter has no external denial injection"
                     );
                     let physical = native.physical_tool(*call)?.to_owned();
-                    let mut tool = if let Some((accepted, deadline, await_mode, cancel_policy)) =
-                        native.accepted_spawns.get(call)
-                    {
-                        anyhow::ensure!(
-                            accepted.tool_call_doc_id == physical,
-                            "modeled spawn dispatch lost exact accepted row"
-                        );
-                        crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
-                            native.node.clone(),
-                            native.principal.clone(),
-                            Some(native.principal.clone()),
-                            accepted.clone(),
-                            native.fixture_time(*deadline)?,
-                            *await_mode,
-                            *cancel_policy,
-                        )?
-                    } else {
-                        crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-                            native.node.clone(),
-                            &physical,
-                            &native.principal,
-                            &native.session_id,
-                            Some(&native.principal),
-                        )
-                        .await?
-                        .context("accepted physical tool disappeared before dispatch")?
-                    };
+                    let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                        native.node.clone(),
+                        &physical,
+                        &native.principal,
+                        &native.session_id,
+                        Some(&native.principal),
+                    )
+                    .await?
+                    .context("accepted physical tool disappeared before dispatch")?;
                     match tool
                         .start_running_at(native.fixture_time(*now)?, &symbolic_generation(*generation))
                         .await
@@ -2152,7 +1719,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     generation,
                     closing,
                     message,
-                    targets,
+                    admissions,
+                    ..
+                }
+                | LeanCanonicalExecutionOperation::AcceptBackground {
+                    now,
+                    generation,
+                    closing,
+                    message,
                     admissions,
                     ..
                 }
@@ -2161,43 +1735,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     generation,
                     closing,
                     message,
-                    targets,
-                    admissions,
-                    ..
-                } => {
-                    anyhow::ensure!(
-                        targets.is_empty(),
-                        "foreground acceptance unexpectedly carries remote targets"
-                    );
-                    native
-                        .accept_provider_turn(
-                            *now,
-                            *generation,
-                            closing,
-                            message,
-                            targets,
-                            admissions,
-                        )
-                        .await
-                }
-                LeanCanonicalExecutionOperation::AcceptRemote {
-                    now,
-                    generation,
-                    closing,
-                    message,
-                    targets,
                     admissions,
                     ..
                 } => {
                     native
-                        .accept_provider_turn(
-                            *now,
-                            *generation,
-                            closing,
-                            message,
-                            targets,
-                            admissions,
-                        )
+                        .accept_provider_turn(*now, *generation, closing, message, admissions)
                         .await
                 }
                 other => anyhow::bail!(
@@ -2410,7 +1952,6 @@ impl NativeCanonicalExecution {
         generation: u64,
         closing: &LeanCanonicalSegment,
         message: &LeanCanonicalMessage<LeanPayloadSpec>,
-        targets: &[crate::lean_vocab_test::LeanCanonicalRemoteTarget],
         admissions: &[LeanCanonicalToolAdmission],
     ) -> Result<LeanCanonicalExecutionObservation> {
         anyhow::ensure!(
@@ -2494,74 +2035,24 @@ impl NativeCanonicalExecution {
         )?);
         let expected_native = expected.clone();
         let final_flush = sealed;
-        let spawn_admissions = targets
+        // Each admission's modeled await mode is immutable publication input:
+        // a background admission is accepted directly as a background row.
+        let background_calls = admissions
             .iter()
-            .map(|target| -> Result<crate::streaming::SpawnAdmissionPlan> {
-                let route = self
-                    .remote_routes
-                    .iter()
-                    .find(|route| {
-                        route.call == target.call
-                            && route.target == target.target
-                            && route.behavior == target.behavior
-                    })
-                    .context("modeled remote target has no configured route fact")?;
-                anyhow::ensure!(
-                    target.coordinator == self.principal_id,
-                    "modeled remote target coordinator differs from fixture principal"
-                );
-                let admission = admissions
-                    .iter()
-                    .find(|admission| admission.document == route.call)
-                    .context("modeled remote target has no accepted physical admission")?;
-                let call_id = message
+            .filter(|admission| admission.await_mode == "background")
+            .map(|admission| {
+                message
                     .blocks
                     .iter()
                     .find_map(|block| match block {
-                        LeanMessageBlock::ToolCall { doc_id, id, .. } if *doc_id == target.call => {
+                        LeanMessageBlock::ToolCall { doc_id, id, .. }
+                            if *doc_id == admission.document =>
+                        {
                             Some(id.clone())
                         }
                         _ => None,
                     })
-                    .context("modeled remote target has no provider-native ToolCall")?;
-                let child = admission
-                    .child_request_id
-                    .context("modeled remote admission omitted immutable child identity")?;
-                let admitted_behavior = admission
-                    .spawn_behavior_id
-                    .context("modeled remote admission omitted immutable behavior")?;
-                let await_mode = match admission.await_mode.as_str() {
-                    "background" => crate::tool_call_lifecycle::AwaitMode::Background,
-                    "foreground" => crate::tool_call_lifecycle::AwaitMode::Foreground,
-                    other => anyhow::bail!("unknown modeled await mode: {other}"),
-                };
-                Ok(crate::streaming::SpawnAdmissionPlan {
-                    tool_call_id: call_id,
-                    child_request_id: format!("lean-child-{child}"),
-                    spawn_target_did: modeled_principal_did(
-                        route.target,
-                        self.principal_id,
-                        &self.principal,
-                        &self.remote_dids,
-                    ),
-                    spawn_behavior_id: format!("lean-behavior-{admitted_behavior}"),
-                    delegated_workspace: admission.delegated_workspace.as_ref().map(|workspace| {
-                        gents_protocol::output::DelegatedWorkspace {
-                            workspace_id: format!("lean-workspace-{}", workspace.workspace_id),
-                            workspace_owner_agent_did: modeled_principal_did(
-                                workspace.workspace_owner_agent_did,
-                                self.principal_id,
-                                &self.principal,
-                                &self.remote_dids,
-                            ),
-                            workspace_authority: workspace.workspace_authority.clone(),
-                            workspace_seal_hash: workspace
-                                .workspace_seal_hash
-                                .map(|seal| format!("lean-seal-{seal}")),
-                        }
-                    }),
-                    await_mode,
-                })
+                    .context("modeled background admission has no provider-native ToolCall")
             })
             .collect::<Result<Vec<_>>>()?;
         let tool_deadline_at = self
@@ -2580,7 +2071,7 @@ impl NativeCanonicalExecution {
                 encoded,
                 expected: Arc::new(expected),
                 tool_deadline_at,
-                spawn_admissions: spawn_admissions.clone(),
+                background_calls,
             },
             self.fixture_time(now)?,
         )
@@ -2597,13 +2088,6 @@ impl NativeCanonicalExecution {
             Err(error)
                 if error
                     .downcast_ref::<crate::streaming::canonical::ProviderReplayRejection>()
-                    .is_some() =>
-            {
-                return self.observe(false).await;
-            }
-            Err(error)
-                if error
-                    .downcast_ref::<crate::streaming::canonical::ProviderWorkspaceRejection>()
                     .is_some() =>
             {
                 return self.observe(false).await;
@@ -2672,7 +2156,7 @@ impl NativeCanonicalExecution {
             let response = self
                 .node
                 .execute(&format!(
-                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state child_request_id spawn_target_did spawn_behavior_id delegated_workspace delegated_input await_mode }} }}"#,
+                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state await_mode }} }}"#,
                     crate::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
                 ))
                 .await;
@@ -2702,44 +2186,13 @@ impl NativeCanonicalExecution {
                         == Some(admission.state.as_str()),
                 "accepted native tool readback differs from modeled admission"
             );
-            if let Some(plan) = spawn_admissions
-                .iter()
-                .find(|plan| plan.tool_call_id == accepted.id)
-            {
-                let stored = &rows[0];
-                if plan.spawn_target_did != self.principal {
-                    let copied: gents_protocol::output::DelegatedToolInput =
-                        serde_json::from_value(stored["delegated_input"].clone())
-                            .context("accepted remote tool omitted delegated input")?;
-                    anyhow::ensure!(
-                        u64::from(copied.parent_subagent_depth) == self.subagent_depth,
-                        "accepted remote tool changed modeled parent depth"
-                    );
-                }
-                anyhow::ensure!(
-                    stored["child_request_id"].as_str() == Some(plan.child_request_id.as_str())
-                        && stored["spawn_target_did"].as_str()
-                            == Some(plan.spawn_target_did.as_str())
-                        && stored["spawn_behavior_id"].as_str()
-                            == Some(plan.spawn_behavior_id.as_str())
-                        && stored["delegated_workspace"]
-                            == serde_json::to_value(&plan.delegated_workspace)?
-                        && stored["await_mode"].as_str() == Some(plan.await_mode.as_str()),
-                    "accepted native spawn provenance differs from modeled route and admission"
-                );
-                self.accepted_spawns.insert(
-                    admission.document,
-                    (
-                        accepted.clone(),
-                        admission.deadline,
-                        plan.await_mode,
-                        crate::tool_call_lifecycle::CancelPolicy::from_persisted(
-                            &admission.cancel_policy,
-                        )
-                        .context("modeled spawn admission has invalid cancel policy")?,
-                    ),
-                );
-            }
+            anyhow::ensure!(
+                rows[0]
+                    .get("await_mode")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(admission.await_mode.as_str()),
+                "accepted native tool await mode differs from modeled admission"
+            );
         }
         self.observe(true).await
     }
@@ -3494,435 +2947,6 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
     native.node.shutdown().await;
 }
 
-// The accepted depth scripts retain their unchanged argument stream. The
-// receiver test separately binds model-published bind arguments to the actual
-// trigger decoder and materialization path.
-#[tokio::test]
-async fn generated_remote_depth_crosses_publication_and_child_creation_boundaries() {
-    let contracts = crate::lean_vocab_test::lean_contract_snapshot();
-    for (modeled_name, native_name) in [
-        (
-            "remote_depth_two_inherit_at_bound",
-            "real_spawn_depth_two_copies_parent_depth",
-        ),
-        (
-            "remote_depth_three_rejects_child",
-            "real_spawn_depth_three_copies_parent_depth",
-        ),
-    ] {
-        let modeled = contracts
-            .delegated_child_resolution_cases
-            .iter()
-            .find(|case| case.name == modeled_name)
-            .expect("Lean exports the delegated child boundary");
-        let source = modeled
-            .delegated_input
-            .as_ref()
-            .expect("accepted Lean bridge has copied input");
-        let native_case = contracts
-            .canonical_execution_gate_cases
-            .iter()
-            .find(|case| {
-                matches!(case,
-                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                    if name == native_name)
-            })
-            .expect("Lean exports the matching real spawn publication");
-        let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
-            seed,
-            query_document,
-            operations,
-            ..
-        } = native_case
-        else {
-            unreachable!()
-        };
-        assert_eq!(seed.subagent_depth, u64::from(modeled.parent_depth));
-        assert_eq!(seed.principal, modeled.parent_agent);
-        let crate::lean_vocab_test::LeanCanonicalExecutionOperation::AcceptRemote {
-            targets,
-            admissions,
-            ..
-        } = &operations[0]
-        else {
-            panic!("generated child boundary requires a remote publication");
-        };
-        let [target] = targets.as_slice() else {
-            panic!("generated child boundary requires one route");
-        };
-        let [admission] = admissions.as_slice() else {
-            panic!("generated child boundary requires one accepted call");
-        };
-        assert_eq!(target.target, modeled.child_agent);
-        assert_eq!(target.call, admission.document);
-        let mut adapter = NativeCanonicalExecutionAdapter;
-        let mut native = adapter.initialize(seed).await.unwrap();
-        let observed = adapter
-            .apply(&mut native, *query_document, &operations[0])
-            .await
-            .unwrap();
-        assert!(observed.accepted, "{native_name} did not publish");
-        let tool_doc_id = native
-            .tool_ids
-            .iter()
-            .find_map(|(doc_id, modeled_id)| {
-                (*modeled_id == admission.document).then(|| doc_id.clone())
-            })
-            .expect("accepted native spawn has a physical tool row");
-        let response = native
-            .node
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ delegated_input delegated_workspace child_request_id spawn_target_did spawn_behavior_id }} }}"#,
-                crate::graphql::escape_graphql_string(&tool_doc_id),
-            ))
-            .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
-        let data = response.data.unwrap();
-        let rows = data["AgentToolCall"]
-            .as_array()
-            .expect("accepted bridge rows");
-        assert_eq!(rows.len(), 1, "accepted bridge must be physically unique");
-        let copied: gents_protocol::output::DelegatedToolInput =
-            serde_json::from_value(rows[0]["delegated_input"].clone()).unwrap();
-        assert_eq!(copied.parent_subagent_depth, source.parent_subagent_depth);
-        assert_eq!(copied.arguments, source.arguments);
-        assert_eq!(u64::from(copied.source.stream), source.source_stream);
-        assert_eq!(
-            native.segment_ids.get(&copied.source.close_doc_id),
-            Some(&source.source_close_doc_id)
-        );
-        let parent_stamp = modeled
-            .parent_workspace
-            .as_ref()
-            .expect("modeled boundary has a parent workspace stamp");
-        let seed_stamp = seed.workspace.as_ref().expect("native seed has workspace");
-        assert_eq!(parent_stamp.workspace_id, seed_stamp.workspace_id);
-        assert_eq!(
-            parent_stamp.workspace_owner_agent_did,
-            seed_stamp.workspace_owner_agent_did
-        );
-        assert_eq!(
-            parent_stamp.workspace_authority,
-            seed_stamp.workspace_authority
-        );
-        assert_eq!(
-            parent_stamp.workspace_seal_hash,
-            seed_stamp.workspace_seal_hash
-        );
-        let expected_workspace_id = format!("lean-workspace-{}", parent_stamp.workspace_id);
-        let expected_owner = modeled_principal_did(
-            parent_stamp.workspace_owner_agent_did,
-            seed.principal,
-            &native.principal,
-            &native.remote_dids,
-        );
-        assert_eq!(
-            rows[0]["delegated_workspace"]["workspace_id"].as_str(),
-            Some(expected_workspace_id.as_str())
-        );
-        assert_eq!(
-            rows[0]["delegated_workspace"]["workspace_owner_agent_did"].as_str(),
-            Some(expected_owner.as_str())
-        );
-        assert_eq!(
-            rows[0]["delegated_workspace"]["workspace_authority"].as_str(),
-            Some(parent_stamp.workspace_authority.as_str())
-        );
-        assert_eq!(
-            rows[0]["delegated_workspace"]["workspace_seal_hash"].as_str(),
-            parent_stamp
-                .workspace_seal_hash
-                .map(|seal| format!("lean-seal-{seal}"))
-                .as_deref()
-        );
-        let accepted = &native.accepted_spawns[&admission.document].0;
-        let child_id = rows[0]["child_request_id"]
-            .as_str()
-            .expect("accepted bridge retained child identity")
-            .to_owned();
-        let child_did = rows[0]["spawn_target_did"]
-            .as_str()
-            .expect("accepted bridge retained target DID")
-            .to_owned();
-        let behavior_id = rows[0]["spawn_behavior_id"]
-            .as_str()
-            .expect("accepted bridge retained behavior")
-            .to_owned();
-        assert_eq!(
-            child_did,
-            modeled_principal_did(
-                modeled.child_agent,
-                seed.principal,
-                &native.principal,
-                &native.remote_dids,
-            )
-        );
-        let prompt = serde_json::from_str::<serde_json::Value>(&source.arguments).unwrap()
-            ["prompt"]
-            .as_str()
-            .expect("modeled accepted arguments contain a prompt")
-            .to_owned();
-        if modeled.expected.is_none() {
-            let error =
-                crate::tool_call_lifecycle::create_subagent_request_with_trusted_parent_request_id(
-                    &native.node,
-                    child_id,
-                    format!("lean-request-{}", seed.request_id),
-                    native.request_doc_id.clone(),
-                    accepted.id.clone(),
-                    tool_doc_id,
-                    copied.parent_subagent_depth,
-                    child_did,
-                    behavior_id,
-                    prompt,
-                    None,
-                    native.principal.clone(),
-                )
-                .await
-                .expect_err("modeled maximum parent depth must reject child creation");
-            assert!(matches!(
-                error.downcast_ref::<crate::tool_call_lifecycle::IllegalToolCallTransition>(),
-                Some(crate::tool_call_lifecycle::IllegalToolCallTransition::SubagentDepthExceeded)
-            ));
-        } else {
-            let stamp =
-                crate::tool_call_lifecycle::subagent_workspace::ParentWorkspaceStamp::from_fields(
-                    &native.principal,
-                    Some(&expected_workspace_id),
-                    Some(&expected_owner),
-                    Some(&parent_stamp.workspace_authority),
-                    parent_stamp
-                        .workspace_seal_hash
-                        .map(|seal| format!("lean-seal-{seal}"))
-                        .as_deref(),
-                );
-            let workspace_arg = match &modeled.choice {
-                crate::lean_vocab_test::LeanDelegatedChildChoice::Inherit { workspace } => {
-                    assert_eq!(workspace.workspace_id, parent_stamp.workspace_id);
-                    assert_eq!(
-                        workspace.workspace_owner_agent_did,
-                        parent_stamp.workspace_owner_agent_did
-                    );
-                    assert_eq!(
-                        workspace.workspace_seal_hash,
-                        parent_stamp.workspace_seal_hash
-                    );
-                    assert_eq!(workspace.state, "ready");
-                    assert!(workspace.available);
-                    crate::background_tools::SpawnWorkspaceArg::Inherit
-                }
-                _ => panic!("depth publication scripts require inherited workspace"),
-            };
-            let workspace =
-                crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
-                    &native.node,
-                    &stamp,
-                    Some(&workspace_arg),
-                    None,
-                    &child_did,
-                    &format!("lean-child-invocation-{}", admission.document),
-                    &format!("lean-child-correlation-{}", admission.document),
-                    None,
-                )
-                .await
-                .expect("real workspace owner accepted generated choice");
-            crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_trusted_parent_request_id_and_workspace(
-                &native.node,
-                child_id.clone(),
-                format!("lean-request-{}", seed.request_id),
-                native.request_doc_id.clone(),
-                accepted.id.clone(),
-                tool_doc_id,
-                copied.parent_subagent_depth,
-                child_did.clone(),
-                behavior_id,
-                prompt,
-                None,
-                native.principal.clone(),
-                workspace,
-            )
-            .await
-            .expect("real signed child owner accepted generated boundary");
-            let result = native.node.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} admission_signer_did admission_signature }} }}"#,
-                crate::graphql::escape_graphql_string(&child_id),
-                crate::watcher::AGENT_REQUEST_FIELDS,
-            )).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-            let child = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
-                .unwrap()
-                .expect("signed child persisted");
-            let expected = modeled.expected.as_ref().unwrap();
-            assert_eq!(child.subagent_depth, Some(i64::from(expected.child_depth)));
-            assert_eq!(child.agent_did.as_deref(), Some(child_did.as_str()));
-            assert_eq!(
-                child.requester_did.as_deref(),
-                Some(native.principal.as_str())
-            );
-            assert_eq!(
-                child.admission_signer_did.as_deref(),
-                Some(child_did.as_str())
-            );
-            assert!(
-                child
-                    .admission_signature
-                    .as_deref()
-                    .is_some_and(|signature| !signature.is_empty()),
-                "registered target did not persist a signed child admission"
-            );
-            let expected_workspace = expected
-                .child_workspace
-                .as_ref()
-                .expect("modeled child inherits or binds workspace");
-            assert_eq!(
-                child.workspace_id.as_deref(),
-                Some(format!("lean-workspace-{}", expected_workspace.workspace_id).as_str())
-            );
-            assert_eq!(
-                child.workspace_owner_agent_did.as_deref(),
-                Some(
-                    modeled_principal_did(
-                        expected_workspace.workspace_owner_agent_did,
-                        seed.principal,
-                        &native.principal,
-                        &native.remote_dids
-                    )
-                    .as_str()
-                )
-            );
-            assert_eq!(
-                child.workspace_authority.as_deref(),
-                Some(expected_workspace.workspace_authority.as_str())
-            );
-            assert_eq!(
-                child.workspace_seal_hash.as_deref(),
-                expected_workspace
-                    .workspace_seal_hash
-                    .map(|seal| format!("lean-seal-{seal}"))
-                    .as_deref()
-            );
-        }
-    }
-}
-
-// The native fixture supplies the physical IsolatedWorkspace observation; the
-// stamped parent comes from the generated source. This binds the modeled
-// negative choices to the real resolver, not to a test-local seal policy.
-#[tokio::test]
-async fn generated_provision_parent_seal_drift_reaches_real_resolver() {
-    let contracts = crate::lean_vocab_test::lean_contract_snapshot();
-    let native_case = contracts
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| {
-            matches!(case,
-                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                    if name == "real_spawn_depth_two_copies_parent_depth")
-        })
-        .expect("Lean exports a native workspace fixture");
-    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { seed, .. } =
-        native_case
-    else {
-        unreachable!()
-    };
-    for name in [
-        "provision_rejects_changed_parent_seal",
-        "provision_rejects_absent_to_present_parent_seal",
-    ] {
-        let modeled = contracts
-            .delegated_child_resolution_cases
-            .iter()
-            .find(|case| case.name == name)
-            .expect("Lean exports the parent-seal drift case");
-        assert!(modeled.delegated_input.is_some());
-        assert!(modeled.expected.is_none());
-        let parent = modeled
-            .parent_workspace
-            .as_ref()
-            .expect("generated accepted source has a parent workspace");
-        let crate::lean_vocab_test::LeanDelegatedChildChoice::Provision {
-            observed_parent,
-            parent_path_exact,
-            created_child,
-        } = &modeled.choice
-        else {
-            panic!("{name} must be a provision choice");
-        };
-        assert!(*parent_path_exact);
-        assert!(created_child.is_some());
-        assert!(observed_parent.available);
-        assert_ne!(
-            parent.workspace_seal_hash,
-            observed_parent.workspace_seal_hash
-        );
-        assert_eq!(parent.workspace_id, observed_parent.workspace_id);
-        assert_eq!(
-            parent.workspace_owner_agent_did,
-            observed_parent.workspace_owner_agent_did
-        );
-        assert_eq!(seed.principal, modeled.parent_agent);
-
-        let mut adapter = NativeCanonicalExecutionAdapter;
-        let native = adapter.initialize(seed).await.unwrap();
-        let workspace_id = format!("lean-workspace-{}", parent.workspace_id);
-        let owner = modeled_principal_did(
-            parent.workspace_owner_agent_did,
-            seed.principal,
-            &native.principal,
-            &native.remote_dids,
-        );
-        let mut document =
-            crate::callback::load_isolated_workspace(&native.node, &workspace_id, &owner)
-                .await
-                .unwrap()
-                .expect("native fixture has an observed parent workspace");
-        document.seal_hash = observed_parent
-            .workspace_seal_hash
-            .map(|seal| format!("lean-seal-{seal}"));
-        let response = native
-            .node
-            .execute(&crate::workspace::isolated_workspace_upsert_mutation(
-                &document,
-            ))
-            .await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-        let stamped_seal = parent
-            .workspace_seal_hash
-            .map(|seal| format!("lean-seal-{seal}"));
-        let stamp =
-            crate::tool_call_lifecycle::subagent_workspace::ParentWorkspaceStamp::from_fields(
-                &native.principal,
-                Some(&workspace_id),
-                Some(&owner),
-                Some(&parent.workspace_authority),
-                stamped_seal.as_deref(),
-            );
-        let child_did = modeled_principal_did(
-            modeled.child_agent,
-            seed.principal,
-            &native.principal,
-            &native.remote_dids,
-        );
-        let error = crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
-            &native.node,
-            &stamp,
-            Some(&crate::background_tools::SpawnWorkspaceArg::Provision { policy: None }),
-            None,
-            &child_did,
-            &format!("lean-provision-{name}"),
-            &format!("lean-provision-correlation-{name}"),
-            None,
-        )
-        .await
-        .expect_err("modeled seal drift must reject through the real resolver");
-        assert!(
-            error.message.contains("parent workspace seal drift"),
-            "{name}: {error}"
-        );
-        native.node.shutdown().await;
-    }
-}
-
 #[tokio::test]
 async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
@@ -3987,7 +3011,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
     );
     let crate::lean_vocab_test::LeanR4cBackgroundWorkCase::ReadToolOutputCanonicalSourceReconstruction {
         cases, ..
-    } = witness else { unreachable!() };
+    } = witness;
     assert_eq!(
         cases.len(),
         5,

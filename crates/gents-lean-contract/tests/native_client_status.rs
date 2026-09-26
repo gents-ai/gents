@@ -10,7 +10,7 @@ mod runtime_contract;
 use std::collections::BTreeSet;
 
 use gents_protocol::client_protocol::{
-    project_persisted_attempt, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
+    project_persisted_attempt, ClientTurnState, RequestLifecycleState,
 };
 
 fn codex_phase(state: ClientTurnState) -> &'static str {
@@ -19,18 +19,6 @@ fn codex_phase(state: ClientTurnState) -> &'static str {
         ClientTurnState::Completed => "completed",
         ClientTurnState::Failed => "failed",
         ClientTurnState::Superseded | ClientTurnState::Interrupted => "interrupted",
-    }
-}
-
-fn subagent_status(projection: ClientHeadProjection) -> (&'static str, bool) {
-    match (projection.turn_state, projection.request_state) {
-        (ClientTurnState::Completed, _) => ("completed", true),
-        (ClientTurnState::Failed, _) => ("errored", true),
-        (ClientTurnState::Superseded | ClientTurnState::Interrupted, _) => ("interrupted", true),
-        (ClientTurnState::WaitingForClaim, RequestLifecycleState::Pending) => {
-            ("pendingInit", false)
-        }
-        (ClientTurnState::WaitingForClaim | ClientTurnState::Running, _) => ("running", false),
     }
 }
 
@@ -92,24 +80,6 @@ fn generated_codex_client_status_vectors_use_persisted_request_projection() {
         .codex_shim_projection_cases
         .iter()
         .any(|case| case.local_interrupt_acked));
-
-    let subagent_cases = &snapshot.codex_shim_subagent_status_cases;
-    assert!(!subagent_cases.is_empty());
-    assert_eq!(
-        subagent_cases
-            .iter()
-            .map(|case| case.request_state.as_str())
-            .collect::<BTreeSet<_>>(),
-        all_lifecycle_states,
-        "generated subagent vectors must cover every lifecycle state"
-    );
-    for case in subagent_cases {
-        let projection = project_persisted_attempt(&case.request_state, false)
-            .unwrap_or_else(|| panic!("{}: invalid persisted lifecycle", case.witness));
-        let expected = subagent_status(projection);
-        assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
-        assert_eq!(case.terminal, expected.1, "{}", case.witness);
-    }
 
     let thread_cases = &snapshot.codex_shim_thread_status_cases;
     assert!(!thread_cases.is_empty());

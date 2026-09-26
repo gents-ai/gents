@@ -2655,44 +2655,6 @@ mod tests {
         ));
     }
 
-    // This is the observed projection boundary shared by live bridge failure
-    // and recovery. Durable writes/notifications have separate owner tests.
-    #[test]
-    fn generated_child_failure_projections_match_bridge_owner() {
-        let cases = crate::lean_vocab_test::lean_child_failure_projections();
-        let observed_kinds = cases
-            .iter()
-            .map(|case| case.child_state.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        let runtime_kinds = ChildTerminal::ALL_KIND
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(observed_kinds, runtime_kinds);
-        assert_eq!(
-            cases.len(),
-            observed_kinds.len(),
-            "duplicate child projection"
-        );
-        for case in cases {
-            let row = AgentRequestRow {
-                request_id: "projection-child".to_string(),
-                lifecycle_state: Some(
-                    RequestLifecycleState::parse(&case.child_state)
-                        .expect("Lean child lifecycle vocabulary"),
-                ),
-                ..Default::default()
-            };
-            let terminal = project_child_terminal(&row).expect("child failure projection");
-            assert_eq!(
-                terminal.projected_state().as_str(),
-                case.tool_state,
-                "child {} bridge projection",
-                case.child_state
-            );
-        }
-    }
-
     #[test]
     fn project_child_terminal_maps_child_states() {
         let row = |state, failure_reason| AgentRequestRow {

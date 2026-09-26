@@ -556,86 +556,23 @@ mod tests {
 
     fn assert_state(capacity: &WorkerCapacity, modeled: &LeanWorkerCapacityState) {
         assert_eq!(capacity.active_limit(), modeled.active_limit);
-        assert_eq!(capacity.parked_limit(), modeled.parked_limit);
-        let actual = capacity.snapshot();
         let mut active: Vec<_> = modeled.active.iter().copied().map(ticket).collect();
-        let mut parked: Vec<_> = modeled.parked.iter().copied().map(ticket).collect();
-        let mut dependencies: Vec<_> = modeled
-            .dependencies
-            .iter()
-            .map(|entry| (ticket(entry.ticket), entry.document.to_string()))
-            .collect();
         active.sort_by(|a, b| {
             (&a.request_doc_id, &a.execution_generation)
                 .cmp(&(&b.request_doc_id, &b.execution_generation))
         });
-        parked.sort_by(|a, b| {
-            (&a.request_doc_id, &a.execution_generation)
-                .cmp(&(&b.request_doc_id, &b.execution_generation))
-        });
-        dependencies.sort_by(|a, b| {
-            (&a.0.request_doc_id, &a.0.execution_generation)
-                .cmp(&(&b.0.request_doc_id, &b.0.execution_generation))
-        });
-        assert_eq!(actual.active, active);
-        assert_eq!(actual.parked, parked);
-        assert_eq!(actual.dependencies, dependencies);
+        assert_eq!(capacity.snapshot().active, active);
     }
 
-    /// The resource transitions are compared to evaluated Lean states. Owner
-    /// refusal cases involving an invalid claim, lease, cancellation, or tool
-    /// bridge require the real request/tool owners at the integration seam;
-    /// this module does not substitute a test-only policy implementation.
+    /// Worker capacity is acquire/release only: a request never parks its
+    /// worker on another agent's request, so the evaluated Lean states are the
+    /// whole resource contract.
     #[tokio::test]
     async fn emitted_worker_capacity_resource_transitions_match_model() {
         let mut exercised = 0;
-        let mut exercised_existing_wait = false;
-        let mut exercised_existing_resume = false;
         for case in lean_canonical_worker_capacity_cases() {
-            // RAII guards cannot construct an orphan dependency. The Lean
-            // model includes that adversarial state to require fresh refusal.
-            if case.pre.dependencies.len() != case.pre.parked.len()
-                || case
-                    .pre
-                    .dependencies
-                    .iter()
-                    .any(|entry| !case.pre.parked.contains(&entry.ticket))
-            {
-                continue;
-            }
-            if matches!(
-                &case.operation,
-                LeanWorkerCapacityOperation::ResumeAfterChild { .. }
-                    | LeanWorkerCapacityOperation::WaitForExistingChild { .. }
-                    | LeanWorkerCapacityOperation::ResumeAfterExistingChild { .. }
-            ) && case.expected.is_none()
-            {
-                continue;
-            }
-            let capacity = WorkerCapacity::new(case.pre.active_limit, case.pre.parked_limit);
+            let capacity = WorkerCapacity::new(case.pre.active_limit);
             let mut active = HashMap::<WorkerTicket, ActiveGuard>::new();
-            let mut parked = HashMap::<WorkerTicket, ParkedGuard>::new();
-            for raw in &case.pre.parked {
-                let key = ticket(*raw);
-                let document = case
-                    .pre
-                    .dependencies
-                    .iter()
-                    .find(|entry| entry.ticket == *raw)
-                    .expect("parked modeled ticket has exact dependency")
-                    .document
-                    .to_string();
-                let guard = capacity
-                    .try_acquire_unbound()
-                    .unwrap()
-                    .bind(key.clone())
-                    .unwrap_or_else(|_| panic!("bind modeled parked ticket"));
-                let reservation = guard.reserve_park(document).unwrap();
-                let guard = guard
-                    .park(reservation)
-                    .unwrap_or_else(|_| panic!("park modeled ticket"));
-                parked.insert(key, guard);
-            }
             for raw in &case.pre.active {
                 let key = ticket(*raw);
                 let guard = capacity
@@ -648,7 +585,7 @@ mod tests {
             assert_state(&capacity, &case.pre);
 
             match &case.operation {
-                LeanWorkerCapacityOperation::AdmitFresh { ticket: raw } => {
+                LeanWorkerCapacityOperation::Acquire { ticket: raw } => {
                     let key = ticket(*raw);
                     let outcome = capacity
                         .try_acquire_unbound()
@@ -656,100 +593,8 @@ mod tests {
                     if case.expected.is_some() {
                         active.insert(key, outcome.expect("Lean admitted fresh ticket"));
                     } else {
-                        assert!(
-                            outcome.is_err(),
-                            "Lean refused fresh ticket in {}",
-                            case.name
-                        );
+                        assert!(outcome.is_err(), "Lean refused ticket in {}", case.name);
                     }
-                }
-                LeanWorkerCapacityOperation::WaitForChild {
-                    generation,
-                    document,
-                }
-                | LeanWorkerCapacityOperation::WaitForExistingChild {
-                    generation,
-                    document,
-                    ..
-                } => {
-                    if let LeanWorkerCapacityOperation::WaitForExistingChild { selection, .. } =
-                        &case.operation
-                    {
-                        assert_eq!(
-                            *document, selection.bridge_document,
-                            "resource dependency is the selected physical bridge"
-                        );
-                        exercised_existing_wait = true;
-                    }
-                    let key = WorkerTicket::new(
-                        case.world.request_id.to_string(),
-                        generation.to_string(),
-                    );
-                    let guard = active.remove(&key).expect("modeled parent active");
-                    match guard.reserve_park(document.to_string()) {
-                        Ok(reservation) => {
-                            assert!(
-                                case.expected.is_some(),
-                                "Lean refused available parked capacity in {}",
-                                case.name
-                            );
-                            let guard = guard
-                                .park(reservation)
-                                .unwrap_or_else(|_| panic!("park accepted modeled bridge"));
-                            parked.insert(key, guard);
-                        }
-                        Err(error) => {
-                            assert!(
-                                case.expected.is_none(),
-                                "unexpected parked refusal in {}: {error}",
-                                case.name
-                            );
-                            active.insert(key, guard);
-                        }
-                    }
-                }
-                LeanWorkerCapacityOperation::ResumeAfterChild {
-                    generation,
-                    cancellation_allows,
-                }
-                | LeanWorkerCapacityOperation::ResumeAfterExistingChild {
-                    generation,
-                    cancellation_allows,
-                    ..
-                } => {
-                    assert!(*cancellation_allows);
-                    let key = WorkerTicket::new(
-                        case.world.request_id.to_string(),
-                        generation.to_string(),
-                    );
-                    let guard = parked.remove(&key).expect("modeled parent parked");
-                    let selected_document = match &case.operation {
-                        LeanWorkerCapacityOperation::ResumeAfterExistingChild {
-                            selection, ..
-                        } => {
-                            exercised_existing_resume = true;
-                            selection.bridge_document.to_string()
-                        }
-                        _ => case
-                            .world
-                            .selected_tool
-                            .as_ref()
-                            .expect("modeled exact child bridge")
-                            .document
-                            .to_string(),
-                    };
-                    let active_guard = guard
-                        .resume(
-                            &CancellationToken::new(),
-                            move |observed_ticket, observed_document| {
-                                assert_eq!(observed_ticket, key);
-                                assert_eq!(observed_document, selected_document);
-                                std::future::ready(Ok(()))
-                            },
-                        )
-                        .await
-                        .expect("resume after caller's owner revalidation");
-                    active.insert(active_guard.ticket().clone(), active_guard);
                 }
                 LeanWorkerCapacityOperation::Release { ticket: raw } => {
                     drop(
@@ -759,20 +604,13 @@ mod tests {
                     );
                 }
             }
-            if let Some(expected) = &case.expected {
-                assert_state(&capacity, expected);
-            } else {
-                assert_state(&capacity, &case.pre);
-            }
+            assert_state(&capacity, case.expected.as_ref().unwrap_or(&case.pre));
             exercised += 1;
         }
-        assert!(
-            exercised >= 8,
-            "model export must exercise all reachable resource transitions"
-        );
-        assert!(
-            exercised_existing_wait && exercised_existing_resume,
-            "model export must exercise existing-child resource handoff"
+        assert_eq!(
+            exercised,
+            lean_canonical_worker_capacity_cases().len(),
+            "every emitted resource transition is exercised"
         );
     }
 

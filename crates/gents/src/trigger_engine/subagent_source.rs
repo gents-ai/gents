@@ -1342,8 +1342,3 @@ mod delegated_workspace_tests {
         .is_err());
     }
 }
-
-#[cfg(test)]
-mod delegated_child_tests;
-#[cfg(test)]
-mod spawn_fence_tests;

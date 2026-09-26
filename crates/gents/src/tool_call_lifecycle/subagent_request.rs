@@ -651,12 +651,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn max_subagent_depth_matches_lean_spec() {
-        // Lean: Subagent.State.lean defines `maxSubagentDepth : Nat := 3`.
-        assert_eq!(MAX_SUBAGENT_DEPTH, 3);
-    }
-
-    #[test]
     fn parent_request_lookup_rejects_malformed_canonical_row() {
         let err = decode_parent_request_rows(&serde_json::json!([{
             "_docID": "parent-doc",
@@ -725,98 +719,6 @@ mod tests {
             let mut changed = base.clone();
             changed[field] = value;
             assert!(!matches(changed), "{field} drift must fail closed");
-        }
-    }
-
-    #[test]
-    fn generated_reserved_child_cases_drive_native_owner_decision() {
-        use crate::lean_vocab_test::{
-            lean_reserved_child_materialization_cases, LeanReservedChildBinding,
-        };
-
-        fn token(prefix: &str, value: usize) -> String {
-            format!("{prefix}-{value}")
-        }
-        fn admission(
-            binding: &LeanReservedChildBinding,
-        ) -> gents_protocol::request_admission::AgentRequestAdmissionRecord {
-            if binding.admission == 7 {
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_child(
-                    token("agent", binding.agent),
-                    token("request", binding.parent_request),
-                )
-            } else {
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_cross_principal_child(
-                    token("agent", binding.agent),
-                    token("request", binding.parent_request),
-                    token("bridge-author", binding.admission),
-                )
-            }
-        }
-        fn workspace(binding: &LeanReservedChildBinding) -> Option<WorkspaceLineage> {
-            binding.workspace.as_ref().map(|value| WorkspaceLineage {
-                workspace_id: Some(format!("workspace-{}", value.workspace_id)),
-                workspace_owner_agent_did: Some(format!(
-                    "agent-{}",
-                    value.workspace_owner_agent_did
-                )),
-                workspace_authority: Some(value.workspace_authority.clone()),
-                workspace_seal_hash: value.workspace_seal_hash.map(|seal| format!("seal-{seal}")),
-            })
-        }
-        fn row(binding: &LeanReservedChildBinding) -> gents_protocol::row::AgentRequestRow {
-            let admission = admission(binding);
-            serde_json::from_value(serde_json::json!({
-                "request_id": token("child", binding.child),
-                "agent_did": token("agent", binding.agent),
-                "requester_did": token("agent", binding.agent),
-                "behavior_id": token("behavior", binding.behavior),
-                "content": token("payload", binding.payload),
-                "input": {},
-                "subagent_depth": binding.depth,
-                "caused_by_parent_request_id": token("request", binding.parent_request),
-                "caused_by_parent_request_doc_id": token("request-doc", binding.parent_request_doc),
-                "caused_by_parent_tool_call_id": token("tool", binding.parent_tool),
-                "caused_by_parent_tool_call_doc_id": token("tool-doc", binding.parent_tool_doc),
-                "workspace_id": workspace(binding).as_ref().and_then(|value| value.workspace_id.clone()),
-                "workspace_owner_agent_did": workspace(binding).as_ref().and_then(|value| value.workspace_owner_agent_did.clone()),
-                "workspace_authority": workspace(binding).as_ref().and_then(|value| value.workspace_authority.clone()),
-                "workspace_seal_hash": workspace(binding).as_ref().and_then(|value| value.workspace_seal_hash.clone()),
-                "admission_kind": admission.kind.as_str(),
-                "runtime_issuer_did": admission.runtime_issuer_did,
-                "runtime_source_request_id": admission.runtime_source_request_id,
-                "runtime_source_kind": admission.runtime_source_kind.map(|value| value.as_str()),
-                "runtime_bridge_author_did": admission.runtime_bridge_author_did,
-            }))
-            .expect("modeled reserved-child binding maps to native row")
-        }
-
-        for case in lean_reserved_child_materialization_cases() {
-            let candidate = &case.candidate;
-            let candidate_workspace = workspace(candidate);
-            let candidate_admission = admission(candidate);
-            let rows = case.stored.iter().map(row).collect::<Vec<_>>();
-            let decision = reserved_child_decision(
-                &rows,
-                &token("agent", candidate.agent),
-                &token("behavior", candidate.behavior),
-                &token("payload", candidate.payload),
-                &gents_protocol::request_input::RequestInput::default(),
-                u32::try_from(candidate.depth).expect("modeled child depth fits native depth"),
-                &token("request", candidate.parent_request),
-                &token("request-doc", candidate.parent_request_doc),
-                &token("tool", candidate.parent_tool),
-                &token("tool-doc", candidate.parent_tool_doc),
-                candidate_workspace.as_ref(),
-                &candidate_admission,
-            );
-            let (actual_decision, actual_count) = match decision {
-                ReservedChildDecision::Create => ("created", rows.len() + 1),
-                ReservedChildDecision::Replay => ("replayed", rows.len()),
-                ReservedChildDecision::Conflict => ("conflict", rows.len()),
-            };
-            assert_eq!(actual_decision, case.expected_decision, "{}", case.name);
-            assert_eq!(actual_count, case.expected_count, "{}", case.name);
         }
     }
 }

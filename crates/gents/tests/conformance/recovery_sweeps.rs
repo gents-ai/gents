@@ -5,37 +5,11 @@ use std::sync::Arc;
 
 const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 
-pub(super) fn generated_reserved_child_materialization_cases_are_derived() {
-    let cases = lean_reserved_child_materialization_cases();
-    assert_eq!(cases.len(), 9);
-    assert_eq!(
-        cases
-            .iter()
-            .map(|case| (
-                case.name.as_str(),
-                case.expected_decision.as_str(),
-                case.expected_count
-            ))
-            .collect::<Vec<_>>(),
-        vec![
-            ("fresh_reserved_child", "created", 1),
-            ("exact_reserved_child_replay", "replayed", 1),
-            ("conflicting_physical_lineage", "conflict", 1),
-            ("conflicting_payload", "conflict", 1),
-            ("conflicting_workspace", "conflict", 1),
-            ("conflicting_workspace_authority", "conflict", 1),
-            ("conflicting_depth", "conflict", 1),
-            ("conflicting_admission", "conflict", 1),
-            ("physical_twins_fail_closed", "conflict", 2),
-        ]
-    );
-}
-
 pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        36,
+        29,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -45,9 +19,8 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "tool_call_lifecycle_reconcile_orphaned_background_tools",
         "tool_call_lifecycle_reconcile_background_completion_side_effects",
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
-        "tool_call_lifecycle_recover_detached_bridge_rows",
+        "tool_call_lifecycle_recover_session_message_rows",
         "inference_call_recover_all_stale_calls",
-        "subagent_liveness_terminalize_expired_children",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -165,12 +138,7 @@ fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
 }
 
 async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    if case.collection == "AgentToolCall"
-        || matches!(
-            case.sweep_id.as_str(),
-            "subagent_liveness_terminalize_expired_children"
-        )
-    {
+    if case.collection == "AgentToolCall" {
         // These rows are driven by the crate-private accepted-publication
         // recovery conformance tests, including deferred missing parents.
         return;

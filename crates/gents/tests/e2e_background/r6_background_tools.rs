@@ -27,7 +27,6 @@ struct ToolCallRow {
     lifecycle_state: Option<String>,
     cancel_cause: Option<String>,
     await_mode: Option<String>,
-    child_request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,7 +365,6 @@ async fn fetch_tool_call(
                 lifecycle_state
                 cancel_cause
                 await_mode
-                child_request_id
             }}
         }}"#
     );
@@ -533,7 +531,7 @@ async fn wait_for_named_tool_call(
     for _ in 0..200 {
         let response = node
             .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "{tool_name}" }} }}, limit: 1) {{ tool_call_id tool_name lifecycle_state cancel_cause await_mode child_request_id }} }}"#
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "{tool_name}" }} }}, limit: 1) {{ tool_call_id tool_name lifecycle_state cancel_cause await_mode }} }}"#
             ))
             .await;
         if let Some(row) = response
@@ -728,7 +726,6 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert_eq!(row.tool_name.as_deref(), Some("bash"));
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(row.await_mode.as_deref(), Some("background"));
-    assert_eq!(row.child_request_id.as_deref(), None);
     assert_eq!(
         count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "wait_process").await,
         1
@@ -1334,7 +1331,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
                 escape_graphql_string(&turn.session_id),
             )).await;
             let tools = turn.db.node.execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id request_doc_id tool_call_id tool_name lifecycle_state cancel_cause tool_failure_class started_at completed_at message_sequence await_mode cancel_policy }} }}"#,
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id request_doc_id tool_call_id tool_name lifecycle_state cancel_cause tool_failure_class started_at completed_at message_sequence await_mode }} }}"#,
                 escape_graphql_string(&turn.session_id),
             )).await;
             panic!(
