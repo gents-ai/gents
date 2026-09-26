@@ -14,7 +14,9 @@ use super::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use super::output::{load_canonical_assistant_candidates, CanonicalReplayScope};
+use super::output::{
+    load_canonical_assistant_candidates, CanonicalReplayScope, ReplayRequestReader,
+};
 use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
@@ -1044,5 +1046,151 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
             .iter()
             .all(|block| !matches!(block, AssistantContent::Reasoning(_))));
         assert!(!selected[0].content.is_empty(), "ordinary blocks stay");
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RequestFault {
+    Missing,
+    RowsReadFails,
+    CommitsReadFails,
+}
+
+struct FaultingRequests<'a> {
+    node: &'a EmbeddedNode,
+    request_doc_id: &'a str,
+    fault: Option<RequestFault>,
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for FaultingRequests<'_> {
+    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
+        if query.contains(self.request_doc_id) {
+            match self.fault {
+                Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
+                Some(RequestFault::Missing) => {
+                    return Ok(serde_json::json!({"data": {"AgentRequest": []}}))
+                }
+                _ => {}
+            }
+        }
+        self.node.request_rows(query).await
+    }
+
+    async fn request_commits(
+        &self,
+        request_doc_id: &str,
+    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
+        if request_doc_id == self.request_doc_id
+            && matches!(self.fault, Some(RequestFault::CommitsReadFails))
+        {
+            anyhow::bail!("injected composite commit read");
+        }
+        self.node.request_commits(request_doc_id).await
+    }
+}
+
+async fn load_with_fault(
+    fixture: &ReplayFixture,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &SourceBoundary,
+    fault: Option<RequestFault>,
+) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
+    let requests = FaultingRequests {
+        node: &fixture.node,
+        request_doc_id: &fixture.request_doc_id,
+        fault,
+    };
+    super::output::load_canonical_assistant_candidates_with(
+        &fixture.node,
+        &requests,
+        scope,
+        boundary,
+    )
+    .await
+}
+
+/// A historical turn's reasoning is dropped only when its physical request is
+/// verifiably unavailable; a failed read of that request fails the lookup.
+#[tokio::test]
+async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning() {
+    let fixture = signed_fixture().await;
+    assert!(fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .is_some());
+    let now = chrono::Utc::now().to_rfc3339();
+    let created = fixture
+        .node
+        .execute(&format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "replay-request-next", purpose: "normal", agent_did: "{}",
+                behavior_id: "general", session_id: "{}", content: "next",
+                lifecycle_state: "pending", execution_origin: "interactive",
+                created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
+            }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(AGENT_DID),
+            crate::graphql::escape_graphql_string(SESSION_ID),
+            crate::graphql::escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let current_doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let current_commit_cid = crate::graphql::newest_document_composite_commit(
+        &fixture.node,
+        &current_doc_id,
+        "replay fixture next request",
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .cid;
+    let boundary = capture_source_boundary(
+        &fixture.node,
+        SESSION_ID,
+        AGENT_DID,
+        None,
+        &current_doc_id,
+        &current_commit_cid,
+    )
+    .await
+    .unwrap();
+    let scope = CanonicalReplayScope {
+        request_id: "replay-request-next",
+        request_doc_id: &current_doc_id,
+        request_commit_cid: &current_commit_cid,
+        ..fixture.scope()
+    };
+    let verified = load_with_fault(&fixture, scope, &boundary, None)
+        .await
+        .unwrap();
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0].request_doc_id, fixture.request_doc_id);
+    assert!(verified[0].has_capture(), "the healthy turn replays");
+
+    assert!(
+        load_with_fault(&fixture, scope, &boundary, Some(RequestFault::Missing))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a verifiably missing request drops only its turn"
+    );
+
+    for fault in [RequestFault::RowsReadFails, RequestFault::CommitsReadFails] {
+        let error = load_with_fault(&fixture, scope, &boundary, Some(fault))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{fault:?} must fail the lookup"));
+        assert!(
+            error
+                .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+                .is_none(),
+            "{fault:?} is not a replay violation: {error:#}"
+        );
     }
 }

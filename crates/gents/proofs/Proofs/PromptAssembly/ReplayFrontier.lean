@@ -271,9 +271,12 @@ end Chain
 /-- One accepted provider turn carrying reasoning. `prefixOrds` and `items`
 come from the assembled request body (this turn's ordinary prefix and its own
 anchored reasoning items); `captured` is the flattened body of the accepted
-request that produced the turn, `none` when unknown or undecodable. `base` is
-the per-turn provenance and payload decision (issuer, completion, witness,
-replayable payload). -/
+request that produced the turn, `none` when that request or its capture is
+verifiably absent, out of scope or undecodable. A failed store read is not
+`none`: it says nothing about the turn, so the adapter forms no input and the
+request fails instead of cutting the frontier there. `base` is the per-turn
+provenance and payload decision (issuer, completion, witness, replayable
+payload). -/
 structure Turn (O W : Type) where
   base : Bool
   prefixOrds : List O

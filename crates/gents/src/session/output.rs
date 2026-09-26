@@ -69,6 +69,13 @@ pub(crate) struct CanonicalAssistantCandidate {
     capture: Option<CanonicalReplayCapture>,
 }
 
+#[cfg(test)]
+impl CanonicalAssistantCandidate {
+    pub(crate) fn has_capture(&self) -> bool {
+        self.capture.is_some()
+    }
+}
+
 struct CanonicalReplayCapture {
     issuer: gents_loop::claude_messages_body::ReplayIssuer,
     wire: gents_loop::claude_messages_body::ReplayWire,
@@ -625,7 +632,45 @@ pub(crate) async fn load_canonical_assistant_candidates(
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    let (_, high_water) = validated_canonical_replay_boundary(node, scope, boundary).await?;
+    load_canonical_assistant_candidates_with(node, node, scope, boundary).await
+}
+
+/// Physical-request reads for replay. A failed store read is an error, never
+/// empty rows, so it cannot pass for a missing request.
+#[async_trait::async_trait]
+pub(crate) trait ReplayRequestReader: Sync {
+    async fn request_rows(&self, query: &str) -> Result<serde_json::Value>;
+    async fn request_commits(
+        &self,
+        request_doc_id: &str,
+    ) -> Result<Vec<crate::graphql::CompositeCommit>>;
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for EmbeddedNode {
+    async fn request_rows(&self, query: &str) -> Result<serde_json::Value> {
+        ReadAccess::Node(self)
+            .query(query, "load_canonical_replay_request")
+            .await
+    }
+
+    async fn request_commits(
+        &self,
+        request_doc_id: &str,
+    ) -> Result<Vec<crate::graphql::CompositeCommit>> {
+        crate::graphql::composite_commits(self, request_doc_id, "canonical replay request commits")
+            .await
+    }
+}
+
+pub(crate) async fn load_canonical_assistant_candidates_with(
+    node: &EmbeddedNode,
+    requests: &impl ReplayRequestReader,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::provider_context_reduction::SourceBoundary,
+) -> Result<Vec<CanonicalAssistantCandidate>> {
+    let (_, high_water) =
+        validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
     // None records the empty canonical view at capture time. A later current
     // read cannot turn that historical empty boundary into an unbounded scan.
     let Some(high_water) = high_water else {
@@ -712,7 +757,7 @@ pub(crate) async fn load_canonical_assistant_candidates(
             .as_deref()
             .context("canonical provider header has no physical request")?;
         let (request_id, request_commits) = match load_replay_physical_request(
-            node,
+            requests,
             request_doc_id,
             &origin_header.agent_did,
             origin_header.requester_did.as_deref(),
@@ -721,9 +766,16 @@ pub(crate) async fn load_canonical_assistant_candidates(
         .await
         {
             Ok(request) => request,
-            // A historical turn whose physical request cannot be verified is
-            // not a replay candidate; the current request is validated above.
-            Err(error) if request_doc_id != scope.request_doc_id => {
+            // A historical request that is verifiably missing or out of scope
+            // makes only its turn non-replayable; the current request is
+            // validated above. A failed store read says nothing about the
+            // request and must not silently strip reasoning, so it propagates.
+            Err(error)
+                if request_doc_id != scope.request_doc_id
+                    && error
+                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+                        .is_some() =>
+            {
                 tracing::warn!(
                     header_doc_id = %row.doc_id,
                     error = %format!("{error:#}"),
@@ -763,13 +815,14 @@ pub(crate) async fn validate_canonical_replay_boundary(
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
 ) -> Result<()> {
-    validated_canonical_replay_boundary(node, scope, boundary)
+    validated_canonical_replay_boundary(node, node, scope, boundary)
         .await
         .map(|_| ())
 }
 
 async fn validated_canonical_replay_boundary(
     node: &EmbeddedNode,
+    requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
 ) -> Result<(
@@ -791,7 +844,7 @@ async fn validated_canonical_replay_boundary(
             && scope.requester_did.is_none_or(|did| !did.is_empty()),
         "canonical replay scope is incomplete"
     );
-    let request_commits = validate_replay_request(node, scope).await?;
+    let request_commits = validate_replay_request(requests, scope).await?;
     let Some(high_water) = boundary.canonical_through.as_ref() else {
         return Ok((request_commits, None));
     };
@@ -925,11 +978,11 @@ pub(crate) async fn resolve_canonical_replay_tag(
 }
 
 async fn validate_replay_request(
-    node: &EmbeddedNode,
+    requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
 ) -> Result<BTreeSet<String>> {
     let (request_id, commits) = load_replay_physical_request(
-        node,
+        requests,
         scope.request_doc_id,
         scope.agent_did,
         scope.requester_did,
@@ -947,8 +1000,10 @@ async fn validate_replay_request(
     Ok(commits)
 }
 
+/// A missing, ambiguous or out-of-scope request is a `ReplayEvidenceViolation`;
+/// a failed store read keeps its own error so callers cannot mistake it for one.
 async fn load_replay_physical_request(
-    node: &EmbeddedNode,
+    requests: &impl ReplayRequestReader,
     request_doc_id: &str,
     agent_did: &str,
     requester_did: Option<&str>,
@@ -958,9 +1013,7 @@ async fn load_replay_physical_request(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id purpose session_id agent_did requester_did }} }}"#,
         crate::graphql::escape_graphql_string(request_doc_id)
     );
-    let response = ReadAccess::Node(node)
-        .query(&query, "load_canonical_replay_request")
-        .await?;
+    let response = requests.request_rows(&query).await?;
     let rows = rows_value(&response, "AgentRequest")?;
     replay_ensure!(
         rows.len() == 1,
@@ -976,12 +1029,12 @@ async fn load_replay_physical_request(
             && row["requester_did"].as_str() == requester_did,
         "canonical replay request crossed its physical principal/session scope"
     );
-    let commits =
-        crate::graphql::composite_commits(node, request_doc_id, "canonical replay request commits")
-            .await?
-            .into_iter()
-            .map(|commit| commit.cid)
-            .collect::<BTreeSet<_>>();
+    let commits = requests
+        .request_commits(request_doc_id)
+        .await?
+        .into_iter()
+        .map(|commit| commit.cid)
+        .collect::<BTreeSet<_>>();
     Ok((required_row_str(row, "request_id")?.to_owned(), commits))
 }
 
