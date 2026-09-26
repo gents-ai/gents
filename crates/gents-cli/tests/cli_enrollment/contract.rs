@@ -661,9 +661,10 @@ async fn wait_for_replicated_reply(
 /// DefraDB makes a replicated document queryable only once its whole commit
 /// ancestry has transferred and merged, and a fresh peer has no owner index to
 /// short-circuit that walk. The readiness row can therefore stay absent on the
-/// client while every block is already in flight, so the merged head height
-/// against the runtime's — not row presence — separates an undelivered head
-/// from historical DAG transfer that has not finished.
+/// client while every block is already in flight. The probe samples the
+/// client's merged head height beside the runtime's and whether the row is
+/// present; a lagging height shows the ancestry walk is still behind, but it
+/// cannot by itself tell an undelivered head from unfinished history.
 ///
 /// It owns the client handles it reads, so the sampler runs beside enrollment
 /// rather than inside it.
