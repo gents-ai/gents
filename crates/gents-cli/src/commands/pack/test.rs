@@ -43,7 +43,7 @@ pub(crate) async fn test(args: PackTestArgs) -> Result<()> {
     );
     let out = tempfile::tempdir().context("creating a build directory")?;
     let built = super::build::build_pack(&dir, Some(&out.path().join("test.pack")))?;
-    let plugins = run_plugin_cases(&dir)?;
+    let plugins = run_plugin_cases_off_runtime(dir.clone()).await?;
     let scenario = if args.scenario {
         anyhow::ensure!(
             dir.join("experiment.json").is_file(),
@@ -73,6 +73,14 @@ pub(crate) async fn test(args: PackTestArgs) -> Result<()> {
 struct ScenarioRun {
     #[command(flatten)]
     args: crate::cli::PackRunArgs,
+}
+
+/// [`run_plugin_cases`] on a blocking thread: running a guest blocks on the
+/// WASI runtime's own executor, which panics when called from an async task.
+pub(crate) async fn run_plugin_cases_off_runtime(dir: PathBuf) -> Result<Vec<PluginCases>> {
+    tokio::task::spawn_blocking(move || run_plugin_cases(&dir))
+        .await
+        .context("running the plugin cases")?
 }
 
 /// Runs every case of every plugin that has a source, against its built
@@ -105,6 +113,12 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             plugin,
             &gents::plugin::authority::declared_manifold(plugin)?,
         )?;
+        // The budget a real call of this artifact gets: an interpreted
+        // plugin needs room to boot its runtime.
+        let budget = PluginBudget::for_artifact(
+            &afterburner_cloud::Afb::from_bytes(&artifact)
+                .with_context(|| format!("{} is not a readable plugin", plugin.artifact))?,
+        );
         let mut report = PluginCases {
             plugin: plugin.name.clone(),
             passed: 0,
@@ -115,7 +129,7 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            match run_case(&runner, &path) {
+            match run_case(&runner, &budget, &path) {
                 Ok(()) => report.passed += 1,
                 Err(error) => report.failures.push(format!("{name}: {error:#}")),
             }
@@ -125,10 +139,10 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
     Ok(results)
 }
 
-fn run_case(runner: &PluginRunner, path: &Path) -> Result<()> {
+fn run_case(runner: &PluginRunner, budget: &PluginBudget, path: &Path) -> Result<()> {
     let case: PluginCase = serde_json::from_slice(&std::fs::read(path)?)
         .context("a case is {\"input\": ..., \"expect\": ...}")?;
-    let outcome = runner.call(&case.input, &PluginBudget::default())?;
+    let outcome = runner.call(&case.input, budget)?;
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "{:?}: {}",
@@ -149,8 +163,10 @@ fn run_case(runner: &PluginRunner, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_scaffolded_plugin_passes_its_case_and_a_wrong_expectation_fails() {
+    /// Driven from an async task, as `gents pack test` runs it: calling a
+    /// guest there directly panics inside the WASI runtime.
+    #[tokio::test]
+    async fn a_scaffolded_plugin_passes_its_case_and_a_wrong_expectation_fails() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("format_check");
         super::super::scaffold::scaffold(
@@ -170,7 +186,7 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             super::super::build::build_pack(&dir, Some(&root.path().join("out.pack"))).unwrap();
         }
-        let results = run_plugin_cases(&dir).unwrap();
+        let results = run_plugin_cases_off_runtime(dir.clone()).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
         assert!(results[0].failures.is_empty());
@@ -180,7 +196,7 @@ mod tests {
             r#"{"input": {"a": 1}, "expect": {"a": 2}}"#,
         )
         .unwrap();
-        let results = run_plugin_cases(&dir).unwrap();
+        let results = run_plugin_cases_off_runtime(dir.clone()).await.unwrap();
         assert_eq!(results[0].passed, 1);
         assert_eq!(results[0].failures.len(), 1);
         assert!(
