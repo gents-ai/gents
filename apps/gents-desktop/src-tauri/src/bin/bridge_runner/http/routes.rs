@@ -3,10 +3,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use gents::config_client::ConfigAccess;
-use gents::subagent_tree::{
-    build_subagent_tree_from, effective_subagent_tree_max_depth, SubagentTreeAccess,
-};
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
@@ -16,7 +12,6 @@ use crate::diagnostics::{
     build_desktop_client_snapshot, build_desktop_session_snapshot, build_request_diagnostics_bundle,
 };
 use crate::live_fixture::LiveBridgeFixture;
-use gents_desktop_bridge::cascade::{build_cascade_preview, interrupt_request};
 use gents_desktop_bridge::commands::mcp_health::{
     load_mcp_services_with_health, probe_mcp_service,
 };
@@ -28,24 +23,23 @@ use gents_desktop_bridge::commands::{
     save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
     set_default_behavior, test_tool_service_config,
 };
+use gents_desktop_bridge::interrupt::interrupt_request;
+use gents_desktop_bridge::provenance::session_provenance;
 use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use gents_desktop_bridge::tauri_commands::operations::{
-    list_backends_with_health_for_core, subagent_tree_view_from_gents,
-};
+use gents_desktop_bridge::tauri_commands::operations::list_backends_with_health_for_core;
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
-    DefaultBehaviorSetRequest, DesktopInterruptRequest, DesktopListSubagentTreeRequest,
-    DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EnrollmentRequestView,
-    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NativeExecutorStatusView, PeerStatusFetchRequest,
-    RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest,
-    SessionRenameRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest, TriggerSaveRequest,
+    DefaultBehaviorSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshot,
+    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    DesktopSessionProvenanceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
+    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
+    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest,
+    ScheduleRunRequest, ScheduleSaveRequest, SessionProvenanceView, SessionRenameRequest,
+    TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest, TriggerSaveRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -343,14 +337,14 @@ pub(super) fn handle_request(
             ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
-        ("POST", "/desktop/subagent-tree") => {
-            let request = decode::<DesktopListSubagentTreeRequest>(
+        ("POST", "/desktop/session-provenance") => {
+            let request = decode::<DesktopSessionProvenanceRequest>(
                 &request.body,
-                "decoding subagent tree request",
+                "decoding session provenance request",
             )?;
-            let tree =
-                runtime.block_on(list_subagent_tree_response(fixture.desktop_core(), request))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&tree)?))
+            let view =
+                runtime.block_on(session_provenance_response(fixture.desktop_core(), request))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
             let rows = runtime.block_on(list_backends_with_health_for_core(Arc::clone(
@@ -681,16 +675,6 @@ pub(super) fn handle_request(
                 runtime.block_on(run_task_config(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
-        ("POST", "/desktop/interrupt/preview") => {
-            let request = decode::<DesktopPreviewInterruptCascadeRequest>(
-                &request.body,
-                "decoding interrupt preview request",
-            )?;
-            let result = runtime
-                .block_on(build_cascade_preview(fixture.desktop_core(), &request))
-                .map_err(|e| anyhow!("{e}"))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
         ("POST", "/desktop/interrupt/request") => {
             let request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
@@ -738,7 +722,6 @@ async fn operations_snapshot_response(
         liveness_unavailable_reason: None,
         backgrounded_tools,
         stuck_diagnostics,
-        lineage: None,
     })
 }
 
@@ -756,10 +739,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 started_at
                 deadline_at
                 await_mode
-                cancel_policy
-                child_request_id
                 stuck_since
-                cancel_pending_remote_ack
             }
         }
     "#;
@@ -816,31 +796,18 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
                 .get("await_mode")
                 .and_then(|value| value.as_str())
                 .map(str::to_string),
-            cancel_policy: row
-                .get("cancel_policy")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
-            child_request_id: row
-                .get("child_request_id")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
             stuck_since: row
                 .get("stuck_since")
                 .and_then(|value| value.as_str())
                 .map(str::to_string),
-            cancel_pending_remote_ack: row
-                .get("cancel_pending_remote_ack")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
         })
         .collect())
 }
 
-async fn list_subagent_tree_response(
+async fn session_provenance_response(
     core: &Arc<ClientCore>,
-    request: DesktopListSubagentTreeRequest,
-) -> Result<SubagentTreeView> {
-    let root = request.root().map_err(|error| anyhow::anyhow!(error))?;
+    request: DesktopSessionProvenanceRequest,
+) -> Result<SessionProvenanceView> {
     let agent_did = request
         .agent_did
         .as_deref()
@@ -849,19 +816,9 @@ async fn list_subagent_tree_response(
         .map(str::to_owned)
         .or_else(|| core.selected_agent_did())
         .context("no agent selected; pass agentDid explicitly")?;
-    let tree = build_subagent_tree_from(
-        &[SubagentTreeAccess {
-            label: None,
-            access: ConfigAccess::Local(core.node_arc()),
-        }],
-        root,
-        Some(&agent_did),
-        request.include_terminal.unwrap_or(false),
-        effective_subagent_tree_max_depth(request.max_depth),
-    )
-    .await
-    .context("local subagent tree query failed")?;
-    Ok(subagent_tree_view_from_gents(tree))
+    session_provenance(core, &agent_did, &request.session_id)
+        .await
+        .map_err(|error| anyhow!("{error}"))
 }
 
 fn decode<T: serde::de::DeserializeOwned>(body: &str, context: &str) -> Result<T> {

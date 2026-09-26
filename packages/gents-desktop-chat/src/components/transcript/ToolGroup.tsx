@@ -208,7 +208,7 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
       <>
         <span className="tool-kind">subagent · {view.action}</span>
         <span className="tool-primary">
-          {view.name ?? view.childRequestId ?? "subagent"}
+          {view.name ?? view.sessionId ?? "subagent"}
         </span>
         {commonBadges(tool)}
         {compact(view.description) ? (
@@ -265,13 +265,12 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {tool.cancelCause ? (
         <CancelCauseDetails cause={tool.cancelCause} />
       ) : null}
-      {tool.awaitMode || tool.cancelPolicy || tool.deadlineAt ? (
+      {tool.awaitMode || tool.deadlineAt ? (
         <div
           className="tool-meta muted small"
           data-testid={`tool-lifecycle-${tool.itemKey}`}
         >
           {tool.awaitMode ? <span>await: {tool.awaitMode}</span> : null}
-          {tool.cancelPolicy ? <span>cancel: {tool.cancelPolicy}</span> : null}
           {tool.deadlineAt ? <span>deadline: {tool.deadlineAt}</span> : null}
         </div>
       ) : null}
@@ -337,13 +336,13 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {payloadReady && view.kind === "subagent" ? (
         <>
           <Payload
-            label={view.action === "spawn" ? "assignment" : "instruction"}
+            label={view.action === "start" ? "assignment" : "message"}
             value={view.description}
           />
-          {view.childRequestId ? (
+          {view.sessionId ? (
             <div className="tool-identity">
-              <span className="tool-detail-label">child request</span>
-              <code>{view.childRequestId}</code>
+              <span className="tool-detail-label">session</span>
+              <code>{view.sessionId}</code>
             </div>
           ) : null}
           <Payload label="result" value={view.output} />
@@ -379,7 +378,6 @@ function UnifiedToolItem({ tool }: { tool: RenderedToolCallView }) {
   return (
     <details
       className={`tool-item tool-item-${tool.presentation.kind}`}
-      data-child-request-id={tool.childRequestId ?? undefined}
       data-testid={`tool-${tool.itemKey}`}
       open={live}
     >

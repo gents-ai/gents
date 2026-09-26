@@ -2,7 +2,6 @@ import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
   BehaviorSaveRequest,
-  CascadeCancelPreview,
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
@@ -12,7 +11,7 @@ import type {
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  SubagentTreeView,
+  SessionProvenanceView,
   TaskRunResult,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
@@ -155,8 +154,8 @@ export function createBridgeHttpAdapter(
       observers.onTaskRunResult?.(result);
       return result;
     },
-    listSubagentTree: async (request) =>
-      client.postJson<SubagentTreeView>("/desktop/subagent-tree", request),
+    sessionProvenance: async (request) =>
+      client.postJson<SessionProvenanceView>("/desktop/session-provenance", request),
     listBackendsWithHealth: async () =>
       client.getJson<BackendHealth[]>("/desktop/backend-health"),
     listMcpServicesWithHealth: async () =>
@@ -168,8 +167,6 @@ export function createBridgeHttpAdapter(
         "/desktop/operations/snapshot",
         request,
       ),
-    previewInterruptCascade: async (request) =>
-      client.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
   };

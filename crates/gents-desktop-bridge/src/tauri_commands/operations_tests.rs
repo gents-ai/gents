@@ -1,8 +1,7 @@
 #![cfg(test)]
 
 use super::operations::{
-    desktop_interrupt_request, desktop_list_subagent_tree, desktop_operations_snapshot,
-    desktop_preview_interrupt_cascade,
+    desktop_interrupt_request, desktop_operations_snapshot, desktop_session_provenance,
 };
 
 #[allow(dead_code)]
@@ -11,7 +10,6 @@ fn _assert_command_signatures() {
     // visible. The Tauri `#[tauri::command]` macro wraps the real function
     // in a synthetic one we don't reference here.
     let _ = desktop_operations_snapshot;
-    let _ = desktop_list_subagent_tree;
-    let _ = desktop_preview_interrupt_cascade;
+    let _ = desktop_session_provenance;
     let _ = desktop_interrupt_request;
 }

@@ -6,7 +6,6 @@ import type {
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 import type {
-  CascadeCancelPreview,
   CodexLoginResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
@@ -20,7 +19,7 @@ import type {
   MCPServiceHealthView,
   ManagedServerStatus,
   McpServiceProbeResult,
-  SubagentTreeView,
+  SessionProvenanceView,
   SyncHealthView,
   TaskRunResult,
   ToolServiceTestResult,
@@ -107,7 +106,6 @@ export type DesktopUiHarnessScenario =
   | "mailbox-overflow"
   | "long-content"
   | "active-turn"
-  | "cascade-turn"
   | "coding"
   | "mobile-performance"
   | "session-hydration"
@@ -304,7 +302,7 @@ export function createDesktopUiHarness(
     scenario === "long-content"
       ? longHarnessMessage()
       : "I am your desktop UI test agent. This seeded turn gives the transcript a stable row for duplicate-message checks.";
-  const activeTurn = scenario === "active-turn" || scenario === "cascade-turn";
+  const activeTurn = scenario === "active-turn";
   sessions.set("session-intro", {
     sessionId: "session-intro",
     agentDid: AGENT_DID,
@@ -428,18 +426,19 @@ export function createDesktopUiHarness(
                 },
                 {
                   itemKey: "intro-subagent",
-                  toolName: "spawn_subagent",
+                  toolName: "create_session",
+                  toolCallId: "call-intro-subagent",
                   statusKind: "success",
                   reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "subagent" as const,
-                    action: "spawn",
+                    action: "start",
                     name: "reviewer",
-                    childRequestId: "request-reviewer",
+                    sessionId: "session-reviewer",
                     description: "Review the parser change for correctness.",
-                    output: "Child request created.",
+                    output: "Session started.",
                   },
-                  awaitMode: "blocking",
+                  awaitMode: "background",
                 },
                 {
                   itemKey: "intro-process",
@@ -454,7 +453,6 @@ export function createDesktopUiHarness(
                     output: null,
                   },
                   awaitMode: "background",
-                  cancelPolicy: "cascade",
                 },
                 {
                   itemKey: "intro-mcp",
@@ -2249,28 +2247,14 @@ export function createDesktopUiHarness(
       };
     },
     async cancelClaudeLogin() {},
-    async listSubagentTree(request) {
-      const tree: SubagentTreeView = {
-        rootRequestId: request.rootRequestId,
+    async sessionProvenance(request) {
+      const view: SessionProvenanceView = {
+        sessionId: request.sessionId,
+        received: [],
+        sent: [],
         truncated: false,
-        nodes: [
-          {
-            requestId: request.rootRequestId,
-            resolvedVia: null,
-            sessionId: findSessionByRequest(request.rootRequestId)?.sessionId ?? null,
-            agentDid: deployment.agentDid,
-            behaviorId: deployment.agentPrincipal.defaultBehaviorId,
-            lifecycleState: "completed",
-            subagentDepth: 0,
-            causedByParentRequestId: null,
-            causedByParentToolCallId: null,
-            backendId: null,
-          },
-        ],
-        edges: [],
-        partialErrors: [],
       };
-      return tree;
+      return view;
     },
     async listBackendsWithHealth() {
       if (scenario === "backend-health-error") {
@@ -2341,55 +2325,8 @@ export function createDesktopUiHarness(
         livenessUnavailableReason: null,
         backgroundedTools: [],
         stuckDiagnostics: [],
-        lineage: null,
       };
       return operations;
-    },
-    async previewInterruptCascade(request) {
-      const cascadeChildren =
-        scenario === "cascade-turn"
-          ? [
-              {
-                requestId: "request_01JZ6Q0Y5Q7V0MOBILE_CASCADE_CHILD_WITHOUT_BREAKS",
-                sessionId: "session_01JZ6Q0Y5Q7V0MOBILE_CASCADE_CHILD_WITHOUT_BREAKS",
-                behaviorId: "ops",
-                lifecycleState: "processing",
-                parentRequestId: request.requestId,
-                parentToolCallId:
-                  "tool_call_01JZ6Q0Y5Q7V0MOBILE_CASCADE_PARENT_WITHOUT_BREAKS",
-                toolName:
-                  "mcp__subagent_coordinator__delegate_to_remote_behavior_without_breaks",
-                awaitMode: "foreground",
-                cancelPolicy: "cascade",
-              },
-            ]
-          : [];
-      const preview: CascadeCancelPreview = {
-        rootRequestId: request.requestId,
-        previewSignature: `preview-${request.requestId}`,
-        rootState: activeTurn ? "processing" : "completed",
-        willInterrupt: cascadeChildren,
-        willDetach: [],
-        alreadyTerminal: [
-          ...(activeTurn
-            ? []
-            : [
-                {
-                  requestId: request.requestId,
-                  sessionId: null,
-                  behaviorId: deployment.agentPrincipal.defaultBehaviorId,
-                  lifecycleState: "completed",
-                  parentRequestId: null,
-                  parentToolCallId: null,
-                  toolName: null,
-                  awaitMode: null,
-                  cancelPolicy: null,
-                },
-              ]),
-        ],
-        unknownPolicy: [],
-      };
-      return preview;
     },
     async interruptRequest(request) {
       const result: InterruptRequestResult = {
@@ -2397,8 +2334,6 @@ export function createDesktopUiHarness(
         accepted: true,
         interruptRequestedAt: new Date().toISOString(),
         alreadyInterrupted: false,
-        stalePreview: false,
-        preview: null,
       };
       return result;
     },
@@ -2433,12 +2368,6 @@ export function createDesktopUiHarness(
       behaviorId,
       lifecycleState: "completed",
     };
-  }
-
-  function findSessionByRequest(requestId: string) {
-    return Array.from(sessions.values()).find(
-      (session) => session.latestRequestId === requestId,
-    );
   }
 
   const performance: MobilePerformanceHarnessController | null =
@@ -3081,7 +3010,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mailbox-overflow":
     case "long-content":
     case "active-turn":
-    case "cascade-turn":
     case "coding":
     case "mobile-performance":
     case "session-hydration":

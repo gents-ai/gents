@@ -101,12 +101,11 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_p2p_repair", "fleet-admin"),
         // operations-read
         ("desktop_operations_snapshot", "operations-read"),
-        ("desktop_list_subagent_tree", "operations-read"),
+        ("desktop_session_provenance", "operations-read"),
         ("desktop_list_backends_with_health", "operations-read"),
         ("desktop_list_mcp_services_with_health", "operations-read"),
         ("desktop_probe_mcp_service", "operations-read"),
-        // interrupt-read / interrupt-control
-        ("desktop_preview_interrupt_cascade", "interrupt-read"),
+        // interrupt-control
         ("desktop_interrupt_request", "interrupt-control"),
         // config-write (save/delete/test/auth)
         ("desktop_agent_config_save", "config-write"),
@@ -191,7 +190,6 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("packs-admin", "mutate"),
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
-        ("interrupt-read", "read"),
         ("interrupt-control", "mutate"),
         // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
@@ -482,11 +480,10 @@ mod tests {
             ("desktop_peer_enroll_status", "mutate"),
             ("desktop_p2p_repair", "mutate"),
             ("desktop_operations_snapshot", "read"),
-            ("desktop_list_subagent_tree", "read"),
+            ("desktop_session_provenance", "read"),
             ("desktop_list_backends_with_health", "read"),
             ("desktop_list_mcp_services_with_health", "read"),
             ("desktop_probe_mcp_service", "read"),
-            ("desktop_preview_interrupt_cascade", "read"),
             ("desktop_interrupt_request", "mutate"),
             ("desktop_agent_config_save", "mutate"),
             ("desktop_default_behavior_set", "mutate"),

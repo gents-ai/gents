@@ -10,8 +10,6 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "invalidArgument",
   "unsupported",
   "endpointUnreachable",
-  "stalePreview",
-  "cascadeDepthExceeded",
   "pathEscapesRoot",
   "backend",
   "incompatibleLocalStore",

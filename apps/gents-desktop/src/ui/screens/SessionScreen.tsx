@@ -81,7 +81,6 @@ import { activityStatus, isStopping } from "./activity-status";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
 import { BehaviorHoverCard } from "./HoverCards";
-import { CascadeDialog } from "./CascadeDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -94,8 +93,8 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Markdown } from "./Markdown";
 import { ToolBody } from "./tool-views";
-import { WorkerStep, isWorkerStep } from "./WorkerStep";
-import { useWorkers, type Workers } from "./workers";
+import { SubagentList, WorkerStep, isWorkerStep, subagentName } from "./WorkerStep";
+import { NO_WORKERS, useSessionProvenance, useWorkers, type Workers } from "./workers";
 import { useParentWork, type ParentWork } from "./parentWork";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { ArrowUpRight } from "lucide-react";
@@ -358,27 +357,18 @@ export function SessionSubmissionStatus({
 /* an earlier request's failure, shown where it happened; the session has
    moved on to a later request, so there is nothing to retry here */
 
-/* where this session came from: the parent that started it, from
-   provenance; how the two are bound (await mode, cancel policy) waits in
-   the link's title rather than the header line */
+/* where this session came from: the session whose call started it, from
+   provenance. It is an ordinary session; the link opens it as one. */
 function ParentLine({ work }: { work: ParentWork }) {
   if (!work.parent) return null;
-  const edge = work.edge;
-  const how = [
-    edge?.awaitMode === "background" ? "runs in the background" : edge?.awaitMode,
-    edge?.cancelPolicy ? `${edge.cancelPolicy} on cancel` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   return (
     <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       Started by
       <a
         href={href({ name: "session", sessionId: work.parent.sessionId })}
-        title={how || undefined}
         className="flex min-w-0 items-center gap-0.5 truncate hover:text-foreground hover:underline"
       >
-        {work.parent.title ?? "its parent"}
+        {work.parent.summary?.title ?? "another session"}
         <ArrowUpRight className="size-3 shrink-0" />
       </a>
     </span>
@@ -452,16 +442,12 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
-/* what the parent knows about its delegated work; memoised items read it
-   from context so a lineage refresh re-renders only the worker rows */
-const WorkersContext = createContext<Workers>({
-  byChildRequest: () => null,
-  byToolCall: () => null,
-  loaded: false,
-});
+/* the sessions this one reached; memoised items read it from context so a
+   lineage refresh re-renders only the subagent rows */
+const WorkersContext = createContext<Workers>(NO_WORKERS);
 
-/* the parent this session works for, if any; a turn the parent sent is
-   labeled as such above the message */
+/* the sessions that sent work into this one; a turn another session sent is
+   labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
 
 /* one tool call as a row, wherever it sits: loose in the group, or among
@@ -492,7 +478,11 @@ function WorkerRunStep({
   const deployment = useDeployment();
   const first = tools[0]!;
   const p = first.presentation;
-  const name = (p.kind === "subagent" && p.name) || "a worker";
+  const reached = workers.byToolCall(first);
+  const name = subagentName(
+    reached?.subagent ?? null,
+    p.kind === "subagent" ? p.name : null,
+  );
   const last = tools[tools.length - 1]!;
   const failed = tools.some(
     (t) => t.statusKind === "error" || t.statusKind === "failed",
@@ -501,9 +491,7 @@ function WorkerRunStep({
      avatar the session list and the parent's turns use. A worker with
      no session summary has no behavior to wear, and falls back to the
      kind's glyph. */
-  const child = p.kind === "subagent" && p.childRequestId;
-  const behaviorId =
-    (child && workers.byChildRequest(child)?.summary?.behaviorId) || null;
+  const behaviorId = reached?.subagent.summary?.behaviorId ?? null;
   return (
     <ToolStep
       label={name}
@@ -560,35 +548,31 @@ const TranscriptItem = memo(function TranscriptItem({
   switch (item.kind) {
     case "userMessage":
     case "pendingUserTurn": {
-      const kind = item.content ? (parentWork?.sentBy(item.content) ?? null) : null;
+      const sender = parentWork?.sentBy(item.requestId) ?? null;
       const message = (
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
-      if (!kind || !parentWork?.parent) return message;
-      /* a turn the parent sent wears the parent's mark, the way any other
-         sender would; its state, where the mark cannot say it, is a chip
-         seated on the bubble's bottom edge */
-      const state =
-        item.kind === "pendingUserTurn"
-          ? "Queued"
-          : kind === "interruption"
-            ? "Interrupt"
-            : null;
+      if (!sender) return message;
+      const senderName = sender.summary?.title ?? "another session";
+      /* a turn another session sent wears that session's mark, the way any
+         other sender would; its state, where the mark cannot say it, is a
+         chip seated on the bubble's bottom edge */
+      const state = item.kind === "pendingUserTurn" ? "Queued" : null;
       return (
         /* the mark hangs in the transcript's right gutter, seated on the
            first line's center: the bubble's own my-1 and py-3 put that 26px
            down, half the avatar is 12 */
         <div className={cn("relative", state && "mb-2")}>
           <BehaviorAvatar
-            name={parentWork.parentBehaviorName ?? parentWork.parent.title ?? "parent"}
-            behaviorId={parentWork.parent.behaviorId}
+            name={sender.behaviorName ?? senderName}
+            behaviorId={sender.summary?.behaviorId ?? null}
             /* in the gutter where there is one; seated on the bubble's
                top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
             aria-hidden={false}
             role="img"
-            aria-label={`Sent by ${parentWork.parent.title ?? "the parent"}`}
-            title={`Sent by ${parentWork.parent.title ?? "the parent"}`}
+            aria-label={`Sent by ${senderName}`}
+            title={`Sent by ${senderName}`}
           />
           <div className="relative min-w-0">
             {message}
@@ -659,7 +643,6 @@ const TranscriptItem = memo(function TranscriptItem({
 
 const STOP_SOURCES: Record<string, string> = {
   requestInterrupt: "a stop request on this request",
-  parentCascade: "a stop request on its parent",
   requestLifecycle: "the request's lifecycle state",
   deadline: "its deadline",
 };
@@ -856,7 +839,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const { draft, setDraft } = shell;
-  const [cascadeFor, setCascadeFor] = useState<string | null>(null);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
@@ -936,8 +918,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   });
   const choice = useBehaviorChoice(shell);
   const deployment = shell.selectedDeployment;
-  const workers = useWorkers(shell);
-  const parentWork = useParentWork(shell);
+  const provenance = useSessionProvenance(shell);
+  const workers = useWorkers(shell, provenance);
+  const parentWork = useParentWork(shell, provenance);
   /* the composer mounts with the session, not with the screen, so this
      measures from a callback ref rather than an effect that would run once
      while it was still absent. The height goes on the column, not the
@@ -980,14 +963,28 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       window.removeEventListener("resize", publish);
     };
   }, []);
-  /* a person acting on a worker from here: cancel is the desktop's
-     interrupt after the cascade preview, the same path as Stop */
+  /* a person stopping a subagent from here: the desktop's interrupt on the
+     one request it is working on, on its own agent */
   const workerActions = useMemo<WorkerActions>(
     () => ({
-      parentRequestId: session?.latestRequestId ?? null,
-      cancel: (requestId) => setCascadeFor(requestId),
+      stop: (request) => {
+        void shell.api
+          .interruptRequest({
+            requestId: request.requestId,
+            agentDid: request.agentDid,
+            cause: "userCancelled",
+          })
+          .then(
+            (r) => {
+              if (!r.accepted && !r.alreadyInterrupted)
+                toast("That subagent had already finished.");
+            },
+            (e: unknown) =>
+              toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`),
+          );
+      },
     }),
-    [session?.latestRequestId],
+    [shell.api],
   );
   const agentName = deployment?.agentPrincipal.displayName ?? "the agent";
   /* the snapshot says what happened in a session; the summary says where it
@@ -1117,8 +1114,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const holdsHere = shell.holds.filter((h) => h.sessionId === session?.sessionId);
   const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
 
-  /* stop: the desktop previews the cascade first; with no children it
-     interrupts at once, otherwise it asks */
+  /* stop: the interrupt reaches this request only; sessions it started keep
+     their own work, each stoppable from its row or its own screen */
   const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
   const stopping = isStopping({
     inFlight,
@@ -1135,25 +1132,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      const preview = await shell.api.previewInterruptCascade({
-        requestId,
-        agentDid: shell.selectedAgentDid,
-        includeTerminal: false,
-      });
-      const kids =
-        preview.willInterrupt.length +
-        preview.willDetach.length +
-        preview.unknownPolicy.length;
-      if (kids > 0) {
-        release();
-        return setCascadeFor(requestId);
-      }
       const r = await shell.api.interruptRequest({
         requestId,
         agentDid: shell.selectedAgentDid,
         cause: "userCancelled",
-        cascade: false,
-        expectedPreviewSignature: null,
       });
       if (!r.accepted && !r.alreadyInterrupted) {
         release();
@@ -1255,14 +1237,14 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             the composer sticks to the foot so the bar runs the full height */}
         <div ref={column} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
-            {/* the right gutter is the parent marks' column, so it is only
-                  spent where marks can appear: a session with a parent, on a
+            {/* the right gutter is the sender marks' column, so it is only
+                  spent where marks can appear: a session another sent to, on a
                   screen wide enough to give the width away. Elsewhere the
                   column keeps its even padding. */}
             <div
               className={cn(
                 "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
-                parentWork.parent && "sm:pr-14",
+                parentWork.hasSenders && "sm:pr-14",
               )}
             >
               <a
@@ -1295,6 +1277,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   {parentWork.parent && (
                     <div className="mt-1 mb-1">
                       <ParentLine work={parentWork} />
+                    </div>
+                  )}
+                  {workers.all.length > 0 && (
+                    <div className="mt-1 mb-1">
+                      <SubagentList workers={workers} />
                     </div>
                   )}
                   {summary &&
@@ -1554,13 +1541,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <CascadeDialog
-        shell={shell}
-        requestId={cascadeFor}
-        onClose={() => setCascadeFor(null)}
-        onStopRequested={setRequestedStop}
-        onFailure={(text) => toast(text)}
-      />
     </div>
   );
 }

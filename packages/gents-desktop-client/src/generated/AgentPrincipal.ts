@@ -6,6 +6,11 @@
  */
 export type AgentPrincipal = { agent_did: string, display_name?: string | null, default_behavior_id?: string | null, enabled?: boolean | null, created_at?: string | null, created_by?: string | null,
 /**
+ * Admission bound on a request's causal hop (`subagent_depth`). Absent
+ * uses [`DEFAULT_MAX_REQUEST_HOP`].
+ */
+max_request_hop?: number | null,
+/**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */
 tags?: Array<string> | null, };

@@ -145,7 +145,7 @@ mod tests {
         );
         let invalid: Tools = serde_json::from_value(json!({
             "agent_did":"did:test:owner", "tools_id":tools.tools_id,
-            "subagents":{"target_ids":["missing"],"spawn_enabled":true}
+            "subagents":{"target_ids":["missing"],"enabled":true}
         }))?;
         assert!(upsert_tools(&node, &invalid).await.is_err());
         let mut replaced = tools.clone();

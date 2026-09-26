@@ -13,10 +13,7 @@ pub struct ToolCallRow {
     pub started_at: Option<String>,
     pub deadline_at: Option<String>,
     pub await_mode: Option<String>,
-    pub cancel_policy: Option<String>,
-    pub child_request_id: Option<String>,
     pub stuck_since: Option<String>,
-    pub cancel_pending_remote_ack: bool,
 }
 
 const TERMINAL_LIFECYCLE_STATES: &[&str] =
@@ -55,10 +52,7 @@ pub fn project_backgrounded_tools(
                 deadline_at: r.deadline_at.clone(),
                 deadline_expired,
                 await_mode: r.await_mode.clone(),
-                cancel_policy: r.cancel_policy.clone(),
-                child_request_id: r.child_request_id.clone(),
                 stuck_since: r.stuck_since.clone(),
-                cancel_pending_remote_ack: r.cancel_pending_remote_ack,
                 native_executor,
             }
         })
@@ -73,25 +67,17 @@ pub fn stuck_diagnostics_from_tool_calls(rows: &[ToolCallRow]) -> Vec<StuckWorkD
                 .as_deref()
                 .is_some_and(|s| TERMINAL_LIFECYCLE_STATES.contains(&s))
         })
-        .filter_map(|r| {
-            let reason = if r.cancel_pending_remote_ack {
-                "pendingRemoteCancelAck"
-            } else if r.stuck_since.is_some() {
-                "stuckTool"
-            } else {
-                return None;
-            };
-            Some(StuckWorkDiagnosticView {
-                request_id: r.request_id.clone(),
-                session_id: None,
-                severity: "warning".to_string(),
-                reason: reason.to_string(),
-                deadline_age_ms: None,
-                last_progress_age_ms: None,
-                tool_call_id: Some(r.tool_call_id.clone()),
-                tool_name: Some(r.tool_name.clone()),
-                stuck_since: r.stuck_since.clone(),
-            })
+        .filter(|r| r.stuck_since.is_some())
+        .map(|r| StuckWorkDiagnosticView {
+            request_id: r.request_id.clone(),
+            session_id: None,
+            severity: "warning".to_string(),
+            reason: "stuckTool".to_string(),
+            deadline_age_ms: None,
+            last_progress_age_ms: None,
+            tool_call_id: Some(r.tool_call_id.clone()),
+            tool_name: Some(r.tool_name.clone()),
+            stuck_since: r.stuck_since.clone(),
         })
         .collect()
 }

@@ -6,7 +6,12 @@ import type { ToolPresentationView } from "./ToolPresentationView.js";
 
 export type RenderedToolCallView = { itemKey: string, toolName: string, statusKind: string,
 /**
- * Request that issued this call, in the same logical identity as
- * `child_request_id` and a subagent lineage root.
+ * Request that issued this call; a request it caused names it as
+ * `caused_by_parent_request_id`.
  */
-requestId?: string | null, childRequestId?: string | null, awaitMode?: string | null, cancelPolicy?: string | null, startedAt?: string | null, deadlineAt?: string | null, completedAt?: string | null, presentation: ToolPresentationView, reconstruction: MessageReconstructionView, partialOutputTail?: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };
+requestId?: string | null,
+/**
+ * The call's logical id; a request it caused names it as
+ * `caused_by_parent_tool_call_id`.
+ */
+toolCallId?: string | null, awaitMode?: string | null, startedAt?: string | null, deadlineAt?: string | null, completedAt?: string | null, presentation: ToolPresentationView, reconstruction: MessageReconstructionView, partialOutputTail?: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };

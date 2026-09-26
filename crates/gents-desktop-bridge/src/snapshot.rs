@@ -176,14 +176,8 @@ use runtime_tasks::{request_matches_agent, source_matches_agent};
 mod runtime;
 pub use runtime::build_runtime_snapshot;
 
-#[path = "snapshot/operations_signature.rs"]
-pub mod operations_signature;
-
 #[path = "snapshot/operations_snapshot.rs"]
 pub mod operations_snapshot;
-pub use operations_signature::{
-    compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
-};
 
 #[path = "snapshot/session.rs"]
 mod session;

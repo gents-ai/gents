@@ -1678,13 +1678,8 @@ def caseCoverage : List CoverageEntry :=
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"
-      "ToolCall"
-      "gents_desktop_bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature")
-      "interrupt-and-cancel" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "state_machine"
       "Request"
-      "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches")
+      "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_returns_accepted")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (followUpCoverage
       "workspace_cases"

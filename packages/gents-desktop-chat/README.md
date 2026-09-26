@@ -17,4 +17,4 @@ import {
 /* Host semantic-token overrides come last. */
 ```
 
-**Required bridge grants:** default + session-read + chat-write + resend-control + interrupt-read + interrupt-control.
+**Required bridge grants:** default + session-read + chat-write + resend-control + interrupt-control.

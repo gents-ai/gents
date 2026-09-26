@@ -182,7 +182,7 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
     forkSession,
     refreshSnapshot: vi.fn(),
     api: {
-      listSubagentTree: vi.fn().mockResolvedValue(null),
+      sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
     },
   } as unknown as Shell;

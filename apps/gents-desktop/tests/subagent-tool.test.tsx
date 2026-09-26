@@ -5,7 +5,7 @@ import { MessageList } from "@source-inc/gents-desktop-chat";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
 describe("subagent transcript tool", () => {
-  it("renders a running child as an open lifecycle card", () => {
+  it("renders a running subagent start as an open lifecycle card", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "toolGroup",
@@ -14,16 +14,15 @@ describe("subagent transcript tool", () => {
         tools: [
           {
             itemKey: "spawn-1",
-            toolName: "spawn_subagent",
+            toolName: "create_session",
             status: "running",
             statusKind: "running",
-            childRequestId: "child-request-123456789",
             awaitMode: "background",
             presentation: {
               kind: "subagent",
-              action: "spawn",
+              action: "start",
               name: "researcher",
-              childRequestId: "child-request-123456789",
+              sessionId: "session-123456789",
               description: "Trace the completion control flow",
               output: null,
             },
@@ -41,7 +40,6 @@ describe("subagent transcript tool", () => {
 
     expect(card).not.toBeNull();
     expect(card?.hasAttribute("open")).toBe(true);
-    expect(card?.getAttribute("data-child-request-id")).toBe("child-request-123456789");
     expect(getByText("researcher")).toBeTruthy();
     expect(getByText("background")).toBeTruthy();
     expect(getByText("working")).toBeTruthy();
@@ -49,7 +47,7 @@ describe("subagent transcript tool", () => {
     expect(getByText("Reading watcher.rs")).toBeTruthy();
   });
 
-  it("renders terminal child output and status", () => {
+  it("renders a terminal message output and status", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "toolGroup",
@@ -58,16 +56,15 @@ describe("subagent transcript tool", () => {
         tools: [
           {
             itemKey: "spawn-complete",
-            toolName: "spawn_subagent",
+            toolName: "send_message",
             status: "completed",
             statusKind: "success",
-            childRequestId: "child-complete",
-            awaitMode: "foreground",
+            awaitMode: "background",
             presentation: {
               kind: "subagent",
-              action: "spawn",
+              action: "message",
               name: "reviewer",
-              childRequestId: "child-complete",
+              sessionId: "session-complete",
               description: "Review the patch",
               output: "No blocking issues found.",
             },
@@ -80,7 +77,8 @@ describe("subagent transcript tool", () => {
     const { getByText } = render(<MessageList timelineItems={items} />);
 
     expect(getByText("completed")).toBeTruthy();
-    expect(getByText("foreground")).toBeTruthy();
+    expect(getByText("background")).toBeTruthy();
+    expect(getByText("session-complete")).toBeTruthy();
     expect(getByText("No blocking issues found.")).toBeTruthy();
   });
 });

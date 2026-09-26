@@ -2,8 +2,8 @@
 import type { SessionFork } from "./SessionFork.js";
 
 /**
- * These origins can coexist: a graph stage invokes a task, and a subagent can
- * be spawned within that work. References record actual creation facts; they
+ * These origins can coexist: a graph stage invokes a task, and that work can
+ * start another session with `create_session`. References record actual creation facts; they
  * neither select configuration nor confer graph membership or authorization.
  */
 export type SessionProvenance = {
@@ -16,7 +16,9 @@ task_id?: string | null,
  */
 graph_run_id?: string | null,
 /**
- * Exact causal request document for a spawned session, not its logical label.
+ * Exact causal request document for a session started by `create_session`,
+ * copied from its first request's `caused_by_parent_request_doc_id`. It is
+ * provenance only: no hierarchy, cascade or authority follows from it.
  * Further tool-call/trigger lineage remains on the existing request owners.
  */
 parent_request_doc_id?: string | null, fork?: SessionFork | null, };

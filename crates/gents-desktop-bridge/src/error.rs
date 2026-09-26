@@ -18,10 +18,6 @@ pub enum BridgeErrorCode {
     Unsupported,
     /// Peer / runtime HTTP endpoint was unreachable.
     EndpointUnreachable,
-    /// Cascade preview signature was missing or drifted.
-    StalePreview,
-    /// Cascade walk exceeded the safety depth limit.
-    CascadeDepthExceeded,
     /// Path escaped an authorized workspace root.
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
@@ -52,8 +48,6 @@ impl BridgeErrorCode {
             Self::InvalidArgument => "invalidArgument",
             Self::Unsupported => "unsupported",
             Self::EndpointUnreachable => "endpointUnreachable",
-            Self::StalePreview => "stalePreview",
-            Self::CascadeDepthExceeded => "cascadeDepthExceeded",
             Self::PathEscapesRoot => "pathEscapesRoot",
             Self::Backend => "backend",
             Self::IncompatibleLocalStore => "incompatibleLocalStore",
@@ -70,7 +64,6 @@ impl BridgeErrorCode {
             Self::ClientStartFailed
                 | Self::EndpointUnreachable
                 | Self::Backend
-                | Self::StalePreview
                 | Self::Pairing
                 | Self::CredentialNotSaved
         )
@@ -173,11 +166,11 @@ mod tests {
 
     #[test]
     fn bridge_error_serializes_camel_case() {
-        let err = BridgeError::new(BridgeErrorCode::StalePreview, "preview drifted");
+        let err = BridgeError::new(BridgeErrorCode::Backend, "store unavailable");
         let json = serde_json::to_value(&err).expect("serialize");
-        assert_eq!(json["code"], "stalePreview");
+        assert_eq!(json["code"], "backend");
         assert_eq!(json["retryable"], true);
-        assert_eq!(json["message"], "preview drifted");
+        assert_eq!(json["message"], "store unavailable");
         assert!(json["endpoint"].is_null());
     }
 

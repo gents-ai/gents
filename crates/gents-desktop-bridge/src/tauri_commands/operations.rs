@@ -5,15 +5,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use gents::backend_registry::{list_all_backends, lookup_backend_observation};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::subagent_tree::{
-    build_subagent_tree_from, effective_subagent_tree_max_depth, SubagentTree, SubagentTreeAccess,
-};
 use gents_desktop_core::client::ClientCore;
-#[cfg(test)]
-use reqwest::Url;
 use tauri::State;
 
 use crate::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
@@ -22,11 +16,11 @@ use crate::snapshot::operations_snapshot::{
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
-    DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, InferenceCallSummaryView,
-    InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView,
-    RuntimeLivenessView, SubagentEdgeView, SubagentNodeView, SubagentTreeView,
+    BackendHealthView, DesktopInterruptRequest, DesktopOperationsSnapshot,
+    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    DesktopSessionProvenanceRequest, InferenceCallSummaryView, InterruptRequestResult,
+    MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, RuntimeLivenessView,
+    SessionProvenanceView,
 };
 
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
@@ -84,7 +78,6 @@ pub async fn desktop_operations_snapshot(
         liveness_unavailable_reason: None,
         backgrounded_tools,
         stuck_diagnostics,
-        lineage: None,
     })
 }
 
@@ -145,22 +138,10 @@ async fn fetch_background_tool_calls(
                 .get("await_mode")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            cancel_policy: row
-                .get("cancel_policy")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            child_request_id: row
-                .get("child_request_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
             stuck_since: row
                 .get("stuck_since")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            cancel_pending_remote_ack: row
-                .get("cancel_pending_remote_ack")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
         })
         .collect())
 }
@@ -187,10 +168,7 @@ fn background_tool_calls_query(agent_did: &str) -> String {
                 started_at
                 deadline_at
                 await_mode
-                cancel_policy
-                child_request_id
                 stuck_since
-                cancel_pending_remote_ack
             }}
         }}
     "#
@@ -213,11 +191,10 @@ mod background_tool_query_tests {
 }
 
 #[tauri::command]
-pub async fn desktop_list_subagent_tree(
+pub async fn desktop_session_provenance(
     state: State<'_, DesktopAppState>,
-    request: DesktopListSubagentTreeRequest,
-) -> Result<SubagentTreeView, BridgeError> {
-    let root = request.root().map_err(BridgeError::untyped)?;
+    request: DesktopSessionProvenanceRequest,
+) -> Result<SessionProvenanceView, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
     let agent_did = request
@@ -228,188 +205,7 @@ pub async fn desktop_list_subagent_tree(
         .map(str::to_owned)
         .or_else(|| core.selected_agent_did())
         .ok_or_else(|| BridgeError::untyped("no agent selected; pass agentDid explicitly"))?;
-
-    let mut accesses = vec![SubagentTreeAccess {
-        label: None,
-        access: ConfigAccess::Local(core.node_arc()),
-    }];
-    for record in core.peer_records().await {
-        let Some(graphql) = record
-            .graphql
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        accesses.push(SubagentTreeAccess {
-            label: Some(record.label.clone()),
-            access: ConfigAccess::Graphql(graphql.to_string()),
-        });
-    }
-
-    let tree = build_subagent_tree_from(
-        &accesses,
-        root,
-        Some(&agent_did),
-        request.include_terminal.unwrap_or(false),
-        effective_subagent_tree_max_depth(request.max_depth),
-    )
-    .await
-    .map_err(|error| BridgeError::untyped(format!("subagent tree query failed: {error:#}")))?;
-
-    Ok(subagent_tree_view_from_gents(tree))
-}
-
-/// The bridge's TS-bound presentation shape, built from the owned
-/// `gents::subagent_tree` projection (#1334). `pub` so the fixture-host's
-/// bridge_runner HTTP shim (a separate crate wrapping the same local-node
-/// query) shares the conversion rather than duplicating it.
-pub fn subagent_tree_view_from_gents(tree: SubagentTree) -> SubagentTreeView {
-    SubagentTreeView {
-        root_request_id: tree.root_request_id,
-        nodes: tree
-            .nodes
-            .into_iter()
-            .map(|node| SubagentNodeView {
-                request_id: node.request_id,
-                resolved_via: node.resolved_via,
-                session_id: node.session_id,
-                agent_did: node.agent_did,
-                behavior_id: node.behavior_id,
-                lifecycle_state: node.lifecycle_state,
-                subagent_depth: node.subagent_depth,
-                caused_by_parent_request_id: node.caused_by_parent_request_id,
-                caused_by_parent_tool_call_id: node.caused_by_parent_tool_call_id,
-                backend_id: node.backend_id,
-            })
-            .collect(),
-        edges: tree
-            .edges
-            .into_iter()
-            .map(|edge| SubagentEdgeView {
-                parent_request_id: edge.parent_request_id,
-                child_request_id: edge.child_request_id,
-                parent_tool_call_id: edge.parent_tool_call_id,
-                tool_name: edge.tool_name,
-                await_mode: edge.await_mode,
-                cancel_policy: edge.cancel_policy,
-                lifecycle_state: edge.lifecycle_state,
-            })
-            .collect(),
-        truncated: tree.truncated,
-        partial_errors: tree.partial_errors,
-    }
-}
-
-#[cfg(test)]
-fn subagent_tree_url(
-    graphql: &str,
-    root_request_id: &str,
-    request: &DesktopListSubagentTreeRequest,
-) -> Result<Url, BridgeError> {
-    let trimmed = graphql.trim();
-    if trimmed.is_empty() {
-        return Err(BridgeError::untyped("agent graphql URL is empty"));
-    }
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
-    };
-    let mut url = Url::parse(&with_scheme).map_err(|error| {
-        BridgeError::untyped(format!("agent graphql URL is not a valid URL: {error}"))
-    })?;
-    let path = url.path().trim_end_matches('/').to_string();
-    if path.is_empty() || path == "/api/v0" || path == "/api/v0/graphql" {
-        url.set_path("/subagents/tree");
-    } else if !path.ends_with("/subagents/tree") {
-        url.set_path(&format!("{path}/subagents/tree"));
-    }
-    url.set_query(None);
-    url.set_fragment(None);
-
-    let mut pairs = url.query_pairs_mut();
-    pairs.append_pair("root_request_id", root_request_id);
-    if let Some(include_terminal) = request.include_terminal {
-        pairs.append_pair("include_terminal", &include_terminal.to_string());
-    }
-    if let Some(max_depth) = request.max_depth {
-        pairs.append_pair("max_depth", &max_depth.to_string());
-    }
-    drop(pairs);
-    Ok(url)
-}
-
-#[cfg(test)]
-mod subagent_tree_url_tests {
-    use super::*;
-
-    fn request(
-        include_terminal: Option<bool>,
-        max_depth: Option<u32>,
-    ) -> DesktopListSubagentTreeRequest {
-        DesktopListSubagentTreeRequest {
-            root_request_id: Some("req-root".to_string()),
-            root_request_doc_id: None,
-            agent_did: None,
-            include_terminal,
-            max_depth,
-        }
-    }
-
-    #[test]
-    fn strips_graphql_path_and_appends_subagents_tree() {
-        let url = subagent_tree_url(
-            "http://127.0.0.1:9181/api/v0/graphql",
-            "req-root",
-            &request(None, None),
-        )
-        .unwrap();
-        assert_eq!(url.path(), "/subagents/tree");
-        assert!(url.query().unwrap().contains("root_request_id=req-root"));
-    }
-
-    #[test]
-    fn accepts_bare_host_and_defaults_scheme() {
-        let url =
-            subagent_tree_url("127.0.0.1:9181", "req-root", &request(Some(true), Some(4))).unwrap();
-        assert_eq!(url.scheme(), "http");
-        assert_eq!(url.path(), "/subagents/tree");
-        let query = url.query().unwrap();
-        assert!(query.contains("include_terminal=true"));
-        assert!(query.contains("max_depth=4"));
-    }
-
-    #[test]
-    fn preserves_remote_host_and_port() {
-        let url = subagent_tree_url(
-            "https://runtime.example.com:8443/api/v0/graphql",
-            "req-root",
-            &request(None, None),
-        )
-        .unwrap();
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("runtime.example.com"));
-        assert_eq!(url.port(), Some(8443));
-        assert_eq!(url.path(), "/subagents/tree");
-    }
-
-    #[test]
-    fn rejects_empty_graphql_url() {
-        let err = subagent_tree_url("   ", "req-root", &request(None, None)).unwrap_err();
-        assert!(err.message.contains("empty"));
-    }
-}
-
-#[tauri::command]
-pub async fn desktop_preview_interrupt_cascade(
-    state: State<'_, DesktopAppState>,
-    request: DesktopPreviewInterruptCascadeRequest,
-) -> Result<CascadeCancelPreview, BridgeError> {
-    let core = crate::state::current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
-    crate::cascade::build_cascade_preview(&core, &request)
+    crate::provenance::session_provenance(&core, &agent_did, &request.session_id)
         .await
         .map_err(BridgeError::untyped)
 }
@@ -425,17 +221,15 @@ pub async fn desktop_interrupt_request(
         target: "gents_desktop::interrupt",
         request_id = %request.request_id,
         agent_did = %request.agent_did.as_deref().unwrap_or(""),
-        cascade = request.cascade,
         "desktop interrupt action received"
     );
-    let result = crate::cascade::interrupt_request(&core, &request).await;
+    let result = crate::interrupt::interrupt_request(&core, &request).await;
     match &result {
         Ok(result) => tracing::info!(
             target: "gents_desktop::interrupt",
             request_id = %result.request_id,
             accepted = result.accepted,
             already_interrupted = result.already_interrupted,
-            stale_preview = result.stale_preview,
             interrupt_requested_at = %result.interrupt_requested_at.as_deref().unwrap_or(""),
             "desktop interrupt action completed"
         ),
@@ -443,7 +237,6 @@ pub async fn desktop_interrupt_request(
             target: "gents_desktop::interrupt",
             request_id = %request.request_id,
             agent_did = %request.agent_did.as_deref().unwrap_or(""),
-            cascade = request.cascade,
             error,
             "desktop interrupt action failed"
         ),

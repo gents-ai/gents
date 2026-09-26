@@ -5,14 +5,8 @@ use super::super::types::{ToolCallView, ToolDiffLineKind, ToolDiffLineView, Tool
 const COMMAND_TOOLS: &[&str] = &["bash", "bash_unrestricted", "gents_exec", "exec_command"];
 const FILE_READ_TOOLS: &[&str] = &["read_file", "grep", "glob", "list_files"];
 const FILE_EDIT_TOOLS: &[&str] = &["write_file", "edit_file"];
-const SUBAGENT_TOOLS: &[&str] = &[
-    "spawn_subagent",
-    "wait_subagent",
-    "list_subagents",
-    "read_subagent",
-    "steer_subagent",
-    "cancel_subagent",
-];
+/// The session-message tools; the UX calls the sessions they reach subagents.
+const SUBAGENT_TOOLS: &[&str] = &["create_session", "send_message"];
 const PROCESS_TOOLS: &[&str] = &[
     "spawn_process",
     "wait_process",
@@ -425,7 +419,7 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
 
 fn action_label(name: &str, suffix: &str) -> String {
     match name {
-        "list_subagents" | "list_processes" => "list".to_string(),
+        "list_processes" => "list".to_string(),
         _ => name.strip_suffix(suffix).unwrap_or(name).replace('_', " "),
     }
 }
@@ -433,18 +427,25 @@ fn action_label(name: &str, suffix: &str) -> String {
 fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
     let args = json_object(tool.args.as_deref());
     let result = json_object(tool.result.as_deref());
-    let child_request_id = tool
-        .child_request_id
-        .clone()
-        .or_else(|| string_field(args.as_ref(), "child_request_id"))
-        .or_else(|| string_field(result.as_ref(), "child_request_id"));
-    let description = string_field(args.as_ref(), "prompt")
-        .or_else(|| string_field(args.as_ref(), "message"))
-        .or_else(|| string_field(args.as_ref(), "reason"));
+    let session_id = string_field(args.as_ref(), "session_id")
+        .or_else(|| string_field(result.as_ref(), "session_id"));
+    let description = string_field(args.as_ref(), "prompt").or_else(|| {
+        args.as_ref()
+            .and_then(|args| args.get("task"))
+            .and_then(Value::as_object)
+            .and_then(|task| task.get("task_id"))
+            .and_then(Value::as_str)
+            .map(|task_id| format!("task {task_id}"))
+    });
     ToolPresentationView::Subagent {
-        action: action_label(name, "_subagent"),
-        name: string_field(args.as_ref(), "name"),
-        child_request_id,
+        action: if name == "create_session" {
+            "start"
+        } else {
+            "message"
+        }
+        .to_string(),
+        name: string_field(args.as_ref(), "agent"),
+        session_id,
         description,
         output: clean_text(tool.result.as_deref()),
     }
@@ -528,9 +529,7 @@ mod tests {
             },
             status: Some(state.into()),
             lifecycle_state: Some(state.into()),
-            child_request_id: None,
             await_mode: None,
-            cancel_policy: None,
             started_at: None,
             deadline_at: None,
             completed_at: None,

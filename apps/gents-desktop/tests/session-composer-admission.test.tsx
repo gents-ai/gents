@@ -105,7 +105,7 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
     forkSession: vi.fn(),
     refreshSnapshot: vi.fn(),
     api: {
-      listSubagentTree: vi.fn().mockResolvedValue(null),
+      sessionProvenance: vi.fn().mockResolvedValue(null),
       fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
     },
   } as unknown as Shell;

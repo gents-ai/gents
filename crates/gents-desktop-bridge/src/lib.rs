@@ -9,16 +9,17 @@
 //!
 //! Invoke paths: `plugin:gents-desktop-bridge|<command>`.
 
-pub mod cascade;
 pub mod cause_derivation;
 pub mod commands;
 pub mod config;
 pub mod contract;
 pub mod error;
 pub mod host_browser;
+pub mod interrupt;
 pub mod logging;
 pub mod package_tools;
 pub mod plugin;
+pub mod provenance;
 pub mod runtime_setup;
 pub mod snapshot;
 pub mod state;

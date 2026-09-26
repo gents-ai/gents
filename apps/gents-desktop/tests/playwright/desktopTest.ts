@@ -11,7 +11,6 @@ export type HarnessScenario =
   | "mailbox-overflow"
   | "long-content"
   | "active-turn"
-  | "cascade-turn"
   | "coding"
   | "session-hydration"
   | "sync-offline"
