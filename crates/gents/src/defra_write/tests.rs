@@ -431,6 +431,7 @@ fn can_hold_canonical_count_over_every_field_type_spelling() {
         "LIST",
         "NON_NULL",
         "Object",
+        "[Object]",
         "ObligationOutcome",
         "",
     ] {
@@ -439,4 +440,90 @@ fn can_hold_canonical_count_over_every_field_type_spelling() {
             "{schema} cannot carry a canonical count"
         );
     }
+}
+
+/// Which runtime failure a count field refused at publication produces is
+/// decided here, not by the refusing rule: a type [`super::input::parameters`]
+/// accepts still resolves a write-tool argument schema, so the tool registers
+/// and only the obligation fails after the write; a relation-typed or absent
+/// field resolves none, so the tool is not well formed and never registers.
+/// `FieldKind::graphql_type_name` spells a relation `Object` and a relation
+/// list `[Object]`, so a list carries a count field only when its items are
+/// scalar.
+#[tokio::test]
+async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
+    use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
+
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(
+        r#"
+        type CountOwner {
+            flag: Boolean
+            labels: [String]
+            tallies: [CountTally]
+        }
+        type CountTally {
+            label: String
+            owner: CountOwner @primary
+        }
+    "#,
+    )
+    .await
+    .unwrap();
+
+    let tool_for = |collection: &str, field: &str| {
+        BoundedWriteTool::new(
+            Arc::clone(&node),
+            WriteToolDecl {
+                notification: None,
+                tool_name: "record_tally".into(),
+                collection: collection.into(),
+                description: "Record one tally.".into(),
+                fields: vec![WriteToolField {
+                    name: field.into(),
+                    required: true,
+                    fill: None,
+                }],
+                output_obligation: Some(WriteToolOutputObligation {
+                    scope: WriteToolOutputObligationScope::Request,
+                    minimum_writes: 1,
+                    expected_count_field: Some(field.into()),
+                }),
+            },
+        )
+    };
+
+    for field in ["flag", "labels"] {
+        let tool = tool_for("CountOwner", field);
+        let schema = tool.field_types().unwrap()[field].clone();
+        assert!(
+            !super::can_hold_canonical_count(&schema),
+            "`{field}` is `{schema}`, which publication refuses"
+        );
+        assert!(
+            tool.is_well_formed(),
+            "`{field}` is `{schema}`, which resolves an argument schema"
+        );
+    }
+
+    for (collection, field) in [("CountTally", "owner"), ("CountOwner", "tallies")] {
+        let tool = tool_for(collection, field);
+        assert!(
+            !tool.is_well_formed(),
+            "relation-typed `{collection}.{field}` resolves no argument schema"
+        );
+        let error = tool.ensure_well_formed().unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unsupported bounded write field type `Object`"),
+            "{error:#}"
+        );
+    }
+
+    let absent = tool_for("CountOwner", "missing_total");
+    assert!(!absent.is_well_formed());
+    let error = absent.ensure_well_formed().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("field `missing_total` is absent from `CountOwner`"),
+        "{error:#}"
+    );
 }

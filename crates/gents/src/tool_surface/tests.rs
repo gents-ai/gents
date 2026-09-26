@@ -1125,6 +1125,68 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
+/// A count field whose type resolves no argument schema reaches registration
+/// only when it was never published through the refusing rule; `build_tools`
+/// then declines the tool, so no write of it can complete.
+#[tokio::test]
+async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
+    use crate::document_config::{
+        WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    };
+
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    node.add_schema(
+        "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
+    )
+        .await
+        .unwrap();
+
+    let surface = BehaviorToolConfig::from_selection(
+        "ops",
+        ResolvedToolSelection {
+            enable_defra_query: false,
+            write_tools: vec![WriteToolDecl {
+                notification: None,
+                tool_name: "record_tally".to_string(),
+                collection: "Tally".to_string(),
+                description: "Record one tally".to_string(),
+                fields: vec![WriteToolField {
+                    name: "owner".to_string(),
+                    required: true,
+                    fill: None,
+                }],
+                output_obligation: Some(WriteToolOutputObligation {
+                    scope: WriteToolOutputObligationScope::Request,
+                    minimum_writes: 1,
+                    expected_count_field: Some("owner".to_string()),
+                }),
+            }],
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node, "did:key:z-test-agent")
+    .await
+    .unwrap();
+
+    let error = match surface
+        .build_tools(&ToolRuntimeContext::oneshot(std::sync::Arc::new(node)))
+        .await
+    {
+        Ok(_) => panic!("a relation-typed count field must not reach a registered tool"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("has an unavailable or unsupported collection schema"),
+        "{error:#}"
+    );
+}
+
 #[tokio::test]
 async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
