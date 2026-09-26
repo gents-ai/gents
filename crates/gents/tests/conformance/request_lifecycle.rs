@@ -54,18 +54,6 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 // Rust copy of the classification here would only create a second source of
 // truth that could be edited to silence a drift failure.
 
-/// Drive the real recovery sweep named by the contract and assert it persists the
-/// modelled post-state.
-///
-/// The two `-> dead` edges are written only by corrupt-generation revocation,
-/// which needs a definitively corrupt canonical output. The generated
-/// `corrupt_twin_revocation_*` canonical execution cases drive that writer
-/// through the native revocation owner; driving them from THIS generated-case
-/// test remains open, tracked in #994.
-async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
-    let _ = case;
-}
-
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
     let db = test_db("ordinary-complete-from-claimed").await;
@@ -513,7 +501,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                     "Request transition {} must cite the recovery-sweep boundary",
                     case.name
                 );
-                drive_generated_request_recovery_reachable_case(case).await;
             }
             other => panic!(
                 "generated Request transition {} has unknown classification {other:?}",
@@ -681,12 +668,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             // Processing writers require a real claimed generation. Canonical
             // terminal output is selected by the request owner; there is no
             // separate response row.
-            if start == "processing"
-                && matches!(
-                    writer,
-                    "complete" | "fail" | "interrupt"
-                )
-            {
+            if start == "processing" && matches!(writer, "complete" | "fail" | "interrupt") {
                 crate::support::begin_owned_execution(&mut lifecycle, &db.node)
                     .await
                     .unwrap();
@@ -1319,7 +1301,6 @@ async fn scheduled_materialization_persists_trigger_lineage() {
         .as_str()
         .is_some_and(|signature| !signature.is_empty()));
 }
-
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();

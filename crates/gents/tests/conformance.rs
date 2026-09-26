@@ -115,6 +115,8 @@ mod mailbox;
 mod mcp_health;
 #[path = "conformance/p2p_observability.rs"]
 mod p2p_observability;
+#[path = "conformance/p2p_replication.rs"]
+mod p2p_replication;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]

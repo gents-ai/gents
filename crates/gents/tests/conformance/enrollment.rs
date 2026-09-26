@@ -12,9 +12,9 @@ use gents_protocol::request_admission::{
 };
 
 use crate::lean_vocab_test::{
-    lean_agent_request_admission_cases, lean_causal_hop_contract, lean_enrollment_cases, lean_enrollment_digest_cases,
-    lean_enrollment_durable_projection_cases, lean_enrollment_encoding_cases,
-    LeanEnrollmentTraceStep,
+    lean_agent_request_admission_cases, lean_causal_hop_contract, lean_enrollment_cases,
+    lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases,
+    lean_enrollment_encoding_cases, LeanEnrollmentTraceStep,
 };
 
 #[test]
@@ -75,8 +75,8 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
         }
     }
     // Every admission branch, including cross-principal `Peer` messaging, is
-    // exercised by an admitted row, and the causal-hop bound refuses a row the
-    // other evidence would admit on both same-principal and peer branches.
+    // exercised by an admitted row, and both the LocalSelf and Peer branches
+    // have a refused row whose hop exceeds the target's bound.
     for kind in [
         AgentRequestAdmissionKind::Enrollment,
         AgentRequestAdmissionKind::LocalSelf,

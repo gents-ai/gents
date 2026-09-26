@@ -1623,5 +1623,4 @@ mod tests {
         assert!(!lifecycle_is_terminal("running"));
         assert!(!lifecycle_is_terminal("pending"));
     }
-
 }
