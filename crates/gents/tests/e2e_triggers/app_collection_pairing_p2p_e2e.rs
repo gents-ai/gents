@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 
 const TRIGGER_ID: &str = "trigger-app-collection-pairing";
@@ -128,14 +128,16 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
+        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = last_snapshot.as_ref() {
+            if predicate(snapshot) {
+                return snapshot.clone();
             }
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for runtime snapshot for {agent_did}; \
+             last_snapshot={last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -692,10 +694,9 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     .await;
 
     // B: document reconcile for Task + Trigger (ordering invariant).
-    let startup = wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
-        s.process_state == "ready" && s.reconcile_phase == "idle" && s.active_generation >= 1
-    })
-    .await;
+    let startup =
+        wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| is_routed_ready_after(s, 0))
+            .await;
     let initial_generation = startup.active_generation;
 
     create_task(
@@ -717,10 +718,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
     wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
-        s.process_state == "ready"
-            && s.reconcile_phase == "idle"
-            && s.active_generation > initial_generation
-            && s.last_reconcile_result == "applied"
+        is_routed_ready_after(s, initial_generation)
     })
     .await;
 

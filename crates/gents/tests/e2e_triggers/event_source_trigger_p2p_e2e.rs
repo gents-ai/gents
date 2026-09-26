@@ -40,7 +40,7 @@ use serde_json::Value;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_p2p_db;
 
 const TRIGGER_ID: &str = "trigger-p2p-signup";
@@ -143,14 +143,16 @@ where
     // Generous deadline: the control watcher debounce is 5s plus settle.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
+        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = last_snapshot.as_ref() {
+            if predicate(snapshot) {
+                return snapshot.clone();
             }
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for runtime snapshot for {agent_did}; \
+             last_snapshot={last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -414,7 +416,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
 
     // Baseline reconcile — the generation our post-insert reconcile must exceed.
     let startup = wait_for_runtime_snapshot(db_agent.node.as_ref(), &agent_did, |s| {
-        s.process_state == "ready" && s.reconcile_phase == "idle" && s.active_generation >= 1
+        is_routed_ready_after(s, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -439,10 +441,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
     wait_for_runtime_snapshot(db_agent.node.as_ref(), &agent_did, |s| {
-        s.process_state == "ready"
-            && s.reconcile_phase == "idle"
-            && s.active_generation > initial_generation
-            && s.last_reconcile_result == "applied"
+        is_routed_ready_after(s, initial_generation)
     })
     .await;
 
