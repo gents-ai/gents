@@ -24,7 +24,16 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("background called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_fragment = self.resupply_unclaimed_deadline_fragment();
+        // Lean `SpawnClaimFence.unclaimedDeadlineApplies` is re-evaluated for
+        // the new mode: a same-principal child waiting in the background has
+        // not failed, so its foreground bound is dropped in this same write.
+        let drop_unclaimed_bound = self.unclaimed_deadline_at.is_some()
+            && self.spawn_target_did.as_deref() == Some(self.agent_did());
+        let unclaimed_deadline_fragment = if drop_unclaimed_bound {
+            ", unclaimed_deadline_at: null".to_owned()
+        } else {
+            self.resupply_unclaimed_deadline_fragment()
+        };
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -56,6 +65,9 @@ impl ToolCallLifecycle {
         }
 
         self.await_mode = AwaitMode::Background;
+        if drop_unclaimed_bound {
+            self.unclaimed_deadline_at = None;
+        }
         Ok(())
     }
 

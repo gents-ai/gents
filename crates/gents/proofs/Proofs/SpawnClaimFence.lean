@@ -284,6 +284,40 @@ theorem expiry_keeps_live_child_unsettled (w : World) (hawait : w.bridge = .awai
   subst hawait
   cases v <;> simp [expire, deadline, fence]
 
+/-- Continuation from an already-reached world under a (possibly new) mode.
+    A mode flip re-evaluates `unclaimedDeadlineApplies` for the new mode. -/
+inductive ReachableFrom (route : Route) (mode : AwaitMode) (start : World) : World → Prop where
+  | refl : ReachableFrom route mode start start
+  | step (w : World) (action : Action) :
+      ReachableFrom route mode start w → enabled route mode action = true →
+        ReachableFrom route mode start (step w action)
+
+theorem same_principal_background_continuation_never_abandons (start w : World)
+    (hstart : start.bridge ≠ .abandoned)
+    (h : ReachableFrom .samePrincipal .background start w) : w.bridge ≠ .abandoned := by
+  induction h with
+  | refl => exact hstart
+  | step w action _ henabled ih =>
+      by_cases hd : action = .deadline
+      · subst hd
+        rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+        simp at ih
+        cases b <;> cases v <;> simp_all [step, deadline, fence]
+      · have hne : action ≠ .expire := by
+          intro hexp
+          subst hexp
+          simp [enabled, unclaimedDeadlineApplies] at henabled
+        rw [step_keeps_bridge w action hne hd]
+        exact ih
+
+/-- A same-principal foreground spawn that is backgrounded before its bound
+    abandoned it (explicitly, or by an interrupted parent retaining its awaited
+    child) drops the bound with the mode flip, so it is never abandoned after. -/
+theorem foreground_then_background_same_principal_never_abandoned (w0 w : World)
+    (_h0 : Reachable .samePrincipal .foreground w0) (hnot : w0.bridge ≠ .abandoned)
+    (h : ReachableFrom .samePrincipal .background w0 w) : w.bridge ≠ .abandoned :=
+  same_principal_background_continuation_never_abandons w0 w hnot h
+
 /-- A foreground spawn on any route carries the unclaimed bound: its parent's
     turn is never held by a child that was never confirmed (#1830). -/
 theorem foreground_always_bounded (route : Route) :

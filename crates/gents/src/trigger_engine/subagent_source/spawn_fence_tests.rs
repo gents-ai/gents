@@ -556,3 +556,42 @@ async fn unrelated_row_reusing_the_child_id_neither_links_nor_is_interrupted() {
     assert_eq!(fixture.bridge().await["cancel_pending_remote_ack"], true);
     fixture.node.shutdown().await;
 }
+
+/// Lean `foreground_then_background_same_principal_never_abandoned`: a
+/// backgrounded same-principal foreground spawn drops its unclaimed bound in
+/// the mode-flip write, so the reconciler never abandons it.
+#[tokio::test]
+async fn backgrounded_same_principal_spawn_drops_its_bound() {
+    let case = lean_spawn_fence_cases()
+        .iter()
+        .find(|case| case.name == "local_foreground_unconfirmed_child_released")
+        .unwrap();
+    assert_eq!(case.route, "same_principal");
+    assert_eq!(case.await_mode, "foreground");
+    let fixture = Fixture::new(case).await;
+    assert!(fixture.bridge().await["unclaimed_deadline_at"].is_string());
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::load_physical(
+        fixture.node.clone(),
+        &fixture.bridge_doc_id,
+    )
+    .await
+    .unwrap()
+    .expect("bridge lifecycle");
+    lifecycle.background().await.unwrap();
+    // The foreground-to-background handoff publishes the bridge's receipt.
+    lifecycle
+        .publish_background_receipt("child started")
+        .await
+        .unwrap();
+    let bridge = fixture.bridge().await;
+    assert!(bridge["unclaimed_deadline_at"].is_null(), "{bridge}");
+    let outcomes = crate::background_completion::reconcile_unclaimed_cross_deployment_spawns(
+        fixture.node.clone(),
+        &fixture.coordinator,
+    )
+    .await
+    .unwrap();
+    assert!(outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(fixture.bridge().await["lifecycle_state"], "running");
+    fixture.node.shutdown().await;
+}
