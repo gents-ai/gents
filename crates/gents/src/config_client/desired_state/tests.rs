@@ -1174,3 +1174,158 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     node.shutdown().await;
     Ok(())
 }
+
+/// A plan document whose create payload names `add_field` and whose replacement
+/// names `update_field`; the plan only requires the two to share an identity.
+fn obligation_surface_payloads(
+    owner: &str,
+    surface_id: &str,
+    add_field: &str,
+    update_field: &str,
+) -> DesiredStateApplyDocument {
+    let add = obligation_surface(owner, surface_id, "ObligationOutcome", add_field).add;
+    let update = obligation_surface(owner, surface_id, "ObligationOutcome", update_field).update;
+    DesiredStateApplyDocument {
+        collection: Collection::DatastoreToolSurface,
+        add,
+        update,
+    }
+}
+
+async fn published_count_field(
+    node: &EmbeddedNode,
+    owner: &str,
+    surface_id: &str,
+) -> Result<String> {
+    let surface = crate::list_datastore_tool_surfaces(node, owner)
+        .await?
+        .into_iter()
+        .find(|surface| surface.surface_id == surface_id)
+        .expect("surface is published");
+    let Some(crate::document_config::SurfaceToolDecl::Create(decl)) =
+        surface.entries.unwrap_or_default().into_iter().next()
+    else {
+        panic!("surface publishes its create tool");
+    };
+    Ok(decl
+        .output_obligation
+        .and_then(|obligation| obligation.expected_count_field)
+        .expect("obligation keeps its count field"))
+}
+
+#[tokio::test]
+async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+
+    let refused = apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "created", "flag", "total",
+        )],
+    )
+    .await
+    .err()
+    .expect("a creation publishes the add payload, whose count field is a Boolean");
+    assert!(
+        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
+        "{refused:#}"
+    );
+    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
+        owner, "created", "flag", "total",
+    )])?;
+    let previewed = access
+        .transact("test.obligation.preview.add", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .err()
+        .expect("preflight judges the same add payload");
+    assert!(
+        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
+        "{previewed:#}"
+    );
+    assert!(crate::list_datastore_tool_surfaces(&node, owner)
+        .await?
+        .is_empty());
+
+    apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "created", "total", "flag",
+        )],
+    )
+    .await?;
+    assert_eq!(
+        published_count_field(&node, owner, "created").await?,
+        "total"
+    );
+    node.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
+    let node = obligation_node().await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:obligation-owner";
+    apply(
+        &access,
+        vec![obligation_surface(
+            owner,
+            "replaced",
+            "ObligationOutcome",
+            "total",
+        )],
+    )
+    .await?;
+
+    let refused = apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "replaced", "amount", "flag",
+        )],
+    )
+    .await
+    .err()
+    .expect("a replacement publishes the update payload, whose count field is a Boolean");
+    assert!(
+        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
+        "{refused:#}"
+    );
+    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
+        owner, "replaced", "amount", "flag",
+    )])?;
+    let previewed = access
+        .transact("test.obligation.preview.update", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .err()
+        .expect("preflight judges the same update payload");
+    assert!(
+        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
+        "{previewed:#}"
+    );
+    assert_eq!(
+        published_count_field(&node, owner, "replaced").await?,
+        "total"
+    );
+
+    apply(
+        &access,
+        vec![obligation_surface_payloads(
+            owner, "replaced", "flag", "amount",
+        )],
+    )
+    .await?;
+    assert_eq!(
+        published_count_field(&node, owner, "replaced").await?,
+        "amount"
+    );
+    node.shutdown().await;
+    Ok(())
+}
