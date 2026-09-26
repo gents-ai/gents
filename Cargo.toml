@@ -94,7 +94,7 @@ iroh = "1"
 # `unstable_machinery` carries no semver guarantee. Template admission in
 # crates/gents/src/template/mod.rs matches every instruction variant with no
 # catch-all, so a minijinja release that adds or reshapes one fails the
-# workspace build until that match is extended (#1744).
+# workspace build until that match is extended.
 minijinja = { version = "2", default-features = false, features = ["builtins", "json", "serde", "unstable_machinery"] }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
