@@ -20,8 +20,8 @@ use serde::Deserialize;
 
 use crate::config_client::ConfigAccess;
 use crate::descendant_graph::{
-    resolve_descendant_graph, DescendantEdge, DescendantGraphAccess, DescendantQuery,
-    MAX_DESCENDANT_PAGE_LIMIT,
+    resolve_descendant_graph_by_doc_id, DescendantEdge, DescendantGraphAccess, DescendantQuery,
+    RootRequester, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use crate::graphql::escape_graphql_string;
 
@@ -99,6 +99,7 @@ struct RootRequestEnvelope {
 pub async fn build_local_subagent_tree(
     node: Arc<EmbeddedNode>,
     root_request_id: &str,
+    agent_did: Option<&str>,
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTree> {
@@ -108,6 +109,7 @@ pub async fn build_local_subagent_tree(
             access: ConfigAccess::Local(node),
         }],
         root_request_id,
+        agent_did,
         include_terminal,
         max_depth,
     )
@@ -118,19 +120,113 @@ pub async fn build_local_subagent_tree(
 /// access is recorded in `partial_errors` (once) and skipped rather than
 /// failing the whole walk, so a live tree still renders when a peer
 /// deployment is unreachable.
+///
+/// With `agent_did`, the root is the request with this logical id owned by
+/// that principal on each access, and descendants are walked from that exact
+/// document; a request of another principal that reuses the id is never the
+/// root. Without it, a logical id that names more than one request fails
+/// that access instead of picking one. Accesses merge on the root's physical
+/// document: an access whose root is a different document with the same
+/// logical id is recorded as a partial error and contributes nothing.
 pub async fn build_subagent_tree(
     accesses: &[SubagentTreeAccess],
     root_request_id: &str,
+    agent_did: Option<&str>,
+    include_terminal: bool,
+    max_depth: usize,
+) -> Result<SubagentTree> {
+    build_subagent_tree_from(
+        accesses,
+        SubagentTreeRoot::Request(root_request_id),
+        agent_did,
+        include_terminal,
+        max_depth,
+    )
+    .await
+}
+
+/// How a caller names the tree's root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTreeRoot<'a> {
+    /// A logical `AgentRequest.request_id`.
+    Request(&'a str),
+    /// An exact `AgentRequest` document, as session provenance records a
+    /// spawned session's causal request. The tree is rooted at that document
+    /// only; its logical id is read from it, never guessed.
+    Document(&'a str),
+}
+
+/// [`build_subagent_tree`] with the root named either way. A document root
+/// must also belong to `agent_did` when one is given; the walk then proceeds
+/// exactly as for a logical root, from that document.
+pub async fn build_subagent_tree_from(
+    accesses: &[SubagentTreeAccess],
+    root: SubagentTreeRoot<'_>,
+    agent_did: Option<&str>,
     include_terminal: bool,
     max_depth: usize,
 ) -> Result<SubagentTree> {
     let mut nodes: BTreeMap<String, SubagentTreeNode> = BTreeMap::new();
     let mut partial_errors: Vec<String> = Vec::new();
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
+    let (mut root_doc_id, mut logical_root) = match root {
+        SubagentTreeRoot::Request(id) => (None, Some(id.to_string())),
+        SubagentTreeRoot::Document(doc_id) => (Some(doc_id.to_string()), None),
+    };
+    let named = match root {
+        SubagentTreeRoot::Request(id) | SubagentTreeRoot::Document(id) => id,
+    };
 
     for (index, entry) in accesses.iter().enumerate() {
-        match fetch_root_request(&entry.access, root_request_id).await {
+        match fetch_root_request(&entry.access, root, agent_did).await {
             Ok(Some(root)) => {
+                let root_request_id = named;
+                let Some(doc_id) = clean_optional_string(root.doc_id.as_deref()) else {
+                    let error = anyhow::anyhow!("root request {root_request_id} has no _docID");
+                    record_dead_access(
+                        &mut partial_errors,
+                        &mut dead_accesses,
+                        index,
+                        entry,
+                        &error,
+                    );
+                    continue;
+                };
+                match root_doc_id.as_deref() {
+                    Some(held) if held != doc_id => {
+                        let error = anyhow::anyhow!(
+                            "root request {root_request_id} is document {doc_id} here but {held} on another access"
+                        );
+                        record_dead_access(
+                            &mut partial_errors,
+                            &mut dead_accesses,
+                            index,
+                            entry,
+                            &error,
+                        );
+                        continue;
+                    }
+                    Some(_) => {}
+                    None => root_doc_id = Some(doc_id),
+                }
+                let logical = clean_string(&root.request_id);
+                match logical_root.as_deref() {
+                    Some(held) if held != logical => {
+                        let error = anyhow::anyhow!(
+                            "root document {named} is request {logical} here but {held} on another access"
+                        );
+                        record_dead_access(
+                            &mut partial_errors,
+                            &mut dead_accesses,
+                            index,
+                            entry,
+                            &error,
+                        );
+                        continue;
+                    }
+                    Some(_) => {}
+                    None => logical_root = Some(logical),
+                }
                 let mut node = request_row_into_node(root);
                 node.resolved_via = entry.label.clone();
                 nodes.entry(node.request_id.clone()).or_insert(node);
@@ -148,21 +244,36 @@ pub async fn build_subagent_tree(
         }
     }
 
+    // Descendants are walked from the resolved physical root on every access;
+    // a root that no access resolved has nothing to walk from.
+    let root_request_id = logical_root.unwrap_or_default();
+    let root_request_id = root_request_id.as_str();
     let mut canonical =
         BTreeMap::<(String, String, String), (Option<String>, DescendantEdge)>::new();
     for (index, entry) in accesses.iter().enumerate() {
+        let Some(root_doc_id) = root_doc_id
+            .as_deref()
+            .filter(|_| !root_request_id.is_empty())
+        else {
+            break;
+        };
         if dead_accesses.contains(&index) {
             continue;
         }
         let mut after = None;
         loop {
-            let page = match resolve_descendant_graph(
-                DescendantGraphAccess::Config(&entry.access),
-                &DescendantQuery {
-                    after: after.clone(),
-                    limit: MAX_DESCENDANT_PAGE_LIMIT,
-                    ..DescendantQuery::all(root_request_id)
-                },
+            let query = DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(root_request_id)
+            };
+            let access = DescendantGraphAccess::Config(&entry.access);
+            let page = match resolve_descendant_graph_by_doc_id(
+                access,
+                &query,
+                root_doc_id,
+                agent_did,
+                RootRequester::Any,
             )
             .await
             {
@@ -288,15 +399,31 @@ fn request_row_into_node(row: AgentRequestRow) -> SubagentTreeNode {
 
 async fn fetch_root_request(
     access: &ConfigAccess,
-    root_request_id: &str,
+    root: SubagentTreeRoot<'_>,
+    agent_did: Option<&str>,
 ) -> Result<Option<AgentRequestRow>> {
+    let (field, root_request_id) = match root {
+        SubagentTreeRoot::Request(id) => ("request_id", id),
+        SubagentTreeRoot::Document(doc_id) => ("_docID", doc_id),
+    };
     let escaped = escape_graphql_string(root_request_id);
+    let principal = agent_did
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+        .map(|did| {
+            format!(
+                r#", agent_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_default();
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
+                filter: {{ {field}: {{ _eq: "{escaped}" }}{principal} }},
+                limit: 2
             ) {{
+                _docID
                 request_id
                 session_id
                 agent_did
@@ -311,6 +438,10 @@ async fn fetch_root_request(
     );
     let envelope: RootRequestEnvelope =
         execute_access_query(access, &query, "root request lookup").await?;
+    anyhow::ensure!(
+        envelope.requests.len() <= 1,
+        "root request {root_request_id} is ambiguous across AgentRequest documents"
+    );
     Ok(envelope.requests.into_iter().next())
 }
 

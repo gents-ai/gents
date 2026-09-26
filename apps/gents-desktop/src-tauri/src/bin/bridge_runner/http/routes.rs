@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use gents::subagent_tree::{build_local_subagent_tree, effective_subagent_tree_max_depth};
+use gents::config_client::ConfigAccess;
+use gents::subagent_tree::{
+    build_subagent_tree_from, effective_subagent_tree_max_depth, SubagentTreeAccess,
+};
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
@@ -837,23 +840,22 @@ async fn list_subagent_tree_response(
     core: &Arc<ClientCore>,
     request: DesktopListSubagentTreeRequest,
 ) -> Result<SubagentTreeView> {
-    let root_request_id = request.root_request_id.trim();
-    if root_request_id.is_empty() {
-        anyhow::bail!("rootRequestId is required");
-    }
-    if request
+    let root = request.root().map_err(|error| anyhow::anyhow!(error))?;
+    let agent_did = request
         .agent_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_none()
-        && core.selected_agent_did().is_none()
-    {
-        anyhow::bail!("no agent selected; pass agentDid explicitly");
-    }
-    let tree = build_local_subagent_tree(
-        core.node_arc(),
-        root_request_id,
+        .map(str::to_owned)
+        .or_else(|| core.selected_agent_did())
+        .context("no agent selected; pass agentDid explicitly")?;
+    let tree = build_subagent_tree_from(
+        &[SubagentTreeAccess {
+            label: None,
+            access: ConfigAccess::Local(core.node_arc()),
+        }],
+        root,
+        Some(&agent_did),
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )

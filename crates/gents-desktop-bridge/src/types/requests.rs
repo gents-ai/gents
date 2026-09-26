@@ -293,13 +293,42 @@ pub struct DesktopOperationsSnapshotRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopListSubagentTreeRequest {
-    pub root_request_id: String,
+    /// The root's logical `AgentRequest.request_id`. Exactly one of this and
+    /// `root_request_doc_id` names the root.
+    #[serde(default)]
+    pub root_request_id: Option<String>,
+    /// The root's exact `AgentRequest` document, as a spawned session's
+    /// provenance records its causal request.
+    #[serde(default)]
+    pub root_request_doc_id: Option<String>,
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
     pub include_terminal: Option<bool>,
     #[serde(default)]
     pub max_depth: Option<u32>,
+}
+
+impl DesktopListSubagentTreeRequest {
+    /// The root this request names: exactly one of a logical request id or a
+    /// request document id.
+    pub fn root(&self) -> Result<gents::subagent_tree::SubagentTreeRoot<'_>, &'static str> {
+        fn named(value: &Option<String>) -> Option<&str> {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        }
+        match (
+            named(&self.root_request_id),
+            named(&self.root_request_doc_id),
+        ) {
+            (Some(id), None) => Ok(gents::subagent_tree::SubagentTreeRoot::Request(id)),
+            (None, Some(doc_id)) => Ok(gents::subagent_tree::SubagentTreeRoot::Document(doc_id)),
+            (Some(_), Some(_)) => Err("pass rootRequestId or rootRequestDocId, not both"),
+            (None, None) => Err("rootRequestId or rootRequestDocId is required"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

@@ -144,10 +144,12 @@ async fn cancel_subagent_graphql(
                 root.doc_id
                     .as_deref()
                     .context("cascade root missing physical identity")?,
-                root.agent_did
-                    .as_deref()
-                    .context("cascade root missing principal")?,
-                root.requester_did.as_deref(),
+                Some(
+                    root.agent_did
+                        .as_deref()
+                        .context("cascade root missing principal")?,
+                ),
+                gents::descendant_graph::RootRequester::Exact(root.requester_did.as_deref()),
             )
             .await?;
             for edge in &page.edges {
@@ -392,10 +394,12 @@ async fn cancel_descendant_bridges_local(
             root.doc_id
                 .as_deref()
                 .context("cascade root missing physical identity")?,
-            root.agent_did
-                .as_deref()
-                .context("cascade root missing principal")?,
-            root.requester_did.as_deref(),
+            Some(
+                root.agent_did
+                    .as_deref()
+                    .context("cascade root missing principal")?,
+            ),
+            gents::descendant_graph::RootRequester::Exact(root.requester_did.as_deref()),
         )
         .await?;
         for edge in &page.edges {

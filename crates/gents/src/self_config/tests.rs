@@ -3803,3 +3803,68 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
         assert_eq!(after["documents"]["Tools"], baseline["documents"]["Tools"]);
     }
 }
+
+#[tokio::test]
+async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("profile-context-window");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "setup").await;
+    let backend: crate::document_config::InferenceBackend = serde_json::from_value(json!({
+        "agent_did": owner, "backend_id": "setup:backend", "name": "Test inference",
+        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"},
+    }))
+    .unwrap();
+    crate::backend_registry::record_model_catalog(
+        &node,
+        &backend,
+        serde_json::from_value(json!({
+            "agent_did": null,
+            "observed_at": "2026-09-25T00:00:00Z",
+            "models": [{"model_name":"test-model","context_window":272000,"max_context_window":872000}],
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut tool_config = config(&["profile"]);
+    tool_config.behavior_id = "setup".into();
+    tool_config.dry_run = true;
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let edit = |verb: &str, window: u64| -> Vec<String> {
+        vec![
+            "profile".into(),
+            verb.into(),
+            "--behavior".into(),
+            "setup".into(),
+            "--set".into(),
+            format!("context_window={window}"),
+        ]
+    };
+
+    for verb in ["preview", "edit"] {
+        let error = call_config_tool(&tools, edit(verb, 900_000))
+            .await
+            .expect_err("a window above the advertised maximum must be refused");
+        assert!(
+            error.contains("advertised maximum 872000"),
+            "{verb}: {error}"
+        );
+    }
+    call_config_tool(&tools, edit("edit", 500_000))
+        .await
+        .expect("a window within the advertised maximum is published");
+    let stored = call_config_tool(
+        &tools,
+        vec![
+            "profile".into(),
+            "get".into(),
+            "--behavior".into(),
+            "setup".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(stored.contains("500000"), "{stored}");
+}

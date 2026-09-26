@@ -292,4 +292,100 @@ describe("profile model recommendation ownership", () => {
       }),
     );
   });
+
+  it("never presents the profile's saved window as the model's ceiling (#1618)", async () => {
+    // What the runtime recommends for a model whose limits the backend does
+    // not advertise: no model-aware bound for the window.
+    const unadvertised: InferenceModelRecommendation = {
+      ...recommendation(1),
+      contextWindow: null,
+      maxOutputTokens: null,
+    };
+    const api = {
+      applyConfigComponents: vi.fn().mockResolvedValue({}),
+      getInferenceBackendRecommendation: vi.fn().mockResolvedValue(unadvertised),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    render(
+      <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
+    );
+    const context = await screen.findByLabelText("Context window");
+    expect(api.getInferenceBackendRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({ contextWindow: null, maxOutputTokens: null }),
+    );
+    expect(context).toHaveValue("131072");
+    const user = userEvent.setup();
+    await user.clear(context);
+    await user.type(context, "262144");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(api.applyConfigComponents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            inference_profiles: [expect.objectContaining({ context_window: 262144 })],
+          }),
+        }),
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("bounds the window by an advertised maximum when the default is unknown (#1618)", async () => {
+    const maxOnly = {
+      ...fixture,
+      inferenceBackends: fixture.inferenceBackends.map((backend) =>
+        backend.backendId === "backend-a"
+          ? {
+              ...backend,
+              advertisedModels: [
+                {
+                  model_name: "model-a",
+                  display_name: null,
+                  context_window: null,
+                  max_context_window: 200_000,
+                  max_output_tokens: null,
+                  reasoning_efforts: null,
+                },
+              ],
+            }
+          : backend,
+      ),
+    };
+    const api = {
+      applyConfigComponents: vi.fn().mockResolvedValue({}),
+      getInferenceBackendRecommendation: vi.fn().mockResolvedValue({
+        ...recommendation(1),
+        contextWindow: null,
+        maxOutputTokens: null,
+      }),
+      getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
+    };
+    render(
+      <ProfilesPanel shell={shellWith(api)} deployment={maxOnly} item="profile-a" />,
+    );
+    const context = await screen.findByLabelText("Context window");
+    expect(screen.getByText(/up to 200,000/)).toBeVisible();
+    const user = userEvent.setup();
+    await user.clear(context);
+    await user.type(context, "262144");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Context window must be 200000 or less",
+    );
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+
+    await user.clear(context);
+    await user.type(context, "200000");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.applyConfigComponents).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            inference_profiles: [expect.objectContaining({ context_window: 200000 })],
+          }),
+        }),
+      ),
+    );
+  });
 });

@@ -1661,7 +1661,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceProfile,
                 json!({
-                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(

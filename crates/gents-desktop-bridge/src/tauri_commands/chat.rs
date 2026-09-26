@@ -65,7 +65,7 @@ pub async fn desktop_session_snapshot(
             );
         }
     }
-    let requester_scope = if let Some(agent_did) = agent_did.as_deref() {
+    let principal_scope = if let Some(agent_did) = agent_did.as_deref() {
         core.peer_records()
             .await
             .iter()
@@ -78,6 +78,21 @@ pub async fn desktop_session_snapshot(
         .as_deref()
         .and_then(|agent_did| core.operator_graphql(agent_did))
         .map(gents::config_client::ConfigAccess::Graphql);
+    let requester_scope = {
+        let store = core.store().snapshot();
+        let session = agent_did.as_deref().and_then(|agent_did| {
+            store
+                .sessions
+                .iter()
+                .find(|row| row.session_id == session_id && row.agent_did == agent_did)
+        });
+        gents_desktop_core::client::session_transcript_requester_scope(
+            session,
+            agent_did.as_deref(),
+            principal_scope.as_deref(),
+            operator_access.is_some(),
+        )
+    };
     let page_read = async {
         match operator_access.as_ref() {
             Some(access) => {

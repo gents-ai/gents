@@ -65,6 +65,7 @@ fn root_response() -> Value {
         "data": {
             "AgentRequest": [
                 {
+                    "_docID": "doc-root",
                     "request_id": "req-root",
                     "session_id": "sess-root",
                     "agent_did": "deployment-a",
@@ -419,7 +420,7 @@ async fn tree_aggregates_labeled_accesses_and_records_partial_error_for_dead_pee
         },
     ];
 
-    let tree = build_subagent_tree(&accesses, "req-root", false, 4).await?;
+    let tree = build_subagent_tree(&accesses, "req-root", None, false, 4).await?;
 
     assert_eq!(
         tree.nodes.len(),
@@ -515,8 +516,14 @@ async fn build_local_subagent_tree_resolves_the_root_from_the_embedded_node() ->
     )
     .await;
 
-    let tree =
-        build_local_subagent_tree(node, "req-root", true, DEFAULT_SUBAGENT_TREE_MAX_DEPTH).await?;
+    let tree = build_local_subagent_tree(
+        node,
+        "req-root",
+        None,
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
 
     assert_eq!(tree.root_request_id, "req-root");
     assert!(tree.partial_errors.is_empty());
@@ -529,5 +536,215 @@ async fn build_local_subagent_tree_resolves_the_root_from_the_embedded_node() ->
     assert_eq!(root.behavior_id.as_deref(), Some("amy-general"));
     assert_eq!(root.resolved_via, None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn subagent_tree_root_is_bound_to_the_requested_principal() -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-amy",
+        "did:test:amy",
+        "amy-general",
+    )
+    .await;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-bob",
+        "did:test:bob",
+        "bob-general",
+    )
+    .await;
+
+    let amy = build_local_subagent_tree(
+        node.clone(),
+        "req-root",
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(amy.partial_errors.is_empty(), "{:?}", amy.partial_errors);
+    assert_eq!(amy.nodes.len(), 1);
+    assert_eq!(amy.nodes[0].agent_did.as_deref(), Some("did:test:amy"));
+    assert_eq!(amy.nodes[0].session_id.as_deref(), Some("sess-amy"));
+
+    let carol = build_local_subagent_tree(
+        node.clone(),
+        "req-root",
+        Some("did:test:carol"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        carol.nodes.is_empty(),
+        "another principal's request with the same id is never the root: {:?}",
+        carol.nodes
+    );
+
+    let unscoped = build_local_subagent_tree(
+        node,
+        "req-root",
+        None,
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        unscoped.nodes.is_empty() && !unscoped.partial_errors.is_empty(),
+        "an ambiguous logical id fails closed instead of picking one: {unscoped:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn subagent_tree_refuses_an_access_whose_root_is_another_document() -> anyhow::Result<()> {
+    let local = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
+    let mut other_root = root_response();
+    other_root["data"]["AgentRequest"][0]["_docID"] = json!("doc-other");
+    let peer = spawn_mock_graphql(vec![other_root]).await?;
+
+    let accesses = vec![
+        SubagentTreeAccess {
+            label: None,
+            access: ConfigAccess::Graphql(local),
+        },
+        SubagentTreeAccess {
+            label: Some("peer-b".to_string()),
+            access: ConfigAccess::Graphql(peer),
+        },
+    ];
+
+    let tree = build_subagent_tree(&accesses, "req-root", None, false, 4).await?;
+
+    assert_eq!(tree.partial_errors.len(), 1, "{:?}", tree.partial_errors);
+    assert!(
+        tree.partial_errors[0].contains("peer-b") && tree.partial_errors[0].contains("doc-other"),
+        "the conflicting access is named with its physical root: {:?}",
+        tree.partial_errors
+    );
+    let root = tree
+        .nodes
+        .iter()
+        .find(|node| node.request_id == "req-root")
+        .expect("root node");
+    assert_eq!(root.resolved_via, None, "the first physical root is kept");
+    assert_eq!(
+        tree.nodes.len(),
+        2,
+        "only the matching access's walk: {:?}",
+        tree.nodes
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn subagent_tree_rooted_at_a_document_is_that_exact_request() -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-amy",
+        "did:test:amy",
+        "amy-general",
+    )
+    .await;
+    create_root_request(
+        node.as_ref(),
+        "req-root",
+        "sess-bob",
+        "did:test:bob",
+        "bob-general",
+    )
+    .await;
+    let rows = node
+        .execute(r#"{ AgentRequest(filter: { agent_did: { _eq: "did:test:amy" } }) { _docID } }"#)
+        .await;
+    let amy_doc = rows.data.as_ref().expect("rows")["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("amy's request document")
+        .to_string();
+    let accesses = [SubagentTreeAccess {
+        label: None,
+        access: ConfigAccess::Local(node.clone()),
+    }];
+
+    let amy = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&amy_doc),
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(amy.partial_errors.is_empty(), "{:?}", amy.partial_errors);
+    assert_eq!(amy.root_request_id, "req-root");
+    assert_eq!(amy.nodes.len(), 1);
+    assert_eq!(amy.nodes[0].session_id.as_deref(), Some("sess-amy"));
+
+    let bob = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&amy_doc),
+        Some("did:test:bob"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        bob.nodes.is_empty() && bob.edges.is_empty() && bob.root_request_id.is_empty(),
+        "another principal's document is never the root: {bob:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_document_root_is_unambiguous_when_its_principal_reuses_the_request_id(
+) -> anyhow::Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    crate::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    for session in ["sess-first", "sess-second"] {
+        create_root_request(
+            node.as_ref(),
+            "req-root",
+            session,
+            "did:test:amy",
+            "amy-general",
+        )
+        .await;
+    }
+    let rows = node
+        .execute(r#"{ AgentRequest(filter: { session_id: { _eq: "sess-first" } }) { _docID } }"#)
+        .await;
+    let first = rows.data.as_ref().expect("rows")["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("first request document")
+        .to_string();
+    let accesses = [SubagentTreeAccess {
+        label: None,
+        access: ConfigAccess::Local(node.clone()),
+    }];
+
+    let tree = build_subagent_tree_from(
+        &accesses,
+        SubagentTreeRoot::Document(&first),
+        Some("did:test:amy"),
+        true,
+        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
+    )
+    .await?;
+    assert!(
+        tree.partial_errors.is_empty(),
+        "the walk starts from the chosen document, not the shared logical id: {:?}",
+        tree.partial_errors
+    );
+    assert_eq!(tree.root_request_id, "req-root");
+    assert_eq!(tree.nodes.len(), 1, "{:?}", tree.nodes);
+    assert_eq!(tree.nodes[0].session_id.as_deref(), Some("sess-first"));
     Ok(())
 }

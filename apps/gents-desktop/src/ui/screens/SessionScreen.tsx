@@ -175,7 +175,7 @@ function ContextRing({
   );
 }
 
-function SessionContext({
+export function SessionContext({
   context,
   compact = false,
 }: {
@@ -185,14 +185,12 @@ function SessionContext({
 }) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
-  const window = Math.max(
-    1,
-    context.lastRequest?.contextWindow ?? context.contextWindow,
-  );
-  const threshold = Math.max(
-    0,
-    context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
-  );
+  /* the configured window as the runtime resolves it, so an edit to the
+     profile shows at once; the last request's window is history. A window
+     the runtime rejects is reported, never shown as the one in use. */
+  const windowError = context.contextWindowError ?? null;
+  const window = Math.max(1, context.contextWindow);
+  const threshold = Math.max(0, context.compactionThresholdTokens);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
@@ -220,7 +218,11 @@ function SessionContext({
               variant="ghost"
               size="icon-xs"
               data-testid="context-meter-compact"
-              aria-label={`Context ~${formatTokens(used)} of ${formatTokens(window)}`}
+              aria-label={
+                windowError
+                  ? `Context ~${formatTokens(used)}, window unavailable`
+                  : `Context ~${formatTokens(used)} of ${formatTokens(window)}`
+              }
             />
           ) : (
             <Button
@@ -234,10 +236,16 @@ function SessionContext({
         onMouseEnter={hoverOpen}
         onMouseLeave={hoverClose}
       >
-        <ContextRing used={used} window={window} threshold={threshold} />
+        <ContextRing
+          used={windowError ? 0 : used}
+          window={window}
+          threshold={threshold}
+        />
         {!compact && (
           <span className="tabular-nums">
-            ~{formatTokens(used)} / {formatTokens(window)}
+            {windowError
+              ? `~${formatTokens(used)} / window unavailable`
+              : `~${formatTokens(used)} / ${formatTokens(window)}`}
           </span>
         )}
       </PopoverTrigger>
@@ -255,9 +263,15 @@ function SessionContext({
             <p className="font-heading text-sm font-medium text-heading">
               Conversation context
             </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
-            </p>
+            {windowError ? (
+              <p role="alert" className="mt-1 text-sm text-destructive">
+                The configured context window can’t be used: {windowError}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {used.toLocaleString()} estimated tokens of {window.toLocaleString()}
+              </p>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -269,8 +283,14 @@ function SessionContext({
           </Button>
         </div>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-sm">
-          <dt className="text-muted-foreground">Compacts at</dt>
-          <dd className="text-right font-mono text-xs">{threshold.toLocaleString()}</dd>
+          {!windowError && (
+            <>
+              <dt className="text-muted-foreground">Compacts at</dt>
+              <dd className="text-right font-mono text-xs">
+                {threshold.toLocaleString()}
+              </dd>
+            </>
+          )}
           <dt className="text-muted-foreground">Durable transcript</dt>
           <dd className="text-right font-mono text-xs">
             {context.estimatedDurableTokens.toLocaleString()}
@@ -840,12 +860,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
+  /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
+  const forkNotice = useExclusivePopover();
   const [traceOpenPref, setTracePref] = useTraceOpen();
-  /* the remembered state is a desktop habit; on a phone the sheet opens only by hand */
-  const [mobileTrace, setMobileTrace] = useState(false);
+  /* the remembered state is a desktop habit; on a phone the sheet opens only by
+     hand, and takes its turn with the shell's popovers like any other dialog */
+  const traceSheet = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
@@ -904,9 +927,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return () => io.disconnect();
   }, [shell.selectedSessionId]);
   const wide = useMediaQuery(ROOMY_WINDOW);
-  const traceOpen = wide ? traceOpenPref : mobileTrace;
+  const traceOpen = wide ? traceOpenPref : traceSheet.open;
   const setTraceOpen = (open: boolean) =>
-    wide ? setTracePref(open) : setMobileTrace(open);
+    wide ? setTracePref(open) : traceSheet.onOpenChange(open);
   const trace = useResizableWidth({
     key: "gents-prototype-trace-width",
     initial: 520,
@@ -1140,7 +1163,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       }
     } catch (e) {
       release();
-      toast(`Couldn't stop: ${String(e)}`);
+      toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -1154,6 +1177,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       const sessionId = await shell.forkSession(session.sessionId);
       /* the copy exists; moving to it is the person's call */
       setForked({ sessionId, title: `${session.title ?? "Session"} (fork)` });
+      forkNotice.onOpenChange(true);
     } catch (e) {
       toast(`Couldn't fork: ${String(e)}`);
     }
@@ -1489,8 +1513,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       </div>
       {/* in a narrow window the panel is a sheet over the transcript */}
       {!wide && (
-        <Sheet open={traceOpen} onOpenChange={setTraceOpen}>
+        <Sheet
+          open={traceSheet.open}
+          onOpenChange={traceSheet.onOpenChange}
+          onOpenChangeComplete={traceSheet.onOpenChangeComplete}
+        >
           <SheetContent
+            ref={traceSheet.popupRef}
             side="right"
             className="w-[92vw] max-w-md border-0 bg-transparent p-2 shadow-none"
           >
@@ -1499,8 +1528,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </SheetContent>
         </Sheet>
       )}
-      <AlertDialog open={forked !== null} onOpenChange={(o) => !o && setForked(null)}>
-        <AlertDialogContent aria-modal="true">
+      <AlertDialog
+        open={forkNotice.open && forked !== null}
+        onOpenChange={forkNotice.onOpenChange}
+        onOpenChangeComplete={forkNotice.onOpenChangeComplete}
+      >
+        <AlertDialogContent ref={forkNotice.popupRef} aria-modal="true">
           <AlertDialogHeader>
             <AlertDialogTitle>Forked</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1514,7 +1547,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             <AlertDialogAction
               onClick={() => {
                 const target = forked;
-                setForked(null);
+                forkNotice.onOpenChange(false);
                 if (target) navigate({ name: "session", sessionId: target.sessionId });
               }}
             >
@@ -1527,7 +1560,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         shell={shell}
         requestId={cascadeFor}
         onClose={() => setCascadeFor(null)}
-        onResult={(text) => toast(text)}
+        onStopRequested={setRequestedStop}
+        onFailure={(text) => toast(text)}
       />
     </div>
   );

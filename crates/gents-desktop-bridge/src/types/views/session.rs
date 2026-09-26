@@ -189,6 +189,11 @@ pub struct RenderedToolCallView {
     pub item_key: String,
     pub tool_name: String,
     pub status_kind: String,
+    /// Request that issued this call, in the same logical identity as
+    /// `child_request_id` and a subagent lineage root.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub child_request_id: Option<String>,
@@ -372,6 +377,12 @@ pub struct SessionContextView {
     pub estimated_durable_tokens: i64,
     pub estimated_conversation_tokens: i64,
     pub context_window: i64,
+    /// Why the configured window cannot be what the next request runs with,
+    /// e.g. the profile exceeds the model's advertised maximum. When set,
+    /// `context_window` is only the runtime default, not a usable window.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub context_window_error: Option<String>,
     pub compaction_threshold: f64,
     pub compaction_threshold_tokens: i64,
     pub compaction_strategy: String,

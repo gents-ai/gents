@@ -42,6 +42,25 @@ struct StoredManagedServer {
     tool_ceiling: Option<ManagedServerToolCeiling>,
     #[serde(default)]
     tool_root: Option<String>,
+    /// The canonical home and init identity the ceiling and root were
+    /// reviewed for. A remembered grant applies only to that home.
+    #[serde(default)]
+    reviewed_for: Option<ReviewedHome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewedHome {
+    home: String,
+    agent_did: String,
+}
+
+/// What an initialized home says about itself in `init.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HomeIdentity {
+    reviewed: ReviewedHome,
+    tool_ceiling: Option<ManagedServerToolCeiling>,
+    tool_root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +183,7 @@ async fn observe_managed_server_status<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<ManagedServerStatus, BridgeError> {
-    let stored = load_preference(state).await?;
+    let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
     let last_exit = if (native.job_loaded || native.failed)
         && !native.running
@@ -602,25 +621,13 @@ async fn start_managed_server<'a, R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
-    let stored = load_preference(state).await?;
-    let authority = match request.tool_ceiling {
-        Some(ceiling) => {
-            EffectiveManagedAuthority::from_request(ceiling, request.tool_root.as_deref())?
-        }
-        None => match stored.as_ref().and_then(|stored| {
-            stored
-                .tool_ceiling
-                .map(|ceiling| (ceiling, stored.tool_root.as_deref()))
-        }) {
-            Some((ceiling, root)) => EffectiveManagedAuthority::from_request(ceiling, root)?,
-            None => {
-                return Err(BridgeError::new(
-                    BridgeErrorCode::InvalidArgument,
-                    "Complete local agent setup and review host access before starting the agent.",
-                ));
-            }
-        },
-    };
+    let stored = load_bound_preference(state).await?;
+    let authority = start_authority(
+        request.tool_ceiling,
+        request.tool_root.as_deref(),
+        stored.as_ref(),
+    )?;
+    refuse_renaming_home(&agent_home, agent_name).await?;
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
@@ -722,12 +729,14 @@ async fn start_managed_server<'a, R: Runtime>(
         )
         .await?;
         let (tool_ceiling, tool_root) = authority.stored();
-        save_preference(
+        save_confirmed_preference(
             state,
+            &agent_home,
             &StoredManagedServer {
                 agent_name: agent_name.to_string(),
                 tool_ceiling: Some(tool_ceiling),
                 tool_root,
+                reviewed_for: None,
             },
         )
         .await?;
@@ -804,7 +813,7 @@ async fn start_managed_server<'a, R: Runtime>(
     if let Some(core) = current_core(state) {
         start_running_managed_pairing(state, core).await;
     }
-    let stored = load_preference(state).await?;
+    let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     let mut status = if let Some(external) = matching_external_server(&agent_home).await? {
         project_external_status(external, &native)
@@ -3084,7 +3093,6 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
-    let lifecycle = lock_lifecycle_superseding_start(&state).await;
     let authority = EffectiveManagedAuthority::from_request(
         request.tool_ceiling,
         request.tool_root.as_deref(),
@@ -3095,6 +3103,10 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
+    // Refused before taking the lifecycle lock, which supersedes an
+    // in-flight start: a refused restart must not cancel it.
+    refuse_renaming_home(&agent_home, &request.agent_name).await?;
+    let lifecycle = lock_lifecycle_superseding_start(&state).await;
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&agent_home).await?;
     let previous_did = match &port {
@@ -3132,12 +3144,14 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
                 .map_err(|error| BridgeError::untyped(format!("{error:#}")))
         },
         || async {
-            save_preference(
+            save_confirmed_preference(
                 &state,
+                &agent_home,
                 &StoredManagedServer {
                     agent_name: request.agent_name.clone(),
                     tool_ceiling: Some(tool_ceiling),
                     tool_root: tool_root.clone(),
+                    reviewed_for: None,
                 },
             )
             .await
@@ -3408,7 +3422,7 @@ async fn emit_status<R: Runtime>(app: &AppHandle<R>, state: &DesktopAppState) {
     let status = match observe_managed_server_status(app, state).await {
         Ok(status) => status,
         Err(error) => {
-            let stored = load_preference(state).await.ok().flatten();
+            let stored = load_bound_preference(state).await.ok().flatten();
             let managed = state.managed_server.lock().await;
             let mut status = status_from(&managed, stored.as_ref(), None, None, None);
             status.state = ManagedServerState::Failed;
@@ -3430,6 +3444,157 @@ async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
+}
+
+async fn read_initialized_name(agent_home: &std::path::Path) -> Option<String> {
+    tokio::fs::read(agent_home.join("init.json"))
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("agent_name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+/// Provisioning rewrites an initialized home's host authority but never its
+/// name, so a start or restart naming another agent is refused before
+/// anything (stop, provisioning, preferences) touches the home.
+async fn refuse_renaming_home(
+    agent_home: &std::path::Path,
+    requested: &str,
+) -> Result<(), BridgeError> {
+    if !gents_server::server_host::initialized_home(agent_home) {
+        return Ok(());
+    }
+    let initialized = read_initialized_name(agent_home).await;
+    if name_confirmed_by_home(requested, initialized.as_deref()) {
+        return Ok(());
+    }
+    let requested = requested.trim();
+    Err(BridgeError::new(
+        BridgeErrorCode::InvalidArgument,
+        match initialized {
+            Some(name) => format!(
+                "This computer already has a local agent named {name}, so {requested} was not created. Go back to continue with {name}."
+            ),
+            None => format!(
+                "The local agent home at {} has no readable agent name; it was left unchanged.",
+                agent_home.display()
+            ),
+        },
+    ))
+}
+
+fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
+    initialized.is_some_and(|name| name.trim() == requested.trim())
+}
+
+/// Provisioning never renames an initialized home, so a requested name is
+/// remembered only once the home's init config carries it. Otherwise the
+/// stored preference is left as it was.
+async fn save_confirmed_preference(
+    state: &DesktopAppState,
+    agent_home: &std::path::Path,
+    stored: &StoredManagedServer,
+) -> Result<(), BridgeError> {
+    if name_confirmed_by_home(
+        &stored.agent_name,
+        read_initialized_name(agent_home).await.as_deref(),
+    ) {
+        let reviewed_for = read_home_identity(agent_home)
+            .await
+            .map(|identity| identity.reviewed);
+        save_preference(
+            state,
+            &StoredManagedServer {
+                reviewed_for,
+                ..stored.clone()
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn read_home_identity(agent_home: &std::path::Path) -> Option<HomeIdentity> {
+    let home = tokio::fs::canonicalize(agent_home).await.ok()?;
+    let bytes = tokio::fs::read(agent_home.join("init.json")).await.ok()?;
+    let init: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let text = |key: &str| {
+        init.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    Some(HomeIdentity {
+        reviewed: ReviewedHome {
+            home: home.to_string_lossy().into_owned(),
+            agent_did: text("agent_did")?,
+        },
+        tool_ceiling: text("tool_ceiling").as_deref().and_then(parse_tool_ceiling),
+        tool_root: text("tool_root"),
+    })
+}
+
+/// The remembered grant is withheld unless it was reviewed for this exact
+/// home and identity, and the home still carries that same authority. A
+/// replaced, repointed, missing or re-granted home needs a fresh review.
+fn bind_preference(
+    mut stored: StoredManagedServer,
+    home: Option<&HomeIdentity>,
+) -> StoredManagedServer {
+    let bound = home.is_some_and(|home| {
+        stored.reviewed_for.as_ref() == Some(&home.reviewed)
+            && stored.tool_ceiling.is_some()
+            && home.tool_ceiling == stored.tool_ceiling
+            && home.tool_root == stored.tool_root
+    });
+    if !bound {
+        stored.tool_ceiling = None;
+        stored.tool_root = None;
+    }
+    stored
+}
+
+/// A start uses the authority reviewed with it, or else a remembered grant
+/// that [`bind_preference`] kept for this home. Failing here happens before
+/// provisioning, so a stale grant is never written into a home.
+fn start_authority(
+    tool_ceiling: Option<ManagedServerToolCeiling>,
+    tool_root: Option<&str>,
+    bound: Option<&StoredManagedServer>,
+) -> Result<EffectiveManagedAuthority, BridgeError> {
+    match tool_ceiling {
+        Some(ceiling) => EffectiveManagedAuthority::from_request(ceiling, tool_root),
+        None => match bound.and_then(|stored| {
+            stored
+                .tool_ceiling
+                .map(|ceiling| (ceiling, stored.tool_root.as_deref()))
+        }) {
+            Some((ceiling, root)) => EffectiveManagedAuthority::from_request(ceiling, root),
+            None => Err(BridgeError::new(
+                BridgeErrorCode::InvalidArgument,
+                "Review host access for this agent home before starting it.",
+            )),
+        },
+    }
+}
+
+async fn load_bound_preference(
+    state: &DesktopAppState,
+) -> Result<Option<StoredManagedServer>, BridgeError> {
+    let Some(stored) = load_preference(state).await? else {
+        return Ok(None);
+    };
+    let home = match state.policy.agent_home.as_deref() {
+        Some(agent_home) => read_home_identity(agent_home).await,
+        None => None,
+    };
+    Ok(Some(bind_preference(stored, home.as_ref())))
 }
 
 fn ensure_matching_identity(
@@ -3490,6 +3655,244 @@ async fn save_preference(
 mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    fn write_home(agent_home: &Path, did: &str, ceiling: &str, root: Option<&str>) {
+        let init = serde_json::json!({
+            "home": agent_home.display().to_string(),
+            "agent_name": "Forge",
+            "agent_did": did,
+            "key_path": null,
+            "tool_ceiling": ceiling,
+            "tool_root": root,
+        });
+        write(&agent_home.join("init.json"), &init.to_string());
+    }
+
+    /// Reviewed for the Forge home as it stands, then saved through the
+    /// same confirm-and-bind path start and restart use.
+    async fn remember_forge_grant(state: &DesktopAppState, agent_home: &Path, root: &str) {
+        save_confirmed_preference(
+            state,
+            agent_home,
+            &StoredManagedServer {
+                agent_name: "Forge".to_string(),
+                tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
+                tool_root: Some(root.to_string()),
+                reviewed_for: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(load_preference(state)
+            .await
+            .unwrap()
+            .unwrap()
+            .reviewed_for
+            .is_some());
+    }
+
+    /// Start and restart, driven through their IPC commands, with a
+    /// different name and a different authority than the initialized home.
+    fn invoke_on_forge_home(cmd: &str) -> (tempfile::TempDir, Vec<u8>, String) {
+        use tauri::ipc::InvokeBody;
+        use tauri::webview::InvokeRequest;
+
+        let (temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let desktop_root = state.policy.desktop_paths.root().to_path_buf();
+        write_home(&agent_home, "did:key:forge", "MetaOnly", None);
+        let before = std::fs::read(agent_home.join("init.json")).unwrap();
+        let root = temp.path().join("work");
+        std::fs::create_dir_all(&root).unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![
+                desktop_managed_server_start,
+                desktop_managed_server_restart
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock desktop bridge app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let error = tauri::test::get_ipc_response(
+            &webview,
+            InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().expect("invoke URL"),
+                body: InvokeBody::Json(serde_json::json!({
+                    "request": {
+                        "agentName": "Scout",
+                        "toolCeiling": "readwrite",
+                        "toolRoot": root.display().to_string(),
+                    }
+                })),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .expect_err("a request naming another agent must be refused");
+        assert!(!desktop_root.join(MANAGED_SERVER_CONFIG).exists());
+        let after = std::fs::read(agent_home.join("init.json")).unwrap();
+        assert_eq!(after, before, "{cmd} rewrote the initialized home");
+        (temp, after, error.to_string())
+    }
+
+    #[test]
+    fn start_naming_another_agent_leaves_the_home_untouched() {
+        let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_start");
+        assert!(
+            error.contains("already has a local agent named Forge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn restart_naming_another_agent_leaves_the_home_untouched() {
+        let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_restart");
+        assert!(
+            error.contains("already has a local agent named Forge"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remembered_grant_reconnects_only_the_home_it_was_reviewed_for() {
+        let (temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let root = root.to_string_lossy().into_owned();
+        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &agent_home, &root).await;
+
+        let bound = load_bound_preference(&state).await.unwrap();
+        let authority = start_authority(None, None, bound.as_ref()).expect("reviewed home");
+        assert_eq!(
+            authority.stored(),
+            (ManagedServerToolCeiling::Readwrite, Some(root.clone()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replaced_or_missing_home_needs_a_fresh_review_and_is_not_rewritten() {
+        let (temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let root = root.to_string_lossy().into_owned();
+        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &agent_home, &root).await;
+
+        // Another identity now lives at the same path.
+        write_home(&agent_home, "did:key:other", "MetaOnly", None);
+        let before = std::fs::read(agent_home.join("init.json")).unwrap();
+        let bound = load_bound_preference(&state).await.unwrap();
+        assert_eq!(bound.as_ref().unwrap().tool_ceiling, None);
+        let error = start_authority(None, None, bound.as_ref()).unwrap_err();
+        assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
+        assert_eq!(std::fs::read(agent_home.join("init.json")).unwrap(), before);
+
+        std::fs::remove_file(agent_home.join("init.json")).unwrap();
+        let bound = load_bound_preference(&state).await.unwrap();
+        assert!(start_authority(None, None, bound.as_ref()).is_err());
+        assert!(!agent_home.join("init.json").exists());
+    }
+
+    #[tokio::test]
+    async fn a_home_whose_authority_changed_needs_a_fresh_review() {
+        let (temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let root = root.to_string_lossy().into_owned();
+        write_home(&agent_home, "did:key:forge", "Readwrite", Some(&root));
+        remember_forge_grant(&state, &agent_home, &root).await;
+        let remembered = load_preference(&state).await.unwrap();
+
+        write_home(&agent_home, "did:key:forge", "Readonly", Some(&root));
+        assert_eq!(
+            load_preference(&state).await.unwrap().unwrap().tool_ceiling,
+            remembered.unwrap().tool_ceiling
+        );
+        let bound = load_bound_preference(&state).await.unwrap();
+        assert!(start_authority(None, None, bound.as_ref()).is_err());
+    }
+
+    #[tokio::test]
+    async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone() {
+        let (_temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let init = serde_json::json!({
+            "home": agent_home.display().to_string(),
+            "agent_name": "Forge",
+            "agent_did": "did:key:forge",
+            "key_path": null,
+            "tool_ceiling": "Readwrite",
+            "tool_root": null,
+        });
+        write(&agent_home.join("init.json"), &init.to_string());
+        let forge = StoredManagedServer {
+            agent_name: "Forge".to_string(),
+            tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
+            tool_root: None,
+            reviewed_for: None,
+        };
+        save_preference(&state, &forge).await.unwrap();
+
+        // What restart does with a stale requested name.
+        gents_server::server_host::ensure_standard_home(
+            gents_server::server_host::ProvisionOptions {
+                home: agent_home.clone(),
+                agent_name: "Scout".to_string(),
+                tool_ceiling: ManagedServerToolCeiling::Readwrite.into(),
+                tool_root: None,
+            },
+        )
+        .await
+        .unwrap();
+        save_confirmed_preference(
+            &state,
+            &agent_home,
+            &StoredManagedServer {
+                agent_name: "Scout".to_string(),
+                ..forge.clone()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            read_initialized_name(&agent_home).await.as_deref(),
+            Some("Forge")
+        );
+        let stored = load_preference(&state).await.unwrap().expect("preference");
+        assert_eq!(stored.agent_name, "Forge");
+
+        save_confirmed_preference(&state, &agent_home, &forge)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_preference(&state).await.unwrap().unwrap().agent_name,
+            "Forge"
+        );
+    }
+
+    #[tokio::test]
+    async fn requested_name_is_remembered_only_when_the_home_confirms_it() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!name_confirmed_by_home(
+            "Scout",
+            read_initialized_name(home.path()).await.as_deref()
+        ));
+        write(
+            &home.path().join("init.json"),
+            r#"{"agent_did":"did:key:forge","agent_name":"Forge"}"#,
+        );
+        let initialized = read_initialized_name(home.path()).await;
+        assert_eq!(initialized.as_deref(), Some("Forge"));
+        assert!(!name_confirmed_by_home("Scout", initialized.as_deref()));
+        assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
+    }
 
     fn not_the_user_home() -> &'static Path {
         Path::new("/nonexistent-user-home")
@@ -4229,6 +4632,7 @@ mod tests {
             agent_name: "local".to_string(),
             tool_ceiling: Some(ManagedServerToolCeiling::Readwrite),
             tool_root: Some("/Users/test".to_string()),
+            reviewed_for: None,
         };
         let mut runtime = ManagedServerRuntimeState {
             starting: true,

@@ -152,6 +152,81 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
 }
 
 #[test]
+fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
+    let behavior = serde_json::json!({"behavior_id":"default","agent_did":"did:test:amy","inference_profile_id":"profile"});
+    let backend = serde_json::json!({"agent_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
+    let advertised = |default: Option<i64>, maximum: Option<i64>| serde_json::json!({"backend_id":"backend","catalogs":[{"agent_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":default,"max_context_window":maximum}]}]});
+    let observation = advertised(Some(272_000), Some(872_000));
+    let snapshot_with = |observation: &serde_json::Value, context_window: Option<i64>| {
+        let mut profile = serde_json::json!({"agent_did":"did:test:amy","profile_id":"profile","backend_id":"backend","model_name":"model"});
+        if let Some(value) = context_window {
+            profile["context_window"] = value.into();
+        }
+        let rows = ClientStoreRows {
+            sessions: vec![session("session-window", "did:test:amy", None)],
+            behaviors: vec![serde_json::from_value(behavior.clone()).expect("behavior")],
+            inference_backends: vec![serde_json::from_value(backend.clone()).expect("backend")],
+            backend_observations: vec![
+                serde_json::from_value(observation.clone()).expect("observation")
+            ],
+            backend_observation_source_agent_dids: vec![Some("did:test:amy".into())],
+            inference_profiles: vec![serde_json::from_value(profile).expect("profile")],
+            ..ClientStoreRows::default()
+        };
+        build_session_snapshot_from_store_for_agent(
+            &ClientStore::from_rows(rows),
+            Some("did:test:amy"),
+            "session-window",
+            None,
+        )
+        .expect("snapshot")
+        .context
+    };
+    let snapshot_for = |context_window: Option<i64>| snapshot_with(&observation, context_window);
+    // An unset profile window is the advertised model's default window.
+    let unset = snapshot_for(None);
+    assert_eq!(
+        (unset.context_window, unset.context_window_error),
+        (272_000, None)
+    );
+    // An edited window within the advertised maximum is the configured window.
+    let edited = snapshot_for(Some(500_000));
+    assert_eq!(
+        (edited.context_window, edited.context_window_error),
+        (500_000, None)
+    );
+    // Past the advertised maximum the runtime's capability check rejects the
+    // profile, so it is reported as an error, never as the window in use.
+    let rejected = snapshot_for(Some(900_000));
+    assert_ne!(rejected.context_window, 900_000);
+    assert!(rejected
+        .context_window_error
+        .as_deref()
+        .is_some_and(|error| error.contains("exceeds model model advertised maximum 872000")));
+    // A model that advertises only its maximum: the maximum still bounds the
+    // profile, and an unset window is the runtime default.
+    let max_only = advertised(None, Some(200_000));
+    let unset = snapshot_with(&max_only, None);
+    assert_eq!(
+        (unset.context_window, unset.context_window_error),
+        (
+            i64::try_from(gents::config::DEFAULT_CONTEXT_WINDOW).unwrap(),
+            None
+        )
+    );
+    let within = snapshot_with(&max_only, Some(200_000));
+    assert_eq!(
+        (within.context_window, within.context_window_error),
+        (200_000, None)
+    );
+    let over = snapshot_with(&max_only, Some(250_000));
+    assert!(over
+        .context_window_error
+        .as_deref()
+        .is_some_and(|error| error.contains("advertised maximum 200000")));
+}
+
+#[test]
 fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized() {
     let mut rows = ClientStoreRows {
         sessions: vec![session(

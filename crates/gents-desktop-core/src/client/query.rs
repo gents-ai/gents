@@ -43,6 +43,7 @@ use session_transcript::tool_group_cursor_sequence;
 pub use session_transcript::{
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
     load_session_transcript_page, load_session_transcript_page_on,
+    session_transcript_requester_scope,
 };
 pub(crate) use snapshot_loaders::*;
 

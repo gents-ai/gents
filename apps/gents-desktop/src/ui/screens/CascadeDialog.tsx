@@ -1,7 +1,9 @@
 /* Stopping a request that has children: the desktop previews the cascade
    first and asks. Confirm sends the interrupt with the preview's
    signature; if the tree changed meanwhile the bridge hands back a new
-   preview and the person confirms again. */
+   preview and the person confirms again. An accepted stop is reported
+   through the request's lifecycle (Stopping…, then the stopped notice),
+   not a notification; only a failure is announced. */
 import { useEffect, useState } from "react";
 import type { CascadeCancelPreview } from "@source-inc/gents-desktop-client";
 import {
@@ -21,12 +23,14 @@ export function CascadeDialog({
   shell,
   requestId,
   onClose,
-  onResult,
+  onStopRequested,
+  onFailure,
 }: {
   shell: Shell;
   requestId: string | null;
   onClose: () => void;
-  onResult: (text: string) => void;
+  onStopRequested: (requestId: string) => void;
+  onFailure: (text: string) => void;
 }) {
   const [preview, setPreview] = useState<CascadeCancelPreview | null>(null);
   const [changed, setChanged] = useState(false);
@@ -42,13 +46,13 @@ export function CascadeDialog({
         if (!gone) setPreview(p);
       })
       .catch((e: unknown) => {
-        onResult(`Couldn't interrupt: ${String(e)}`);
+        onFailure(stopFailure(e));
         onClose();
       });
     return () => {
       gone = true;
     };
-  }, [api, requestId, agentDid, onClose, onResult]);
+  }, [api, requestId, agentDid, onClose, onFailure]);
 
   const confirm = async () => {
     if (!preview || !requestId) return;
@@ -66,10 +70,11 @@ export function CascadeDialog({
         setChanged(true);
         return;
       }
-      onResult(r.alreadyInterrupted ? "Already interrupted" : "Interrupt requested");
+      if (r.accepted || r.alreadyInterrupted) onStopRequested(requestId);
+      else onFailure("This response had already finished.");
       onClose();
     } catch (e) {
-      onResult(`Couldn't interrupt: ${String(e)}`);
+      onFailure(stopFailure(e));
       onClose();
     } finally {
       setBusy(false);
@@ -123,4 +128,8 @@ export function CascadeDialog({
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+function stopFailure(error: unknown): string {
+  return `Couldn't stop: ${error instanceof Error ? error.message : String(error)}`;
 }

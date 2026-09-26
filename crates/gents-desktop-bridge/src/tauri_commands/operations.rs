@@ -9,7 +9,7 @@ use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::subagent_tree::{
-    build_subagent_tree, effective_subagent_tree_max_depth, SubagentTree, SubagentTreeAccess,
+    build_subagent_tree_from, effective_subagent_tree_max_depth, SubagentTree, SubagentTreeAccess,
 };
 use gents_desktop_core::client::ClientCore;
 #[cfg(test)]
@@ -217,12 +217,17 @@ pub async fn desktop_list_subagent_tree(
     state: State<'_, DesktopAppState>,
     request: DesktopListSubagentTreeRequest,
 ) -> Result<SubagentTreeView, BridgeError> {
-    let root_request_id = request.root_request_id.trim();
-    if root_request_id.is_empty() {
-        return Err(BridgeError::untyped("rootRequestId is required"));
-    }
+    let root = request.root().map_err(BridgeError::untyped)?;
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
+    let agent_did = request
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| core.selected_agent_did())
+        .ok_or_else(|| BridgeError::untyped("no agent selected; pass agentDid explicitly"))?;
 
     let mut accesses = vec![SubagentTreeAccess {
         label: None,
@@ -243,9 +248,10 @@ pub async fn desktop_list_subagent_tree(
         });
     }
 
-    let tree = build_subagent_tree(
+    let tree = build_subagent_tree_from(
         &accesses,
-        root_request_id,
+        root,
+        Some(&agent_did),
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )
@@ -344,7 +350,8 @@ mod subagent_tree_url_tests {
         max_depth: Option<u32>,
     ) -> DesktopListSubagentTreeRequest {
         DesktopListSubagentTreeRequest {
-            root_request_id: "req-root".to_string(),
+            root_request_id: Some("req-root".to_string()),
+            root_request_doc_id: None,
             agent_did: None,
             include_terminal,
             max_depth,

@@ -118,7 +118,9 @@ describe("session context visibility", () => {
     expect(screen.getByText("Below threshold")).toBeInTheDocument();
     expect(screen.getByText("27,400")).toBeInTheDocument();
     expect(screen.getByText("142,031")).toBeInTheDocument();
-    expect(screen.getByText("262,080 (55%)")).toBeInTheDocument();
+    // The configured threshold the next request compacts at, not the last
+    // request's recorded one.
+    expect(screen.getByText("360,000 (75%)")).toBeInTheDocument();
     expect(screen.getByText("198,288 (58%)")).toBeInTheDocument();
     expect(screen.getByText("1 durable compaction")).toBeInTheDocument();
     expect(screen.getByText("263,000 → 22,000 tokens")).toBeInTheDocument();
@@ -134,6 +136,40 @@ describe("session context visibility", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(meter.open).toBe(false);
     expect(summary).toHaveFocus();
+  });
+});
+
+describe("legacy chat header context window", () => {
+  it("reports a window the runtime rejects instead of presenting it as in use", () => {
+    render(
+      <ChatHeader
+        behaviorLabel="mobile"
+        context={{
+          estimatedDurableTokens: 1_000,
+          estimatedConversationTokens: 1_000,
+          contextWindow: 128_000,
+          contextWindowError:
+            "profile p context window 900000 exceeds model m advertised maximum 872000",
+          compactionThreshold: 0.75,
+          compactionThresholdTokens: 96_000,
+          compactionStrategy: "StripThenSummarize",
+          durableMessageCount: 1,
+          providerMessageCount: 1,
+          totalCompactedMessages: 0,
+          compactions: [],
+          lastRequest: null,
+        }}
+        runtimeHealth={null}
+        selectedSessionSummaryTitle="weekend triage"
+        selectedSessionId="session-1"
+        onRenameSessionTitle={vi.fn()}
+      />,
+    );
+    const meter = screen.getByTestId("context-meter");
+    expect(meter.querySelector("summary")).toHaveTextContent(
+      "Context ≈1.0k / window unavailable",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("advertised maximum 872000");
   });
 });
 

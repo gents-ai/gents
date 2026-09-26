@@ -44,14 +44,11 @@ function ContextMeter({
   );
   const durable = Math.max(0, context.estimatedDurableTokens);
   const conversation = Math.max(0, context.estimatedConversationTokens);
-  const contextWindow = Math.max(
-    1,
-    lastRequest?.contextWindow ?? context.contextWindow,
-  );
-  const threshold = Math.max(
-    0,
-    lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
-  );
+  // The configured window as the runtime resolves it, so a profile edit shows
+  // at once; a window the runtime rejects is reported, never shown as in use.
+  const windowError = context.contextWindowError ?? null;
+  const contextWindow = Math.max(1, context.contextWindow);
+  const threshold = Math.max(0, context.compactionThresholdTokens);
   const usedPercent = Math.min(100, (used / contextWindow) * 100);
   const thresholdPercent = Math.min(100, (threshold / contextWindow) * 100);
   const displayedThresholdPercent = Math.round(
@@ -65,7 +62,7 @@ function ContextMeter({
   const transcriptTotalsExact = context.transcriptTotalsExact !== false;
   const title = lastRequest
     ? `Last assembled provider input: ${used.toLocaleString()} of ` +
-      `${contextWindow.toLocaleString()} tokens. Compaction decision: ` +
+      `${lastRequest.contextWindow.toLocaleString()} tokens. Compaction decision: ` +
       `${lastRequest.compactionReason}.`
     : `${transcriptTotalsExact ? "Estimated" : "At least"} durable conversation context: ${used.toLocaleString()} of ` +
       `${contextWindow.toLocaleString()} tokens. Compaction threshold: ` +
@@ -104,7 +101,8 @@ function ContextMeter({
       ref={detailsRef}
     >
       <summary className="chip" title={title}>
-        Context ≈{formatTokens(used)} / {formatTokens(contextWindow)}
+        Context ≈{formatTokens(used)} /{" "}
+        {windowError ? "window unavailable" : formatTokens(contextWindow)}
       </summary>
       <div
         className="context-meter-popover mobile-viewport-popover"
@@ -196,7 +194,9 @@ function ContextMeter({
           </div>
           <div>
             <dt>Context window</dt>
-            <dd>{contextWindow.toLocaleString()}</dd>
+            <dd role={windowError ? "alert" : undefined}>
+              {windowError ?? contextWindow.toLocaleString()}
+            </dd>
           </div>
           <div>
             <dt>Compacts at</dt>

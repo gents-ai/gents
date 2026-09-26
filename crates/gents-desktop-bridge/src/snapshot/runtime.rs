@@ -661,27 +661,22 @@ fn backend_config_view(
     observation: Option<&gents::document_config::InferenceBackendObservation>,
 ) -> InferenceBackendView {
     use gents::document_config::BackendAuth;
-    let (auth_kind, api_key_configured, api_key_env_var, catalog_scope) = match &row.auth {
-        BackendAuth::Unauthenticated => ("unauthenticated", false, None, None),
-        BackendAuth::ApiKey { .. } => ("api_key", true, None, None),
-        BackendAuth::Environment { variable } => {
-            ("environment", false, Some(variable.clone()), None)
-        }
-        BackendAuth::PrincipalOAuth => {
-            ("principal_oauth", false, None, Some(row.agent_did.as_str()))
-        }
+    let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
+        BackendAuth::Unauthenticated => ("unauthenticated", false, None),
+        BackendAuth::ApiKey { .. } => ("api_key", true, None),
+        BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
+        BackendAuth::PrincipalOAuth => ("principal_oauth", false, None),
     };
-    let advertised_models = observation
-        .and_then(|observation| match observation.catalog_for(catalog_scope) {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                tracing::warn!(backend_id = %row.backend_id, agent_did = %row.agent_did,
-                %error, "cannot project ambiguous backend catalog");
-                None
-            }
-        })
-        .map(|catalog| catalog.models.clone())
-        .unwrap_or_default();
+    let advertised_models = match gents::config::backend_catalog(row, observation) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            tracing::warn!(backend_id = %row.backend_id, agent_did = %row.agent_did,
+            %error, "cannot project ambiguous backend catalog");
+            None
+        }
+    }
+    .map(|catalog| catalog.models.clone())
+    .unwrap_or_default();
     let models = advertised_models
         .iter()
         .map(|model| model.model_name.clone())

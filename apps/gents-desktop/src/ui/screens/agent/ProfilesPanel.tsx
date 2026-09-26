@@ -208,6 +208,11 @@ export function ProfileEditor({
     Set<keyof InferenceSettingsDraft>
   >(new Set());
   const deliberateSelectionRef = useRef<string | null>(null);
+  const advertisedMaxContext = (backendId: string, modelName: string) =>
+    deployment.inferenceBackends
+      .find((backend) => backend.backendId === backendId)
+      ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
+      ?.max_context_window ?? undefined;
   const d = useDraft(
     saved,
     async (next) => {
@@ -261,6 +266,11 @@ export function ProfileEditor({
 
       const contextWindow = optionalInteger("Context window", next.contextWindow, {
         min: 1,
+        // A model that advertises only its maximum has no model-aware
+        // control, but that maximum still bounds the profile's window.
+        ...(recommendation.contextWindow
+          ? {}
+          : { max: advertisedMaxContext(next.backendId, next.modelName) }),
       });
       const maxOutputTokens = optionalInteger(
         "Max output tokens",
@@ -460,19 +470,10 @@ export function ProfileEditor({
           endpoint: backend.endpoint!,
           modelName,
           displayName: advertisedModel?.display_name ?? null,
-          contextWindow:
-            advertisedModel?.context_window ??
-            (profile.model_name === d.draft.modelName &&
-            profile.backend_id === d.draft.backendId
-              ? (profile.context_window ?? null)
-              : null),
+          // Only the backend's advertised facts describe the model.
+          contextWindow: advertisedModel?.context_window ?? null,
           maxContextWindow: advertisedModel?.max_context_window ?? null,
-          maxOutputTokens:
-            advertisedModel?.max_output_tokens ??
-            (profile.model_name === d.draft.modelName &&
-            profile.backend_id === d.draft.backendId
-              ? (profile.max_output_tokens ?? null)
-              : null),
+          maxOutputTokens: advertisedModel?.max_output_tokens ?? null,
           reasoningEfforts: advertisedModel?.reasoning_efforts ?? null,
         })
         .then((next) => {
@@ -706,6 +707,34 @@ export function ProfileEditor({
               alwaysExpanded
             />
           </div>
+          {/* The backend does not advertise these limits for this model, so
+              there is no model-aware bound; the profile value still applies. */}
+          {!recommendation.contextWindow && (
+            <NumberRow
+              id={id("context-window")}
+              label="Context window"
+              description={
+                advertisedModel?.max_context_window
+                  ? `Tokens per request, up to ${advertisedModel.max_context_window.toLocaleString()}. Empty uses the runtime default.`
+                  : "Tokens the model accepts per request. Empty uses the runtime default."
+              }
+              value={d.draft.contextWindow}
+              onChange={(v) => d.set("contextWindow", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+          )}
+          {!recommendation.maxOutputTokens && (
+            <NumberRow
+              id={id("max-output")}
+              label="Max output tokens"
+              description="Empty uses the runtime default."
+              value={d.draft.maxOutputTokens}
+              onChange={(v) => d.set("maxOutputTokens", v)}
+              onCommit={d.commit}
+              onEnter={d.onEnter}
+            />
+          )}
         </Group>
       ) : null}
       {recommendationError ? (

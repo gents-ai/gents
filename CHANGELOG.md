@@ -184,6 +184,48 @@ source consistency checks, not a separate runtime compatibility version.
   is claimed later is refused or interrupted instead of running unsupervised,
   and `list_subagents` reports such a spawn as `stopping` until its child has
   stopped (#1807).
+- Desktop: starting or restarting the local agent from Local server settings,
+  Add agent, or the menu bar no longer reports a runtime that is still
+- Desktop: starting or restarting the local agent from Local server settings
+  or the menu bar no longer reports a runtime that is still
+  updating its data as a failure. It shows "Updating data…" and waits, and the
+  menu bar's Restart Agent waits for the update instead of interrupting it
+  (#1762).
+- Desktop: Add agent no longer claims to create a second local agent under a
+  new name while reusing the existing one. It reconnects this computer's
+  local agent by its real name, reports success only once the agent is listed,
+  and keeps the dialog open with the reason when that fails. First-run setup
+  shows an existing home's agent name instead of an editable name it would
+  ignore, and fails clearly rather than continuing under another name (#1615).
+- Desktop: in a narrow window the session side panel and the fork notice take
+  their turn with the shell's popovers, so opening one after the sync or
+  context popover no longer stacks two dialogs (#1778).
+- Desktop: stopping a request that has children no longer shows an
+  "Interrupt requested" notification. Like a direct Stop, it shows
+  "Stopping…" until the request is terminal and then the stopped notice;
+  only a failure is announced, in plain language (#1616).
+- Desktop: finished subagents keep their details in the session transcript,
+  and workers spawned by earlier requests stay visible after a new message is
+  sent. Rendered tool calls now name the request that issued them (#1784).
+- Desktop: a model profile's context window can be raised again. The editor
+  no longer sends the profile's own saved limits as the model's advertised
+  facts, which made the saved value the ceiling; limits a backend does not
+  advertise stay editable, bounded by an advertised maximum. The context meter
+  shows the configured window as the runtime resolves it, and reports a window
+  the runtime rejects instead of presenting it as in use (#1618).
+- Desktop onboarding shows the recommended reasoning effort as a default that
+  can be changed later; the selector sits with the other adjustable settings
+  and says it applies to new requests (#1618).
+- Desktop: a local agent's subagent sessions open with their messages and
+  tool calls. The transcript was read under the desktop's own requester scope,
+  but a subagent the agent spawns for itself is requested by the agent, so the
+  read matched nothing; the agent's operator now reads such a session under
+  its own scope (#1537).
+- Desktop: a subagent session shows the parent work that spawned it, also
+  after the parent moves on or completes. Its lineage is rooted at the exact
+  request document its provenance names, through the agent-scoped lineage
+  owner, instead of comparing that document id with a logical request id
+  (#1834).
 
 ## 0.19.0 - 2026-09-24
 

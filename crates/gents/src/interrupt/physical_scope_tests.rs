@@ -16,7 +16,7 @@ async fn insert(node: &EmbeddedNode, collection: &str, value: Value) -> String {
 async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
     use crate::descendant_graph::{
         resolve_descendant_graph, resolve_descendant_graph_by_doc_id, DescendantGraphAccess,
-        DescendantQuery,
+        DescendantQuery, RootRequester,
     };
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -34,8 +34,8 @@ async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
         DescendantGraphAccess::Local(&node),
         &query,
         &parent,
-        "owner",
-        None,
+        Some("owner"),
+        RootRequester::Exact(None),
     )
     .await
     .unwrap();
@@ -54,8 +54,8 @@ async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
             DescendantGraphAccess::Local(&node),
             &query,
             &parent,
-            owner,
-            requester
+            Some(owner),
+            RootRequester::Exact(requester)
         )
         .await
         .is_err());
@@ -72,8 +72,8 @@ async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
         DescendantGraphAccess::Local(&node),
         &DescendantQuery::all("different-label"),
         &parent,
-        "owner",
-        None
+        Some("owner"),
+        RootRequester::Exact(None)
     )
     .await
     .is_err());

@@ -364,6 +364,34 @@ async fn resolve_transcript_cursor_sequence(
         .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
 }
 
+/// The exact requester scope under which one session's transcript is read.
+///
+/// Transcript rows carry their session's requester scope, and a desktop
+/// reading an enrolled agent defaults to its own principal. A subagent the
+/// agent spawns for itself is admitted as a `LocalChild`, whose requester is
+/// the agent's own DID, so under the principal its session reads as empty.
+/// Only the agent's operator (its operator GraphQL endpoint, which already
+/// carries full read authority over that runtime) reads such a session under
+/// the session's own scope. Every other session keeps the principal scope, so
+/// sessions requested by other principals are never widened into view.
+pub fn session_transcript_requester_scope(
+    session: Option<&AgentSession>,
+    agent_did: Option<&str>,
+    principal_scope: Option<&str>,
+    operator: bool,
+) -> Option<String> {
+    let agent_own_scope = match (session, agent_did) {
+        (Some(session), Some(agent_did)) => {
+            session.agent_did == agent_did && session.requester_did.as_deref() == Some(agent_did)
+        }
+        _ => false,
+    };
+    if operator && agent_own_scope {
+        return agent_did.map(str::to_owned);
+    }
+    principal_scope.map(str::to_owned)
+}
+
 /// Query a bounded transcript window directly from DefraDB. The cursor is a
 /// bridge item key, but is resolved to the durable sequence space before the
 /// page query so inserts at the tip cannot shift an older page. Messages and

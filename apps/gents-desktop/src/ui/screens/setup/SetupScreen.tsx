@@ -381,6 +381,12 @@ export function SetupScreen({
   const [name, setName] = useState(
     shell.snapshot?.bootstrap.initAgentName?.trim() || "Forge",
   );
+  /* An initialized home keeps its identity: provisioning never renames it,
+     so its name is shown, not asked for. */
+  const existingName = existingHome
+    ? shell.snapshot?.bootstrap.initAgentName?.trim() || null
+    : null;
+  const agentName = existingName ?? name;
   const [homeRoot, setHomeRoot] = useState<string | null>(
     api.managedServerStatus ? null : (shell.snapshot?.bootstrap.initToolRoot ?? null),
   );
@@ -567,7 +573,8 @@ export function SetupScreen({
   }, [api, catalog, step]);
 
   const createAgent = async () => {
-    const agentName = name.trim() || "Local Agent";
+    const requestedName = agentName.trim();
+    if (!requestedName) return;
     if (!authority) {
       setAuthorityError(
         homeRoot
@@ -589,9 +596,16 @@ export function SetupScreen({
         const startManagedServer = api.startManagedServer;
         const status = await observeManagedServerOperation(
           api,
-          () => startManagedServer(agentName, authority),
+          () => startManagedServer(requestedName, authority),
           setManagedWait,
         );
+        if (status.agentName && status.agentName !== requestedName) {
+          /* Welcome then shows the existing agent's name. */
+          void shell.refreshSnapshot();
+          throw new Error(
+            `This computer already has a local agent named ${status.agentName}, so ${requestedName} was not created. Go back to continue with ${status.agentName}.`,
+          );
+        }
         const confirmed: ManagedServerAuthorityInput | null =
           status.effectiveToolCeiling
             ? {
@@ -605,20 +619,20 @@ export function SetupScreen({
           );
         }
         setStartupDetails({
-          managedServer: `${status.agentName ?? agentName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
+          managedServer: `${requestedName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
         });
       }
       setPhase("loading-configuration");
       failedPhase = "configuration-error";
-      await shell.onInitLocalRuntime(agentName);
+      await shell.onInitLocalRuntime(requestedName);
       setStartupDetails((current) => ({
         ...current,
-        configuration: `Saved the local connection to ${agentName}`,
+        configuration: `Saved the local connection to ${requestedName}`,
       }));
       setPhase("starting-client");
       failedPhase = "client-error";
       if (api.commitManagedServerAutoStart) {
-        await api.commitManagedServerAutoStart(agentName);
+        await api.commitManagedServerAutoStart(requestedName);
       }
       await waitForManagedRuntimePairing(api);
       await finishProvisioning();
@@ -928,12 +942,14 @@ export function SetupScreen({
               icon={Server}
             >
               <div className="flex items-end gap-3">
-                <AgentAvatar name={name} className="mb-1 size-8 shrink-0" />
+                <AgentAvatar name={agentName} className="mb-1 size-8 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <Field label="Agent name">
                     <Input
-                      value={name}
+                      value={agentName}
                       onChange={(event) => setName(event.target.value)}
+                      readOnly={existingName !== null}
+                      aria-readonly={existingName !== null}
                     />
                   </Field>
                 </div>
@@ -1036,7 +1052,7 @@ export function SetupScreen({
           busy={busy}
           disabled={
             where === "local"
-              ? !name.trim() || !authority || !homeRoot
+              ? !agentName.trim() || !authority || !homeRoot
               : !address.trim()
           }
         />

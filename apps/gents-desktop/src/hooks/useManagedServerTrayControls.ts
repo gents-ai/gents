@@ -3,11 +3,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 
+import { describeManagedServerWait } from "../lib/managedServerStartup";
 import { installManagedServerTrayListeners } from "../lib/managedServerTray";
 import {
   ownsAutomaticRecovery,
   supportsLocalManagedServer,
 } from "../lib/shellPlatform";
+
+const TRAY_WAIT_TOAST = "managed-server-tray-wait";
 
 /** The native tray targets the one view that owns shared-backend recovery. */
 export function useManagedServerTrayControls(api: DesktopApiAdapter) {
@@ -43,6 +46,17 @@ export function useManagedServerTrayControls(api: DesktopApiAdapter) {
       async () => {
         await view.show();
         await view.setFocus();
+      },
+      (wait) => {
+        try {
+          if (!wait) toast.dismiss(TRAY_WAIT_TOAST);
+          else
+            toast.loading(describeManagedServerWait(wait, Date.now()).label, {
+              id: TRAY_WAIT_TOAST,
+            });
+        } catch {
+          // Progress is informational; the command's own result reports failures.
+        }
       },
     );
   }, [api]);
