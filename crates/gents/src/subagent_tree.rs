@@ -20,8 +20,8 @@ use serde::Deserialize;
 
 use crate::config_client::ConfigAccess;
 use crate::descendant_graph::{
-    resolve_descendant_graph_from_document, DescendantEdge, DescendantGraphAccess, DescendantQuery,
-    MAX_DESCENDANT_PAGE_LIMIT,
+    resolve_descendant_graph_by_doc_id, DescendantEdge, DescendantGraphAccess, DescendantQuery,
+    RootRequester, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use crate::graphql::escape_graphql_string;
 
@@ -268,11 +268,12 @@ pub async fn build_subagent_tree_from(
                 ..DescendantQuery::all(root_request_id)
             };
             let access = DescendantGraphAccess::Config(&entry.access);
-            let page = match resolve_descendant_graph_from_document(
+            let page = match resolve_descendant_graph_by_doc_id(
                 access,
                 &query,
                 root_doc_id,
                 agent_did,
+                RootRequester::Any,
             )
             .await
             {

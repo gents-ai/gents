@@ -139,7 +139,7 @@ describe("session context visibility", () => {
   });
 });
 
-describe("legacy chat header context window (#1618)", () => {
+describe("legacy chat header context window", () => {
   it("reports a window the runtime rejects instead of presenting it as in use", () => {
     render(
       <ChatHeader

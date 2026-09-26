@@ -331,61 +331,50 @@ pub async fn resolve_descendant_graph(
     page_descendant_edges(query, edges)
 }
 
-/// Traverse from an exact root document, bound to `agent_did` when given. The
-/// root is loaded by `_docID` alone, so another request reusing its logical
-/// id, of this principal or another, is never the root and never makes it
-/// ambiguous. The document must still carry the queried logical id.
-pub async fn resolve_descendant_graph_from_document(
-    access: DescendantGraphAccess<'_>,
-    query: &DescendantQuery,
-    root_doc_id: &str,
-    agent_did: Option<&str>,
-) -> Result<DescendantPage> {
-    let root_doc_id =
-        nonempty(Some(root_doc_id)).context("descendant root document is required")?;
-    let mut filter = format!(r#"_docID:{{_eq:"{}"}}"#, escape_graphql_string(root_doc_id));
-    if let Some(agent_did) = agent_did {
-        let agent_did = nonempty(Some(agent_did)).context("principal agent_did is required")?;
-        filter.push_str(&format!(
-            r#", agent_did:{{_eq:"{}"}}"#,
-            escape_graphql_string(agent_did)
-        ));
-    }
-    let mut rows = load_requests_filtered(&access, filter).await?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "root AgentRequest document {root_doc_id} is missing within scope"
-    );
-    let root = rows.pop().expect("one root");
-    anyhow::ensure!(
-        root.request_id == query.root_request_id,
-        "root AgentRequest document {root_doc_id} is request {} not {}",
-        root.request_id,
-        query.root_request_id
-    );
-    let edges = collect_descendant_edges(&access, root, query.scope).await?;
-    page_descendant_edges(query, edges)
+/// Which requester a document-rooted traversal requires of its root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootRequester<'a> {
+    /// The root's `requester_did` must equal this value exactly; `None`
+    /// requires an absent requester and never matches a present one.
+    Exact(Option<&'a str>),
+    /// Any requester: the physical identity (and principal, when given)
+    /// already names exactly one document.
+    Any,
 }
 
 /// Traverse from a previously selected physical request without resolving its
-/// logical label again. The existing corroboration and paging owners apply.
+/// logical label again. The root is loaded by `_docID`, bound to `agent_did`
+/// when given and to the requester scope, and must still carry the queried
+/// logical id; another request reusing that id is never the root. The
+/// existing corroboration and paging owners apply.
 pub async fn resolve_descendant_graph_by_doc_id(
     access: DescendantGraphAccess<'_>,
     query: &DescendantQuery,
     request_doc_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
+    agent_did: Option<&str>,
+    requester: RootRequester<'_>,
 ) -> Result<DescendantPage> {
     anyhow::ensure!(
-        !request_doc_id.trim().is_empty() && !agent_did.trim().is_empty(),
+        !request_doc_id.trim().is_empty() && agent_did.is_none_or(|did| !did.trim().is_empty()),
         "descendant root requires physical identity and principal"
     );
-    let physical = escape_graphql_string(request_doc_id);
-    let owner = escape_graphql_string(agent_did);
-    let requester = requester_did
-        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let mut rows = load_requests_filtered(&access, format!("_docID:{{_eq:\"{physical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}")).await?;
+    let mut filter = format!(
+        "_docID:{{_eq:\"{}\"}}",
+        escape_graphql_string(request_doc_id)
+    );
+    if let Some(agent_did) = agent_did {
+        filter.push_str(&format!(
+            ",agent_did:{{_eq:\"{}\"}}",
+            escape_graphql_string(agent_did)
+        ));
+    }
+    if let RootRequester::Exact(requester_did) = requester {
+        let requester = requester_did
+            .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".into());
+        filter.push_str(&format!(",requester_did:{{_eq:{requester}}}"));
+    }
+    let mut rows = load_requests_filtered(&access, filter).await?;
     anyhow::ensure!(
         rows.len() == 1,
         "selected physical descendant root is missing or ambiguous within scope"
