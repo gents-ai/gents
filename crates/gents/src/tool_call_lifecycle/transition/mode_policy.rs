@@ -30,7 +30,7 @@ impl ToolCallLifecycle {
         let drop_unclaimed_bound = self.unclaimed_deadline_at.is_some()
             && self.spawn_target_did.as_deref() == Some(self.agent_did());
         let unclaimed_deadline_fragment = if drop_unclaimed_bound {
-            ", unclaimed_deadline_at: null".to_owned()
+            self.clear_unclaimed_deadline_fragment().to_owned()
         } else {
             self.resupply_unclaimed_deadline_fragment()
         };

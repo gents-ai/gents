@@ -638,6 +638,15 @@ async fn abandoned_spawn_lists_as_stopping_until_its_child_stops() {
     let session_id = "session-stopping";
     let hook = create_parent_hook(&db, "parent-stopping", session_id).await;
     spawn_unclaimed_background_child(&hook, "spawn-stopping").await;
+    // Give the bridge an expired unclaimed bound, as a bounded spawn has.
+    let response = db
+        .node
+        .execute(
+            r#"mutation { update_AgentToolCall(filter: { tool_call_id: { _eq: "model-spawn-stopping" } },
+                input: { unclaimed_deadline_at: "2020-01-01T00:00:00Z" }) { _docID } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), session_id, "model-spawn-stopping")
             .await

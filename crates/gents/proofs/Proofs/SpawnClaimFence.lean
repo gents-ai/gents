@@ -163,7 +163,9 @@ def step (w : World) : Action → World
   | .observeAck =>
       if w.ackPending && w.child.terminal then { w with ackPending := false } else w
 
-/-- Unclaimed expiry is only enabled on spawns that carry that deadline. -/
+/-- Unclaimed expiry is only enabled on spawns that carry that deadline. A
+    mode flip re-evaluates it, so settlement re-checks the bound on the row it
+    writes: a bound cleared after selection makes the expiry a no-op. -/
 def enabled (route : Route) (mode : AwaitMode) : Action → Bool
   | .expire => unclaimedDeadlineApplies route mode
   | _ => true

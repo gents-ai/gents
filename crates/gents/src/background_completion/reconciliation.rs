@@ -130,7 +130,13 @@ pub(crate) async fn settle_unclaimed_spawn(
     else {
         return Ok(UnclaimedSpawnSettlement::AlreadySettled);
     };
-    if !lifecycle.is_running() {
+    // The row was selected on an expired deadline; a mode flip may have
+    // cleared the bound since (Lean `enabled`): then there is nothing to settle.
+    if !lifecycle.is_running()
+        || !lifecycle
+            .unclaimed_deadline_at
+            .is_some_and(|due| due <= Utc::now())
+    {
         return Ok(UnclaimedSpawnSettlement::AlreadySettled);
     }
     if lifecycle.unobserved_child_fence().await?.is_none() {

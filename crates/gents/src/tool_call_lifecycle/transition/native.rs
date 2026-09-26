@@ -111,6 +111,7 @@ impl ToolCallLifecycle {
             cancel: None,
             remote_cancel_intent_at: None,
             completion_reason: None,
+            unclaimed_expired_by: None,
         };
         let updated = if let Some(now) = fixture_now {
             self.terminalize_raw_with_presentation_at(
@@ -161,6 +162,7 @@ impl ToolCallLifecycle {
                     cancel: None,
                     remote_cancel_intent_at: None,
                     completion_reason: None,
+                    unclaimed_expired_by: None,
                 },
                 result,
                 presentation,
@@ -211,6 +213,7 @@ impl ToolCallLifecycle {
                     cancel: None,
                     remote_cancel_intent_at: None,
                     completion_reason: None,
+                    unclaimed_expired_by: None,
                 },
                 raw,
                 rendered,
@@ -280,6 +283,7 @@ impl ToolCallLifecycle {
                     cancel: None,
                     remote_cancel_intent_at: None,
                     completion_reason,
+                    unclaimed_expired_by: None,
                 },
                 result,
                 presentation,
@@ -328,6 +332,7 @@ impl ToolCallLifecycle {
                     cancel: None,
                     remote_cancel_intent_at: None,
                     completion_reason: None,
+                    unclaimed_expired_by: None,
                 },
                 reason,
                 "tool_call.spawn_failed_delivery",
@@ -373,6 +378,7 @@ impl ToolCallLifecycle {
             cancel: Some(CancelCause::Deadline),
             remote_cancel_intent_at,
             completion_reason: None,
+            unclaimed_expired_by: None,
         };
         let updated = match presented {
             Some((rendered, presentation)) => {
@@ -420,6 +426,7 @@ impl ToolCallLifecycle {
                     cancel: Some(cause),
                     remote_cancel_intent_at: None,
                     completion_reason: None,
+                    unclaimed_expired_by: None,
                 },
                 "tool call cancelled before dispatch",
                 "tool_call.cancel_before_dispatch_delivery",
