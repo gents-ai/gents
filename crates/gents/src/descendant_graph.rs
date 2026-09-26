@@ -1804,6 +1804,7 @@ mod tests {
             await_mode: case.await_mode.clone(),
             cancel_policy: None,
             lifecycle_state: case.lifecycle.clone(),
+            stop_pending: false,
             child_lifecycle_state: None,
             materialization_state,
             terminal_result_ref: None,

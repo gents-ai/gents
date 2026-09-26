@@ -625,9 +625,6 @@ pub(crate) fn steer_admission(
     }
 }
 
-/// Persisted `tool_failure_class` of an unclaimed-spawn fence expiry.
-const SPAWN_UNCLAIMED_FAILURE_CLASS: &str = "spawnUnclaimed";
-
 #[derive(Deserialize)]
 struct BridgeFenceMarkers {
     #[serde(default)]
@@ -646,7 +643,7 @@ impl BridgeFenceMarkers {
 
     fn apply_fence(&self, evidence: &mut SteerEvidence) {
         evidence.spawn_unclaimed = self.tool_failure_class.as_deref().map(str::trim)
-            == Some(SPAWN_UNCLAIMED_FAILURE_CLASS);
+            == Some(FailureClass::SpawnUnclaimed.as_str());
         evidence.cancel_intent = present(self.cancel_cascade_intent_at.as_deref());
     }
 }
