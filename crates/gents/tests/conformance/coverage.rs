@@ -247,7 +247,10 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
         "cancel_pending_remote_ack",
         "unclaimed_deadline_at",
     ] {
-        assert!(!names.contains(field), "AgentToolCall retains field {field}");
+        assert!(
+            !names.contains(field),
+            "AgentToolCall retains field {field}"
+        );
     }
 }
 
@@ -1349,10 +1352,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "r6_background_theorem_witnesses".to_string(),
             "BackgroundBudgetBoundedTheoremWitness".to_string(),
-        ));
-        emitted.insert((
-            "r6_background_theorem_witnesses".to_string(),
-            "CascadeCancelsChildTheoremWitness".to_string(),
         ));
     }
     if !lean_goal_decision_cases().is_empty() {

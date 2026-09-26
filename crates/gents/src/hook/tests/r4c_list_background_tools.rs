@@ -209,7 +209,6 @@ async fn create_foreground_tool_call(hook: &DefraSessionHook) {
         "{}",
         chrono::Utc::now() + chrono::Duration::minutes(5),
         gents::tool_call_lifecycle::AwaitMode::Foreground,
-        gents::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     lifecycle.start_running().await.unwrap();

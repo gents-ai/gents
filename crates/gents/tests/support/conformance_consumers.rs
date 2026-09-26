@@ -1036,11 +1036,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_native_restart_dispositions_use_canonical_admission_owner",
         },
         ConformanceConsumer::RustTest {
-            id: "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner",
+            id: "tool_call_lifecycle::recovery_conformance::generated_session_message_restart_dispositions_use_canonical_admission_owner",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/recovery_conformance.rs",
             module_path: "tool_call_lifecycle::recovery_conformance",
-            function: "generated_linked_restart_dispositions_use_canonical_admission_owner",
+            function: "generated_session_message_restart_dispositions_use_canonical_admission_owner",
         },
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::recovery_closeout_conformance::generated_native_missing_parent_restart_cases_defer",
@@ -1057,11 +1057,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_native_recovery_cases_use_canonical_admission_owner",
         },
         ConformanceConsumer::RustTest {
-            id: "tool_call_lifecycle::recovery_closeout_conformance::generated_linked_recovery_cases_use_accepted_spawn",
+            id: "tool_call_lifecycle::recovery_closeout_conformance::generated_session_message_recovery_cases_use_accepted_call",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/recovery_closeout_conformance.rs",
             module_path: "tool_call_lifecycle::recovery_closeout_conformance",
-            function: "generated_linked_recovery_cases_use_accepted_spawn",
+            function: "generated_session_message_recovery_cases_use_accepted_call",
         },
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call",

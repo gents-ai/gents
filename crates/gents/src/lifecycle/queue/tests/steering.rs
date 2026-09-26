@@ -3,19 +3,6 @@ use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
 
 #[tokio::test]
 async fn steering_admission_keeps_signed_content_queued_without_transcript_publication() {
-    let crate::lean_vocab_test::LeanR4cBackgroundWorkCase::SteerAppendPreservesLineage {
-        queue_source,
-        queue_policy,
-        ..
-    } = crate::lean_vocab_test::lean_r4c_background_work_case(
-        "r4c.steer_subagent.append_preserves_lineage",
-    )
-    else {
-        panic!("steering admission witness variant drifted");
-    };
-    assert_eq!(queue_source, "steering");
-    assert_eq!(queue_policy, "append");
-
     let db = test_db("steering-admission-only").await;
     let mut parent = parent_request(db.agent_did(), "steering-session");
     parent.doc_id = insert_raw_queue_request(

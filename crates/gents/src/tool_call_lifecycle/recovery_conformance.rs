@@ -4,8 +4,6 @@ use crate::tool_call_lifecycle::admission_fixture::{
 };
 use defra_node::EmbeddedNode;
 
-use crate::streaming::SpawnAdmissionPlan;
-
 async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
     let response = node
         .execute(&format!(
@@ -79,10 +77,9 @@ async fn restart_obligations(
     (messages, wakes)
 }
 
-/// Drives the restart classifier rows that do not require a child request
-/// through canonical provider publication. Linked-child rows are exercised
-/// separately once their reserved child has been materialized; the missing
-/// parent row remains an integration fault-injection fixture by design.
+/// Drives the native restart classifier rows through canonical provider
+/// publication. Session-message rows are exercised separately; the missing
+/// parent rows remain an integration fault-injection fixture by design.
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
@@ -98,7 +95,10 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         "restart_foreground_interrupted_parent_cancelled",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
-        assert!(!case.child_linked, "{name} must remain a native tool row");
+        assert!(
+            !case.session_message,
+            "{name} must remain a native tool row"
+        );
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("restart-{name}"),
             // Restart terminalization may owe a scheduled wake. That owner
@@ -272,126 +272,60 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
     }
 }
 
+/// A started session is an ordinary agent's session, not a subordinate: no
+/// parent observation ends its `create_session`/`send_message` row on restart,
+/// only the row's own expired deadline does. The rows come from the Lean
+/// classifier; the fixture publishes an accepted session-message call.
 #[tokio::test]
-async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
-    let cases = crate::lean_vocab_test::lean_restart_disposition_cases();
-    for name in [
-        "restart_background_subagent_live_parent_left_running",
-        "restart_detached_bridge_interrupted_parent_retained",
-        "restart_cascade_bridge_interrupted_parent_retained",
-        "restart_awaited_bridge_interrupted_parent_backgrounded",
-        "restart_awaited_bridge_failed_parent_backgrounded",
-        "restart_background_bridge_failed_parent_retained",
-        "restart_clean_complete_child_linked_retained",
-    ] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
-        assert!(case.child_linked, "{name} must remain a linked bridge row");
-        assert!(
-            matches!(
-                case.disposition.as_str(),
-                "leave_running" | "retain_in_background"
-            ),
-            "{name}"
-        );
-        let await_mode = if case.await_mode == "background" {
-            AwaitMode::Background
-        } else {
-            AwaitMode::Foreground
-        };
-        let cancel_policy = match case.cancel_policy.as_str() {
-            "cascade" => super::CancelPolicy::Cascade,
-            "detach" => super::CancelPolicy::Detach,
-            other => panic!("unsupported linked restart cancel policy {other}"),
-        };
-        let fixture_name = format!("restart-{name}");
-        let parent_request_id = format!("request-{fixture_name}");
-        let child_request_id = format!("child-{fixture_name}");
+async fn generated_session_message_restart_dispositions_use_canonical_admission_owner() {
+    let cases = crate::lean_vocab_test::lean_restart_disposition_cases()
+        .iter()
+        .filter(|case| case.session_message && case.parent_observation != "missing")
+        .collect::<Vec<_>>();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no session-message restart rows"
+    );
+    for case in cases {
+        let name = case.name.as_str();
+        assert_eq!(case.await_mode, "background", "{name}");
         let admission = published_admission(PublishedAdmissionOptions {
-            name: fixture_name,
+            name: format!("restart-{name}"),
             real_identity: true,
-            await_mode: await_mode.clone(),
-            cancel_policy,
+            await_mode: AwaitMode::Background,
+            tool_name: Some(crate::toolset::CREATE_SESSION_TOOL_NAME.to_owned()),
             start_running: true,
-            request_created_at: None,
-            spawn_plan: Some(SpawnAdmissionPlan {
-                tool_call_id: "bridge-native-tool".into(),
-                child_request_id: child_request_id.clone(),
-                spawn_target_did: "overridden-by-fixture".into(),
-                spawn_behavior_id: "general".into(),
-                delegated_workspace: None,
-                await_mode,
-            }),
-            tool_name: None,
+            ..Default::default()
         })
         .await
         .unwrap();
         let tool_doc = admission.tool.doc_id().unwrap().to_owned();
         let request_doc = admission.tool.request_doc_id().unwrap().to_owned();
-        crate::tool_call_lifecycle::create_subagent_request_with_request_id(
-            &admission.node,
-            child_request_id.clone(),
-            parent_request_id.clone(),
-            request_doc.clone(),
-            admission.tool.tool_call_id().to_owned(),
-            tool_doc.clone(),
-            0,
-            admission.agent_did.clone(),
-            "general".to_owned(),
-            "restart child".to_owned(),
-            Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-        )
-        .await
-        .expect("materialize canonically linked restart child");
-        let escaped_parent = crate::graphql::escape_graphql_string(&parent_request_id);
-        let parent = admission
-            .node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, request_id: {{ _eq: "{escaped_parent}" }} }}, limit: 2) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&request_doc),
-            ))
+        if case.deadline_expired {
+            update(
+                admission.node.as_ref(),
+                "AgentToolCall",
+                &tool_doc,
+                r#"deadline_at: "2020-01-01T00:00:00Z""#,
+            )
             .await;
-        assert!(!parent.has_errors(), "{name}: {:?}", parent.errors);
-        assert_eq!(
-            parent.data.unwrap()["AgentRequest"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1,
-            "{name}: physical parent must bind the fixture logical request"
-        );
-        match case.parent_observation.as_str() {
-            "live" => {}
-            "interrupted" => {
-                update(
-                    admission.node.as_ref(),
-                    "AgentRequest",
-                    &request_doc,
-                    r#"lifecycle_state: "interrupted""#,
-                )
-                .await;
-            }
-            "cleanlyCompleted" => {
-                update(
-                    admission.node.as_ref(),
-                    "AgentRequest",
-                    &request_doc,
-                    r#"lifecycle_state: "completed""#,
-                )
-                .await;
-            }
-            "otherTerminal" => {
-                update(
-                    admission.node.as_ref(),
-                    "AgentRequest",
-                    &request_doc,
-                    r#"lifecycle_state: "failed""#,
-                )
-                .await;
-            }
-            other => panic!("unsupported linked restart parent observation {other}"),
         }
-        if case.await_mode == "background" && case.parent_observation != "live" {
-            // The periodic terminal-parent sweep never ends a subagent bridge.
+        let parent_state = match case.parent_observation.as_str() {
+            "live" => None,
+            "interrupted" => Some("interrupted"),
+            "cleanlyCompleted" => Some("completed"),
+            "otherTerminal" => Some("failed"),
+            other => panic!("unsupported session-message restart parent observation {other}"),
+        };
+        if let Some(state) = parent_state {
+            update(
+                admission.node.as_ref(),
+                "AgentRequest",
+                &request_doc,
+                &format!(r#"lifecycle_state: "{state}""#),
+            )
+            .await;
+            // The periodic terminal-parent sweep never ends a background row.
             let periodic = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &admission.node,
                 &admission.agent_did,
@@ -399,64 +333,33 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
             .await
             .unwrap();
             assert_eq!(periodic.tool_calls_terminalized, 0, "{name}");
-            assert_eq!(
-                row(&admission.node, &tool_doc).await["lifecycle_state"],
-                "running",
-                "{name}"
-            );
         }
 
         let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
             .await
             .unwrap();
-        let backgrounded = case.post_await_mode.as_deref() == Some("background")
-            && case.await_mode == "foreground";
-        assert_eq!(
-            report.tool_calls_recovered,
-            usize::from(backgrounded),
-            "{name}"
-        );
-        let bridge = row(&admission.node, &tool_doc).await;
-        assert_eq!(bridge["lifecycle_state"], "running", "{name}");
-        assert_eq!(
-            bridge["await_mode"],
-            case.post_await_mode
-                .as_deref()
-                .unwrap_or(case.await_mode.as_str()),
-            "{name}"
-        );
-        if case.disposition == "retain_in_background" {
-            let presentation = crate::tool_call_lifecycle::query::load_tool_call_presentation(
-                &crate::config_client::ConfigAccess::Local(admission.node.clone()),
-                &tool_doc,
-                &admission.agent_did,
-                admission.tool.session_id(),
-                admission.tool.requester_did(),
-            )
-            .await
-            .unwrap();
-            assert!(
-                presentation.result.is_some(),
-                "{name}: a retained bridge owns its invocation receipt"
-            );
+        let actual = row(&admission.node, &tool_doc).await;
+        assert_eq!(actual["await_mode"], case.await_mode.as_str(), "{name}");
+        match case.disposition.as_str() {
+            "leave_running" => {
+                assert_eq!(report.tool_calls_recovered, 0, "{name}");
+                assert_eq!(actual["lifecycle_state"], "running", "{name}");
+                assert!(actual["cancel_cause"].is_null(), "{name}");
+                assert!(actual["tool_failure_class"].is_null(), "{name}");
+            }
+            "terminalize" => {
+                assert_eq!(report.tool_calls_recovered, 1, "{name}");
+                assert_eq!(
+                    actual["lifecycle_state"],
+                    case.terminal_state.as_deref().unwrap(),
+                    "{name}"
+                );
+                assert_eq!(case.cause.as_deref(), Some("deadlineExceeded"), "{name}");
+                assert_eq!(actual["cancel_cause"], "deadline", "{name}");
+                assert_eq!(actual["tool_failure_class"], "external", "{name}");
+            }
+            other => panic!("unsupported session-message restart disposition {other}"),
         }
-        let escaped_child = crate::graphql::escape_graphql_string(&child_request_id);
-        let child = admission
-            .node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child}" }} }}, limit: 2) {{ _docID interrupt_requested_at }} }}"#
-            ))
-            .await;
-        assert!(!child.has_errors(), "{name}: {:?}", child.errors);
-        let children = child.data.unwrap()["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(children.len(), 1, "{name}: exact linked child identity");
-        assert!(
-            children[0]["interrupt_requested_at"].is_null(),
-            "{name}: leave-running disposition must not interrupt its child"
-        );
         let session_id = format!("session-restart-{name}");
         let (messages, wakes) = restart_obligations(
             &admission.node,
@@ -465,8 +368,16 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
             Some(&admission.agent_did),
         )
         .await;
-        assert!(messages.is_empty(), "{name}");
-        assert!(wakes.is_empty(), "{name}");
+        assert_eq!(
+            messages.len(),
+            usize::from(case.notification_reason.is_some()),
+            "{name}"
+        );
+        assert_eq!(
+            wakes.len(),
+            usize::from(case.queue_source.is_some()),
+            "{name}"
+        );
         let second = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
             .await
             .unwrap();

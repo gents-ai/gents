@@ -8,7 +8,7 @@ use defra_node::EmbeddedNode;
 async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode cancel_policy child_request_id lifecycle_state cancel_cause status }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id await_mode lifecycle_state cancel_cause status }} }}"#,
             crate::graphql::escape_graphql_string(doc_id)
         ))
         .await;
@@ -68,13 +68,6 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         let actual = row(&admission.node, &tool_doc_id).await;
         assert_eq!(actual["request_doc_id"], request_doc_id, "{}", case.name);
         assert_eq!(actual["await_mode"], case.await_mode, "{}", case.name);
-        assert_eq!(actual["cancel_policy"], case.cancel_policy, "{}", case.name);
-        assert_eq!(
-            actual["child_request_id"].as_str(),
-            case.child_request_id.as_deref(),
-            "{}",
-            case.name
-        );
         assert_eq!(
             actual["lifecycle_state"], case.terminal_state,
             "{}",

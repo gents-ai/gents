@@ -1158,7 +1158,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
-      "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner")
+      "tool_call_lifecycle::recovery_conformance::generated_session_message_restart_dispositions_use_canonical_admission_owner")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r6_background_cases"
@@ -1197,7 +1197,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_linked_recovery_cases_use_accepted_spawn")
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_session_message_recovery_cases_use_accepted_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"

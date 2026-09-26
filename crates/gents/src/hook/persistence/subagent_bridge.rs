@@ -1314,19 +1314,8 @@ mod worker_resume_tests {
         published_admission_with_owner, PublishedAdmissionOptions,
     };
 
-    fn modeled(name: &str, succeeds: bool) {
-        let case = crate::lean_vocab_test::lean_canonical_worker_capacity_cases()
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("missing modeled worker case {name}"));
-        assert_eq!(case.expected.is_some(), succeeds, "{name}");
-    }
-
     #[tokio::test]
     async fn accepted_foreground_bridge_resume_rechecks_lease_and_interrupt() {
-        modeled("parent_resume_after_child", true);
-        modeled("stale_generation_refused", false);
-        modeled("cancelled_parent_refused", false);
         let child_request_id = "worker-resume-child";
         let (mut admission, owner) = published_admission_with_owner(PublishedAdmissionOptions {
             name: "worker-resume-bridge".into(),
@@ -1394,8 +1383,6 @@ mod worker_resume_tests {
 
     #[tokio::test]
     async fn accepted_running_background_handoff_requires_durable_receipt() {
-        modeled("background_mode_without_receipt_refused", false);
-        modeled("background_handoff_receipt_resumes", true);
         let child_request_id = "worker-handoff-child";
         let (mut admission, owner) = published_admission_with_owner(PublishedAdmissionOptions {
             name: "worker-background-handoff".into(),
@@ -1455,12 +1442,6 @@ mod worker_resume_tests {
 
     #[tokio::test]
     async fn later_request_wait_control_can_resume_prior_request_bridge() {
-        modeled("existing_parent_resume", true);
-        modeled("existing_cancelled_current_caller_refused", false);
-        modeled("existing_background_mode_without_receipt_refused", false);
-        modeled("existing_background_handoff_receipt_resumes", true);
-        modeled("existing_unauthorized_owner_refused", false);
-        modeled("existing_stale_current_resume_refused", false);
         let child_request_id = "worker-existing-child";
         let (mut admission, mut old_owner) =
             published_admission_with_owner(PublishedAdmissionOptions {

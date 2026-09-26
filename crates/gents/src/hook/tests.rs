@@ -162,7 +162,6 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         "{}",
         Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Background,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     lifecycle.start_running().await.unwrap();
@@ -1363,7 +1362,6 @@ async fn accepted_hook_tool_lifecycle(
     arguments: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
     await_mode: crate::tool_call_lifecycle::AwaitMode,
-    cancel_policy: crate::tool_call_lifecycle::CancelPolicy,
 ) -> crate::tool_call_lifecycle::ToolCallLifecycle {
     accept_hook_tool_call(hook, internal_call_id, tool_name, arguments, None).await;
     let state = hook.state.lock().await;
@@ -1385,7 +1383,6 @@ async fn accepted_hook_tool_lifecycle(
         arguments,
         deadline_at,
         await_mode,
-        cancel_policy,
     )
     .await
     .expect("adopt published test tool")
@@ -1845,7 +1842,6 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     loser.start_running().await.unwrap();
@@ -1884,7 +1880,6 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         r#"{"tool_call_id":"missing"}"#,
         chrono::Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     conflicting.start_running().await.unwrap();
@@ -2747,11 +2742,6 @@ async fn interruption_leaves_background_workers_running() {
             "{}",
             deadline,
             crate::tool_call_lifecycle::AwaitMode::Background,
-            if detached {
-                crate::tool_call_lifecycle::CancelPolicy::Detach
-            } else {
-                crate::tool_call_lifecycle::CancelPolicy::Cascade
-            },
         )
         .await;
         lifecycle.start_running().await.unwrap();
@@ -2792,7 +2782,6 @@ async fn interruption_leaves_background_workers_running() {
         "{}",
         deadline,
         crate::tool_call_lifecycle::AwaitMode::Background,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     unrelated.start_running().await.unwrap();
@@ -2856,13 +2845,13 @@ async fn interruption_leaves_background_workers_running() {
 
 /// Every running Lean interrupt disposition row is driven through the hook's
 /// in-flight interrupt path; every row also pins the production classifier.
+/// The disposition depends only on state and await mode: an interrupt never
+/// reaches another session.
 #[tokio::test]
 async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
-    use crate::tool_call_lifecycle::{
-        AwaitMode, CancelPolicy, InterruptDisposition, ToolCallState,
-    };
+    use crate::tool_call_lifecycle::{AwaitMode, InterruptDisposition, ToolCallState};
     let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
-    assert_eq!(cases.len(), 48);
+    assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -2878,7 +2867,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
         let await_mode = AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
         assert_eq!(
-            InterruptDisposition::of(state, await_mode, case.child_linked).as_str(),
+            InterruptDisposition::of(state, await_mode).as_str(),
             case.disposition,
             "{}",
             case.name
@@ -2886,7 +2875,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         if state != ToolCallState::Running {
             continue;
         }
-        let policy = CancelPolicy::from_persisted(&case.cancel_policy).expect("modeled policy");
         let hook = DefraSessionHook::with_identity(
             node.clone(),
             "general",
@@ -2898,37 +2886,10 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         let session_id = hook.session_id().await.unwrap();
         let parent_id = format!("parent-{}", case.name);
         bind_interruptible_request(&node, &hook, &parent_id, &session_id, deadline).await;
-        let child_id = format!("child-{}", case.name);
-        let mut lifecycle = if case.child_linked {
-            accepted_subagent_lifecycle(&hook, &case.name, deadline, await_mode, policy, &child_id)
-                .await
-        } else {
-            accepted_hook_tool_lifecycle(
-                &hook, &case.name, "bash", "{}", deadline, await_mode, policy,
-            )
-            .await
-        };
+        let mut lifecycle =
+            accepted_hook_tool_lifecycle(&hook, &case.name, "bash", "{}", deadline, await_mode)
+                .await;
         lifecycle.start_running().await.unwrap();
-        if case.child_linked {
-            if await_mode == AwaitMode::Background {
-                lifecycle
-                    .publish_background_receipt("child started")
-                    .await
-                    .unwrap();
-            }
-            let parent_doc_id = hook.active_request_doc_id().await.unwrap();
-            create_corroborated_child_request(
-                &node,
-                &child_id,
-                &session_id,
-                &parent_id,
-                &parent_doc_id,
-                &case.name,
-                lifecycle.doc_id().unwrap(),
-            )
-            .await;
-        }
-        let tool_doc_id = lifecycle.doc_id().unwrap().to_owned();
         hook.in_flight_lifecycles
             .lock()
             .await
@@ -2954,39 +2915,12 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
             "{}",
             case.name
         );
-        assert_eq!(
-            row["cancel_policy"],
-            case.cancel_policy.as_str(),
-            "{}",
-            case.name
-        );
-        if case.child_linked {
-            assert!(
-                crate::interrupt::fetch_interrupt_requested_at(&node, &child_id)
-                    .await
-                    .unwrap()
-                    .is_none(),
-                "{}: interrupting the parent reached its child",
-                case.name
-            );
-            let receipt = crate::tool_call_lifecycle::query::load_tool_call_presentation(
-                &crate::config_client::ConfigAccess::Local(node.clone()),
-                &tool_doc_id,
-                "did:test:general",
-                &session_id,
-                None,
-            )
-            .await
-            .unwrap();
-            assert!(
-                receipt.result.is_some(),
-                "{}: a retained bridge owns its invocation receipt",
-                case.name
-            );
-        }
         driven += 1;
     }
-    assert_eq!(driven, 8);
+    assert_eq!(
+        driven,
+        cases.iter().filter(|case| case.state == "running").count()
+    );
 }
 
 /// A parent interrupt drains the in-flight map: the foreground native tool is
@@ -3024,7 +2958,6 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
         "{}",
         deadline,
         crate::tool_call_lifecycle::AwaitMode::Foreground,
-        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
     .await;
     outer.start_running().await.unwrap();
