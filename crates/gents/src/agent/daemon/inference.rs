@@ -24,11 +24,11 @@ fn terminal_response_has_visible_output(streamed_text: &str, final_text: Option<
     !streamed_text.trim().is_empty() || final_text.is_some_and(|text| !text.trim().is_empty())
 }
 
-/// Harbor (`scripts/harbor/run_gents.sh`) and the pinned max-turns display test
-/// (`agent/loop_stream/tests/streaming.rs`) match
-/// `"agent stream failed: PromptError: MaxTurnError: "` as a fixed byte string,
-/// so the provenance clause is only ever appended after the provider error's
-/// unmodified `Display`, never substituted into it.
+/// Harbor (`scripts/harbor/run_gents.sh`) matches
+/// `"agent stream failed: PromptError: MaxTurnError: "` as a fixed byte string;
+/// `agent/loop_stream/tests/streaming.rs` pins the `PromptError: MaxTurnError: `
+/// half of it on rig's own `Display`. The provenance clause is therefore only
+/// ever appended after that unmodified `Display`, never substituted into it.
 fn stream_failure_reason(
     error_display: &str,
     failure: StreamFailureKind,
@@ -695,8 +695,10 @@ mod tests {
     };
     use std::time::Duration;
 
-    /// rig's own turn-exhaustion `Display`, whose wording is pinned end to end
-    /// by `agent/loop_stream/tests/streaming.rs`.
+    /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
+    /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
+    /// parenthesised limit is pinned by
+    /// `tests/e2e_subagent/child_turn_limit.rs`.
     const MAX_TURNS_DISPLAY: &str = "PromptError: MaxTurnError: (reached max turn limit: 1000)";
     const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
 

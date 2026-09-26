@@ -22,7 +22,11 @@ const MODEL: &str = "e2e-child-limit-model";
 const PARENT_TOOL_CALL_ID: &str = "e2e-child-limit-tool-call";
 const PARENT_PROMPT: &str = "e2e-child-limit-parent-prompt";
 const CHILD_PROMPT: &str = "e2e-child-limit-child-prompt";
-const EXPLICIT_CHILD_MAX_TURNS: i64 = 1;
+/// Its decimal is not a prefix of the built-in default (1,000) nor of any other
+/// limit a mis-wired child could run instead, and it is low enough that the
+/// child reaches its turn limit within the eight invalid dispatches
+/// `gents_loop::loop_stream::invalid_tool_progress` allows per execution.
+const EXPLICIT_CHILD_MAX_TURNS: i64 = 3;
 /// rig's max-turns display, matched as a fixed byte string by
 /// `scripts/harbor/run_gents.sh`.
 const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
@@ -233,15 +237,20 @@ async fn spawn_child(
     (child_behavior, runtime)
 }
 
-/// A child whose loop was handed a limit of 1, 2 or 3 could not reach a fifth
-/// turn, so completing past four tool turns bounds the applied limit from
-/// below by execution rather than by reading the configuration back.
+/// `gents_loop::loop_stream` guards on `current_turn > config.max_turns + 1`
+/// from a zero start, so a limit of N executes N + 2 turns: a child that
+/// completes seven turns ran under a limit of at least five, bounding the
+/// applied limit by execution rather than by reading the configuration back.
+/// The count cannot grow much further — this child has no callable tool, so
+/// every scripted turn spends one of the eight invalid dispatches
+/// `gents_loop::loop_stream::invalid_tool_progress` allows per execution, and
+/// exhausting those fails the child ahead of any turn limit.
 #[tokio::test]
 async fn spawned_child_without_an_execution_document_runs_past_a_low_turn_limit() {
     let db = test_db("e2e-child-limit-default").await;
     configure_spawn_chain(&db).await;
 
-    let mut responses = (0..4).map(child_tool_turn).collect::<Vec<_>>();
+    let mut responses = (0..6).map(child_tool_turn).collect::<Vec<_>>();
     responses.push(StreamResponse::completes(CHILD_PROMPT, ["child done"]));
     let (child_behavior, runtime) = spawn_child(
         &db,
@@ -261,7 +270,7 @@ async fn spawned_child_without_an_execution_document_runs_past_a_low_turn_limit(
     assert_eq!(
         child.lifecycle_state.as_deref(),
         Some("completed"),
-        "child {} must finish five turns, not exhaust a limit: {:?}",
+        "child {} must finish every scripted turn, not exhaust a limit: {:?}",
         child.request_id,
         child.failure_reason
     );
@@ -313,13 +322,17 @@ async fn spawned_child_loop_enforces_its_execution_documents_turn_limit() {
     );
     assert!(
         reason.contains(&format!(
-            "reached max turn limit: {EXPLICIT_CHILD_MAX_TURNS}"
+            "reached max turn limit: {EXPLICIT_CHILD_MAX_TURNS})"
         )),
         "child loop must enforce the configured limit, not another one: {reason}"
     );
     assert!(
-        reason.contains("InferenceExecution document"),
+        reason.contains(MaxTurnsProvenance::ExecutionProfile.describe()),
         "the failure must name the knob that set the applied limit: {reason}"
+    );
+    assert!(
+        !reason.contains(MaxTurnsProvenance::Default.describe()),
+        "a document-bound limit must not report the built-in default: {reason}"
     );
 
     assert_eq!(
