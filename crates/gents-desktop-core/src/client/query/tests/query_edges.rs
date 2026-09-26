@@ -98,7 +98,7 @@ async fn load_agent_runtimes_hydrates_executor_capacity_and_queue_depth() {
 }
 
 #[tokio::test]
-async fn load_agent_tool_calls_hydrates_subagent_projection_fields() {
+async fn load_agent_tool_calls_hydrates_background_projection_fields() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
@@ -108,17 +108,16 @@ async fn load_agent_tool_calls_hydrates_subagent_projection_fields() {
         .execute(
             r#"mutation {
                 create_AgentToolCall(input: {
-                    tool_call_key: "session-1:spawn-1",
+                    tool_call_key: "session-1:start-1",
                     request_id: "parent-1",
                     session_id: "session-1",
                     message_sequence: 1,
-                    tool_name: "spawn_subagent",
-                    tool_call_id: "spawn-1",
+                    tool_name: "create_session",
+                    tool_call_id: "start-1",
                     args: "{}",
                     result: "",
                     status: "called",
                     lifecycle_state: "running",
-                    child_request_id: "child-1",
                     await_mode: "background",
                     started_at: "2026-07-29T00:00:00Z"
                 }) { tool_call_key }
@@ -132,9 +131,8 @@ async fn load_agent_tool_calls_hydrates_subagent_projection_fields() {
         .expect("load agent tool calls");
     let tool_call = tool_calls
         .iter()
-        .find(|row| row.tool_call_key == "session-1:spawn-1")
+        .find(|row| row.tool_call_key == "session-1:start-1")
         .expect("created tool call");
-    assert_eq!(tool_call.child_request_id.as_deref(), Some("child-1"));
     assert_eq!(tool_call.await_mode.as_deref(), Some("background"));
 }
 

@@ -115,19 +115,14 @@ permissions = [
 
 [[set]]
 identifier = "operations-read"
-description = "Operations snapshot, health, subagent tree, MCP probe"
+description = "Operations snapshot, health, session provenance, MCP probe"
 permissions = [
   "allow-desktop-operations-snapshot",
-  "allow-desktop-list-subagent-tree",
+  "allow-desktop-session-provenance",
   "allow-desktop-list-backends-with-health",
   "allow-desktop-list-mcp-services-with-health",
   "allow-desktop-probe-mcp-service",
 ]
-
-[[set]]
-identifier = "interrupt-read"
-description = "Interrupt cascade preview"
-permissions = ["allow-desktop-preview-interrupt-cascade"]
 
 [[set]]
 identifier = "interrupt-control"
@@ -233,7 +228,6 @@ permissions = [
   "workspace-read",
   "fleet-admin",
   "operations-read",
-  "interrupt-read",
   "interrupt-control",
   "config-write",
   "provider-accounts-read",

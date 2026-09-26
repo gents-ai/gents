@@ -69,9 +69,7 @@ pub struct ToolCallView {
     pub reconstruction: MessageReconstructionView,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
-    pub child_request_id: Option<String>,
     pub await_mode: Option<String>,
-    pub cancel_policy: Option<String>,
     pub started_at: Option<String>,
     pub deadline_at: Option<String>,
     pub completed_at: Option<String>,
@@ -153,11 +151,13 @@ pub enum ToolPresentationView {
         diff: Vec<ToolDiffLineView>,
         fallback_output: Option<String>,
     },
+    /// `create_session`/`send_message`: `name` is the addressed target and
+    /// `session_id` the session the call started or messaged.
     #[serde(rename_all = "camelCase")]
     Subagent {
         action: String,
         name: Option<String>,
-        child_request_id: Option<String>,
+        session_id: Option<String>,
         description: Option<String>,
         output: Option<String>,
     },
@@ -189,20 +189,19 @@ pub struct RenderedToolCallView {
     pub item_key: String,
     pub tool_name: String,
     pub status_kind: String,
-    /// Request that issued this call, in the same logical identity as
-    /// `child_request_id` and a subagent lineage root.
+    /// Request that issued this call; a request it caused names it as
+    /// `caused_by_parent_request_id`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub request_id: Option<String>,
+    /// The call's logical id; a request it caused names it as
+    /// `caused_by_parent_tool_call_id`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
-    pub child_request_id: Option<String>,
+    pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub await_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub cancel_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub started_at: Option<String>,

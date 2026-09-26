@@ -38,9 +38,8 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
         status_kind: tool_status_kind(tool.lifecycle_state.as_deref()),
         request_id: tool.request_id.clone(),
-        child_request_id: tool.child_request_id.clone(),
+        tool_call_id: tool.tool_call_id.clone(),
         await_mode: tool.await_mode.clone(),
-        cancel_policy: tool.cancel_policy.clone(),
         started_at: tool.started_at.clone(),
         deadline_at: tool.deadline_at.clone(),
         completed_at: tool.completed_at.clone(),
@@ -304,19 +303,19 @@ mod tests {
     }
 
     #[test]
-    fn subagent_identity_and_await_mode_reach_rendered_tool() {
+    fn session_message_identity_and_await_mode_reach_rendered_tool() {
         let tool = ToolCallView {
-            tool_call_key: "spawn-1".to_string(),
+            tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),
-            tool_name: Some("spawn_subagent".to_string()),
-            tool_call_id: Some("spawn-1".to_string()),
-            args: Some(
-                r#"{"name":"researcher","prompt":"trace the request flow","await_mode":"background"}"#
+            tool_name: Some("create_session".to_string()),
+            tool_call_id: Some("start-1".to_string()),
+            args: Some(r#"{"agent":"researcher","prompt":"trace the request flow"}"#.to_string()),
+            partial_output_tail: None,
+            result: Some(
+                r#"{"session_id":"session-child","request_id":"request-child","tool_call_id":"start-1"}"#
                     .to_string(),
             ),
-            partial_output_tail: Some("reading watcher.rs".to_string()),
-            result: None,
             reconstruction: MessageReconstructionView {
                 state: ReconstructionState::Ready,
                 error: None,
@@ -324,9 +323,7 @@ mod tests {
             },
             status: Some("running".to_string()),
             lifecycle_state: Some("running".to_string()),
-            child_request_id: Some("child-request-1".to_string()),
             await_mode: Some("background".to_string()),
-            cancel_policy: Some("detach".to_string()),
             started_at: None,
             deadline_at: None,
             completed_at: None,
@@ -335,14 +332,26 @@ mod tests {
         };
         let rendered = render_tool_call(tool.clone());
 
-        assert_eq!(rendered.tool_name, "spawn_subagent");
+        assert_eq!(rendered.tool_name, "create_session");
         assert_eq!(rendered.request_id.as_deref(), Some("parent-1"));
-        assert_eq!(
-            rendered.child_request_id.as_deref(),
-            Some("child-request-1")
-        );
+        assert_eq!(rendered.tool_call_id.as_deref(), Some("start-1"));
         assert_eq!(rendered.await_mode.as_deref(), Some("background"));
         assert_eq!(rendered.status_kind, "running");
+        match &rendered.presentation {
+            crate::types::ToolPresentationView::Subagent {
+                action,
+                name,
+                session_id,
+                description,
+                ..
+            } => {
+                assert_eq!(action, "start");
+                assert_eq!(name.as_deref(), Some("researcher"));
+                assert_eq!(session_id.as_deref(), Some("session-child"));
+                assert_eq!(description.as_deref(), Some("trace the request flow"));
+            }
+            other => panic!("create_session must present as a subagent row: {other:?}"),
+        }
 
         let unresolved = render_tool_call(ToolCallView {
             tool_name: Some("custom".to_string()),

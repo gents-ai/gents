@@ -10,15 +10,13 @@ fn tool_default() -> ToolCallEvidence {
 }
 
 #[test]
-fn user_cancelled_when_root_has_interrupt_and_no_parent_cascade() {
+fn user_cancelled_when_request_has_interrupt_latch() {
     let req = RequestEvidence {
         interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
-        caused_by_parent_request_id: None,
     };
     let tool = ToolCallEvidence {
         lifecycle_state: Some("cancelled".into()),
         deadline_at: None,
-        cancel_policy: Some("cascade".into()),
         completed_at: Some("2026-05-20T10:32:15Z".into()),
         timed_out: false,
     };
@@ -33,30 +31,12 @@ fn user_cancelled_when_root_has_interrupt_and_no_parent_cascade() {
 }
 
 #[test]
-fn interrupted_when_request_has_parent_cascade() {
-    let req = RequestEvidence {
-        interrupt_requested_at: None,
-        caused_by_parent_request_id: Some("req_parent".into()),
-    };
-    let tool = ToolCallEvidence {
-        lifecycle_state: Some("cancelled".into()),
-        cancel_policy: Some("cascade".into()),
-        ..tool_default()
-    };
-    let cause = derive_tool_call_cause(&req, &tool).expect("derives");
-    assert_eq!(cause.cause, "interrupted");
-    assert_eq!(cause.source, "parentCascade");
-    assert!(cause.evidence.iter().any(|e| e.contains("req_parent")));
-}
-
-#[test]
 fn deadline_when_tool_lifecycle_is_timedout() {
     let tool = ToolCallEvidence {
         timed_out: true,
         lifecycle_state: Some("timedOut".into()),
         deadline_at: Some("2026-05-20T10:34:00Z".into()),
         completed_at: Some("2026-05-20T10:35:02Z".into()),
-        cancel_policy: None,
     };
     let cause = derive_tool_call_cause(&req_default(), &tool).expect("derives");
     assert_eq!(cause.cause, "deadline");
@@ -65,34 +45,17 @@ fn deadline_when_tool_lifecycle_is_timedout() {
 }
 
 #[test]
-fn deadline_wins_over_interrupted_when_both_signals_present() {
+fn deadline_wins_over_interrupt_latch_when_both_signals_present() {
     let req = RequestEvidence {
-        caused_by_parent_request_id: Some("req_parent".into()),
-        ..req_default()
+        interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
     };
     let tool = ToolCallEvidence {
         timed_out: true,
         lifecycle_state: Some("timedOut".into()),
-        cancel_policy: Some("cascade".into()),
         ..tool_default()
     };
     let cause = derive_tool_call_cause(&req, &tool).expect("derives");
     assert_eq!(cause.cause, "deadline");
-}
-
-#[test]
-fn interrupted_wins_over_user_cancelled_when_both_signals_present_on_child() {
-    let req = RequestEvidence {
-        interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
-        caused_by_parent_request_id: Some("req_parent".into()),
-    };
-    let tool = ToolCallEvidence {
-        lifecycle_state: Some("cancelled".into()),
-        cancel_policy: Some("cascade".into()),
-        ..tool_default()
-    };
-    let cause = derive_tool_call_cause(&req, &tool).expect("derives");
-    assert_eq!(cause.cause, "interrupted");
 }
 
 #[test]
@@ -104,10 +67,6 @@ fn unknown_when_cancelled_but_no_evidence() {
     let cause = derive_tool_call_cause(&req_default(), &tool).expect("derives");
     assert_eq!(cause.cause, "unknown");
     assert_eq!(cause.source, "unresolved");
-    assert!(cause
-        .evidence
-        .iter()
-        .any(|e| e.contains("no parent cascade")));
     assert!(cause.evidence.iter().any(|e| e.contains("no deadline")));
     assert!(cause
         .evidence

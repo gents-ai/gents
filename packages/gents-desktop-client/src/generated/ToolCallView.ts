@@ -8,4 +8,4 @@ export type ToolCallView = { toolCallKey: string, requestId: string | null, mess
  * Availability of the immutable canonical arguments and result payloads.
  * Tool execution status remains in `lifecycle_state`.
  */
-reconstruction: MessageReconstructionView, status: string | null, lifecycleState: string | null, childRequestId: string | null, awaitMode: string | null, cancelPolicy: string | null, startedAt: string | null, deadlineAt: string | null, completedAt: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };
+reconstruction: MessageReconstructionView, status: string | null, lifecycleState: string | null, awaitMode: string | null, startedAt: string | null, deadlineAt: string | null, completedAt: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };

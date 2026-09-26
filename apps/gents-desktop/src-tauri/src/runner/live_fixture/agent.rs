@@ -133,14 +133,14 @@ async fn seed_live_behavior_documents(
             {"agent_did":agent_did,"behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent","context_id":subagent_context_id,"inference_profile_id":subagent_profile_id}
         ],
         "contexts":[
-            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
+            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call create_session with agent \"repo-audit-subagent\" and the requested prompt; its result arrives later as a message, so say that it has started and reply again when that message arrives. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
             {"agent_did":agent_did,"context_id":subagent_context_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tools_id,"compaction_id":compaction_id}
         ],
         "tools":[
             {"agent_did":agent_did,"tools_id":tools_id,"display_name":"Live Repo Audit Tools",
              "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
              "built_ins":{"enable_context_budget":true},
-             "subagents":{"target_ids":[target_id],"spawn_enabled":true,"steering_enabled":true,"background_enabled":true,"allow_cross_principal":false,"cross_principal_spawn_timeout_secs":60}},
+             "subagents":{"target_ids":[target_id],"enabled":true}},
             {"agent_did":agent_did,"tools_id":subagent_tools_id,"display_name":"Live Repo Audit Subagent Tools",
              "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
         ],

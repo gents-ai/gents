@@ -691,18 +691,6 @@
           "markdownDescription": "Denies the desktop_list_mcp_services_with_health command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_list_subagent_tree command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-list-subagent-tree",
-          "markdownDescription": "Enables the desktop_list_subagent_tree command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_list_subagent_tree command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-list-subagent-tree",
-          "markdownDescription": "Denies the desktop_list_subagent_tree command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_mailbox_dismiss command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-mailbox-dismiss",
@@ -1087,18 +1075,6 @@
           "markdownDescription": "Denies the desktop_peer_status_fetch command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-preview-interrupt-cascade",
-          "markdownDescription": "Enables the desktop_preview_interrupt_cascade command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-preview-interrupt-cascade",
-          "markdownDescription": "Denies the desktop_preview_interrupt_cascade command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_probe_inference_endpoint command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-probe-inference-endpoint",
@@ -1253,6 +1229,18 @@
           "type": "string",
           "const": "deny-desktop-session-live-delta",
           "markdownDescription": "Denies the desktop_session_live_delta command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_provenance command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-provenance",
+          "markdownDescription": "Enables the desktop_session_provenance command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_provenance command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-provenance",
+          "markdownDescription": "Denies the desktop_session_provenance command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_rename command without any pre-configured scope.",
@@ -1561,16 +1549,10 @@
           "markdownDescription": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`"
         },
         {
-          "description": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
+          "description": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",
           "type": "string",
           "const": "operations-read",
-          "markdownDescription": "Operations snapshot, health, subagent tree, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-list-subagent-tree`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
-        },
-        {
-          "description": "Interrupt cascade preview\n#### This permission set includes:\n\n- `allow-desktop-preview-interrupt-cascade`",
-          "type": "string",
-          "const": "interrupt-read",
-          "markdownDescription": "Interrupt cascade preview\n#### This permission set includes:\n\n- `allow-desktop-preview-interrupt-cascade`"
+          "markdownDescription": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
         },
         {
           "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`",
@@ -1609,10 +1591,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`"
         }
       ]
     }

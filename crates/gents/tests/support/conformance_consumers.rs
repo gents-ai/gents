@@ -1498,18 +1498,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_mcp_health_cases_match_health_checker_transitions",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_desktop_bridge::tests::operations_cascade::preview_returns_four_classified_groups_and_a_signature",
-            package: "gents-desktop-bridge",
-            source_path: "crates/gents-desktop-bridge/src/tests/operations_cascade.rs",
-            module_path: "gents_desktop_bridge::tests::operations_cascade",
-            function: "preview_returns_four_classified_groups_and_a_signature",
-        },
-        ConformanceConsumer::RustTest {
-            id: "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches",
+            id: "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_returns_accepted",
             package: "gents-desktop-bridge",
             source_path: "crates/gents-desktop-bridge/src/tests/operations_interrupt.rs",
             module_path: "gents_desktop_bridge::tests::operations_interrupt",
-            function: "interrupt_request_cascade_returns_accepted_when_signature_matches",
+            function: "interrupt_request_returns_accepted",
         },
         ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_causes_from_request_and_tool",

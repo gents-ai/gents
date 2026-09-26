@@ -41,294 +41,112 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
-pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
+/// Two sessions of one agent: `sess_parent`'s request `req_parent` started
+/// `sess_child` with `create_session` (`req_child`), then messaged it again
+/// (`req_child_2`); a third session on another agent was started by it too.
+/// Returns the core and `req_parent`'s document id.
+pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     let (core, tmp) = boot_core().await;
 
-    let mutation = r#"mutation {
+    let parent = r#"mutation {
         create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_root",
+            request_id: "req_parent",
             agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_root",
-            content: "cascade fixture root",
+            behavior_id: "lead",
+            session_id: "sess_parent",
+            content: "coordinate",
             lifecycle_state: "processing",
             backend_id: "",
             created_at: "2026-05-20T00:00:00Z",
             retry_count: 0
         }) { _docID }
     }"#;
-    let response = core.node().execute(mutation).await;
+    let response = core.node().execute(parent).await;
     assert!(
         !response.has_errors(),
-        "seed req_root failed: {:?}",
+        "seed req_parent failed: {:?}",
         response.errors
     );
+    let response = core
+        .node()
+        .execute(r#"{ AgentRequest(filter: { request_id: { _eq: "req_parent" } }) { _docID } }"#)
+        .await;
+    let parent_doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.pointer("/AgentRequest/0/_docID"))
+        .and_then(|value| value.as_str())
+        .expect("req_parent doc id")
+        .to_owned();
 
-    let child_requests = r#"mutation {
-        r_b91: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_b91",
+    let caused = format!(
+        r#"mutation {{
+        c1: create_AgentRequest(input: {{ purpose: "normal",
+            request_id: "req_child",
             agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_b91",
-            content: "child b91",
-            lifecycle_state: "processing",
+            behavior_id: "researcher",
+            session_id: "sess_child",
+            content: "look into it",
+            lifecycle_state: "completed",
             backend_id: "",
             created_at: "2026-05-20T00:01:00Z",
             retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_1"
-        }) { _docID }
-        r_b92: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_b92",
+            subagent_depth: 1,
+            caused_by_parent_request_id: "req_parent",
+            caused_by_parent_request_doc_id: "{parent_doc_id}",
+            caused_by_parent_tool_call_id: "tc_start"
+        }}) {{ _docID }}
+        c2: create_AgentRequest(input: {{ purpose: "normal",
+            request_id: "req_child_2",
             agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_b92",
-            content: "child b92",
-            lifecycle_state: "claimed",
+            behavior_id: "researcher",
+            session_id: "sess_child",
+            content: "one more thing",
+            lifecycle_state: "processing",
             backend_id: "",
             created_at: "2026-05-20T00:02:00Z",
             retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_2"
-        }) { _docID }
-        r_b93: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_b93",
-            agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_b93",
-            content: "child b93",
+            subagent_depth: 1,
+            caused_by_parent_request_id: "req_parent",
+            caused_by_parent_request_doc_id: "{parent_doc_id}",
+            caused_by_parent_tool_call_id: "tc_message"
+        }}) {{ _docID }}
+        c3: create_AgentRequest(input: {{ purpose: "normal",
+            request_id: "req_peer",
+            agent_did: "did:test:other",
+            behavior_id: "reviewer",
+            session_id: "sess_peer",
+            content: "review it",
             lifecycle_state: "processing",
             backend_id: "",
             created_at: "2026-05-20T00:03:00Z",
             retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_3"
-        }) { _docID }
-        r_c01: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_c01",
+            subagent_depth: 1,
+            caused_by_parent_request_id: "req_parent",
+            caused_by_parent_request_doc_id: "{parent_doc_id}",
+            caused_by_parent_tool_call_id: "tc_peer"
+        }}) {{ _docID }}
+        unrelated: create_AgentRequest(input: {{ purpose: "normal",
+            request_id: "req_unrelated",
             agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_c01",
-            content: "child c01",
+            behavior_id: "lead",
+            session_id: "sess_unrelated",
+            content: "something else",
             lifecycle_state: "processing",
             backend_id: "",
             created_at: "2026-05-20T00:04:00Z",
-            retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_4"
-        }) { _docID }
-        r_c02: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_c02",
-            agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_c02",
-            content: "child c02",
-            lifecycle_state: "processing",
-            backend_id: "",
-            created_at: "2026-05-20T00:05:00Z",
-            retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_5"
-        }) { _docID }
-        r_a17: create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_a17_old",
-            agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
-            session_id: "sess_a17",
-            content: "child a17 old (completed)",
-            lifecycle_state: "completed",
-            backend_id: "",
-            created_at: "2026-05-20T00:06:00Z",
-            retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_6"
-        }) { _docID }
-    }"#;
-    let response = core.node().execute(child_requests).await;
+            retry_count: 0
+        }}) {{ _docID }}
+    }}"#
+    );
+    let response = core.node().execute(&caused).await;
     assert!(
         !response.has_errors(),
-        "seed child AgentRequests failed: {:?}",
+        "seed caused requests failed: {:?}",
         response.errors
     );
 
-    let tool_calls = r#"mutation {
-        tc1: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_1",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 1,
-            tool_name: "summarize",
-            tool_call_id: "tc_1",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:01:00Z",
-            await_mode: "background",
-            cancel_policy: "cascade",
-            child_request_id: "req_b91"
-        }) { _docID }
-        tc2: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_2",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 2,
-            tool_name: "index_repo",
-            tool_call_id: "tc_2",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:02:00Z",
-            await_mode: "background",
-            cancel_policy: "cascade",
-            child_request_id: "req_b92"
-        }) { _docID }
-        tc3: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_3",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 3,
-            tool_name: "qa_pass",
-            tool_call_id: "tc_3",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:03:00Z",
-            await_mode: "background",
-            cancel_policy: "detach",
-            child_request_id: "req_b93"
-        }) { _docID }
-        tc4: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_4",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 4,
-            tool_name: "summarize_caselaw",
-            tool_call_id: "tc_4",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:04:00Z",
-            await_mode: "background",
-            cancel_policy: "cascade",
-            child_request_id: "req_c01"
-        }) { _docID }
-        tc5: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_5",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 5,
-            tool_name: "classify_docs",
-            tool_call_id: "tc_5",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:05:00Z",
-            await_mode: "background",
-            child_request_id: "req_c02"
-        }) { _docID }
-        tc6: create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_6",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 6,
-            tool_name: "earlier_turn",
-            tool_call_id: "tc_6",
-            args: "{}",
-            result: "done",
-            status: "completed",
-            lifecycle_state: "completed",
-            started_at: "2026-05-20T00:06:00Z",
-            await_mode: "foreground",
-            cancel_policy: "cascade",
-            child_request_id: "req_a17_old"
-        }) { _docID }
-    }"#;
-    let response = core.node().execute(tool_calls).await;
-    assert!(
-        !response.has_errors(),
-        "seed AgentToolCalls failed: {:?}",
-        response.errors
-    );
-
-    (core, tmp)
-}
-
-pub async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, TempDir) {
-    let (core, tmp) = seed_cascade_fixture().await;
-
-    let mutation = r#"mutation {
-        create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_foreign",
-            agent_did: "did:test:other",
-            behavior_id: "other-behavior",
-            session_id: "sess_foreign",
-            content: "foreign agent request",
-            lifecycle_state: "processing",
-            backend_id: "",
-            created_at: "2026-05-20T00:07:00Z",
-            retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_1"
-        }) { _docID }
-    }"#;
-    let response = core.node().execute(mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed foreign AgentRequest failed: {:?}",
-        response.errors
-    );
-
-    (core, tmp)
-}
-
-pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore>, TempDir) {
-    let (core, tmp) = seed_cascade_fixture().await;
-
-    let mutation = r#"mutation {
-        create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_foreign_linked",
-            agent_did: "did:test:other",
-            behavior_id: "other-behavior",
-            session_id: "sess_foreign_linked",
-            content: "foreign linked child request",
-            lifecycle_state: "processing",
-            backend_id: "",
-            created_at: "2026-05-20T00:07:00Z",
-            retry_count: 0,
-            caused_by_parent_request_id: "req_root",
-            caused_by_parent_tool_call_id: "tc_foreign"
-        }) { _docID }
-
-        create_AgentToolCall(input: {
-            tool_call_key: "sess_root:tc_foreign",
-            request_id: "req_root",
-            session_id: "sess_root",
-            message_sequence: 7,
-            tool_name: "remote_subagent",
-            tool_call_id: "tc_foreign",
-            args: "{}",
-            result: "",
-            status: "called",
-            lifecycle_state: "running",
-            started_at: "2026-05-20T00:07:00Z",
-            await_mode: "background",
-            cancel_policy: "cascade",
-            child_request_id: "req_foreign_linked"
-        }) { _docID }
-    }"#;
-    let response = core.node().execute(mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed foreign linked child failed: {:?}",
-        response.errors
-    );
-
-    (core, tmp)
+    (core, tmp, parent_doc_id)
 }
 
 pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRow {

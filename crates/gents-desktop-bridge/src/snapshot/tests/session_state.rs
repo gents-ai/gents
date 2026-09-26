@@ -768,7 +768,7 @@ fn session_snapshot_projects_failed_request_reason_without_response_storage() {
 }
 
 #[test]
-fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_policy() {
+fn session_snapshot_derives_interrupted_cause_for_caused_request() {
     let mut child = request("req-2", RequestLifecycleState::Interrupted);
     child.caused_by_parent_request_id = Some("parent".into());
     let snapshot = build_session_snapshot_from_store(

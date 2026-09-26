@@ -3,14 +3,12 @@ use crate::types::DerivedCancelCauseView;
 #[derive(Debug, Clone, Default)]
 pub struct RequestEvidence {
     pub interrupt_requested_at: Option<String>,
-    pub caused_by_parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallEvidence {
     pub lifecycle_state: Option<String>,
     pub deadline_at: Option<String>,
-    pub cancel_policy: Option<String>,
     pub completed_at: Option<String>,
     pub timed_out: bool,
 }
@@ -50,35 +48,19 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    if req.caused_by_parent_request_id.is_some() && tool.cancel_policy.as_deref() == Some("cascade")
-    {
-        let parent = req.caused_by_parent_request_id.clone().unwrap_or_default();
-        return Some(DerivedCancelCauseView {
-            cause: "interrupted".into(),
-            source: "parentCascade".into(),
-            confidence: "derived".into(),
-            at: tool.completed_at.clone(),
-            evidence: vec![
-                format!("AgentRequest.caused_by_parent_request_id = {parent}"),
-                "AgentToolCall.cancel_policy = \"cascade\"".into(),
-            ],
-        });
-    }
-
-    if req.interrupt_requested_at.is_some() && req.caused_by_parent_request_id.is_none() {
+    // An interrupt latch reaches only its own request: no cancellation
+    // crosses from one request to another, so the latch is this row's cause.
+    if req.interrupt_requested_at.is_some() {
         let at = req.interrupt_requested_at.clone();
         return Some(DerivedCancelCauseView {
             cause: "userCancelled".into(),
             source: "requestInterrupt".into(),
             confidence: "direct".into(),
             at: at.clone(),
-            evidence: vec![
-                format!(
-                    "AgentRequest.interrupt_requested_at = {}",
-                    at.as_deref().unwrap_or("(unset)"),
-                ),
-                "no parent cascade (caused_by_parent_request_id is null)".into(),
-            ],
+            evidence: vec![format!(
+                "AgentRequest.interrupt_requested_at = {}",
+                at.as_deref().unwrap_or("(unset)"),
+            )],
         });
     }
 
@@ -88,7 +70,6 @@ pub fn derive_tool_call_cause(
         confidence: "derived".into(),
         at: tool.completed_at.clone(),
         evidence: vec![
-            "checked: no parent cascade (caused_by_parent_request_id is null)".into(),
             "checked: no deadline (lifecycle_state is not timedOut)".into(),
             "checked: no interrupt_requested_at on root".into(),
             "no persisted AgentToolCall.cancel_cause on this row".into(),

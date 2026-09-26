@@ -201,30 +201,7 @@ fn canonical_tool_payload(
             }
         }
     }
-    if !found_call {
-        if let Some(source) = tool
-            .delegated_input
-            .as_ref()
-            .map(|input| &input.source.close_doc_id)
-        {
-            if let Some(denied_doc_id) = dependency_denials
-                .iter()
-                .filter(|denial| &denial.root_close_id == source)
-                .map(|denial| &denial.denied_doc_id)
-                .min()
-                .or_else(|| denied_segments.iter().find(|id| *id == source))
-            {
-                return (
-                    None,
-                    None,
-                    failed(ReconstructionError::AccessDenied {
-                        doc_id: denied_doc_id.clone(),
-                    }),
-                );
-            }
-        }
-    }
-    if !found_call && tool.spawned_by_tool_call_doc_id.is_none() && tool.delegated_input.is_none() {
+    if !found_call && tool.spawned_by_tool_call_doc_id.is_none() {
         return (
             None,
             None,
@@ -431,9 +408,6 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         let failure_reason = normalize_optional(request.failure_reason.as_deref());
         let evidence = RequestEvidence {
             interrupt_requested_at: normalize_optional(request.interrupt_requested_at.as_deref()),
-            caused_by_parent_request_id: normalize_optional(
-                request.caused_by_parent_request_id.as_deref(),
-            ),
         };
         let cancel_cause = crate::cause_derivation::derive_request_cause(
             request.lifecycle_state.map(|state| state.as_str()),
@@ -668,13 +642,11 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                     let req_evidence = req_for_tool
                         .map(|r| RequestEvidence {
                             interrupt_requested_at: r.interrupt_requested_at.clone(),
-                            caused_by_parent_request_id: r.caused_by_parent_request_id.clone(),
                         })
                         .unwrap_or_default();
                     let tool_evidence = ToolCallEvidence {
                         lifecycle_state: row.lifecycle_state.clone(),
                         deadline_at: row.deadline_at.clone(),
-                        cancel_policy: row.cancel_policy.clone(),
                         completed_at: row.completed_at.clone(),
                         timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
                     };
@@ -692,9 +664,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 reconstruction,
                 status: normalize_optional(row.status.as_deref()),
                 lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),
-                child_request_id: normalize_optional(row.child_request_id.as_deref()),
                 await_mode: normalize_optional(row.await_mode.as_deref()),
-                cancel_policy: normalize_optional(row.cancel_policy.as_deref()),
                 started_at: normalize_optional(row.started_at.as_deref()),
                 deadline_at: normalize_optional(row.deadline_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),

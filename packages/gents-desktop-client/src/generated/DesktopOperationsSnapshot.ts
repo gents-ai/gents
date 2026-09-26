@@ -2,6 +2,5 @@
 import type { BackgroundedToolView } from "./BackgroundedToolView.js";
 import type { RuntimeLivenessView } from "./RuntimeLivenessView.js";
 import type { StuckWorkDiagnosticView } from "./StuckWorkDiagnosticView.js";
-import type { SubagentTreeView } from "./SubagentTreeView.js";
 
-export type DesktopOperationsSnapshot = { fetchedAt: string, agentDid: string | null, liveness: RuntimeLivenessView | null, livenessUnavailableReason: string | null, backgroundedTools: Array<BackgroundedToolView>, stuckDiagnostics: Array<StuckWorkDiagnosticView>, lineage: SubagentTreeView | null, };
+export type DesktopOperationsSnapshot = { fetchedAt: string, agentDid: string | null, liveness: RuntimeLivenessView | null, livenessUnavailableReason: string | null, backgroundedTools: Array<BackgroundedToolView>, stuckDiagnostics: Array<StuckWorkDiagnosticView>, };

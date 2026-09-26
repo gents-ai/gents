@@ -882,32 +882,6 @@ Denies the desktop_list_mcp_services_with_health command without any pre-configu
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-list-subagent-tree`
-
-</td>
-<td>
-
-Enables the desktop_list_subagent_tree command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-list-subagent-tree`
-
-</td>
-<td>
-
-Denies the desktop_list_subagent_tree command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-mailbox-dismiss`
 
 </td>
@@ -1740,32 +1714,6 @@ Denies the desktop_peer_status_fetch command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-preview-interrupt-cascade`
-
-</td>
-<td>
-
-Enables the desktop_preview_interrupt_cascade command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-preview-interrupt-cascade`
-
-</td>
-<td>
-
-Denies the desktop_preview_interrupt_cascade command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-probe-inference-endpoint`
 
 </td>
@@ -2097,6 +2045,32 @@ Enables the desktop_session_live_delta command without any pre-configured scope.
 <td>
 
 Denies the desktop_session_live_delta command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-provenance`
+
+</td>
+<td>
+
+Enables the desktop_session_provenance command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-provenance`
+
+</td>
+<td>
+
+Denies the desktop_session_provenance command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2759,20 +2733,7 @@ Authenticated peer enrollment, removal/rename, and P2P repair
 </td>
 <td>
 
-Operations snapshot, health, subagent tree, MCP probe
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:interrupt-read`
-
-</td>
-<td>
-
-Interrupt cascade preview
+Operations snapshot, health, session provenance, MCP probe
 
 </td>
 </tr>
