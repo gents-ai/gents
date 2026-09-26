@@ -180,7 +180,10 @@ async fn run_generated_wait_observations() {
     };
     let (rescan_expected, rescan_outcome) = follow_up(ABANDONED_RESCAN);
     let (cleared_expected, cleared_outcome) = follow_up(ABANDONED_CLEARED);
-    assert_eq!((rescan_outcome.as_str(), cleared_outcome.as_str()), ("illegal", "illegal"));
+    assert_eq!(
+        (rescan_outcome.as_str(), cleared_outcome.as_str()),
+        ("illegal", "illegal")
+    );
     let cases: Vec<_> = contracts
         .goal_claimed_publication_cases
         .into_iter()
@@ -597,7 +600,11 @@ async fn run_generated_wait_observations() {
                 )
                 .await
                 .unwrap();
-                assert!(retried.is_none(), "{} retry still observes the wait", case.name);
+                assert!(
+                    retried.is_none(),
+                    "{} retry still observes the wait",
+                    case.name
+                );
             }
             "invalid_evidence" => {
                 assert!(result.unwrap().is_none(), "{}", case.name);
@@ -625,8 +632,15 @@ async fn run_generated_wait_observations() {
                             wrapup,
                         )
                     };
-                    assert!(rescan(wrapup).await.unwrap().is_none(), "{ABANDONED_RESCAN}");
-                    assert_eq!(fixture.observe().await, rescan_expected, "{ABANDONED_RESCAN}");
+                    assert!(
+                        rescan(wrapup).await.unwrap().is_none(),
+                        "{ABANDONED_RESCAN}"
+                    );
+                    assert_eq!(
+                        fixture.observe().await,
+                        rescan_expected,
+                        "{ABANDONED_RESCAN}"
+                    );
                     let rescanned =
                         load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
                             .await
@@ -644,8 +658,15 @@ async fn run_generated_wait_observations() {
                             escape_graphql_string(wait_doc),
                         )).await;
                     }
-                    assert!(rescan(wrapup).await.unwrap().is_none(), "{ABANDONED_CLEARED}");
-                    assert_eq!(fixture.observe().await, cleared_expected, "{ABANDONED_CLEARED}");
+                    assert!(
+                        rescan(wrapup).await.unwrap().is_none(),
+                        "{ABANDONED_CLEARED}"
+                    );
+                    assert_eq!(
+                        fixture.observe().await,
+                        cleared_expected,
+                        "{ABANDONED_CLEARED}"
+                    );
                     abandoned_follow_ups += 1;
                 }
             }
@@ -654,7 +675,10 @@ async fn run_generated_wait_observations() {
         assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
         fixture.node.shutdown().await;
     }
-    assert_eq!(abandoned_follow_ups, 1, "the budget wrap-up case drives its follow-up scans");
+    assert_eq!(
+        abandoned_follow_ups, 1,
+        "the budget wrap-up case drives its follow-up scans"
+    );
 }
 
 #[tokio::test]

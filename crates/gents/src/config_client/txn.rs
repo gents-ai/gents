@@ -775,7 +775,11 @@ impl<'a> ConfigApplyTxn<'a> {
         #[cfg(test)]
         if !document.trim_start().starts_with("mutation")
             && SUCCESSFUL_MUTATION_FAULT
-                .try_with(|fault| fault.read_storage_failure.is_some_and(|m| document.contains(m)))
+                .try_with(|fault| {
+                    fault
+                        .read_storage_failure
+                        .is_some_and(|m| document.contains(m))
+                })
                 .unwrap_or(false)
         {
             return Err(retry::transaction_storage_failure(anyhow::anyhow!(

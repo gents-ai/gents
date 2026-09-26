@@ -44,7 +44,10 @@ pub(crate) async fn publish_claimed_continuation(
         },
     )
     .await?;
-    if let Some(reason) = stopped.into_inner().unwrap_or_else(|poison| poison.into_inner()) {
+    if let Some(reason) = stopped
+        .into_inner()
+        .unwrap_or_else(|poison| poison.into_inner())
+    {
         tracing::warn!(goal_id = %observed.goal_id, %parent_request_id, %reason,
             "stopped Goal automation on invalid wait evidence");
     }
@@ -185,8 +188,15 @@ async fn stage_claimed_continuation(
         wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
         wait_observation::WaitEvidence::Invalid(error) => {
             *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                stop_for_invalid_wait_evidence(txn, &goal, sequence, parent_request_id, &error, now)
-                    .await?;
+                stop_for_invalid_wait_evidence(
+                    txn,
+                    &goal,
+                    sequence,
+                    parent_request_id,
+                    &error,
+                    now,
+                )
+                .await?;
             return Ok(None);
         }
     }
