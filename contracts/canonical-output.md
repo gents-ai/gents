@@ -33,8 +33,8 @@ check must not be reapplied to reject exact replay or later out-of-extent facts.
 
 Provider/tool payloads and whole authored content live in segments. Small runtime
 presentation literals live inline in headers; they do not duplicate payload bytes.
-The sole scoped payload-copy exception is remote delegated argument admission
-(below); it never changes the canonical transcript or adds streaming rewrites.
+There is no payload-copy exception: a session started by `create_session` or
+`send_message` receives its own materialized request, not copied arguments.
 The collections only grow, so replication is set union and a reader only asks
 which facts are visible: no visible closure means closure is unknown, a closure with
 missing segments means an incomplete replica, twins mean a conflict. Unsealed
@@ -130,24 +130,27 @@ and delivery remain distinct: delivering a failed/cancelled/timed-out result
 does not change its lifecycle to completed. Pending direct-call cancellation may
 require a later empty output closure and native cancellation result; it must remain deliverable without
 redispatch. A late background result can close and publish after parent expiry
-or termination without renewing or reopening that request. Subagent bridges use
-the existing verified child-terminal owner, not a fabricated native completion.
+or termination without renewing or reopening that request. A
+`create_session`/`send_message` row closes with the terminal output of the
+request it caused, not a fabricated native completion.
 
-An invocation reply is not always execution completion. A background subagent
-returns a native `tool_result` receipt while its bridge remains running, then a
-separate ordinary-text completion notification after the child terminates.
+An invocation reply is not always execution completion. A started session
+returns a native `tool_result` receipt while its row remains running, then a
+separate ordinary-text completion notification after the caused request
+terminates.
 Preserve both publications and their independent replay identities. The receipt
 uses its own whole authored source under the tool writer; it does not close the
 still-running tool output source or claim a terminal lifecycle. The terminal
-notification follows the existing background-completion/Goal/session-queue
-owner, without appending a second copy of its transcript message. Native shapes
+notification follows the existing background-completion/session-queue owner,
+without appending a second copy of its transcript message. Native shapes
 distinguish the invocation reply from the notification; no new mutable response
 status is introduced. Compaction projects native provider call IDs, not physical
 tool-document IDs, and must retain the distinction between the initial native
 result and the later ordinary notification.
 
-The notification and continuation queue have one publication transaction. Without
-a Goal, the notification's `request_doc_id` names its coalesced wake request;
+The notification and continuation queue have one publication transaction. Goal
+presence never suppresses the wake (#1624): the notification's `request_doc_id`
+names its coalesced wake request;
 Goal-owned input-only delivery remains parent-bound. This is publication
 membership, not the payload's provenance: references still resolve the exact
 originating tool/request source. Replay after a wake is claimed or finished uses
@@ -190,41 +193,7 @@ not failure and must not rewind the owner's clock.
 
 The composed model must prove these cross-owner effects and sequence ordering,
 not merely accept isolated owner predicates. Native host stop/acknowledgement,
-remote replication latency and transaction isolation remain external evidence;
-receiving immutable delegated arguments alone never authorizes execution.
-
-### Remote argument disclosure
-
-Remote subagent hosts retain argument-only disclosure. A multi-stream segment
-can also contain parent text, reasoning or other calls; neither a PayloadRef nor
-a filtered query creates field-level ACP. Do not grant parent output/header
-access merely to deliver one call's arguments.
-
-For remotely addressed calls only, the existing AgentToolCall carries immutable
-`delegated_input: DelegatedToolInput { source, arguments, parent_subagent_depth }`.
-The depth is the accepted coordinator request's immutable depth; the remote host
-derives the child depth as `parent_subagent_depth + 1` without receiving the
-private parent request. At accepted
-publication the coordinator reconstructs and validates that call's exact argument
-stream, checks call identity/scope and native JSON validity, and copies only those
-argument bytes into the addressed row. Closure, header, pending call and delegated
-input commit atomically. Local calls omit this field and resolve canonical refs;
-Partial/retracted/unaccepted calls cannot create dispatchable delegated input.
-The source reference is provenance, not authority or a host hydration dependency.
-Hosts authenticate the existing coordinator/target route and retain existing
-lifecycle, policy and cancellation guards; they do not fetch parent history or
-need authority to verify its bytes. Replay reuses the same immutable input.
-The host signs and executes its child request as the target principal, while
-that request's immutable `requester_did` names the authenticated coordinator
-that authored the bridge. Claim checks that exact bridge-author binding and
-fresh authorization; host-to-coordinator return templates filter on this
-requester route. Local children still name their own runtime as requester.
-
-This deliberate one-time boundary copy costs bytes, not another document or a
-per-flush write. It is not a general args/result cache. The coordinator-to-host
-pairing remains addressed AgentToolCall only; no new collection, route or ACL
-mechanism is introduced. Canonical provider input/forks/exports continue to use
-the original segment bytes, never the delegated projection.
+remote replication latency and transaction isolation remain external evidence.
 
 `OutputOutcome` is completeness only: `Complete` or `Partial`. Why output was cut
 short, and whether the request or tool succeeded, stay with the request and tool
@@ -464,11 +433,11 @@ conflicting observations cannot become a successfully served empty manifest.
 
 | Deleted contract / implementation handoff | Surviving owner and obligation | Layer |
 | --- | --- | --- |
-| `AgentResponse` SDL, row and catalog entries (deleted) | `AgentRequest.lifecycle_state`, `failure_reason`, `terminalized_at` own terminal status/error/time; `InferenceCall` owns usage. `terminal_output` replaces final-message selection for subagent delivery. `interrupt_requested_at` remains intent; a `Partial` outcome describes kept output, not a second request status. | Spec |
+| `AgentResponse` SDL, row and catalog entries (deleted) | `AgentRequest.lifecycle_state`, `failure_reason`, `terminalized_at` own terminal status/error/time; `InferenceCall` owns usage. `terminal_output` replaces final-message selection for session-message delivery. `interrupt_requested_at` remains intent; a `Partial` outcome describes kept output, not a second request status. | Spec |
 | Response progress counters, cumulative text/reasoning writes, per-flush lease CAS, `execution_progress_seq` | `lifecycle/execution_lease.rs` keeps claim, bounded explicit owner renewal, and the matching-generation terminal/recovery CAS. `execution_lease_expires_at` alone determines liveness; output, publication and replay never renew. `watcher`, `lifecycle/recovery.rs`, `runtime_trace.rs` read that deadline, not payload history. Tool-owned output uses the existing tool lifecycle and never revives a terminal request. | Lean → conformance → runtime |
-| Response `materialized_*`, response/request dual terminalization | `lifecycle/materialize.rs` and terminal owner: final header publication, terminal lifecycle and `TerminalOutput` selection commit atomically. `background_tools.rs::load_child_final_response` and bridge recovery resolve that exact scoped message. Missing selection/header/closure/segments is incomplete, never latest-message fallback. Explicit NoMessage handles pre-output failure. Recovery closes committed bytes with the original producer binding. | Lean → conformance → runtime |
+| Response `materialized_*`, response/request dual terminalization | `lifecycle/materialize.rs` and terminal owner: final header publication, terminal lifecycle and `TerminalOutput` selection commit atomically. The completion observer and session-message recovery resolve that exact scoped message. Missing selection/header/closure/segments is incomplete, never latest-message fallback. Explicit NoMessage handles pre-output failure. Recovery closes committed bytes with the original producer binding. | Lean → conformance → runtime |
 | Stream-processor cumulative previews, in-flight message upserts, retraction resets | `agent/stream_processor.rs`: one immutable segment per flush, naming its writer and slicing its payload by stream; a Retracted closure commits before retry backoff. `agent/loop_stream.rs`: dispatch follows accepted closure/header publication with the boundaries above. `rendered_request/scope.rs` must allocate non-reused scopes across reclaim/restart. | Lean → conformance → runtime |
-| Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery and remote-only immutable `delegated_input`, created pending with the assistant header. The provider turn owns canonical argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
+| Tool `args`, `result`, `partial_output_*`; `AgentToolResult` SDL/row (deleted) | `AgentToolCall` owns execution/delivery, created pending with the assistant header. The provider turn owns canonical argument bytes; the tool source owns output; tool terminalization closes empty and nonempty output before delivery. Existing completion notification owner composes authored wrappers by reference. | Spec → runtime |
 | `truncation/spill.rs`, spill links and discarded-spill flags | Owned provider-input boundary writes `PresentedPayload`: exact UTF-8 output ranges plus inline literal markers/separators. Preserve head/tail behavior and line normalization; retrieval hints name the tool call. Unreferenced retained output is not proof of delivery. `read_tool_output` reads the original stream. | Lean → conformance → runtime |
 | Tool-output ring storage and `read_tool_output` persisted/live/empty source dispatch | Read the exact physical tool's canonical open prefix or committed closed extent through shared reconstruction, then page those bytes. Registry loss cannot erase committed output; missing/conflicting facts are not an empty successful read. Retain generic paging guarantees and the separate host process-control registry, not a second authoritative payload store. | Lean → conformance → runtime |
 | Legacy `decode_persisted_message` / `present_persisted_message` and fallback tests (deleted) | Shared strict reconstruction produces native `Message`; existing `present_message` remains a rendering function. Missing closing records, conflicts, malformed JSON/media and illegal role/block combinations fail explicitly. | Spec → runtime |
@@ -492,7 +461,6 @@ or drop those collections from the client-to-runtime direction.
 | `gents-schemas/src/lib.rs`, `gents-protocol/src/schemas.rs`, runtime schema exports | Register segment only; remove separate seal, response and spill collections | Verify fresh schema registration and strict JSON/SDL decoding |
 | `gents-migration/src/registry.rs` | Remove obsolete response/spill baselines; update client-authored catalog | Add the fresh segment root pin and regenerate changed request/message/tool pins with DefraDB; catalog coverage/parity remains required. No fabricated pins or relaxed checks |
 | `agent/p2p_reconcile/{templates,profiles,policy}.rs` | Replace response/spill routes with segment, preserving requester/agent filters and route directions | Conformance for conversation, client (both directions), machine and operator routes; collection presence is not ACP authorization |
-| Subagent pairing templates | Host return leg includes segment with requester filters; coordinator leg remains addressed AgentToolCall only | Deliver immutable argument-only `delegated_input` on that row. Its source reference is provenance, not a hydration root; do not grant parent output/header access or broaden the route to parent requests/history |
 | `agent/p2p_reconcile/session_hydration.rs` | New collection inventory | Replace session-only selection with authorized reference closure; preserve membership, route admission and bounded exact push |
 | `session_hydration_reconcile.rs` | Inventory only; old queries intentionally remain | Resolve closure references, enumerate twins and include origin dependencies in the signed exact manifest |
 | `gents-protocol/src/session_hydration.rs` | Closed collection enum; receipt format unchanged | Server validates closure; desktop verifies signature, exact document delivery and header reconstruction before completion |

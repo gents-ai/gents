@@ -194,7 +194,7 @@ The checked handoff inventory is the mapping for this work:
 | [Execution](canonical-output-map-execution.json) | Gate operations, application trace, retry, queue/claim handover, tool delivery, Goal/background continuation, restart and the four invariants. |
 | [Projection](canonical-output-map-projection.json) | Reconstruction, provider input/compaction, live observation, terminal output, delegation, forks/hydration and client observation joins. |
 | [Native premises](canonical-output-map-native.json) | Lease actions, transaction/gate/clock/genesis/ACP experiments, SDL/catalog and pairing routes. |
-| [Tool/subagent joins](canonical-output-map-tools.json) | Tool lifecycle actions, closure authority, child-bridge events, physical parent links and notification authority. |
+| [Tool joins](canonical-output-map-tools.json) | Tool lifecycle actions, closure authority, physical parent links and notification authority. |
 | [Control joins](canonical-output-map-control.json) | Retry mediation, session queue actions and write-gate scheduling events. |
 
 Each entry identifies actual Lean declarations, existing generated groups, intended
