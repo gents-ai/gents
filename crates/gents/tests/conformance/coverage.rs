@@ -1363,6 +1363,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "DescendantGraphCases".to_string(),
         ));
     }
+    if !lean_cancel_child_session_cases().is_empty() {
+        emitted.insert((
+            "cancel_child_session_cases".to_string(),
+            "CancelChildSessionCases".to_string(),
+        ));
+    }
     if !lean_descendant_cursor_cases().is_empty() {
         emitted.insert((
             "descendant_cursor_cases".to_string(),

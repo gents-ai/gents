@@ -29,6 +29,12 @@ def descendantGraphCaseJson (value : DescendantGraphCase) : String :=
         | some requester => jsonString requester)
     ++ ",\"session_authorized\":" ++ boolString value.sessionAuthorized
     ++ ",\"session_controllable\":" ++ boolString value.sessionControllable
+    ++ ",\"child_state\":" ++ (match value.childState with
+        | none => "null"
+        | some state => jsonString state)
+    ++ ",\"spawn_unclaimed\":" ++ boolString value.spawnUnclaimed
+    ++ ",\"cancel_intent\":" ++ boolString value.cancelIntent
+    ++ ",\"steer_admission\":" ++ jsonString value.steerAdmission
     ++ "}"
 
 def descendantGraphCasesJson : String :=
@@ -58,5 +64,15 @@ def descendantCursorCaseJson (value : DescendantCursorCase) : String :=
 
 def descendantCursorCasesJson : String :=
   jsonArray (descendantCursorCases.map descendantCursorCaseJson)
+
+def cancelChildSessionCaseJson (value : CancelChildSessionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString value.name ++ ","
+    ++ "\"session\":" ++ jsonArray (value.session.map jsonString) ++ ","
+    ++ "\"cancelled\":" ++ jsonArray (value.cancelled.map jsonString)
+    ++ "}"
+
+def cancelChildSessionCasesJson : String :=
+  jsonArray (cancelChildSessionCases.map cancelChildSessionCaseJson)
 
 end Conformance.Contracts

@@ -1232,6 +1232,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_spawn_fence_cases_replay_native_owners",
         },
         ConformanceConsumer::RustTest {
+            id: "hook::tests::r4c_steer_subagent::generated_cancel_child_session_cases_drive_cancel_subagent",
+            package: "gents",
+            source_path: "crates/gents/tests/e2e_subagent/r4c_steer_subagent.rs",
+            module_path: "hook::tests::r4c_steer_subagent",
+            function: "generated_cancel_child_session_cases_drive_cancel_subagent",
+        },
+        ConformanceConsumer::RustTest {
+            id: "descendant_graph::tests::generated_steer_admission_cases_fence_terminal_child_steering",
+            package: "gents",
+            source_path: "crates/gents/src/descendant_graph.rs",
+            module_path: "descendant_graph::tests",
+            function: "generated_steer_admission_cases_fence_terminal_child_steering",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::unmaterialized_child_status_matches_runtime_vocabulary",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

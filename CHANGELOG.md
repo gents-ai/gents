@@ -36,6 +36,13 @@ source consistency checks, not a separate runtime compatibility version.
   allowed 1 to 5,000) for `list_files`, `glob` and `grep`. Each is both the
   per-call default and the most a call can request. The desktop Tools editor
   shows them (#1764).
+- `steer_subagent` can steer a background child that already finished
+  (completed, failed or timed out). The steer queues a new request in the
+  child's existing session, so the child continues with its transcript and
+  tool results; the finished request and its bridge keep their outcome.
+  `cancel_subagent` on the same child stops that work. A parent interrupt does
+  not end a child's steerability. Cancelled children and children fenced by
+  an unclaimed-spawn expiry still refuse steering (#1538).
 
 ### Changed
 

@@ -21,6 +21,10 @@ pub(crate) struct LeanDescendantGraphCase {
     pub(crate) caller_requester: Option<String>,
     pub(crate) session_authorized: bool,
     pub(crate) session_controllable: bool,
+    pub(crate) child_state: Option<String>,
+    pub(crate) spawn_unclaimed: bool,
+    pub(crate) cancel_intent: bool,
+    pub(crate) steer_admission: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -44,4 +48,11 @@ pub(crate) struct LeanDescendantCursorCase {
     pub(crate) anchor_settled: bool,
     pub(crate) expected_child_request_ids: Vec<usize>,
     pub(crate) stale_cursor: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanCancelChildSessionCase {
+    pub(crate) name: String,
+    pub(crate) session: Vec<String>,
+    pub(crate) cancelled: Vec<String>,
 }
