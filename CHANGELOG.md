@@ -173,11 +173,14 @@ source consistency checks, not a separate runtime compatibility version.
 - Task `prompt_template` and `goal_objective_template` are refused at configure
   time when they name a filter, test or function the template engine does not
   provide, instead of being accepted and failing on every trigger fire with
-  `template render error: unknown filter`. Names are checked over the whole
-  compiled template, so a conditional branch does not hide one (#1744).
-- Task templates can use `tojson` and `urlencode`. The template engine's `json`
-  feature is enabled, so the filters the configurator already emits resolve
-  instead of being rejected (#1744).
+  `template render error: unknown filter`. Every name the compiled template
+  uses is checked, so a conditional branch does not hide one. A method call on
+  a value (`{{ doc.name.upper() }}`) resolves against that value, so it is
+  still reported when the task fires (#1744).
+- Task templates can use `tojson`. The template engine's `json` feature is
+  enabled, so the filter the configurator already emits resolves instead of
+  being rejected. It escapes `<`, `>`, `&` and `'` as `\uXXXX` sequences, which
+  reach the model as written (#1744).
 - A pack scenario sidecar reference can no longer resolve outside its pack
   directory: the CLI holds sidecar paths to the same canonical asset-path rule
   the pack loader uses (#1642).
