@@ -29,4 +29,15 @@ def spawnFenceCaseJson (value : SpawnFenceCase) : String :=
 def spawnFenceCasesJson : String :=
   jsonArray (spawnFenceCases.map spawnFenceCaseJson)
 
+def spawnClaimLineageCaseJson (value : SpawnClaimLineageCase) : String :=
+  "{\"name\":" ++ jsonString value.name
+    ++ ",\"parent_corroborates\":" ++ boolString value.parentCorroborates
+    ++ ",\"target_corroborates\":" ++ boolString value.targetCorroborates
+    ++ ",\"bridge_intent\":" ++ boolString value.bridgeIntent
+    ++ ",\"refused\":" ++ boolString value.refused
+    ++ "}"
+
+def spawnClaimLineageCasesJson : String :=
+  jsonArray (spawnClaimLineageCases.map spawnClaimLineageCaseJson)
+
 end Conformance.Contracts

@@ -246,6 +246,52 @@ theorem claim_after_visible_intent_is_refused (w : World)
   subst hpending h
   simp [step]
 
+/-- What a pending request row proves about the spawn bridge its lineage
+    names. The logical child id is fixed by the parent before any row exists,
+    so another row can reuse it and even name the bridge's physical document.
+    Only a row whose reciprocal parent lineage matches the bridge receipt and
+    that runs as the receipt's target principal is that bridge's child, the
+    same resolution the cancel mirror and the acknowledgement observer use. -/
+structure ClaimLineage where
+  parentCorroborates : Bool
+  targetCorroborates : Bool
+  deriving DecidableEq, Repr
+
+def ClaimLineage.bridgeChild (l : ClaimLineage) : Bool :=
+  l.parentCorroborates && l.targetCorroborates
+
+/-- The claim gate's reading of a bridge intent. The modeled `claim` step is
+    this gate applied to the bridge's corroborated child; any other row is
+    stopped only through its own interrupt latch. -/
+def claimFencedByIntent (l : ClaimLineage) (hostSeesIntent : Bool) : Bool :=
+  hostSeesIntent && l.bridgeChild
+
+/-- A bridge intent refuses a claim exactly when the claimant is the bridge's
+    child: a row with the wrong parent lineage or principal is never
+    interrupted by it. -/
+theorem claim_intent_reaches_only_bridge_child (l : ClaimLineage) (h : Bool) :
+    claimFencedByIntent l h = true ↔ h = true ∧ l.bridgeChild = true := by
+  cases h <;> simp [claimFencedByIntent]
+
+theorem claim_intent_skips_wrong_parent (target h : Bool) :
+    claimFencedByIntent ⟨false, target⟩ h = false := by
+  cases h <;> cases target <;> rfl
+
+theorem claim_intent_skips_wrong_target (parent h : Bool) :
+    claimFencedByIntent ⟨parent, false⟩ h = false := by
+  cases h <;> cases parent <;> rfl
+
+/-- On the corroborated child the gate is exactly the modeled `claim` step's
+    intent guard. -/
+theorem bridge_child_claim_gate_matches_step (w : World)
+    (hpending : w.child = .pending) (hlatch : w.interruptLatched = false) :
+    ((step w .claim).child = .interrupted) ↔
+      claimFencedByIntent ⟨true, true⟩ w.hostSeesIntent = true := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  simp at hpending hlatch
+  subst hpending hlatch
+  cases hs <;> simp [step, claimFencedByIntent, ClaimLineage.bridgeChild]
+
 /-- A fenced bridge's acknowledgement clears only on a terminal child. -/
 theorem fenced_ack_requires_terminal_child (w : World) (h : w.child.terminal = false) :
     (step w .observeAck).ackPending = w.ackPending := by

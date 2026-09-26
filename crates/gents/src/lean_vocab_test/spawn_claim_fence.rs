@@ -14,6 +14,15 @@ pub(crate) struct LeanSpawnFenceStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSpawnClaimLineageCase {
+    pub(crate) name: String,
+    pub(crate) parent_corroborates: bool,
+    pub(crate) target_corroborates: bool,
+    pub(crate) bridge_intent: bool,
+    pub(crate) refused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSpawnFenceCase {
     pub(crate) name: String,
     pub(crate) route: String,

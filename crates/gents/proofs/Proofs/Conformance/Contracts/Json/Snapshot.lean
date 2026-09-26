@@ -406,6 +406,8 @@ def snapshotJson : String :=
       ++ descendantCursorCasesJson ++ ","
     ++ "\"spawn_fence_cases\":"
       ++ spawnFenceCasesJson ++ ","
+    ++ "\"spawn_claim_lineage_cases\":"
+      ++ spawnClaimLineageCasesJson ++ ","
     ++ "\"cancel_child_session_cases\":"
       ++ cancelChildSessionCasesJson ++ ","
     ++ "\"r5_cross_principal_cases\":"

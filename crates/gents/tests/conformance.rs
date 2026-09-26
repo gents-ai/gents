@@ -59,11 +59,11 @@ use lean_vocab_test::{
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
     lean_request_transition_cases, lean_reserved_child_materialization_cases,
-    lean_restart_disposition_cases, lean_spawn_fence_cases, lean_startup_readiness_cases,
-    lean_state_machine_contract, lean_subagent_delegation_graph_cases,
-    lean_tool_output_paging_cases, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
-    LeanR4cBackgroundWorkCase,
+    lean_restart_disposition_cases, lean_spawn_claim_lineage_cases, lean_spawn_fence_cases,
+    lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
+    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{

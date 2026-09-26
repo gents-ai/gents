@@ -14,7 +14,9 @@ use super::delegated_child_tests::{install_cross_deployment_behavior, receiver_s
 use super::*;
 
 use crate::identity::AgentIdentity;
-use crate::lean_vocab_test::{lean_spawn_fence_cases, LeanSpawnFenceCase, LeanSpawnFenceStep};
+use crate::lean_vocab_test::{
+    lean_spawn_claim_lineage_cases, lean_spawn_fence_cases, LeanSpawnFenceCase, LeanSpawnFenceStep,
+};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::trigger_engine::cross_deployment_cancel_mirror::CrossDeploymentCancelMirror;
 use crate::KeyIdentity;
@@ -555,6 +557,148 @@ async fn unrelated_row_reusing_the_child_id_neither_links_nor_is_interrupted() {
     assert!(row["interrupt_requested_at"].is_null());
     assert_eq!(fixture.bridge().await["cancel_pending_remote_ack"], true);
     fixture.node.shutdown().await;
+}
+
+/// Lean `claimFencedByIntent`: a pending row naming a cancelled spawn bridge
+/// is refused at claim only when the bridge receipt resolves it as its child.
+/// The claimant is created through the child creation owner with the modeled
+/// lineage and claimed through the pre-claim gates.
+#[tokio::test]
+async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
+    let cases = lean_spawn_claim_lineage_cases();
+    assert_eq!(cases.len(), 4);
+    let fence_case = lean_spawn_fence_cases()
+        .iter()
+        .find(|case| case.name == "cross_expiry_then_late_claim_refused")
+        .unwrap();
+    for case in cases {
+        let fixture = Fixture::new(fence_case).await;
+        if case.bridge_intent {
+            set_bridge_datetime(
+                &fixture.node,
+                &fixture.bridge_doc_id,
+                "unclaimed_deadline_at",
+                PAST,
+            )
+            .await;
+            crate::background_completion::reconcile_unclaimed_cross_deployment_spawns(
+                fixture.node.clone(),
+                &fixture.coordinator,
+            )
+            .await
+            .unwrap();
+            assert!(
+                fixture.bridge().await["cancel_cascade_intent_at"].is_string(),
+                "{}",
+                case.name
+            );
+        }
+        let claimant_did = if case.target_corroborates {
+            fixture.host.clone()
+        } else {
+            fixture.coordinator.clone()
+        };
+        if case.parent_corroborates {
+            create_subagent_request_with_trusted_parent_request_id_and_workspace(
+                &fixture.node,
+                fixture.child_id.clone(),
+                fixture.parent_id.clone(),
+                fixture.parent_doc_id.clone(),
+                fixture.tool_call_id.clone(),
+                fixture.bridge_doc_id.clone(),
+                0,
+                claimant_did.clone(),
+                BEHAVIOR_ID.into(),
+                "claimant".into(),
+                None,
+                fixture.coordinator.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        } else {
+            // The creation owner refuses a foreign parent, and lineage is
+            // immutable, so the row a peer could replicate is written directly.
+            ConfigAccess::write_local(
+                &fixture.node,
+                "test.spawn_claim_foreign_parent",
+                &format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                        request_id: "{}", agent_did: "{}", behavior_id: "{}",
+                        session_id: "foreign-session", content: "claimant",
+                        lifecycle_state: "pending", created_at: "2026-09-25T14:35:00Z",
+                        subagent_depth: 1,
+                        caused_by_parent_request_id: "other-parent",
+                        caused_by_parent_request_doc_id: "other-parent-doc",
+                        caused_by_parent_tool_call_id: "{}",
+                        caused_by_parent_tool_call_doc_id: "{}"
+                    }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&fixture.child_id),
+                    escape_graphql_string(&claimant_did),
+                    escape_graphql_string(BEHAVIOR_ID),
+                    escape_graphql_string(&fixture.tool_call_id),
+                    escape_graphql_string(&fixture.bridge_doc_id)
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        let response = fixture
+            .node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                escape_graphql_string(&fixture.child_id),
+                crate::watcher::AGENT_REQUEST_FIELDS
+            ))
+            .await;
+        let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")
+            .unwrap()
+            .expect("claimant exists");
+        let claimant_doc_id = row.doc_id.clone().expect("claimant _docID");
+        assert_eq!(
+            row.caused_by_parent_tool_call_doc_id.as_deref(),
+            Some(fixture.bridge_doc_id.as_str()),
+            "{}",
+            case.name
+        );
+        let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            fixture.node.clone(),
+            BEHAVIOR_ID,
+            &claimant_did,
+            request,
+            60,
+        );
+        let outcome = lifecycle.claim().await.unwrap();
+        assert_eq!(
+            matches!(outcome, ClaimOutcome::Interrupted),
+            case.refused,
+            "{}: {outcome:?}",
+            case.name
+        );
+        if !case.refused {
+            assert!(
+                matches!(outcome, ClaimOutcome::Claimed),
+                "{}: {outcome:?}",
+                case.name
+            );
+        }
+        let response = fixture
+            .node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                escape_graphql_string(&claimant_doc_id)
+            ))
+            .await;
+        let lifecycle_state = &response.data.unwrap()["AgentRequest"][0]["lifecycle_state"];
+        assert_eq!(
+            lifecycle_state == "interrupted",
+            case.refused,
+            "{}: {lifecycle_state}",
+            case.name
+        );
+        fixture.node.shutdown().await;
+    }
 }
 
 /// Parent authorization for a same-principal spawn onto `BEHAVIOR_ID`, so
