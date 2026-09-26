@@ -375,10 +375,8 @@ fn temp_root(name: &str) -> PathBuf {
 fn ensure_native_fs_runner_for_test() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        if native_fs_runner_binary_for_current_test().is_some() {
-            return;
-        }
-
+        // An adjacent runner may predate the current sources (for example after
+        // a rebase), so always let cargo rebuild it; an up-to-date build is a no-op.
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)

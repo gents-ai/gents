@@ -627,6 +627,7 @@ async fn generated_spawn_claim_lineage_cases_drive_claim_gate() {
                         request_id: "{}", agent_did: "{}", behavior_id: "{}",
                         session_id: "foreign-session", content: "claimant",
                         lifecycle_state: "pending", created_at: "2026-09-25T14:35:00Z",
+                        purpose: "normal",
                         subagent_depth: 1,
                         caused_by_parent_request_id: "other-parent",
                         caused_by_parent_request_doc_id: "other-parent-doc",
