@@ -208,7 +208,7 @@ struct RequestTransitionView {
 #[derive(Debug, Clone, Serialize)]
 struct RequestCancelCauseView {
     cause: String,
-    cancel_initiated_at: Option<String>,
+    interrupt_requested_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,7 +225,6 @@ struct RequestToolCallView {
     cancel_policy: String,
     child_terminal: String,
     cancel_cause: String,
-    cancel_initiated_at: Option<String>,
     child_request_id: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
@@ -469,7 +468,6 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         &schema.agent_request,
         &[
             "cancel_cause",
-            "cancel_initiated_at",
             "terminal_output",
             "execution_generation",
             "execution_lease_secs",
@@ -531,7 +529,7 @@ fn request_show_tool_calls_query(
     append_optional_fields(
         &mut fields,
         &schema.agent_tool_call,
-        &["child_terminal", "cancel_cause", "cancel_initiated_at"],
+        &["child_terminal", "cancel_cause"],
     );
     let fields = fields.join("\n                ");
     Ok(format!(
@@ -747,7 +745,6 @@ fn request_cancel_cause_view(
     tool_calls: &[RequestToolCallView],
 ) -> Option<RequestCancelCauseView> {
     let request_cause = string_field(request, "cancel_cause");
-    let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
     let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
@@ -760,18 +757,7 @@ fn request_cancel_cause_view(
                 .map(|tool| tool.cancel_cause.clone())
         })
         .flatten();
-    let cascade_tool_cancel_at = is_interrupted
-        .then(|| {
-            tool_calls
-                .iter()
-                .find(|tool| tool.cancel_policy == "cascade")
-                .and_then(|tool| tool.cancel_initiated_at.clone())
-        })
-        .flatten();
-    let was_cancelled = is_interrupted
-        || request_cause.is_some()
-        || request_cancel_at.is_some()
-        || interrupt_at.is_some();
+    let was_cancelled = is_interrupted || request_cause.is_some() || interrupt_at.is_some();
     if !was_cancelled {
         return None;
     }
@@ -779,9 +765,7 @@ fn request_cancel_cause_view(
         cause: request_cause
             .or(cascade_tool_cause)
             .unwrap_or_else(|| "unknown".to_string()),
-        cancel_initiated_at: request_cancel_at
-            .or(interrupt_at)
-            .or(cascade_tool_cancel_at),
+        interrupt_requested_at: interrupt_at,
     })
 }
 
@@ -812,7 +796,6 @@ fn tool_call_view(
         cancel_policy: string_field_or_unknown(row, "cancel_policy"),
         child_terminal: string_field_or_unknown(row, "child_terminal"),
         cancel_cause: string_field_or_unknown(row, "cancel_cause"),
-        cancel_initiated_at: string_field(row, "cancel_initiated_at"),
         child_request_id: string_field(row, "child_request_id"),
         started_at: string_field(row, "started_at"),
         completed_at: string_field(row, "completed_at"),
@@ -1027,8 +1010,11 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
         lines.push("CancelCause:".to_string());
         lines.push(format!("  cause: {}", cancel.cause));
         lines.push(format!(
-            "  cancel_initiated_at: {}",
-            cancel.cancel_initiated_at.as_deref().unwrap_or("unknown")
+            "  interrupt_requested_at: {}",
+            cancel
+                .interrupt_requested_at
+                .as_deref()
+                .unwrap_or("unknown")
         ));
     }
 
@@ -1739,11 +1725,7 @@ mod tests {
         let request = json!({
             "lifecycle_state": "processing",
         });
-        let tool_calls = vec![request_tool_call(
-            "cascade",
-            "operator_interrupt",
-            Some("2026-05-20T10:00:02Z"),
-        )];
+        let tool_calls = vec![request_tool_call("cascade", "operator_interrupt")];
 
         assert!(request_cancel_cause_view(&request, &tool_calls).is_none());
     }
@@ -1754,55 +1736,38 @@ mod tests {
             "lifecycle_state": "interrupted",
         });
 
-        let independent_only = vec![request_tool_call(
-            "independent",
-            "independent_tool_timeout",
-            Some("2026-05-20T10:00:02Z"),
-        )];
+        let independent_only = vec![request_tool_call("independent", "independent_tool_timeout")];
         let cancel = request_cancel_cause_view(&request, &independent_only)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "unknown");
-        assert_eq!(cancel.cancel_initiated_at, None);
-
-        let cascade_time_only = vec![request_tool_call(
-            "cascade",
-            "unknown",
-            Some("2026-05-20T10:00:03Z"),
-        )];
-        let cancel = request_cancel_cause_view(&request, &cascade_time_only)
-            .expect("interrupted requests should render CancelCause");
-        assert_eq!(cancel.cause, "unknown");
-        assert_eq!(
-            cancel.cancel_initiated_at.as_deref(),
-            Some("2026-05-20T10:00:03Z")
-        );
+        assert_eq!(cancel.interrupt_requested_at, None);
 
         let cascade_tool = vec![
-            request_tool_call(
-                "independent",
-                "independent_tool_timeout",
-                Some("2026-05-20T10:00:02Z"),
-            ),
-            request_tool_call(
-                "cascade",
-                "operator_interrupt",
-                Some("2026-05-20T10:00:03Z"),
-            ),
+            request_tool_call("independent", "independent_tool_timeout"),
+            request_tool_call("cascade", "operator_interrupt"),
         ];
         let cancel = request_cancel_cause_view(&request, &cascade_tool)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "operator_interrupt");
+        assert_eq!(cancel.interrupt_requested_at, None);
+    }
+
+    #[test]
+    fn request_cancel_cause_timestamp_comes_from_the_durable_interrupt_latch() {
+        let request = json!({
+            "lifecycle_state": "interrupted",
+            "interrupt_requested_at": "2026-05-20T10:00:03Z",
+        });
+
+        let cancel = request_cancel_cause_view(&request, &[])
+            .expect("interrupted requests should render CancelCause");
         assert_eq!(
-            cancel.cancel_initiated_at.as_deref(),
+            cancel.interrupt_requested_at.as_deref(),
             Some("2026-05-20T10:00:03Z")
         );
     }
 
-    fn request_tool_call(
-        cancel_policy: &str,
-        cancel_cause: &str,
-        cancel_initiated_at: Option<&str>,
-    ) -> RequestToolCallView {
+    fn request_tool_call(cancel_policy: &str, cancel_cause: &str) -> RequestToolCallView {
         RequestToolCallView {
             tool_call_key: "session:tool".to_string(),
             request_id: "request".to_string(),
@@ -1816,7 +1781,6 @@ mod tests {
             cancel_policy: cancel_policy.to_string(),
             child_terminal: "unknown".to_string(),
             cancel_cause: cancel_cause.to_string(),
-            cancel_initiated_at: cancel_initiated_at.map(ToOwned::to_owned),
             child_request_id: None,
             started_at: Some("2026-05-20T10:00:01Z".to_string()),
             completed_at: None,

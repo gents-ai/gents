@@ -371,6 +371,19 @@ pub(crate) fn current_session_id() -> Option<String> {
         .ok()
 }
 
+/// Provider calls admission has minted in the current request scope.
+///
+/// `next_call` mints exactly one sequence per admitted provider call, and a
+/// request's inference, pre-inference compaction and generated-title scopes all
+/// clone the same counter, so one read covers every provider call attributable
+/// to the request. `None` outside a request admission scope, where no provider
+/// call can be minted at all.
+pub(crate) fn current_request_provider_call_count() -> Option<u64> {
+    ADMISSION_CALL_CONTEXT
+        .try_with(|context| context.call_seq.load(Ordering::SeqCst))
+        .ok()
+}
+
 /// The admission identity of the call currently in flight on this task, if
 /// one has been admitted. `None` outside an admission scope (one-shot runs)
 /// and before the first `next_call` of a scope.

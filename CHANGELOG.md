@@ -27,6 +27,10 @@ source consistency checks, not a separate runtime compatibility version.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
+- `gents request show`: the `CancelCause` block and its JSON field
+  `cancel_initiated_at` are now `interrupt_requested_at`, the durable request
+  signal. The per-tool `cancel_initiated_at` field is gone; no schema or writer
+  ever populated it (#1809).
 
 ### Added
 
@@ -87,6 +91,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- Interrupting a claimed request before inference starts now terminalizes it
+  at once instead of waiting out the execution lease and a recovery sweep
+  (#1809). The per-request interrupt observer starts at the claim, and workspace
+  inspection, generated-title work and pre-inference compaction are all raced
+  against the latch. The terminal request records whether the interrupt caught
+  any provider call: `failure_reason` is `interrupted before any provider call`
+  when none ran, and `interrupted` otherwise.
 - Stateless (`store:false`) Responses requests to xAI/Grok and ChatGPT Codex
   now always request `include: ["reasoning.encrypted_content"]`, even with no
   reasoning effort configured, so replayed reasoning resolves without

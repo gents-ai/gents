@@ -149,7 +149,46 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
 enum HandleRequestOutcome {
     Completed,
     FailedAfterResponse(anyhow::Error),
-    Interrupted,
+    Interrupted(InterruptEvidence),
+}
+
+/// How much provider work the interrupt caught, read from provider-call
+/// admission: the request's inference, pre-inference compaction and
+/// generated-title calls share one minted-call counter, so a single read covers
+/// all three. Published output cannot answer this — a request may call a
+/// provider and publish nothing.
+#[derive(Debug, Clone, Copy)]
+struct InterruptEvidence {
+    provider_calls: u64,
+}
+
+impl InterruptEvidence {
+    /// Outside a request admission scope no provider call can be minted, so an
+    /// absent counter is zero rather than unknown.
+    fn observed() -> Self {
+        Self {
+            provider_calls: crate::admission::current_request_provider_call_count().unwrap_or(0),
+        }
+    }
+
+    fn terminal_reason(self) -> &'static str {
+        use gents_protocol::request_lifecycle::interrupt_terminal_reason;
+        if self.provider_calls == 0 {
+            interrupt_terminal_reason::BEFORE_ANY_PROVIDER_CALL
+        } else {
+            interrupt_terminal_reason::AFTER_PROVIDER_CALL
+        }
+    }
+}
+
+/// Settle the generated-title task before its provider-call evidence is read,
+/// so the observed count cannot grow after the fact.
+async fn stop_title_generation(task: Option<tokio::task::JoinHandle<()>>) -> InterruptEvidence {
+    if let Some(task) = task {
+        task.abort();
+        let _ = task.await;
+    }
+    InterruptEvidence::observed()
 }
 
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
@@ -384,6 +423,55 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
+    /// Terminalize an interrupted claim through the owned lifecycle and
+    /// workspace owners. `interrupt.rs` only latches intent; this is the sole
+    /// place the daemon converts that intent into a terminal request state.
+    async fn finish_interrupted_request(
+        &self,
+        lifecycle: &mut RequestLifecycle,
+        stream_writer: &DefraStreamWriter,
+        request: &AgentRequest,
+        evidence: InterruptEvidence,
+        cancellation_source: &'static str,
+    ) {
+        record_current_request_outcome("interrupted");
+        match terminalize_request(
+            lifecycle,
+            stream_writer,
+            RequestTerminalOutcome::Interrupted,
+            Some(evidence.terminal_reason()),
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                record_current_request_outcome("terminalization_failed");
+                record_current_failure_class(&error);
+                tracing::error!(request_id = %request.request_id, error = %error,
+                    "failed to atomically terminalize interrupted request and response");
+                return;
+            }
+        }
+        if let Err(error) =
+            crate::workspace::release_writer_binding(self.node.as_ref(), request).await
+        {
+            tracing::warn!(
+                request_id = %request.request_id,
+                error = %error,
+                "failed to release writer workspace binding after interrupt"
+            );
+        }
+        tracing::info!(
+            behavior_id = %self.behavior.behavior_id,
+            request_id = %request.request_id,
+            session_id = %request.session_id,
+            cancellation_source,
+            provider_calls = evidence.provider_calls,
+            "request interrupted"
+        );
+    }
+
     pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
@@ -539,6 +627,20 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
         }
 
+        // Observation starts at the claim, not at the first provider call:
+        // workspace inspection, generated titles and pre-inference compaction
+        // all run in between, and an interrupt latched there has no other owner.
+        let (interrupt_tx, mut interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        let interrupt_observer = crate::interrupt::ClaimedRequestInterruptObserver::new(
+            crate::interrupt::spawn_request_interrupt_observer(
+                self.node.clone(),
+                request.doc_id.clone(),
+                interrupt_tx,
+                shutdown.clone(),
+            ),
+        );
+
         let requested_behavior_id = request.behavior_id.as_str();
         if requested_behavior_id != self.behavior.behavior_id {
             let error = anyhow::anyhow!(
@@ -565,7 +667,26 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             return;
         }
 
-        match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
+        let seal_state = match crate::interrupt::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request),
+        )
+        .await
+        {
+            crate::interrupt::InterruptiblePreparation::Ready(seal_state) => seal_state,
+            crate::interrupt::InterruptiblePreparation::Interrupted => {
+                self.finish_interrupted_request(
+                    &mut lifecycle,
+                    &stream_writer,
+                    &request,
+                    InterruptEvidence::observed(),
+                    "pre_inference",
+                )
+                .await;
+                return;
+            }
+        };
+        match seal_state {
             Ok(true) => {
                 if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {
                     finalize_request_failure(
@@ -638,19 +759,10 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             }
         }
 
-        let (interrupt_tx, interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
-        let observer = crate::interrupt::spawn_request_interrupt_observer(
-            self.node.clone(),
-            request.doc_id.clone(),
-            interrupt_tx,
-            shutdown.clone(),
-        );
-
         let result = self
             .handle_request(&mut lifecycle, &stream_writer, shutdown, interrupt_rx)
             .await;
-        observer.abort();
+        drop(interrupt_observer);
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
@@ -735,42 +847,15 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         "failed to atomically terminalize completed request and response");
                 }
             }
-            Ok(HandleRequestOutcome::Interrupted) => {
-                record_current_request_outcome("interrupted");
-                match terminalize_request(
+            Ok(HandleRequestOutcome::Interrupted(evidence)) => {
+                self.finish_interrupted_request(
                     &mut lifecycle,
                     &stream_writer,
-                    RequestTerminalOutcome::Interrupted,
-                    Some("interrupted"),
+                    &request,
+                    evidence,
+                    "mid_flight",
                 )
-                .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => return,
-                    Err(error) => {
-                        record_current_request_outcome("terminalization_failed");
-                        record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %error,
-                            "failed to atomically terminalize interrupted request and response");
-                        return;
-                    }
-                }
-                if let Err(error) =
-                    crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
-                {
-                    tracing::warn!(
-                        request_id = %request.request_id,
-                        error = %error,
-                        "failed to release writer workspace binding after interrupt"
-                    );
-                }
-                tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    cancellation_source = "mid_flight",
-                    "request interrupted mid-flight"
-                );
+                .await;
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 record_current_request_outcome("failed_after_response");

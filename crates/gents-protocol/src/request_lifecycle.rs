@@ -8,6 +8,24 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Canonical `failure_reason` values the terminal owner writes when a request
+/// ends as [`RequestLifecycleState::Interrupted`]. The model proves the state
+/// transition; the reason is the native request-row adapter's only durable
+/// record of what the interrupt caught.
+pub mod interrupt_terminal_reason {
+    /// An interrupt that landed once at least one provider call had been
+    /// admitted for the request.
+    pub const AFTER_PROVIDER_CALL: &str = "interrupted";
+
+    /// Positive evidence that no provider call was admitted for the request
+    /// before the interrupt landed. Provider-call admission mints one call
+    /// sequence per call, and a request's inference, pre-inference compaction
+    /// and generated-title calls share that one counter, so a zero count covers
+    /// all three. Absent output is not evidence: a request can call a provider
+    /// and publish nothing.
+    pub const BEFORE_ANY_PROVIDER_CALL: &str = "interrupted before any provider call";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RequestLifecycleState {
     WorkspaceBindingPending,

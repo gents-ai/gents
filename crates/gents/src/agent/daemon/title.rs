@@ -17,12 +17,15 @@ const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    /// The returned handle lets the request owner settle this out-of-band
+    /// provider call before it reads interrupt evidence; a generated title is
+    /// presentation metadata, so nothing waits on it otherwise.
     pub(super) fn spawn_conversation_title_generation(
         &self,
         request: &AgentRequest,
         admission_context: AdmissionCallContext,
         capture_context: crate::rendered_request::RenderedRequestContext,
-    ) {
+    ) -> Option<tokio::task::JoinHandle<()>> {
         // A generated title is optional presentation metadata, not part of the
         // requested agent result. Budgeted requests therefore skip this
         // out-of-band provider call instead of giving it a second allowance or
@@ -32,7 +35,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 request_id = %request.request_id,
                 "skipping generated title for an aggregate-token-budgeted request"
             );
-            return;
+            return None;
         }
         let node = Arc::clone(&self.node);
         let behavior_did = self.behavior.agent_did().to_string();
@@ -63,7 +66,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // stack. Canonical request rows make the surrounding request future
         // intentionally broad, and constructing both futures inline can
         // exceed Tokio's default worker stack before this task is spawned.
-        tokio::spawn(Box::pin(async move {
+        Some(tokio::spawn(Box::pin(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
                 crate::rendered_request::scope_request_if_configured(
                     capture_context,
@@ -85,7 +88,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     "failed to generate conversation title"
                 );
             }
-        }));
+        })))
     }
 }
 

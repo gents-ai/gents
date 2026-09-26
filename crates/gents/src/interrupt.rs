@@ -363,6 +363,68 @@ pub struct InterruptIntent {
     pub at: DateTime<Utc>,
 }
 
+/// Holds a per-request interrupt observer for the lifetime of one claim. Every
+/// path out of the claim — including the error returns before terminalization —
+/// must stop the observer, and a bare `JoinHandle` drop leaves it polling the
+/// node instead.
+pub(crate) struct ClaimedRequestInterruptObserver(tokio::task::JoinHandle<()>);
+
+impl Drop for ClaimedRequestInterruptObserver {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl ClaimedRequestInterruptObserver {
+    pub(crate) fn new(observer: tokio::task::JoinHandle<()>) -> Self {
+        Self(observer)
+    }
+}
+
+/// What a raced stretch of pre-provider preparation produced. `Interrupted`
+/// carries no timestamp: `interrupt_requested_at` on the request row is the
+/// durable one, and the caller's terminal write is stamped by its owner.
+pub(crate) enum InterruptiblePreparation<T> {
+    Ready(T),
+    Interrupted,
+}
+
+/// Run `work` while watching the durable interrupt latch, yielding whichever
+/// arrives first.
+///
+/// Observation only: the latch is never a terminal write here. The caller's
+/// lifecycle owner decides the outcome, and dropping `work` is what stops the
+/// preparation it was doing.
+pub(crate) async fn prepare_unless_interrupted<T>(
+    interrupt_rx: &mut watch::Receiver<Option<InterruptIntent>>,
+    work: impl std::future::Future<Output = T>,
+) -> InterruptiblePreparation<T> {
+    if interrupt_rx.borrow_and_update().is_some() {
+        return InterruptiblePreparation::Interrupted;
+    }
+    tokio::pin!(work);
+    loop {
+        // The latch is checked first so an interrupt that is already observable
+        // wins over preparation that is also ready.
+        tokio::select! {
+            biased;
+            changed = interrupt_rx.changed() => {
+                if changed.is_err() {
+                    // The observer stopped, so no later latch can be observed
+                    // here. Preparation continues; a latch written from now on
+                    // is left to the durable reads the owned loop performs
+                    // around inference, and to recovery for ownerless work.
+                    return InterruptiblePreparation::Ready(work.await);
+                }
+                if interrupt_rx.borrow_and_update().is_some() {
+                    return InterruptiblePreparation::Interrupted;
+                }
+            }
+            ready = &mut work => return InterruptiblePreparation::Ready(ready),
+        }
+    }
+}
+
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Spawn an observer task that reads `interrupt_requested_at` for a single

@@ -1638,4 +1638,5 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_path);
     }
     include!("execution_lease_regression_tests.rs");
+    include!("pre_inference_interrupt_tests.rs");
 }
