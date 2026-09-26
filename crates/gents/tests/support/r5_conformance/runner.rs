@@ -78,6 +78,8 @@ impl HarnessNode {
 pub struct Harness {
     a: HarnessNode,
     b: HarnessNode,
+    scenario_name: String,
+    current_action: Option<(usize, &'static str)>,
     history: Vec<Observation>,
     generated_bridges: HashMap<String, GeneratedBridge>,
     modeled_parent_request_ids: HashSet<String>,
@@ -102,6 +104,9 @@ struct GeneratedBridge {
 
 #[derive(Debug, Clone, Default)]
 pub struct Observation {
+    /// Modeled boundary this snapshot was sampled at. Invariant violations are
+    /// only actionable when the retained log names that exact boundary.
+    pub origin: String,
     pub a_bridge_rows: Vec<BridgeObservation>,
     pub b_bridge_rows: Vec<BridgeObservation>,
     pub a_rejected_spawn_invocation_ids: Vec<String>,
@@ -165,7 +170,7 @@ impl Harness {
     /// Start the generated R5 runner with real transport. Do not subscribe to
     /// the modeled collections' live P2P topics: their arrival is controlled
     /// by the explicit exact-document push actions below.
-    pub async fn start_two_p2p_nodes() -> Result<Self> {
+    pub async fn start_two_p2p_nodes(scenario: &str) -> Result<Self> {
         super::init_tracing();
         let a = HarnessNode {
             id: "A".to_string(),
@@ -207,6 +212,8 @@ impl Harness {
         let mut harness = Self {
             a,
             b,
+            scenario_name: scenario.to_string(),
+            current_action: None,
             history: Vec::new(),
             generated_bridges: HashMap::new(),
             modeled_parent_request_ids: HashSet::new(),
@@ -219,12 +226,12 @@ impl Harness {
             observed_expired_children: HashSet::new(),
             observed_cancel_ack_events: Vec::new(),
         };
-        harness.record_observation().await?;
+        harness.record_observation("start").await?;
         Ok(harness)
     }
 
     pub async fn start_generated(scenario: &ModeledScenario) -> Result<Self> {
-        let mut harness = Self::start_two_p2p_nodes().await?;
+        let mut harness = Self::start_two_p2p_nodes(&scenario.name).await?;
         anyhow::ensure!(
             scenario.child_lease_secs > 0,
             "R5 modeled child lease must be positive"
@@ -1663,12 +1670,19 @@ impl Harness {
                 ModeledAction::CrashNode { node, .. } => Some(node.clone()),
                 _ => None,
             };
+            self.current_action = Some((index, action.op()));
+            tracing::info!(
+                scenario = %scenario.name,
+                action = index,
+                op = action.op(),
+                "R5 modeled action"
+            );
             self.apply_modeled_action(action, scenario)
                 .await
                 .with_context(|| {
                     format!("R5 scenario {} action {index}: {action:?}", scenario.name)
                 })?;
-            self.record_observation_after(crashed)
+            self.record_observation_after(crashed, "after_action")
                 .await
                 .with_context(|| {
                     format!(
@@ -1885,7 +1899,7 @@ impl Harness {
         // owned execution. The caller waits for that readiness before Crash;
         // sample immediately before *any* process teardown so the next
         // observation checks the entire abort + durable reopen boundary.
-        self.record_observation().await?;
+        self.record_observation("pre_crash").await?;
         if id == "B" {
             if let Some(agent) = self.generated_child_agent.take() {
                 agent.crash().await;
@@ -1943,12 +1957,31 @@ impl Harness {
         Ok(())
     }
 
-    async fn record_observation(&mut self) -> Result<()> {
-        self.record_observation_after(None).await
+    fn observation_origin(&self, stage: &str) -> String {
+        let scenario = if self.scenario_name.is_empty() {
+            "<unbound>"
+        } else {
+            self.scenario_name.as_str()
+        };
+        match self.current_action {
+            Some((index, op)) => {
+                format!("scenario={scenario} action={index} op={op} stage={stage}")
+            }
+            None => format!("scenario={scenario} action=<none> stage={stage}"),
+        }
     }
 
-    async fn record_observation_after(&mut self, crashed_node: Option<NodeId>) -> Result<()> {
+    async fn record_observation(&mut self, stage: &str) -> Result<()> {
+        self.record_observation_after(None, stage).await
+    }
+
+    async fn record_observation_after(
+        &mut self,
+        crashed_node: Option<NodeId>,
+        stage: &str,
+    ) -> Result<()> {
         self.history.push(Observation {
+            origin: self.observation_origin(stage),
             a_bridge_rows: load_bridge_rows(&self.a).await?,
             b_bridge_rows: load_bridge_rows(&self.b).await?,
             a_rejected_spawn_invocation_ids: load_rejected_spawn_invocation_ids(&self.a).await?,
@@ -2641,7 +2674,7 @@ pub async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> 
     const SESSION: &str = "r5-replicated-ordinal-conflict";
     const ORIGINAL: &str = "original";
     const TWIN: &str = "intruder";
-    let harness = Harness::start_two_p2p_nodes().await?;
+    let harness = Harness::start_two_p2p_nodes(SESSION).await?;
     let agent_did = crate::support::AGENT_DID;
     crate::support::create_agent_message_in_scope(
         harness.a.db.node.as_ref(),

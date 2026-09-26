@@ -2,6 +2,10 @@ use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
 
+async fn local_peer_id(node: &EmbeddedNode) -> Option<String> {
+    node.p2p()?.local_peer_id().await.ok()
+}
+
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -15,7 +19,10 @@ pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
             return addr.clone();
         }
         if Instant::now() >= deadline {
-            panic!("node never exposed a P2P listen address; last_addrs={addrs:?}");
+            panic!(
+                "node {:?} never exposed a P2P listen address; last_addrs={addrs:?}",
+                local_peer_id(node).await
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -34,7 +41,10 @@ pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
             return;
         }
         if Instant::now() >= deadline {
-            panic!("node never reported a connected peer; last_peers={peers:?}");
+            panic!(
+                "node {:?} never reported a connected peer; last_peers={peers:?}",
+                local_peer_id(node).await
+            );
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

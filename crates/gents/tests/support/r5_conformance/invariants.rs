@@ -21,19 +21,22 @@ pub fn assert_liveness_after_convergence(history: &[Observation]) {
         if let Some(child) = last.child_for_bridge(bridge) {
             if child.is_terminal() && bridge.lifecycle_state == "running" {
                 panic!(
-                    "durable child terminal did not settle onto bridge {}",
-                    bridge.tool_call_id
+                    "[{}] durable child terminal did not settle onto bridge {}",
+                    last.origin, bridge.tool_call_id
                 );
             }
         }
         if bridge.cancel_cascade_intent_at.is_some() {
             let Some(child) = last.child_for_bridge(bridge) else {
-                panic!("cancel intent {} has no child", bridge.tool_call_id);
+                panic!(
+                    "[{}] cancel intent {} has no child",
+                    last.origin, bridge.tool_call_id
+                );
             };
             if !(child.interrupt_requested_at.is_some() || child.is_terminal()) {
                 panic!(
-                    "cancel intent {} did not interrupt or absorb into terminal child",
-                    bridge.tool_call_id
+                    "[{}] cancel intent {} did not interrupt or absorb into terminal child",
+                    last.origin, bridge.tool_call_id
                 );
             }
         }
@@ -55,13 +58,15 @@ pub mod crash {
         match crashed {
             "A" => assert!(
                 o.a_process_generation > 0,
-                "Crash(A) left a_process_generation at 0 (no-op crash)"
+                "[{}] Crash(A) left a_process_generation at 0 (no-op crash)",
+                o.origin
             ),
             "B" => assert!(
                 o.b_process_generation > 0,
-                "Crash(B) left b_process_generation at 0 (no-op crash)"
+                "[{}] Crash(B) left b_process_generation at 0 (no-op crash)",
+                o.origin
             ),
-            other => panic!("unknown crashed node {other}"),
+            other => panic!("[{}] unknown crashed node {other}", o.origin),
         }
     }
 
@@ -77,19 +82,23 @@ pub mod crash {
             match crashed {
                 "A" => assert!(
                     curr.a_process_generation > prev.a_process_generation,
-                    "Crash(A) did not advance process generation ({} -> {}); \
-                     false-green no-op Crash is not allowed",
+                    "[{}] Crash(A) did not advance process generation ({} -> {}); \
+                     false-green no-op Crash is not allowed; previous sample [{}]",
+                    curr.origin,
                     prev.a_process_generation,
-                    curr.a_process_generation
+                    curr.a_process_generation,
+                    prev.origin
                 ),
                 "B" => assert!(
                     curr.b_process_generation > prev.b_process_generation,
-                    "Crash(B) did not advance process generation ({} -> {}); \
-                     false-green no-op Crash is not allowed",
+                    "[{}] Crash(B) did not advance process generation ({} -> {}); \
+                     false-green no-op Crash is not allowed; previous sample [{}]",
+                    curr.origin,
                     prev.b_process_generation,
-                    curr.b_process_generation
+                    curr.b_process_generation,
+                    prev.origin
                 ),
-                other => panic!("unknown crashed node {other}"),
+                other => panic!("[{}] unknown crashed node {other}", curr.origin),
             }
         }
         assert!(
@@ -118,7 +127,7 @@ pub mod crash {
                     &prev.b_child_requests,
                     &curr.b_child_requests,
                 ),
-                other => panic!("unknown crashed node {other}"),
+                other => panic!("[{}] unknown crashed node {other}", curr.origin),
             };
             for bridge in prev_bridges {
                 assert!(
@@ -127,8 +136,10 @@ pub mod crash {
                         .any(|b| b.tool_call_id == bridge.tool_call_id
                             && b.lifecycle_state == bridge.lifecycle_state
                             && b.child_request_id == bridge.child_request_id),
-                    "Crash({crashed}) lost durable bridge {}",
-                    bridge.tool_call_id
+                    "[{}] Crash({crashed}) lost durable bridge {}; before={bridge:?}, after={curr_bridges:?}; previous sample [{}]",
+                    curr.origin,
+                    bridge.tool_call_id,
+                    prev.origin
                 );
             }
             for child in prev_children {
@@ -137,8 +148,10 @@ pub mod crash {
                         .iter()
                         .any(|c| c.request_id == child.request_id
                             && c.lifecycle_state == child.lifecycle_state),
-                    "Crash({crashed}) lost durable child request {}: before={child:?}, after={curr_children:?}",
-                    child.request_id
+                    "[{}] Crash({crashed}) lost durable child request {}: before={child:?}, after={curr_children:?}; previous sample [{}]",
+                    curr.origin,
+                    child.request_id,
+                    prev.origin
                 );
             }
         }
@@ -155,7 +168,8 @@ pub mod completion {
                     bridge.lifecycle_state.as_str(),
                     "running" | "completed" | "failed" | "timedOut" | "cancelled"
                 ),
-                "bridge {} has invalid lifecycle_state {}",
+                "[{}] bridge {} has invalid lifecycle_state {}",
+                o.origin,
                 bridge.tool_call_id,
                 bridge.lifecycle_state
             );
@@ -168,7 +182,8 @@ pub mod completion {
                 let child = o.child_for_bridge(bridge);
                 assert!(
                     child.is_some_and(|child| child.is_terminal()),
-                    "bridge {} terminalized without durable child terminal",
+                    "[{}] bridge {} terminalized without durable child terminal",
+                    o.origin,
                     bridge.tool_call_id
                 );
             }
@@ -182,7 +197,8 @@ pub mod completion {
                     assert!(
                         bridge.lifecycle_state == "running"
                             || bridge.lifecycle_state == "cancelled",
-                        "interrupted child should map to cancelled bridge"
+                        "[{}] interrupted child should map to cancelled bridge: {bridge:?}",
+                        o.origin
                     );
                 }
             }
@@ -192,14 +208,22 @@ pub mod completion {
     pub fn notification_idempotent(o: &Observation) {
         let mut seen = std::collections::HashSet::new();
         for note in &o.subagent_notifications {
-            assert!(seen.insert(note.clone()), "duplicate notification {note}");
+            assert!(
+                seen.insert(note.clone()),
+                "[{}] duplicate notification {note}",
+                o.origin
+            );
         }
     }
 
     pub fn wakeup_coalesced(o: &Observation) {
         let mut seen = std::collections::HashSet::new();
         for key in &o.background_wakeup_keys {
-            assert!(seen.insert(key.clone()), "duplicate wakeup key {key}");
+            assert!(
+                seen.insert(key.clone()),
+                "[{}] duplicate wakeup key {key}",
+                o.origin
+            );
         }
     }
 }
@@ -212,7 +236,8 @@ pub mod cancel_propagation {
             if bridge.cancel_pending_remote_ack == Some(true) {
                 assert!(
                     bridge.cancel_cascade_intent_at.is_some(),
-                    "pending remote ack without durable cancel intent"
+                    "[{}] pending remote ack without durable cancel intent: {bridge:?}",
+                    o.origin
                 );
             }
         }
@@ -232,8 +257,8 @@ pub mod cancel_propagation {
                     && child.lifecycle_state != RequestLifecycleState::Interrupted;
                 assert!(
                     !naturally_terminal,
-                    "natural terminal child {} was interrupted (lifecycle_state={})",
-                    child.request_id, child.lifecycle_state
+                    "[{}] natural terminal child {} was interrupted (lifecycle_state={})",
+                    o.origin, child.request_id, child.lifecycle_state
                 );
             }
         }

@@ -204,3 +204,34 @@ pub enum ModeledAction {
     },
     Converge,
 }
+
+impl ModeledAction {
+    /// Failure-evidence label. It carries no modeled prompt, argument or
+    /// workspace bytes, so it is safe to stamp on every retained observation.
+    pub fn op(&self) -> &'static str {
+        match self {
+            Self::PairPrincipals { .. } => "PairPrincipals",
+            Self::PublishAcceptedBackgroundBridge { .. } => "PublishAcceptedBackgroundBridge",
+            Self::RejectSpawnInvocation { .. } => "RejectSpawnInvocation",
+            Self::ReplicateBridge { .. } => "ReplicateBridge",
+            Self::MaterializeChild { .. } => "MaterializeChild",
+            Self::BeginChild { .. } => "BeginChild",
+            Self::AwaitChildExpiry { .. } => "AwaitChildExpiry",
+            Self::ReplicateChild { .. } => "ReplicateChild",
+            Self::PublishChildTerminal { .. } => "PublishChildTerminal",
+            Self::ReplicateTerminalRequest { .. } => "ReplicateTerminalRequest",
+            Self::ReplicateOutputSegments { .. } => "ReplicateOutputSegments",
+            Self::ReplicateMessageHeader { .. } => "ReplicateMessageHeader",
+            Self::ObserveCompletion => "ObserveCompletion",
+            Self::CancelBridge { .. } => "CancelBridge",
+            Self::ReplicateCancelIntent { .. } => "ReplicateCancelIntent",
+            Self::MirrorCancel { .. } => "MirrorCancel",
+            Self::ObserveCancelAck => "ObserveCancelAck",
+            Self::RecoverBridges => "RecoverBridges",
+            Self::RecoverChildRequests { .. } => "RecoverChildRequests",
+            Self::CrashNode { .. } => "CrashNode",
+            Self::AdvanceClock { .. } => "AdvanceClock",
+            Self::Converge => "Converge",
+        }
+    }
+}

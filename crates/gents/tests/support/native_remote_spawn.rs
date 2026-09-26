@@ -110,10 +110,27 @@ pub async fn wait_for_child(node: &EmbeddedNode, request_id: &str) -> RemoteSpaw
         if let Some(row) = exactly_one(&response, "AgentRequest") {
             return row;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "remote child request was not materialized"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            // Bounded lifecycle evidence only: never dump provider payloads,
+            // prompts, tool arguments, or credentials into failure logs.
+            let evidence = node
+                .execute(&format!(
+                    r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, limit: 4) {{
+                    _docID request_id lifecycle_state failure_reason subagent_depth
+                    caused_by_parent_tool_call_id
+                }}
+                AgentToolCall(filter: {{ child_request_id: {{ _eq: "{request}" }} }}, limit: 4) {{
+                    _docID request_id tool_call_id lifecycle_state tool_failure_class
+                }}
+            }}"#
+                ))
+                .await;
+            panic!(
+                "remote child request {request_id} was not materialized: data={:?}, errors={:?}",
+                evidence.data, evidence.errors
+            );
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
