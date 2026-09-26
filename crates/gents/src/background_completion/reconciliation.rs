@@ -45,7 +45,6 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
                 filter: {{
                     _and: [
                         {{ lifecycle_state: {{ _eq: "running" }} }},
-                        {{ await_mode: {{ _eq: "background" }} }},
                         {{ child_request_id: {{ _ne: "" }} }},
                         {{ unclaimed_deadline_at: {{ _lt: "{now}" }} }}
                     ]
@@ -104,16 +103,22 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
                     parent_request_id: row.request_id,
                 });
             }
-            UnclaimedSpawnSettlement::AlreadySettled => {}
+            UnclaimedSpawnSettlement::AlreadySettled | UnclaimedSpawnSettlement::Unarmed(_) => {}
         }
     }
     Ok(outcomes)
 }
 
+#[derive(Debug)]
 pub(crate) enum UnclaimedSpawnSettlement {
     Linked,
     Abandoned,
+    /// The row is terminal (or gone): another writer settled it.
     AlreadySettled,
+    /// The row is still running but carries no due unclaimed bound (a mode
+    /// flip or a concurrent link cleared it): nothing to settle; the carried
+    /// bound is the row's current one.
+    Unarmed(Option<chrono::DateTime<Utc>>),
 }
 
 /// The one owner of an expired unclaimed-spawn deadline (Lean
@@ -131,8 +136,18 @@ pub(crate) async fn settle_unclaimed_spawn(
     else {
         return Ok(UnclaimedSpawnSettlement::AlreadySettled);
     };
+    // The row was selected on an expired deadline; a mode flip may have
+    // cleared the bound since (Lean `enabled`): then there is nothing to settle.
     if !lifecycle.is_running() {
         return Ok(UnclaimedSpawnSettlement::AlreadySettled);
+    }
+    if !lifecycle
+        .unclaimed_deadline_at
+        .is_some_and(|due| due <= Utc::now())
+    {
+        return Ok(UnclaimedSpawnSettlement::Unarmed(
+            lifecycle.unclaimed_deadline_at,
+        ));
     }
     if lifecycle.unobserved_child_fence().await?.is_none() {
         clear_unclaimed_deadline_at(node.as_ref(), bridge_doc_id).await?;
@@ -141,6 +156,8 @@ pub(crate) async fn settle_unclaimed_spawn(
     let payload = crate::background_tools::spawn_unclaimed_payload();
     Ok(if lifecycle.abandon_unclaimed_spawn(&payload).await? {
         UnclaimedSpawnSettlement::Abandoned
+    } else if lifecycle.is_running() {
+        UnclaimedSpawnSettlement::Unarmed(lifecycle.unclaimed_deadline_at)
     } else {
         UnclaimedSpawnSettlement::AlreadySettled
     })

@@ -638,6 +638,15 @@ async fn abandoned_spawn_lists_as_stopping_until_its_child_stops() {
     let session_id = "session-stopping";
     let hook = create_parent_hook(&db, "parent-stopping", session_id).await;
     spawn_unclaimed_background_child(&hook, "spawn-stopping").await;
+    // Give the bridge an expired unclaimed bound, as a bounded spawn has.
+    let response = db
+        .node
+        .execute(
+            r#"mutation { update_AgentToolCall(filter: { tool_call_id: { _eq: "model-spawn-stopping" } },
+                input: { unclaimed_deadline_at: "2020-01-01T00:00:00Z" }) { _docID } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), session_id, "model-spawn-stopping")
             .await
@@ -662,4 +671,62 @@ async fn abandoned_spawn_lists_as_stopping_until_its_child_stops() {
         terminal["entries"].as_array().unwrap().is_empty(),
         "{terminal}"
     );
+}
+
+#[tokio::test]
+async fn unconfirmed_foreground_spawn_returns_within_its_bound() {
+    // #1830: a foreground spawn whose child never materializes once blocked
+    // its parent's turn until the parent's own (24h) deadline.
+    let db = test_db("r4c-foreground-unconfirmed").await;
+    let agent_did = db.node_identity.did().to_string();
+    crate::support::fixtures::configure_subagent_behavior(
+        db.node.as_ref(),
+        &agent_did,
+        CHILD_BEHAVIOR_ID,
+        "r4c-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
+    crate::support::fixtures::configure_subagent_behavior_with_spawn_timeout(
+        db.node.as_ref(),
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4c-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
+        Some(1),
+    )
+    .await;
+    let hook = create_parent_hook(&db, "parent-foreground", "session-foreground").await;
+    let args = json!({
+        "name": CHILD_BEHAVIOR_ID,
+        "prompt": "never materialized",
+        "await_mode": "foreground"
+    })
+    .to_string();
+    let action = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        accepted_call(
+            &hook,
+            "spawn_subagent",
+            Some("model-spawn-foreground".to_string()),
+            "spawn-foreground",
+            &args,
+        ),
+    )
+    .await
+    .expect("foreground spawn must return within its unclaimed bound");
+    let result = skip_reason_json(action);
+    assert_eq!(result["failure_class"], "spawn_unclaimed", "{result}");
+    assert_eq!(result["retryable"], false, "{result}");
 }

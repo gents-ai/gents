@@ -24,7 +24,16 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("background called without started_at set"))?;
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_fragment = self.resupply_unclaimed_deadline_fragment();
+        let flip_fragment = Self::background_flip_unclaimed_fragment(
+            self.spawn_target_did.as_deref(),
+            self.agent_did(),
+        );
+        let drop_unclaimed_bound = !flip_fragment.is_empty();
+        let unclaimed_deadline_fragment = if drop_unclaimed_bound {
+            flip_fragment.to_owned()
+        } else {
+            self.resupply_unclaimed_deadline_fragment()
+        };
 
         let escaped_doc_id = escape_graphql_string(doc_id);
 
@@ -56,6 +65,9 @@ impl ToolCallLifecycle {
         }
 
         self.await_mode = AwaitMode::Background;
+        if drop_unclaimed_bound {
+            self.unclaimed_deadline_at = None;
+        }
         Ok(())
     }
 

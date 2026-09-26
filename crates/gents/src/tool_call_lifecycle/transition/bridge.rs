@@ -50,6 +50,7 @@ impl ToolCallLifecycle {
             cancel: None,
             remote_cancel_intent_at: None,
             completion_reason: None,
+            unclaimed_expired_by: None,
         };
         let updated = match presented {
             Some((rendered, presentation)) => {
@@ -166,6 +167,7 @@ impl ToolCallLifecycle {
             cancel: (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted),
             remote_cancel_intent_at: None,
             completion_reason: Some(completion_reason),
+            unclaimed_expired_by: None,
         };
         let updated = match presented {
             Some((rendered, presentation)) => {
@@ -203,18 +205,25 @@ impl ToolCallLifecycle {
     /// not already won its claim, so the same terminal write records the
     /// durable cancel intent its host mirrors onto the child's interrupt latch,
     /// and leaves the remote acknowledgement pending until the child is
-    /// observed terminal. Returns false when a concurrent writer settled first.
+    /// observed terminal. Returns false, writing nothing, when the row no
+    /// longer carries an expired unclaimed deadline (a mode flip cleared it)
+    /// or a concurrent writer settled first.
     pub(crate) async fn abandon_unclaimed_spawn(&mut self, result: &str) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "abandon_unclaimed_spawn")?;
         if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
         }
+        let now = chrono::Utc::now();
+        if !self.unclaimed_deadline_at.is_some_and(|due| due <= now) {
+            return Ok(false);
+        }
         let fields = super::super::delivery::TerminalFields {
             state: ToolCallState::Failed,
             failure: Some(FailureClass::SpawnUnclaimed),
             cancel: None,
-            remote_cancel_intent_at: Some(chrono::Utc::now()),
+            remote_cancel_intent_at: Some(now),
             completion_reason: Some("unclaimed_spawn_timeout"),
+            unclaimed_expired_by: Some(now),
         };
         let updated = self
             .terminalize_bridge_with_delivery(
@@ -225,6 +234,23 @@ impl ToolCallLifecycle {
             )
             .await?;
         if !updated {
+            let current = ToolCallLifecycle::load_by_doc_id(
+                self.node.clone(),
+                self.doc_id
+                    .as_deref()
+                    .context("abandon lifecycle missing physical identity")?,
+                &self.agent_did,
+                &self.session_id,
+                self.requester_did.as_deref(),
+            )
+            .await?
+            .context("abandoned spawn bridge row disappeared")?;
+            if current.state == ToolCallState::Running {
+                // The bound was cleared (or moved) under us: nothing to settle.
+                self.unclaimed_deadline_at = current.unclaimed_deadline_at;
+                self.await_mode = current.await_mode;
+                return Ok(false);
+            }
             self.sync_after_lost_running_compare("abandon_unclaimed_spawn")
                 .await?;
         }
@@ -437,6 +463,7 @@ impl ToolCallLifecycle {
             cancel: Some(cause),
             remote_cancel_intent_at,
             completion_reason: Some(completion_reason),
+            unclaimed_expired_by: None,
         };
         let raw = Self::CANCEL_DURING_RUN_OUTPUT;
         let updated = match presented {

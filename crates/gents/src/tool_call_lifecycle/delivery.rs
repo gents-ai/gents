@@ -35,6 +35,9 @@ pub(super) struct TerminalFields<'a> {
     pub cancel: Option<CancelCause>,
     pub remote_cancel_intent_at: Option<DateTime<Utc>>,
     pub completion_reason: Option<&'a str>,
+    /// Lean `SpawnClaimFence.enabled .expire`: the write applies only while
+    /// the row still carries an unclaimed deadline at or before this instant.
+    pub unclaimed_expired_by: Option<DateTime<Utc>>,
 }
 
 /// Physical scope for the one canonical output source owned by an executing
@@ -1703,6 +1706,13 @@ async fn terminalize_transaction(
         })
         .unwrap_or_default();
     let state = fields.state.as_str();
+    let unclaimed_filter = fields
+        .unclaimed_expired_by
+        .map(|by| {
+            let by = escape_graphql_string(&by.to_rfc3339_opts(SecondsFormat::Nanos, true));
+            format!(r#", unclaimed_deadline_at: {{ _le: "{by}" }}"#)
+        })
+        .unwrap_or_default();
     let spawned_filter = spawned_by_tool_call_doc_id
         .map(|parent| {
             format!(
@@ -1716,7 +1726,7 @@ async fn terminalize_transaction(
         session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
         message_sequence: {{ _eq: {message_sequence} }},
-        lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter} }}, input: {{
+        lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter}{unclaimed_filter} }}, input: {{
         status: "{}", lifecycle_state: "{state}", started_at: {started_at},
         deadline_at: "{deadline_at}", completed_at: "{completed_at}", latency_ms: {latency_ms}{failure}{cancel}{remote_handoff}
     }}) {{ _docID }} }}"#, escape_graphql_string(terminal_status))).await?;

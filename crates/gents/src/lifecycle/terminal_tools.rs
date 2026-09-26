@@ -99,7 +99,7 @@ pub(super) async fn account_tools_in_txn(
         AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
             _docID tool_call_key request_doc_id agent_did requester_did session_id
             message_sequence tool_call_id tool_name lifecycle_state await_mode
-            started_at child_request_id spawn_behavior_id spawned_by_tool_call_doc_id
+            started_at child_request_id spawn_target_did spawn_behavior_id spawned_by_tool_call_doc_id
         }}
     }}"#
         ))
@@ -241,7 +241,13 @@ pub(super) async fn account_tools_in_txn(
                 r#"lifecycle_state: "cancelled", cancel_cause: "interrupted", completed_at: "{timestamp}""#
             )
         } else if background_bridge {
-            format!(r#"await_mode: "background", stuck_since: "{timestamp}""#)
+            format!(
+                r#"await_mode: "background", stuck_since: "{timestamp}"{}"#,
+                crate::tool_call_lifecycle::ToolCallLifecycle::background_flip_unclaimed_fragment(
+                    tool.row.spawn_target_did.as_deref(),
+                    &tool.agent_did,
+                )
+            )
         } else if state == "running" && !completed {
             format!(r#"stuck_since: "{timestamp}""#)
         } else {

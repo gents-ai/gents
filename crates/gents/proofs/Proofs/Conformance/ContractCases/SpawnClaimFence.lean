@@ -8,6 +8,10 @@ def routeString : Route → String
   | .samePrincipal => "same_principal"
   | .crossPrincipal => "cross_principal"
 
+def fenceAwaitModeString : AwaitMode → String
+  | .foreground => "foreground"
+  | .background => "background"
+
 def bridgeString : Bridge → String
   | .awaiting => "awaiting"
   | .linked => "linked"
@@ -61,35 +65,37 @@ structure SpawnFenceStep where
 structure SpawnFenceCase where
   name : String
   route : String
+  awaitMode : String
   unclaimedDeadlineSet : Bool
   singleNodeReplayable : Bool
   steps : List SpawnFenceStep
   deriving Repr
 
-def traceSteps (route : Route) : World → List Action → List SpawnFenceStep
+def traceSteps (route : Route) (mode : AwaitMode) : World → List Action → List SpawnFenceStep
   | _, [] => []
   | w, action :: rest =>
-      let on := enabled route action
+      let on := enabled route mode action
       let next := if on then step w action else w
       { action := actionString action, enabled := on
       , staleHostView := action == .materialize && w.cancelIntent && !w.hostSeesIntent
       , bridge := bridgeString next.bridge, child := childString next.child
       , cancelIntent := next.cancelIntent, hostSeesIntent := next.hostSeesIntent
       , interruptLatched := next.interruptLatched, ackPending := next.ackPending }
-        :: traceSteps route next rest
+        :: traceSteps route mode next rest
 
-def traceFaithful (route : Route) : World → List Action → Bool
+def traceFaithful (route : Route) (mode : AwaitMode) : World → List Action → Bool
   | _, [] => true
   | w, action :: rest =>
-      let on := enabled route action
+      let on := enabled route mode action
       (!on || singleNodeFaithful w action) &&
-        traceFaithful route (if on then step w action else w) rest
+        traceFaithful route mode (if on then step w action else w) rest
 
-def spawnFenceCase (name : String) (route : Route) (actions : List Action) : SpawnFenceCase :=
-  { name, route := routeString route
-  , unclaimedDeadlineSet := unclaimedDeadlineApplies route
-  , singleNodeReplayable := traceFaithful route World.initial actions
-  , steps := traceSteps route World.initial actions }
+def spawnFenceCase (name : String) (route : Route) (actions : List Action)
+    (mode : AwaitMode := .background) : SpawnFenceCase :=
+  { name, route := routeString route, awaitMode := fenceAwaitModeString mode
+  , unclaimedDeadlineSet := unclaimedDeadlineApplies route mode
+  , singleNodeReplayable := traceFaithful route mode World.initial actions
+  , steps := traceSteps route mode World.initial actions }
 
 def spawnFenceCases : List SpawnFenceCase :=
   [ spawnFenceCase "local_late_claim_runs_attached" .samePrincipal
@@ -114,6 +120,10 @@ def spawnFenceCases : List SpawnFenceCase :=
       [.deadline, .expire, .replicateBridge, .materialize]
   , spawnFenceCase "local_deadline_fences_late_child" .samePrincipal
       [.deadline, .materialize, .publishChild, .replicateBridge, .claim, .observeAck]
+  , spawnFenceCase "local_foreground_unconfirmed_child_released" .samePrincipal
+      [.expire, .replicateBridge, .materialize] (mode := .foreground)
+  , spawnFenceCase "local_foreground_confirmed_child_links" .samePrincipal
+      [.materialize, .publishChild, .claim, .expire] (mode := .foreground)
   ]
 
 /-- Only the race whose claim beats the intent's replication needs two nodes;

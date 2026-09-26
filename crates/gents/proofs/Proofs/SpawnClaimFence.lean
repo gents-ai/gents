@@ -28,13 +28,21 @@ inductive Route where
   | crossPrincipal
   deriving DecidableEq, Repr
 
-/-- A same-principal child is materialized by this runtime's own subagent
-    source, so a queued child has not failed: its bridge keeps awaiting
-    materialization with no fixed unclaimed failure. Only a cross-principal
-    spawn waits on a peer that may never answer. -/
-def unclaimedDeadlineApplies : Route → Bool
-  | .samePrincipal => false
-  | .crossPrincipal => true
+inductive AwaitMode where
+  | foreground
+  | background
+  deriving DecidableEq, Repr
+
+/-- A background same-principal child is materialized by this runtime's own
+    subagent source, so a queued child has not failed: its bridge keeps
+    awaiting materialization with no fixed unclaimed failure. A cross-principal
+    spawn waits on a peer that may never answer. A foreground spawn blocks its
+    parent's turn, so on any route an unconfirmed child may not hold the
+    parent past the bound (#1830); the parent's own deadline is not one. -/
+def unclaimedDeadlineApplies : Route → AwaitMode → Bool
+  | _, .foreground => true
+  | .samePrincipal, .background => false
+  | .crossPrincipal, .background => true
 
 inductive Bridge where
   /-- Running; the parent has not observed the child. -/
@@ -155,15 +163,18 @@ def step (w : World) : Action → World
   | .observeAck =>
       if w.ackPending && w.child.terminal then { w with ackPending := false } else w
 
-/-- Unclaimed expiry is only enabled on routes that carry that deadline. -/
-def enabled (route : Route) : Action → Bool
-  | .expire => unclaimedDeadlineApplies route
+/-- Unclaimed expiry is only enabled on spawns that carry that deadline. A
+    mode flip re-evaluates it, so settlement re-checks the bound on the row it
+    writes: a bound cleared after selection makes the expiry a no-op. -/
+def enabled (route : Route) (mode : AwaitMode) : Action → Bool
+  | .expire => unclaimedDeadlineApplies route mode
   | _ => true
 
-inductive Reachable (route : Route) : World → Prop where
-  | initial : Reachable route World.initial
+inductive Reachable (route : Route) (mode : AwaitMode) : World → Prop where
+  | initial : Reachable route mode World.initial
   | step (w : World) (action : Action) :
-      Reachable route w → enabled route action = true → Reachable route (step w action)
+      Reachable route mode w → enabled route mode action = true →
+        Reachable route mode (step w action)
 
 /-- An orphan is a live child of a fenced bridge whose stop is no longer
     awaited. -/
@@ -200,7 +211,8 @@ theorem step_preserves_fenceInvariant (w : World) (action : Action)
   cases action <;> cases b <;> cases c <;> cases v <;> cases ci <;> cases hs <;>
     cases il <;> cases ap <;> decide
 
-theorem reachable_fenceInvariant (route : Route) (w : World) (h : Reachable route w) :
+theorem reachable_fenceInvariant (route : Route) (mode : AwaitMode) (w : World)
+    (h : Reachable route mode w) :
     fenceInvariant w = true := by
   induction h with
   | initial => decide
@@ -208,9 +220,9 @@ theorem reachable_fenceInvariant (route : Route) (w : World) (h : Reachable rout
 
 /-- A late materialization or claim never leaves a live child of a fenced
     bridge unsupervised: its stop is still awaited. -/
-theorem reachable_never_orphan (route : Route) (w : World) (h : Reachable route w) :
-    orphan w = false := by
-  have hf := reachable_fenceInvariant route w h
+theorem reachable_never_orphan (route : Route) (mode : AwaitMode) (w : World)
+    (h : Reachable route mode w) : orphan w = false := by
+  have hf := reachable_fenceInvariant route mode w h
   rcases w with ⟨b, c, v, ci, hs, il, ap⟩
   revert hf
   cases b <;> cases c <;> cases v <;> cases ci <;> cases hs <;> cases il <;>
@@ -245,9 +257,10 @@ theorem step_keeps_bridge (w : World) (action : Action)
     (step w action).bridge = w.bridge := by
   cases action <;> simp at h h' <;> simp only [step] <;> (try split_ifs) <;> rfl
 
-/-- A same-principal spawn is never abandoned by the unclaimed deadline. -/
-theorem same_principal_never_abandoned (w : World)
-    (h : Reachable .samePrincipal w) : w.bridge ≠ .abandoned := by
+/-- A same-principal background spawn is never abandoned by the unclaimed
+    deadline. -/
+theorem same_principal_background_never_abandoned (w : World)
+    (h : Reachable .samePrincipal .background w) : w.bridge ≠ .abandoned := by
   induction h with
   | initial => simp [World.initial]
   | step w action _ henabled ih =>
@@ -272,5 +285,56 @@ theorem expiry_keeps_live_child_unsettled (w : World) (hawait : w.bridge = .awai
   simp at hawait
   subst hawait
   cases v <;> simp [expire, deadline, fence]
+
+/-- Continuation from an already-reached world under a (possibly new) mode.
+    A mode flip re-evaluates `unclaimedDeadlineApplies` for the new mode. -/
+inductive ReachableFrom (route : Route) (mode : AwaitMode) (start : World) : World → Prop where
+  | refl : ReachableFrom route mode start start
+  | step (w : World) (action : Action) :
+      ReachableFrom route mode start w → enabled route mode action = true →
+        ReachableFrom route mode start (step w action)
+
+theorem same_principal_background_continuation_never_abandons (start w : World)
+    (hstart : start.bridge ≠ .abandoned)
+    (h : ReachableFrom .samePrincipal .background start w) : w.bridge ≠ .abandoned := by
+  induction h with
+  | refl => exact hstart
+  | step w action _ henabled ih =>
+      by_cases hd : action = .deadline
+      · subst hd
+        rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+        simp at ih
+        cases b <;> cases v <;> simp_all [step, deadline, fence]
+      · have hne : action ≠ .expire := by
+          intro hexp
+          subst hexp
+          simp [enabled, unclaimedDeadlineApplies] at henabled
+        rw [step_keeps_bridge w action hne hd]
+        exact ih
+
+/-- A same-principal foreground spawn that is backgrounded before its bound
+    abandoned it (explicitly, or by an interrupted parent retaining its awaited
+    child) drops the bound with the mode flip, so it is never abandoned after. -/
+theorem foreground_then_background_same_principal_never_abandoned (w0 w : World)
+    (_h0 : Reachable .samePrincipal .foreground w0) (hnot : w0.bridge ≠ .abandoned)
+    (h : ReachableFrom .samePrincipal .background w0 w) : w.bridge ≠ .abandoned :=
+  same_principal_background_continuation_never_abandons w0 w hnot h
+
+/-- A foreground spawn on any route carries the unclaimed bound: its parent's
+    turn is never held by a child that was never confirmed (#1830). -/
+theorem foreground_always_bounded (route : Route) :
+    unclaimedDeadlineApplies route .foreground = true := by
+  cases route <;> rfl
+
+/-- Once the bound expires on an unconfirmed foreground child the bridge is
+    settled, so the parent's blocked turn receives a result. -/
+theorem foreground_expiry_settles_unconfirmed (route : Route) (w : World)
+    (hawait : w.bridge = .awaiting) (hunseen : w.childVisible = false) :
+    enabled route .foreground .expire = true ∧
+      (step w .expire).bridge = .abandoned := by
+  rcases w with ⟨b, c, v, ci, hs, il, ap⟩
+  simp at hawait hunseen
+  subst hawait hunseen
+  cases route <;> simp [enabled, unclaimedDeadlineApplies, step, expire, fence]
 
 end SpawnClaimFence
