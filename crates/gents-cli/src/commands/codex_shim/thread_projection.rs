@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use super::caused_threads::{load_caused_thread, load_caused_threads_for_root_ids, CausedThread};
 use super::host_runtime::thread_git_info;
-use super::caused_threads::{load_caused_threads, load_caused_threads_for_root_ids, CausedThread};
 use super::ShimState;
 
 mod goal;
@@ -99,25 +99,7 @@ pub(super) async fn load_codex_thread(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<CodexThreadRecord>> {
-    // A wire thread ID has no principal/requester component. Validate child
-    // identities before choosing a root record with the same label.
-    let links = load_caused_threads(state).await?;
-    if state.is_thread_created(thread_id).await {
-        for link in links.iter().filter(|link| link.session_id == thread_id) {
-            anyhow::ensure!(
-                link.agent_did == state.agent_did.as_ref()
-                    && link.requester_did.as_deref() == Some(state.local_requester_did()),
-                "ambiguous Codex ephemeral/child thread label across canonical scopes: {thread_id}"
-            );
-        }
-    }
     if let Some((session, head)) = load_thread_state(state, thread_id).await? {
-        for link in links.iter().filter(|link| link.session_id == thread_id) {
-            anyhow::ensure!(
-                link.agent_did == session.agent_did && link.requester_did == session.requester_did,
-                "ambiguous Codex root/child thread label across canonical scopes: {thread_id}"
-            );
-        }
         return Ok(Some(
             assemble_record(state, thread_id, Some(session), head).await?,
         ));
@@ -133,24 +115,16 @@ pub(super) async fn load_codex_thread(
             .await?,
         ));
     }
-    let Some(link) = links.into_iter().find(|link| link.session_id == thread_id) else {
+    let Some(link) = load_caused_thread(state, thread_id).await? else {
         return Ok(None);
     };
     Ok(Some(assemble_subagent_record(state, link).await?))
 }
 
-pub(super) async fn root_thread_ids(state: &ShimState) -> Result<Vec<String>> {
-    let mut ids = list_scoped_sessions(state)
-        .await?
-        .into_iter()
-        .map(|session| session.session_id)
-        .collect::<Vec<_>>();
-    for session_id in state.created_thread_ids().await {
-        if !ids.contains(&session_id) {
-            ids.push(session_id);
-        }
-    }
-    Ok(ids)
+/// Whether `thread_id` is a Codex root thread of this shim.
+pub(super) async fn is_root_thread(state: &ShimState, thread_id: &str) -> Result<bool> {
+    Ok(state.is_thread_created(thread_id).await
+        || load_thread_state(state, thread_id).await?.is_some())
 }
 
 pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<String>> {

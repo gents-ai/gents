@@ -6,6 +6,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
+use super::super::caused_threads::CausedThread;
 use super::super::{trace, ConnectionState, ShimState, TurnStreamControl};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -370,6 +371,60 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
                 }),
             );
         }
+    }
+    Ok(())
+}
+
+/// Interrupt the active request of a caused thread in its own scope. Only
+/// that thread stops: the thread that caused it and any sessions it started
+/// keep running.
+pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
+    connection: &ConnectionState,
+    state: &ShimState,
+    thread: &CausedThread,
+    turn_id: &str,
+) -> Result<()> {
+    let rows = load_thread_request_rows(
+        state,
+        &thread.agent_did,
+        thread.requester_did.as_deref(),
+        &thread.session_id,
+    )
+    .await?;
+    let Some(active) = active_codex_turn_from_rows(&rows, None)? else {
+        cancel_stream_control(connection, &thread.session_id, turn_id).await;
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_no_active_turn",
+            json!({ "thread_id": thread.session_id, "requested_turn_id": turn_id }),
+        );
+        return Ok(());
+    };
+    cancel_stream_control(connection, &thread.session_id, &active.turn_id).await;
+    if let Err(error) = gents::interrupt_request_by_doc_id(
+        state.node.as_ref(),
+        &active.interrupt_request_doc_id,
+        &thread.agent_did,
+        thread.requester_did.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(
+            %error,
+            request_id = active.interrupt_request_id,
+            thread_id = thread.session_id,
+            "Codex shim failed to forward GENTS interrupt for a caused thread"
+        );
+    } else {
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_latch_succeeded",
+            json!({
+                "thread_id": thread.session_id,
+                "turn_id": active.turn_id,
+                "request_id": active.interrupt_request_id,
+            }),
+        );
     }
     Ok(())
 }

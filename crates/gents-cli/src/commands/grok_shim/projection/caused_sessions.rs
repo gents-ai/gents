@@ -20,7 +20,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{effective_context_window_tokens, nonempty};
-use crate::caused_sessions::{load_caused_sessions, CausedSession, SessionScope};
+use crate::caused_sessions::{
+    load_caused_session, load_caused_sessions, load_direct_caused_sessions, CausedSession,
+    SessionScope,
+};
 
 /// Ext request methods routed to this leaf by the ACP service.
 pub(crate) const SUBAGENT_GET_METHOD: &str = "x.ai/subagent/get";
@@ -69,7 +72,6 @@ pub(super) struct SubagentFinishedUpdate {
     pub child_session_id: String,
     pub status: SubagentFinishStatus,
     pub error: Option<String>,
-    pub output: Option<String>,
     pub tool_calls: u32,
     pub turns: u32,
     pub duration_ms: u64,
@@ -185,9 +187,6 @@ impl SubagentUpdate {
                 if let Some(error) = update.error.as_deref() {
                     payload["error"] = json!(error);
                 }
-                if let Some(output) = update.output.as_deref() {
-                    payload["output"] = json!(output);
-                }
                 payload
             }
         }
@@ -245,38 +244,12 @@ struct CauseRow {
     message_sequence: Option<i64>,
 }
 
-fn request_scope(request: &AgentRequestRow) -> Result<SessionScope> {
-    Ok(SessionScope {
-        agent_did: request
-            .agent_did
-            .clone()
-            .context("projected request omitted agent_did")?,
-        session_id: request
-            .session_id
-            .clone()
-            .context("projected request omitted session_id")?,
-        requester_did: request.requester_did.clone(),
-    })
-}
-
-/// Sessions whose first request was caused by this exact physical request.
+/// Sessions whose origin was caused by this exact physical request.
 pub(crate) async fn caused_by_request(
     node: &EmbeddedNode,
     request: &AgentRequestRow,
 ) -> Result<Vec<CausedSession>> {
-    let doc_id = request
-        .doc_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
-        .context("caused-session projection requires a physical request")?;
-    Ok(load_caused_sessions(node, &[request_scope(request)?])
-        .await?
-        .into_iter()
-        .filter(|session| {
-            session.depth == 1
-                && session.first.caused_by_parent_request_doc_id.as_deref() == Some(doc_id)
-        })
-        .collect())
+    load_direct_caused_sessions(node, request).await
 }
 
 /// Project the pager subagent lifecycle for the sessions caused by one
@@ -327,7 +300,6 @@ pub(super) async fn project_caused_sessions(
                     .as_deref()
                     .and_then(nonempty)
                     .map(ToOwned::to_owned),
-                output: None,
                 tool_calls: count(head.tools.len()),
                 turns: 1,
                 duration_ms: elapsed_millis(
@@ -366,9 +338,9 @@ pub(crate) async fn handle(
             requester_did: Some(principal.to_owned()),
         })
         .collect::<Vec<_>>();
-    let caused = load_caused_sessions(&node, &roots).await?;
     if method == SUBAGENT_LIST_RUNNING_METHOD {
-        let running = caused
+        let running = load_caused_sessions(&node, &roots)
+            .await?
             .into_iter()
             .filter(|session| !session.latest.is_terminal())
             .collect::<Vec<_>>();
@@ -389,10 +361,7 @@ pub(crate) async fn handle(
     let id = params["subagentId"]
         .as_str()
         .context("subagentId required")?;
-    let Some(session) = caused
-        .into_iter()
-        .find(|session| session.scope.session_id == id)
-    else {
+    let Some(session) = load_caused_session(&node, id, |scope| roots.contains(scope)).await? else {
         return Ok(json!({"snapshot": null}));
     };
     let activity = load_activity(&node, std::slice::from_ref(&session), None).await?;
@@ -416,10 +385,12 @@ async fn snapshot(
         .unwrap_or(0);
     let status = SubagentFinishStatus::of(latest)
         .map(SubagentFinishStatus::wire_name)
-        .unwrap_or_else(|| match latest.lifecycle_state.map(|state| state.as_str()) {
-            Some("pending" | "claimed") => "initializing",
-            _ => "running",
-        });
+        .unwrap_or_else(
+            || match latest.lifecycle_state.map(|state| state.as_str()) {
+                Some("pending" | "claimed") => "initializing",
+                _ => "running",
+            },
+        );
     let duration = if latest.is_terminal() || started == 0 {
         progress.duration_ms
     } else {
@@ -597,10 +568,13 @@ async fn load_activity(
             {causes}
         }}"#
     );
-    let response = graphql_with_transaction_retry(node, &query, "grok caused session activity").await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "grok caused session activity").await?;
     let mut activity = Activity::default();
     for (_, doc_id) in &heads {
-        activity.heads.insert(doc_id.clone(), HeadActivity::default());
+        activity
+            .heads
+            .insert(doc_id.clone(), HeadActivity::default());
     }
     for row in decode_rows::<UsageRow>(&response, "InferenceCall")? {
         if let Some(head) = activity.heads.get_mut(&row.request_doc_id) {
@@ -662,7 +636,11 @@ fn progress_update(
 ) -> SubagentProgressUpdate {
     let context_window_tokens = effective_context_window_tokens(context_window_tokens);
     let mut tools_used = Vec::<String>::new();
-    for name in head.tools.iter().filter_map(|(name, _)| name.as_deref().and_then(nonempty)) {
+    for name in head
+        .tools
+        .iter()
+        .filter_map(|(name, _)| name.as_deref().and_then(nonempty))
+    {
         if !tools_used.iter().any(|seen| seen == name) {
             tools_used.push(name.to_string());
         }
@@ -792,7 +770,11 @@ mod tests {
             ("pending", None),
             ("processing", None),
         ] {
-            assert_eq!(SubagentFinishStatus::of(&session(state).latest), expected, "{state}");
+            assert_eq!(
+                SubagentFinishStatus::of(&session(state).latest),
+                expected,
+                "{state}"
+            );
         }
     }
 
@@ -837,7 +819,6 @@ mod tests {
             child_session_id: "child-session".into(),
             status: SubagentFinishStatus::Failed,
             error: Some("boom".into()),
-            output: None,
             tool_calls: 0,
             turns: 1,
             duration_ms: 0,

@@ -5,7 +5,7 @@ use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
-use super::caused_threads::{load_caused_threads_for_root, CausedThread, CausedThreadUpdateFilter};
+use super::caused_threads::{CausedThread, CausedThreadUpdateFilter};
 use super::progress::timestamp_millis;
 use super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
@@ -53,22 +53,19 @@ pub(super) async fn ensure_loaded_subagent_stream(
 async fn watch_loaded_subagent_thread(
     connection: &ConnectionState,
     state: &ShimState,
-    initial_link: CausedThread,
+    mut link: CausedThread,
     baseline_turn: Option<codex::Turn>,
 ) -> Result<()> {
-    let child_thread_id = initial_link.session_id.clone();
-    let root_session_id = initial_link.root_session_id.clone();
-    let mut projected_request_id = initial_link.latest_request_id.clone();
-    if initial_link
-        .client_projection
-        .is_some_and(|head| head.is_active())
-    {
+    let child_thread_id = link.session_id.clone();
+    let root_session_id = link.root_session_id.clone();
+    let mut projected_request_id = link.latest_request_id.clone();
+    if link.client_projection.is_some_and(|head| head.is_active()) {
         let announce_turn = baseline_turn.is_none();
         let options = baseline_turn.map_or_else(
             || TurnStreamOptions::fresh_subagent(root_session_id.clone()),
             |turn| TurnStreamOptions::resumed_subagent(root_session_id.clone(), turn),
         );
-        project_child_request(connection, state, &initial_link, options, announce_turn).await?;
+        project_child_request(connection, state, &link, options, announce_turn).await?;
     }
 
     let mut updates = state.node.subscribe_updates();
@@ -109,13 +106,7 @@ async fn watch_loaded_subagent_thread(
             }
         }
 
-        let Some(link) = load_caused_threads_for_root(state, &root_session_id)
-            .await?
-            .into_iter()
-            .find(|link| link.session_id == child_thread_id)
-        else {
-            return Ok(());
-        };
+        link.refresh(state).await?;
         if link.latest_request_id == projected_request_id {
             continue;
         }

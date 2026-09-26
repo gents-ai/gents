@@ -209,9 +209,10 @@ progress DTO (`duration_ms`, `turn_count`, `tool_call_count`,
 [0, 100], `tools_used`, `error_count`), rejecting legacy camelCase names
 and unknown extras. An inline fixture self-test calls these same real
 validators before the live envelopes are trusted. Client request/result
-methods (`x.ai/subagent/get`, `x.ai/subagent/cancel`,
-`x.ai/subagent/list_running`) keep their separately audited camelCase DTO
-shapes. The worker target `port-live-worker` is
+methods (`x.ai/subagent/get`, `x.ai/subagent/list_running`) keep their
+separately audited camelCase DTO shapes; `x.ai/subagent/cancel` is not
+served, because cancelling a started session is `cancel_process` on its one
+request. The worker target `port-live-worker` is
 no-shell/no-file/no-subagent; its parent target `port-live-tools` starts it
 with `create_session`, and the worker's result returns to the parent session
 as a completion notification.

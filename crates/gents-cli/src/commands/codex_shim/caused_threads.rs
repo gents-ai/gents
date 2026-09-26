@@ -2,10 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use gents_protocol::client_protocol::{project_persisted_attempt, ClientHeadProjection};
+use gents_protocol::row::AgentRequestRow;
 
 use super::bound_behavior::load_bound_model_selection_id;
 use super::ShimState;
-use crate::caused_sessions::{load_caused_sessions, CausedSession, SessionScope};
+use crate::caused_sessions::{
+    load_caused_session, load_caused_sessions, load_session_head, CausedSession, SessionScope,
+};
 
 const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
     "AgentRequest",
@@ -81,16 +84,55 @@ pub(super) struct CausedThread {
     pub(super) latest_request_created_at: Option<String>,
 }
 
-pub(super) async fn load_caused_threads(state: &ShimState) -> Result<Vec<CausedThread>> {
-    let roots = super::thread_projection::root_thread_ids(state).await?;
-    load_caused_threads_for_root_ids(state, &roots).await
+/// Resolve one wire thread ID to the caused thread it names, when its
+/// causal chain reaches a Codex root thread.
+pub(super) async fn load_caused_thread(
+    state: &ShimState,
+    thread_id: &str,
+) -> Result<Option<CausedThread>> {
+    let Some(session) = load_caused_session(&state.node, thread_id, |scope| {
+        scope.agent_did == state.agent_did.as_ref()
+            && scope.requester_did.as_deref() == Some(state.local_requester_did())
+    })
+    .await?
+    else {
+        return Ok(None);
+    };
+    if !super::thread_projection::is_root_thread(state, &session.root_session_id).await? {
+        return Ok(None);
+    }
+    let model = bound_model(state, &session.scope.agent_did, &session.behavior_id).await;
+    Ok(Some(caused_thread(session, model)))
 }
 
-pub(super) async fn load_caused_threads_for_root(
-    state: &ShimState,
-    root_session_id: &str,
-) -> Result<Vec<CausedThread>> {
-    load_caused_threads_for_root_ids(state, &[root_session_id.to_string()]).await
+impl CausedThread {
+    /// Re-read this thread's latest request; its origin and parent are fixed.
+    pub(super) async fn refresh(&mut self, state: &ShimState) -> Result<()> {
+        let scope = SessionScope {
+            agent_did: self.agent_did.clone(),
+            session_id: self.session_id.clone(),
+            requester_did: self.requester_did.clone(),
+        };
+        if let Some(latest) = load_session_head(&state.node, &scope).await? {
+            self.apply_latest(&latest);
+        }
+        Ok(())
+    }
+
+    fn apply_latest(&mut self, latest: &AgentRequestRow) {
+        self.client_projection = project_persisted_attempt(
+            latest
+                .lifecycle_state
+                .map(|state| state.as_str())
+                .unwrap_or(""),
+            nonempty(latest.superseded_by_request.as_deref()).is_some(),
+        );
+        self.failure_reason = nonempty(latest.failure_reason.as_deref()).map(ToOwned::to_owned);
+        self.latest_request_id = latest.request_id.clone();
+        self.latest_request_doc_id = latest.doc_id.clone().unwrap_or_default();
+        self.latest_request_content = latest.content.clone().unwrap_or_default();
+        self.latest_request_created_at = latest.created_at.clone();
+    }
 }
 
 pub(super) async fn load_caused_threads_for_root_ids(
@@ -134,18 +176,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
         labels.insert(session.scope.session_id.clone(), session.scope.clone());
         let key = (session.scope.agent_did.clone(), session.behavior_id.clone());
         if !models.contains_key(&key) {
-            let model = match load_bound_model_selection_id(&state.node, &key.0, &key.1).await {
-                Ok(model) => Some(model),
-                Err(error) => {
-                    tracing::debug!(
-                        error = format!("{error:#}"),
-                        agent_did = key.0,
-                        behavior_id = key.1,
-                        "Codex caused thread has no locally bound model"
-                    );
-                    None
-                }
-            };
+            let model = bound_model(state, &key.0, &key.1).await;
             models.insert(key.clone(), model);
         }
         let model = models.get(&key).cloned().flatten();
@@ -154,9 +185,23 @@ pub(super) async fn load_caused_threads_for_root_ids(
     Ok(threads)
 }
 
+async fn bound_model(state: &ShimState, agent_did: &str, behavior_id: &str) -> Option<String> {
+    match load_bound_model_selection_id(&state.node, agent_did, behavior_id).await {
+        Ok(model) => Some(model),
+        Err(error) => {
+            tracing::debug!(
+                error = format!("{error:#}"),
+                agent_did,
+                behavior_id,
+                "Codex caused thread has no locally bound model"
+            );
+            None
+        }
+    }
+}
+
 fn caused_thread(session: CausedSession, model: Option<String>) -> CausedThread {
-    let latest = &session.latest;
-    CausedThread {
+    let mut thread = CausedThread {
         session_id: session.scope.session_id.clone(),
         agent_did: session.scope.agent_did.clone(),
         requester_did: session.scope.requester_did.clone(),
@@ -166,20 +211,16 @@ fn caused_thread(session: CausedSession, model: Option<String>) -> CausedThread 
         root_session_id: session.root_session_id.clone(),
         depth: session.depth,
         model,
-        client_projection: project_persisted_attempt(
-            latest
-                .lifecycle_state
-                .map(|state| state.as_str())
-                .unwrap_or(""),
-            nonempty(latest.superseded_by_request.as_deref()).is_some(),
-        ),
-        failure_reason: nonempty(latest.failure_reason.as_deref()).map(ToOwned::to_owned),
+        client_projection: None,
+        failure_reason: None,
         created_at: session.first.created_at.clone(),
-        latest_request_id: latest.request_id.clone(),
-        latest_request_doc_id: latest.doc_id.clone().unwrap_or_default(),
-        latest_request_content: latest.content.clone().unwrap_or_default(),
-        latest_request_created_at: latest.created_at.clone(),
-    }
+        latest_request_id: String::new(),
+        latest_request_doc_id: String::new(),
+        latest_request_content: String::new(),
+        latest_request_created_at: None,
+    };
+    thread.apply_latest(&session.latest);
+    thread
 }
 
 fn nonempty(value: Option<&str>) -> Option<&str> {

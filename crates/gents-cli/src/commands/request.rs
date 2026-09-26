@@ -292,16 +292,20 @@ async fn load_request_show_snapshot(
     .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
-    let caused_response = post_graphql(
-        graphql,
-        &request_show_caused_requests_query(&canonical_request)?,
+    let request_doc_id = canonical_request
+        .doc_id
+        .clone()
+        .context("request show missing physical identity")?;
+    let child_requests = crate::caused_sessions::load_session_origins(
+        crate::caused_sessions::LineageReader::Graphql(graphql),
+        &[request_doc_id],
+        "",
     )
     .await
-    .with_context(|| format!("loading requests caused by {request_id}"))?;
-    let child_requests = value_array(&caused_response, "/data/AgentRequest")
-        .iter()
-        .map(child_request_view)
-        .collect::<Vec<_>>();
+    .with_context(|| format!("loading sessions started by {request_id}"))?
+    .iter()
+    .map(child_request_view)
+    .collect::<Vec<_>>();
 
     let request_terminal = canonical_request.is_terminal();
     let request_agent_did = canonical_request.agent_did.unwrap_or_default();
@@ -511,30 +515,6 @@ fn request_show_tool_calls_query(
                 order: {{ started_at: ASC }}
             ) {{
                 {fields}
-            }}
-        }}"#,
-        request_doc_id = escape_graphql_string(request_doc_id),
-    ))
-}
-
-fn request_show_caused_requests_query(request: &AgentRequestRow) -> Result<String> {
-    let request_doc_id = request
-        .doc_id
-        .as_deref()
-        .context("request show missing physical identity")?;
-    Ok(format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{request_doc_id}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                agent_did
-                session_id
-                behavior_id
-                lifecycle_state
-                created_at
-                caused_by_parent_tool_call_id
             }}
         }}"#,
         request_doc_id = escape_graphql_string(request_doc_id),

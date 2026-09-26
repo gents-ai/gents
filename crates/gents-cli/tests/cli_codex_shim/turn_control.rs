@@ -545,3 +545,145 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-codex-shim-caused-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+
+    let server_port = allocate_port()?;
+    let graphql = graphql_url(server_port);
+    let agent_name = format!("cli-codex-shim-caused-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-poll-ms",
+            "100",
+            "--codex-shim-timeout-secs",
+            "60",
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
+
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+    let thread_id = start_thread(&mut ws, &home_dir).await?;
+
+    let prompt = format!("start caused work {}", Uuid::new_v4().simple());
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnStart {
+            request_id: request_id(230),
+            params: codex::TurnStartParams {
+                thread_id: thread_id.clone(),
+                input: vec![codex::UserInput::Text {
+                    text: prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(230)).await?;
+    let (parent_request_id, session_id, behavior_id) =
+        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    assert_eq!(session_id, thread_id);
+
+    let (caused_request_id, caused_thread_id) =
+        seed_caused_running_request(&graphql, &parent_request_id, &behavior_id).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::TurnInterrupt {
+            request_id: request_id(231),
+            params: codex::TurnInterruptParams {
+                thread_id: caused_thread_id.clone(),
+                turn_id: caused_request_id.clone(),
+            },
+        },
+    )
+    .await?;
+    let _: codex::TurnInterruptResponse = tokio::time::timeout(
+        Duration::from_secs(15),
+        read_typed_response(&mut ws, request_id(231)),
+    )
+    .await
+    .context("timed out waiting for the caused-thread interrupt response")??;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _in: ["{}", "{}"] }} }}) {{ request_id interrupt_requested_at lifecycle_state }} }}"#,
+                escape_graphql_string(&caused_request_id),
+                escape_graphql_string(&parent_request_id),
+            ),
+        )
+        .await?;
+        let rows = response
+            .pointer("/data/AgentRequest")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let marked = |id: &str| {
+            rows.iter().any(|row| {
+                row["request_id"] == id
+                    && (row["interrupt_requested_at"]
+                        .as_str()
+                        .is_some_and(|at| !at.is_empty())
+                        || row["lifecycle_state"] == "interrupted")
+            })
+        };
+        if marked(&caused_request_id) {
+            assert!(
+                !marked(&parent_request_id),
+                "interrupting a caused thread must not interrupt the thread that caused it"
+            );
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "caused thread's own request was never interrupted: {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}

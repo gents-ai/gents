@@ -659,3 +659,52 @@ pub(super) async fn seed_background_completion_wake(
     .await?;
     Ok(request_id)
 }
+
+/// Seed the running first request of a session caused by `parent_request_id`,
+/// under the parent's principal and behavior. Returns `(request_id, session_id)`.
+pub(super) async fn seed_caused_running_request(
+    graphql: &str,
+    parent_request_id: &str,
+    behavior_id: &str,
+) -> Result<(String, String)> {
+    let (parent_doc_id, agent_did, requester_did) =
+        exact_request_binding(graphql, parent_request_id).await?;
+    let request_id = Uuid::new_v4().to_string();
+    let session_id = Uuid::new_v4().to_string();
+    let requester_field = requester_did
+        .as_deref()
+        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_default();
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                purpose: "normal",
+                request_id: "{request_id}",
+                agent_did: "{agent_did}",
+                {requester_field}
+                behavior_id: "{behavior_id}",
+                session_id: "{session_id}",
+                caused_by_parent_request_id: "{parent_request_id}",
+                caused_by_parent_request_doc_id: "{parent_doc_id}",
+                caused_by_parent_tool_call_id: "codex-caused-interrupt",
+                content: "caused work",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "interactive",
+                failure_reason: "",
+                created_at: "{now}",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#,
+        request_id = escape_graphql_string(&request_id),
+        agent_did = escape_graphql_string(&agent_did),
+        behavior_id = escape_graphql_string(behavior_id),
+        session_id = escape_graphql_string(&session_id),
+        parent_request_id = escape_graphql_string(parent_request_id),
+        parent_doc_id = escape_graphql_string(&parent_doc_id),
+        now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+    );
+    graphql_query(graphql, &mutation).await?;
+    Ok((request_id, session_id))
+}

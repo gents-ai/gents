@@ -2,10 +2,12 @@ use anyhow::Result;
 use gents_codex_protocol as codex;
 use serde_json::json;
 
-use super::super::protocol::{send_error, send_result};
+use super::super::protocol::send_result;
 use super::super::thread_projection::load_codex_thread;
-use super::super::turn::{interrupt_active_turn, start_gents_turn, steer_gents_turn};
-use super::super::{trace, ConnectionState, Outbound, ShimState, JSONRPC_INVALID_PARAMS};
+use super::super::turn::{
+    interrupt_active_turn, interrupt_caused_thread_turn, start_gents_turn, steer_gents_turn,
+};
+use super::super::{trace, ConnectionState, Outbound, ShimState};
 
 pub(super) async fn handle_turn_request(
     connection: &ConnectionState,
@@ -40,19 +42,9 @@ pub(super) async fn handle_turn_request(
         codex::ClientRequest::TurnInterrupt {
             request_id, params, ..
         } => {
-            if load_codex_thread(state, &params.thread_id)
+            let caused = load_codex_thread(state, &params.thread_id)
                 .await?
-                .is_some_and(|record| record.is_subagent())
-            {
-                return send_error(
-                    outbound,
-                    request_id,
-                    JSONRPC_INVALID_PARAMS,
-                    "linked GENTS subagent threads are read-only; interrupt them from the parent thread"
-                        .to_string(),
-                )
-                .await;
-            }
+                .and_then(|record| record.subagent);
             trace::shim_event_fields(
                 &state.trace_path,
                 "turn_interrupt_received",
@@ -62,7 +54,16 @@ pub(super) async fn handle_turn_request(
                     "requested_turn_id": params.turn_id,
                 }),
             );
-            interrupt_active_turn(connection, state, &params.thread_id, &params.turn_id).await?;
+            match caused {
+                Some(thread) => {
+                    interrupt_caused_thread_turn(connection, state, &thread, &params.turn_id)
+                        .await?
+                }
+                None => {
+                    interrupt_active_turn(connection, state, &params.thread_id, &params.turn_id)
+                        .await?
+                }
+            }
             let result = send_result(
                 outbound,
                 request_id.clone(),

@@ -6,10 +6,10 @@ use anyhow::Result;
 use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
-pub(super) use active::interrupt_active_turn;
+pub(super) use active::{interrupt_active_turn, interrupt_caused_thread_turn};
 
-use active::{cancel_abandoned_steering_request, load_active_codex_turn};
 pub(super) use active::install_stream_control;
+use active::{cancel_abandoned_steering_request, load_active_codex_turn};
 pub(super) use stream::{stream_gents_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;
 
@@ -42,7 +42,7 @@ pub(super) async fn start_gents_turn(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "linked GENTS subagent threads are read-only; steer them from the parent thread"
+            "GENTS sub-agent threads accept no user input; the session that started them messages them with send_message"
                 .to_string(),
         )
         .await;
@@ -200,7 +200,7 @@ pub(super) async fn steer_gents_turn(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "linked GENTS subagent threads are read-only; steer them from the parent thread"
+            "GENTS sub-agent threads accept no user input; the session that started them messages them with send_message"
                 .to_string(),
         )
         .await;
@@ -253,7 +253,8 @@ pub(super) async fn steer_gents_turn(
 
     let turn_id = active_turn.turn_id.clone();
     let queued_after_request_id = active_turn.current_request_id.clone();
-    let request_input = codex_queued_user_input(&cwd, &queued_after_request_id, &selected_skill_ids);
+    let request_input =
+        codex_queued_user_input(&cwd, &queued_after_request_id, &selected_skill_ids);
     let submitted = match gents::enqueue_local_steering_request(
         state.node.as_ref(),
         &active_turn.current_request_id,
