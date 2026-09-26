@@ -88,7 +88,6 @@ impl<H> ResponsesNormalizingHttpClient<H> {
 fn normalize_responses_body(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     crate::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
-    gents_loop::provider_patches::request_encrypted_reasoning_when_stateless(&mut value);
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 

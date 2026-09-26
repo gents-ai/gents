@@ -486,7 +486,7 @@ async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
 }
 
 #[tokio::test]
-async fn openai_responses_wire_body_without_effort_requests_encrypted_reasoning_when_stateless() {
+async fn openai_responses_wire_body_never_adds_encrypted_reasoning_even_when_stateless() {
     let mut request = core_request("openai-visible reasoning");
     request.additional_params = Some(serde_json::json!({ "store": false }));
     let counter = ProviderInputCounter::new(
@@ -503,7 +503,7 @@ async fn openai_responses_wire_body_without_effort_requests_encrypted_reasoning_
     assert_eq!(projected_body, body);
     assert_eq!(body["store"], false);
     assert!(body.get("reasoning").is_none());
-    assert!(requests_encrypted_reasoning(&body), "{body}");
+    assert!(!requests_encrypted_reasoning(&body), "{body}");
 }
 
 #[tokio::test]

@@ -69,10 +69,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
-- Stateless (`store:false`) Responses requests to xAI/Grok, ChatGPT Codex and
-  OpenAI-compatible endpoints now always request
-  `include: ["reasoning.encrypted_content"]`, even with no reasoning effort
-  configured, so replayed reasoning resolves without server-side storage (#1862).
+- Stateless (`store:false`) Responses requests to xAI/Grok and ChatGPT Codex
+  now always request `include: ["reasoning.encrypted_content"]`, even with no
+  reasoning effort configured, so replayed reasoning resolves without
+  server-side storage (#1862).
 - Desktop onboarding explains what Gents keeps for you (a record of every step,
   so work can be reviewed and resumed) instead of saying every step is a
   document. After a subscription sign-in the next button reads "Find models"

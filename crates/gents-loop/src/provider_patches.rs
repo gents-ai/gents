@@ -123,8 +123,9 @@ pub const ENCRYPTED_REASONING_INCLUDE: &str = "reasoning.encrypted_content";
 /// A `store:false` Responses server keeps no reasoning items, so replayed
 /// reasoning is only resolvable from the `encrypted_content` the previous
 /// response returned, and the server returns it only when `include` asks,
-/// whether or not the request sets `reasoning`. Stored requests are left
-/// alone: some non-reasoning models reject encrypted reasoning content.
+/// whether or not the request sets `reasoning`. Only reasoning-model
+/// transports (xAI, ChatGPT Codex) may call this: OpenAI rejects the include
+/// for non-reasoning models (gpt-4o, gpt-4.1) with a 400.
 pub fn request_encrypted_reasoning_when_stateless(value: &mut Value) -> bool {
     if value.get("store") != Some(&Value::Bool(false)) {
         return false;
