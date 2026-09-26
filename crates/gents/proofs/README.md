@@ -12,16 +12,12 @@ joins and their limits, not a universal application-correctness theorem.
 Retention and existing-install upgrade behavior remain product boundaries; no
 garbage collector, migration conversion or data wipe is introduced here.
 
-The waiting-parent scheduler repair now composes `Execution/WorkerCapacity`
-with `SessionComposition.Trace`. It proves bounded/disjoint active and parked
-tickets, exact-generation reacquisition, and authorized fresh-child and
-earlier-request existing-child waits, with a capacity-one yield/child/resume
-witness and model-derived conformance cases. The native local worker retains
-parked continuations while children run; capacity-one slot and database-backed
-owner-resume tests exercise the integration. The resource-case adapter does not
-exercise every semantic refusal, and neither the model nor these tests prove
-fair scheduling, bounded progress, or continuation survival across host-process
-loss.
+`Execution/WorkerCapacity` composes local worker capacity with
+`SessionComposition.Trace`: acquire respects the bound, release frees it, and
+the application trace cannot spend or manufacture a ticket. No request parks a
+worker while waiting on another session, because `create_session` and
+`send_message` never block their caller. The model does not prove fair
+scheduling or bounded progress.
 
 Branch `feat/1571-canonical-transcript-lean` targets
 `feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
@@ -34,8 +30,8 @@ presentation windows, conservative recovery text, and exact terminal selection.
 `Execution` composes these facts with the lease and transcript owners; producer
 acceptance publishes closure, header and pending tool intent atomically before
 dispatch. Recovery covers all unresolved provider sources before swapping the
-generation. `Execution/ToolDelivery` applies the existing tool lifecycle and
-bridge transitions to that same world, including partial results wrapped in
+generation. `Execution/ToolDelivery` applies the existing tool lifecycle
+transitions to that same world, including partial results wrapped in
 complete notifications. `ToolDelivery` is now only the source-validation kernel;
 it has no independent world, delivery flag or sequence allocator.
 
@@ -76,10 +72,10 @@ Usage belongs to `InferenceCall` and the existing aggregate-budget owner:
 retry proofs preserve accounted usage but do not prove provider reporting or
 exactly-once ingestion of those reports.
 
-Remote subagents retain argument-only disclosure: the existing addressed tool-call
-document carries one immutable validated argument copy. Its source reference is
-provenance, not permission to hydrate a multi-stream parent document. Local calls
-use canonical arguments without that copy. `Delegation` models this boundary.
+Sessions started by `create_session`/`send_message` carry no copied arguments
+or delegated workspace: the started request is materialized by its own owner
+under the target's behavior, and its `caused_by_parent_*` lineage is provenance
+only, never a hydration root.
 
 Lean conformance-source adapters change with their owners; external fixture
 regeneration and native bridge implementation belong to the next PR. Historical
@@ -106,7 +102,7 @@ authored publication and preserves the actual terminal lifecycle outcome.
 | Join | Shared owner and checked guarantee |
 | --- | --- |
 | Lease → publication → dispatch | `Execution/Gate` applies operations to the current gate-held world. Publication installs the exact physical tool reservations before dispatch. Output is not renewal evidence. |
-| Request → native/child tool → transcript | `Execution/ToolDelivery` applies existing lifecycle/bridge transitions to `Execution.World`; there is no second transcript allocator. A running background invocation receipt is distinct from a later ordinary completion notification. |
+| Request → tool → transcript | `Execution/ToolDelivery` applies existing lifecycle transitions to `Execution.World`; there is no second transcript allocator. A running background invocation receipt is distinct from a later ordinary completion notification. |
 | Recovery/revocation → tool effects | Generation swap cancels exact pending calls and records running-call handoff without pretending a process stopped. Policy revocation preserves corrupt bytes and uses structural ownership, not successful reconstruction, to account for tools. |
 | Notification → Goal/session queue | `Execution/BackgroundContinuation` atomically publishes the canonical ordinary notification and its queue decision. The notification belongs to the exact physical wake request, not its logical ID; Goal-owned input-only delivery stays parent-bound. `BackgroundGate` carries both existing owners under the same local gate. |
 | Queue → physical claim → terminal acknowledgement | `Execution/Handover` invokes the actual queue and lease transitions, binds logical queue identity to the authenticated physical request and exact requester scope, preserves session history and earlier tools, and derives wake snapshots at the canonical claim cutoff. Failed work releases its claim without acknowledging input. |
@@ -127,7 +123,7 @@ not another stored column. Where the current SDL permits a field such as tool
 name to change, native replay must read its genesis/accepted-header provenance;
 the current mutable value is not proof of the original operation.
 
-The older `CrossMachineComposed`/bridge theorems retain their stated coherence
+The older `CrossMachineComposed` theorems retain their stated coherence
 premises and domains. They are not silently promoted into universal facts about
 the richer shared world: independent background deadlines and eventual host
 acknowledgements still need the specified native refinement. Likewise,
@@ -401,8 +397,9 @@ The proofs are strongest where the runtime is a state machine:
 - managed native executor deadline/cancel liveness and tool composition
 - mailbox owner stamping, open-row idempotence, and terminal transitions
   (`Proofs/Mailbox`)
-- canonical descendant visibility, materialization authorization, and
-  direct-parent control authority (`DescendantGraph`, #836)
+- the causal hop bound between agents (`Request/CausalHop`): continuations
+  preserve the hop, tool-caused requests are one further, and admission bounds
+  every chain by `max_request_hop`
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -505,10 +502,10 @@ The current proof suite covers twenty practical areas:
 15. Provider-input and token-budget enforcement: prompt assembly and
     sanitization, per-turn context clamps, and the request-wide aggregate
     ledger across tool turns and retracted attempts
-16. Canonical descendant graphs: durable pending bridge visibility,
-    logical-plus-physical materialization authorization, behavior/deployment/
-    await-mode independence, replicated authorization equivalence,
-    and the separation between ancestor visibility and direct-parent control
+16. Session messaging without hierarchy: every agent is addressed directly,
+    a started session is a background tool row whose result arrives only as a
+    completion notification, no interrupt or terminal cascades, and the
+    signed causal hop bounds every admitted chain
 17. Agent self-configuration writes: per-collection writable/protected field
     partitions, patch-merge identity immutability and containment,
     transactional accept/reject totality, and no-lockout recoverability
@@ -607,8 +604,6 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | File | Contents |
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
-| `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties; `steerAdmission` owns which edges a steer may append to: a running or finished (completed, failed, timed out) direct background child continues in its session, while cancelled edges, unmaterialized settled bridges and settled bridges marked by the unclaimed-spawn fence are refused (a parent interrupt's `stuck_since` is not a fence). `steerAppend` is the admission the enqueue transaction re-evaluates, so a fence or cancellation that commits first refuses the steer. `cancelChildSession` is the supervisor of steered work: explicit cancellation through the edge stops every live request of the child session; stale page anchors degrade instead of failing the caller |
-| `Proofs/SpawnClaimFence.lean` | Unclaimed-spawn deadline applies only across principals; expiry fences a late materialization or claim through a durable cancel intent and keeps the bridge unsettled until its child stops (#1807) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
@@ -621,7 +616,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
-| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: cross-principal children keep the target runtime as signer/issuer but bind `requesterDid` to the authenticated, fresh bridge author; local runtime sources retain requester=target. Generated enrollment cases fence the branch distinction. |
+| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another principal and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
+| `Proofs/Request/CausalHop.lean` | The only loop bound between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), `admitHop`, and `admitted_chain_sends_le_max` |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
@@ -649,8 +645,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
-| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, foreground interrupt scope, and property modules (B1/B2 projection, B3/B3′ explicit cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
-| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them). Canonical-output accounting is owned by `CanonicalOutput/Execution`, not the retired `Recovery/Outcome` module. |
+| `Proofs/Background/` | Background tool rows (native processes and `create_session`/`send_message` rows): admission budget, terminal CAS and notification delivery, completion continuation (independent of Goal presence), canonical output paging, process control and the foreground interrupt scope, which never cascades |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including session-message rows and the startup restart-disposition classifier (#937), and the startup sweep ordering contract |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
@@ -846,10 +842,11 @@ Operational meaning:
 - `processing` is actively executing
 - `dead` is persisted by the request machine only for stale pre-claim TTL
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
-  deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
-  is the one exception: it terminalizes an expired `claimed`/`processing` child
-  as `dead` (`Proofs/Recovery/`), published in the contract as
-  `recoveryReachable` under `boundary.request.recovery-sweep-reachable`
+  deadline expiry are terminal `failed`. Corrupt-generation revocation is the
+  one exception: it terminalizes an expired `claimed`/`processing` request with
+  corrupt canonical output as `dead` (`CanonicalOutput.Execution.revokeCorrupt`),
+  published in the contract as `recoveryReachable` under
+  `boundary.request.recovery-sweep-reachable`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
@@ -1171,129 +1168,57 @@ scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
 `supersede_only_touches_own_agent_requests`); see the docstrings on
 `Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
 
-### Backgrounding: subagent bridges and native background tools
+### Background tool rows
 
-Background work comes in two kinds that share the `AgentToolCall` bridge row
-vocabulary (`await_mode`, `cancel_policy`) but have deliberately different
-durable state and restart outcomes. The models keep them distinct; do not
-generalize one lane's fixtures to the other.
+Background work is one row vocabulary (`await_mode`) with two tool kinds. A
+native process has a host owner; a `create_session`/`send_message` row has none,
+and its terminal is the caused request's terminal output. The runtime encodes
+no hierarchy between agents: nothing cascades from a caller to a session it
+started, and there is no foreground wait on another session.
 
-| | Background **subagent** (R5) | Native background **tool** (R6) |
+| | Session-message row | Native background process |
 |---|---|---|
-| Row shape | `await_mode="background"`, `child_request_id` set | `await_mode="background"`, `child_request_id` empty |
-| Durable state | Bridge row + child `AgentRequest` (lineage, depth, interrupt flag) + notification message + coalesced wake row | Tool row (result, cancel_cause) + notification message + coalesced wake row |
-| Volatile state | Foreground waiter state in the owned loop | Execution registries and the live output ring buffer |
-| Restart, live parent | **Leave bridge running**; project when the child terminal is durable | **Interrupt**: terminalize `cancelled`, notification reason `interrupted_on_restart`, one coalesced wake |
-| Restart, terminal parent | Preserve the durable bridge for child-terminal projection | **Fail**: terminalize `failed`, notification reason `parent_terminal`, one coalesced wake |
-| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / startup and periodic ownership recovery |
+| Row shape | `operation = sessionMessage`, always background after its receipt | `operation = nativeCommand`, `await_mode="background"` |
+| Result | Caused request's terminal output, delivered by the completion observer | Process exit through the host owner |
+| Restart | **Leave running** under every resolvable parent unless its own deadline expired | **Interrupt** or settle as `processLost`, with one notification and coalesced wake |
+| Caller interrupt/terminal | Untouched | Untouched |
+| Wait | Refused (no `foreground` transition) | `wait_process` |
 
 Model → conformance → Rust bindings:
 
-- **Bridge lifecycle and properties** — `Proofs/Background/*` (B1–B7,
-  INV-LINK/UNIQUE/DEPTH, delegation graph) → `r6_backgrounding_cases`,
-  `r6_background_theorem_witnesses`, `subagent_delegation_graph_cases`, and
-  `r4c_background_work_cases` in the contract JSON → driven by
-  `tests/conformance/background.rs` against the real hook and
-  `ToolCallLifecycle`.
 - **Startup restart disposition (#937)** —
-  `Proofs/Recovery/Sweeps/BackgroundRestart.lean` models the classifier in
-  `recover_stuck_running_tool_calls` as a total function
-  (`restartDisposition`) with exhaustive characterizations
+  `Proofs/Recovery/Sweeps/BackgroundRestart.lean` models the classifier as a
+  total function (`restartDisposition`) with exhaustive characterizations
   (`restart_interrupt_iff_native_background_resolvable_parent`,
   `leave_running_iff_preserved_shapes`,
-  `retain_in_background_iff_child_linked_terminal_parent`,
-  `child_linked_bridge_terminalizes_only_on_expiry`,
+  `session_message_row_terminalizes_only_on_expiry`,
   `notification_iff_terminalized_native_background`,
-  `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
-  rows are **computed from the model** and driven through the real
-  `ToolCallLifecycle::recover_all` by
-  `conformance::generated_restart_disposition_cases_drive_recover_all`,
-  including the leave-running rows (background subagent bridge under a live
-  parent), the retain-in-background rows (a child-linked bridge of either
-  cancellation policy under any terminal parent: an awaited one becomes
-  background work with its invocation receipt) and the notification +
-  coalesced-wake side effects with idempotence under a second pass. A lost
-  native process is attributed to the restart, never to its parent. The
-  request's terminal accounting applies the same retention in its terminal
-  transaction (`handoff_backgrounds_child_linked_bridge`), and no sweep
-  releases queued subagents of a terminal parent.
-- **Foreground interrupt scope** — `Proofs/Background/Interrupt.lean` gives
-  each tool owned by an interrupted request one disposition: cancel a pending
-  intent or running foreground native call, turn a running awaited subagent
-  bridge into background work, and leave background work untouched. It
-  ignores the cancellation policy (`disposition_ignores_cancel_policy`),
-  refines existing single-row transitions (`interruptTool_refines`), and
-  leaves no cascade step (`interrupted_parent_admits_no_cascade`). Cascade
-  requires an explicitly cancelled bridge (`bridge_cancel_cascade`,
-  `uncancelled_bridge_does_not_cancel_child`). `interrupt_disposition_cases`
-  drive the hook's in-flight interrupt path.
-- **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
-  bridges, subagent liveness #465, terminal-parent owned tools #837, and
-  orphaned native-background ownership repair, including volatile execution
-  reservations and retryable completion-notification/wake obligations) →
-  `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
+  `deadline_precedes_restart_interrupt`). `restart_disposition_cases` rows are
+  computed from the model.
+- **Foreground interrupt scope** — `Proofs/Background/Interrupt.lean` cancels a
+  pending intent or running foreground call and leaves background work,
+  including every started session's row, untouched (`interruptTool_refines`,
+  `interrupt_retains_running_background`). `interrupt_disposition_cases` drive
+  the hook's in-flight interrupt path.
+- **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, session-message
+  rows, terminal-parent foreground tools #837, and orphaned native-background
+  ownership repair, including retryable completion-notification/wake
+  obligations) → `recovery_sweep_cases`.
 - **Partial output (#937, revised by #1571)** —
   `Proofs/Background/ToolOutput.lean` reads canonical segments for the exact
-  physical tool, independently of volatile executor registries. Open-prefix and
-  closed-extent cases cover conflicts, missing/foreign physical identity and late
-  suffix inertness. Generic paging retains contiguity, bounds, progress and
-  `has_more`; canonical windows start at zero without ring eviction. Generated
-  output witnesses now describe canonical reads, not state/registry dispatch.
-  Native readers and fixture consumers must migrate in the implementation layer;
-  their old ring-buffer tests are not evidence for this new contract. UTF-8 page
-  boundary snapping remains a native representation obligation.
-- **Executable bridge step (#937)** — `Proofs/Background/Executable.lean`
-  now executes the bridge-local events on the subagent leg
-  (`bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`) with a
-  non-vacuous `step_refines_transition`. The `bridge_step_cases` rows are
-  computed by running `step` on concrete fixtures (pinned at Lean build time
-  by `bridgeStepCases_pinned`) and driven by
-  `conformance::generated_bridge_step_cases_drive_bridge_lifecycle` through
-  `project_background_subagent_completion` (which owns the complete/failure
-  guards — Rust `bridge_complete` itself is a caller-trust boundary) and
-  `ToolCallLifecycle::bridge_cancel_cascade`.
-- **Native tool leg (boundary)** — the childless R6 row's lifecycle is the
-  single-row `ToolExecution` machine (executable via
-  `ToolExecution.Executable.step?`, including `background`, `foreground`, and
-  `detach` mode/policy actions): Rust `bridge_complete` on a
-  `new_background_tool` row refines `ToolExecution.Transition.complete`,
-  `bridge_failure(Interrupted)` refines `cancelDuringRun`, and
-  `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
-  (`is_bridge()` admits both kinds). `BridgedState` is subagent-only; native
-  tools use these existing executor transitions without a second child payload.
-- **Terminal completion → next agent turn (#937, revised by #1571)** —
-  `Proofs/Background/CompletionContinuation.lean` composes the terminal
-  parent-visible tool state, ordinary user-role transcript append, canonical
-  `background_completion:<session>` coalesced wake, and FIFO claim. Its
-  `claimed_continuation_sees_terminal_notification` theorem makes the
-  provider-facing acceptance property explicit: a continuation can only be
-  built after notification persistence, and claiming it retains that message
-  in the parent transcript. The executable canonical path emits
-  `terminal_completion_message_precedes_claimed_continuation` in
-  `r6_backgrounding_cases`. Native consumers must migrate to the canonical
-  execution/claim join before their historical coverage applies to this revision.
-  Wake snapshots are immutable claim observations, not terminal state. Recovery
-  preserves the authoritative request lifecycle: neither a snapshot nor a
-  separately persisted response can manufacture completion or failure. Only an
-  actually completed attempt acknowledges its claimed bindings; live work does
-  not acknowledge or redrive. The obsolete response-persistence crash boundary
-  and its generated case are deleted.
-- **Goal-owned background input (#1410)** — the completion composition checks
-  canonical Goal presence before enqueue or failed-wake redrive. All six Goal
-  statuses retain their existing continuation owner: the background path
-  persists the notification without creating another request. Seven generated
-  `completion_continuation_owner` cases exercise real delivery, replay, and
-  redrive; the Goal controller integration test then reads that input through
-  the budget-limited wrap-up child. Legacy receipt repair uses the same
-  transaction owner. This models the observed Goal state; it does not claim
-  cross-node phantom protection for concurrent creation after an absent read.
+  physical tool, independently of volatile executor registries. Generic paging
+  retains contiguity, bounds, progress and `has_more`.
+- **Terminal completion → next agent turn** —
+  `Proofs/Background/CompletionContinuation.lean` composes the terminal tool
+  state, ordinary user-role transcript append, canonical
+  `background_completion:<session>` coalesced wake, and FIFO claim
+  (`claimed_continuation_sees_terminal_notification`). Goal presence is not an
+  input: Goals and background wakes are independent, so every status,
+  including paused and complete, keeps the wake and failed-wake redrive. Seven
+  generated `completion_continuation_owner` cases pin that outcome.
 - **Wake coalescing** — `Proofs/Session/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
-  queue-source rows in `r6_backgrounding_cases` and the R4c steering
-  witnesses.
-- **Cross-node subagent completion/cancel** — `tla/SubagentCompletion.tla`
-  and `tla/SubagentCancelPropagation.tla` (subagent lane only; native tool
-  backgrounding is single-node and carried by Lean).
+  queue-source rows in `r6_backgrounding_cases`.
 
 ### Compaction
 

@@ -1,7 +1,6 @@
 import Proofs.Basic
 import Proofs.Persistence
 import Proofs.ToolExecution.Policy
-import Proofs.Background.State
 
 namespace ToolExecution
 
@@ -57,6 +56,37 @@ instance : HasTerminal ToolCallState where
 
 end ToolCallState
 
+/-- Whether the calling turn blocks on the call. Background rows outlive the
+turn that started them; their terminal is delivered as a completion
+notification. A `create_session`/`send_message` row is always background: its
+result arrives only as a message, never through a wait. -/
+inductive AwaitMode where
+  | foreground
+  | background
+  deriving DecidableEq, Repr
+
+namespace AwaitMode
+
+def toDefraDB : AwaitMode → String
+  | .foreground => "foreground"
+  | .background => "background"
+
+def fromDefraDB? : String → Option AwaitMode
+  | "foreground" => some .foreground
+  | "background" => some .background
+  | _ => none
+
+theorem fromDefraDB_toDefraDB (m : AwaitMode) :
+    fromDefraDB? m.toDefraDB = some m := by
+  cases m <;> rfl
+
+def all : List AwaitMode := [ .foreground, .background ]
+
+theorem all_complete (m : AwaitMode) : m ∈ all := by
+  cases m <;> simp [all]
+
+end AwaitMode
+
 end ToolExecution
 
 namespace ToolExecution
@@ -73,12 +103,7 @@ structure ToolCallContext where
   currentTime    : Time
   failureClass   : Option FailureClass := none
   persistence    : PersistenceState
-  awaitMode      : Subagent.AwaitMode := .foreground
-  cancelPolicy   : Subagent.CancelPolicy := .cascade
-  childRequestId : Option RequestId := none
-  /-- Immutable configured behavior selected when a remote subagent call is
-  accepted. This is admission metadata, not provider argument enrichment. -/
-  spawnBehaviorId : Option Nat := none
+  awaitMode      : AwaitMode := .foreground
   deriving DecidableEq, Repr
 
 namespace ToolCallContext

@@ -21,7 +21,6 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
   | complete {pre post : ToolCallContext}
       (h_state   : pre.state = .running)
       (h_persist : pre.persistence = .committed)
-      (h_native  : pre.childRequestId = none)
       (h_post    : post = { pre with state := .completed })
       : Transition pre post
 
@@ -53,16 +52,17 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post  : post = { pre with awaitMode := .background })
       : Transition pre post
 
+  /-- Reacquiring a background row in the foreground is a wait. A
+  `create_session`/`send_message` row never becomes foreground: its result
+  arrives only as a completion notification. Jack's 0.20 decision removes the
+  foreground wait on another session because it couples the caller's turn to
+  another agent's lifetime, which is the privileged parent position the runtime
+  no longer encodes. -/
   | foreground {pre post : ToolCallContext}
       (h_state : pre.state = .running)
       (h_mode  : pre.awaitMode = .background)
+      (h_op    : pre.operation ≠ .sessionMessage)
       (h_post  : post = { pre with awaitMode := .foreground })
-      : Transition pre post
-
-  | detach {pre post : ToolCallContext}
-      (h_live  : pre.state = .pending ∨ pre.state = .running)
-      (h_pol   : pre.cancelPolicy = .cascade)
-      (h_post  : post = { pre with cancelPolicy := .detach })
       : Transition pre post
 
   | timeAdvance {pre post : ToolCallContext} (t : Time)

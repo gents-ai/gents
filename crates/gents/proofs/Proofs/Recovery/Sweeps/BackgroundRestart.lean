@@ -1,5 +1,4 @@
 import Proofs.Recovery.Sweeps.ToolCalls
-import Proofs.SpawnClaimFence
 
 /-!
 # Startup Restart Disposition for Running Tool Rows (#937)
@@ -7,52 +6,34 @@ import Proofs.SpawnClaimFence
 `ToolCallLifecycle::recover_all` does not terminalize every running row it
 loads: the startup classifier in `recover_stuck_running_tool_calls`
 (`tool_call_lifecycle/recovery.rs`) decides, per row, between a terminal
-recovery cause and **leaving the row running**. The existing
-`toolCallRecoverySweep` contract only models rows that already carry a cause;
-the classifier itself — in particular the two leave-running arms and the
-kind split between background *subagents* and native background *tools* —
-was previously unmodeled, so a "model-driven" closeout could have
-terminalized rows production deliberately preserves.
+recovery cause and **leaving the row running**. This module is the total,
+executable model of that classifier:
 
-This module is the total, executable model of that classifier:
-
-* **native background tool** (`await_mode = background`, no child request)
-  with a resolvable parent → the host owner first stops a proven-owned
-  process (`ManagedExec.stopOutcome`). A process still observed running keeps
-  its row running; one the owner did not observe stopping (unrecorded, pid
-  reused, or already exited) settles as `processLost`, never as an
-  interruption. After an observed stop, every terminal restart disposition
-  carries a durable completion notification and coalesced
-  background-completion wake; the reason distinguishes restart interruption
-  and deadline expiry, never the parent's state: a lost process is attributed
-  to the restart, whatever the parent's state. Canonical output already
-  committed to durable records remains available;
-* **background subagent bridge** (`await_mode = background`, child request
-  linked) with a live parent → **leave running** — the durable bridge row is
-  the work, and the child terminal projects later;
-* child-linked bridge under any terminal parent → **retain in background**,
-  whatever its cancellation policy: a parent's fate is never a cancel signal
-  for a subagent. An awaited bridge becomes background work with its one
-  immutable invocation receipt (the `Subagent.Interrupt` background
-  disposition), so the child's terminal is later delivered as a completion
-  notification; an already-background bridge only has its receipt ensured;
+* **native background tool** (`await_mode = background`, a host process) with a
+  resolvable parent → the host owner first stops a proven-owned process
+  (`ManagedExec.stopOutcome`). A process still observed running keeps its row
+  running; one the owner did not observe stopping (unrecorded, pid reused, or
+  already exited) settles as `processLost`, never as an interruption. After an
+  observed stop, every terminal restart disposition carries a durable
+  completion notification and coalesced background-completion wake; the
+  reason distinguishes restart interruption and deadline expiry, never the
+  parent's state;
+* **session-message row** (`create_session`/`send_message`) → **leave running**
+  under every resolvable parent unless its own deadline expired. No host
+  process backs it: the started session is an ordinary agent's session, and
+  its caused request's terminal later terminalizes the row through the
+  completion observer. A parent's fate is never a cancel signal for it;
 * an unresolved exact physical parent defers all terminalization, including
-  deadline / unclaimed-spawn expiry;
-* deadline / unclaimed-spawn expiry take precedence for resolvable parents;
+  deadline expiry;
+* deadline expiry takes precedence for resolvable parents;
 * other rows under interrupted / otherwise-terminal parents terminalize as
   `parentInterrupted` / `parentTerminal`.
 
-The request's own terminal accounting applies the same retention inside its
-terminal transaction, so a crash between the interrupt latch and the live
-hook's retention is repaired when request recovery terminalizes the parent;
-this startup arm covers rows whose parent was already terminal.
-
 Scope notes, matching Rust:
 
-* Child-terminal precedence (`recover_bridge_terminal_child`) runs *before*
-  this classifier and is covered by the `childCompleted`/`childFailed`/… rows
-  of `toolCallRecoverySweep`; rows reaching this classifier have no durable
-  child terminal yet.
+* Caused-request terminal precedence runs *before* this classifier and is
+  covered by `sessionMessageRecoverySweep`; rows reaching this classifier have
+  no durable caused-request terminal yet.
 * The classifier observes the parent as loaded at startup, before
   `RequestLifecycle::recover_all` runs (tool recovery is wired first in
   `agent/runtime/startup.rs`), so an orphaned `processing` parent still
@@ -107,34 +88,21 @@ end ParentObservation
 
 /-- One running `AgentToolCall` row as the startup classifier sees it. The
     sweep scope is `lifecycle_state = "running"`, so the state itself is not
-    a field. `childLinked` is `child_request_id` non-empty: `true` makes the
-    row a subagent bridge, `false` a native background-bridge or plain tool
-    row. -/
+    a field. `sessionMessage` is the `create_session`/`send_message` tool kind. -/
 structure RestartRow where
-  awaitMode : Subagent.AwaitMode
-  cancelPolicy : Subagent.CancelPolicy
-  childLinked : Bool
+  awaitMode : AwaitMode
+  sessionMessage : Bool
   parent : ParentObservation
   deadlineExpired : Bool
-  unclaimedExpired : Bool
   /-- Host stop verdict for a native background process; other rows carry
       `stopped` and ignore it. -/
   process : ManagedExec.StopOutcome
-  /-- A child row corroborating this bridge's exact physical lineage and target
-      principal is visible to the recovering parent (#1807). -/
-  childObserved : Bool := false
   deriving DecidableEq, Repr
 
 /-- What startup recovery does with one running row. -/
 inductive RestartDisposition where
   | terminalize (cause : ToolRecoveryCause)
   | leaveRunning
-  /-- Unclaimed expiry observed the child: the deadline clears and the bridge
-      keeps running (`SpawnClaimFence.expire`). -/
-  | link
-  /-- Keep the child-linked bridge running as background work: flip an
-      awaited bridge to background and ensure its invocation receipt. -/
-  | retainInBackground
   deriving DecidableEq, Repr
 
 namespace RestartDisposition
@@ -142,8 +110,6 @@ namespace RestartDisposition
 def toContract : RestartDisposition → String
   | .terminalize _ => "terminalize"
   | .leaveRunning => "leave_running"
-  | .link => "link"
-  | .retainInBackground => "retain_in_background"
 
 def causeContract : RestartDisposition → Option String
   | .terminalize cause => some cause.toContract
@@ -153,32 +119,15 @@ def terminalStateContract : RestartDisposition → Option String
   | .terminalize cause => some cause.terminalState.toDefraDB
   | _ => none
 
-/-- Await mode after the disposition, when the disposition sets one. -/
-def postAwaitModeContract : RestartDisposition → Option String
-  | .retainInBackground => some Subagent.AwaitMode.background.toDefraDB
-  | _ => none
-
 end RestartDisposition
 
-/-- A native background tool row: R6 bridge row with no child request. -/
+/-- A native background tool row: a background row backed by a host process. -/
 def RestartRow.isNativeBackgroundTool (row : RestartRow) : Prop :=
-  row.awaitMode = .background ∧ row.childLinked = false
+  row.awaitMode = .background ∧ row.sessionMessage = false
 
 instance (row : RestartRow) : Decidable row.isNativeBackgroundTool := by
   unfold RestartRow.isNativeBackgroundTool
   infer_instance
-
-/-- A background subagent bridge row: R5 bridge row with a child request. -/
-def RestartRow.isBackgroundSubagentBridge (row : RestartRow) : Prop :=
-  row.awaitMode = .background ∧ row.childLinked = true
-
-instance (row : RestartRow) : Decidable row.isBackgroundSubagentBridge := by
-  unfold RestartRow.isBackgroundSubagentBridge
-  infer_instance
-
-/-- The spawn fence's view of a child-linked row. -/
-def RestartRow.fenceWorld (row : RestartRow) : SpawnClaimFence.World :=
-  { SpawnClaimFence.World.initial with childVisible := row.childLinked && row.childObserved }
 
 /-- Total startup disposition. Branch order is the production order in
     `recover_stuck_running_tool_calls`; reordering any two branches changes
@@ -192,14 +141,10 @@ def restartDisposition (row : RestartRow) : RestartDisposition :=
     .terminalize .processLost
   else if row.deadlineExpired then
     .terminalize .deadlineExceeded
-  else if row.unclaimedExpired then
-    match (SpawnClaimFence.expire row.fenceWorld).bridge with
-    | .linked => .link
-    | _ => .terminalize .unclaimedCrossPrincipalSpawn
   else if row.isNativeBackgroundTool then
     .terminalize .terminalizeBackgroundedAsInterrupted
-  else if row.childLinked ∧ row.parent.observedTerminal then
-    .retainInBackground
+  else if row.sessionMessage then
+    .leaveRunning
   else if row.parent = .interrupted then
     .terminalize .parentInterrupted
   else if row.parent.observedTerminal then
@@ -220,13 +165,10 @@ def OrphanedBackgroundToolRow.parentObservation
 def OrphanedBackgroundToolRow.toRestartRow
     (row : OrphanedBackgroundToolRow) : RestartRow :=
   { awaitMode := row.call.awaitMode
-  , cancelPolicy := row.call.cancelPolicy
-  , childLinked := row.call.childRequestId.isSome
+  , sessionMessage := decide (row.call.operation = .sessionMessage)
   , parent := row.parentObservation
   , deadlineExpired := row.deadlineExpired
-  , unclaimedExpired := row.unclaimedExpired
   , process := row.process
-  , childObserved := false
   }
 
 /-- The periodic orphan classifier is the native-background restriction of
@@ -235,13 +177,12 @@ def OrphanedBackgroundToolRow.toRestartRow
 theorem orphanedBackgroundToolCause_matches_restartDisposition
     (row : OrphanedBackgroundToolRow)
     (h_background : row.call.awaitMode = .background)
-    (h_native : row.call.childRequestId = none)
+    (h_native : row.call.operation ≠ .sessionMessage)
     (h_unregistered : row.executionRegistered = false)
     (h_task : row.ownerTaskDeleted = false) :
     (orphanedBackgroundToolCause row).map ToolRecoveryCause.toContract =
       (restartDisposition row.toRestartRow).causeContract := by
   cases h_deadline : row.deadlineExpired <;>
-    cases h_unclaimed : row.unclaimedExpired <;>
     cases h_live : row.parentLive <;>
     cases h_interrupted : row.parentInterrupted <;>
     cases h_terminal : row.parentTerminal <;>
@@ -251,9 +192,8 @@ theorem orphanedBackgroundToolCause_matches_restartDisposition
       OrphanedBackgroundToolRow.parentResolvable, restartDisposition,
       RestartRow.isNativeBackgroundTool,
       RestartDisposition.causeContract, h_background, h_native, h_deadline,
-      h_unclaimed, h_live, h_interrupted, h_terminal, h_process,
-      h_unregistered, h_task, ParentObservation.observedTerminal, RestartRow.fenceWorld,
-      SpawnClaimFence.expire, SpawnClaimFence.fence, SpawnClaimFence.World.initial]
+      h_live, h_interrupted, h_terminal, h_process,
+      h_unregistered, h_task, ParentObservation.observedTerminal]
 
 /-- Durable side effects owed after terminalizing a native background tool on
     restart: the cause-specific `<tool-completion>` notification reason and
@@ -273,10 +213,8 @@ def restartNotificationObligation
       | .parentInterrupted => "parent_interrupted"
       | .parentTerminal => "parent_terminal"
       | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
-      | .unclaimedCrossPrincipalSpawn => "unclaimed_spawn_timeout"
       | .processLost => "process_lost"
       | .taskDeleted => "task_deleted"
-      | _ => "tool_failed"
   , queueSource := "background_completion"
   , queueKeyPrefix := "background_completion:"
   }
@@ -302,14 +240,7 @@ theorem missing_parent_never_terminalizes (row : RestartRow)
   · simp [restartDisposition, h]
   · simp [RestartRow.notification, h]
 
-/-! ## Pointwise theorems (the four #937 arms) -/
-
-/-- The cancellation policy never affects a restart disposition. -/
-theorem restartDisposition_ignores_cancel_policy
-    (row : RestartRow) (policy : Subagent.CancelPolicy) :
-    restartDisposition { row with cancelPolicy := policy } =
-      restartDisposition row := by
-  simp [restartDisposition, RestartRow.isNativeBackgroundTool, RestartRow.fenceWorld]
+/-! ## Pointwise theorems -/
 
 /-- An observed stop of a lost native background process is attributed to
     the restart under every resolvable parent, never to the parent. -/
@@ -318,11 +249,10 @@ theorem native_background_tool_interrupted_on_restart
     (h_native : row.isNativeBackgroundTool)
     (h_owner : row.parent ≠ .missing)
     (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = false)
     (h_process : row.process = .stopped) :
     restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
-  simp [restartDisposition, h_native, h_owner, h_deadline, h_unclaimed, h_process]
+  simp [restartDisposition, h_native, h_owner, h_deadline, h_process]
 
 /-- RB1: a native background tool with a live parent, no expiry, and an
     observed stop of its proven-owned process is interrupted on restart —
@@ -332,7 +262,6 @@ theorem native_background_tool_live_parent_interrupted_on_restart
     (h_native : row.isNativeBackgroundTool)
     (h_live : row.parent = .live)
     (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = false)
     (h_process : row.process = .stopped) :
     restartDisposition row =
         .terminalize .terminalizeBackgroundedAsInterrupted ∧
@@ -342,8 +271,7 @@ theorem native_background_tool_live_parent_interrupted_on_restart
           .terminalizeBackgroundedAsInterrupted) := by
   have h : restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
-    simp [restartDisposition, h_native, h_live, h_deadline, h_unclaimed,
-      h_process]
+    simp [restartDisposition, h_native, h_live, h_deadline, h_process]
   refine ⟨h, ?_, ?_⟩
   · rw [h]; rfl
   · simp [RestartRow.notification, h_native, h_live, h]
@@ -382,120 +310,68 @@ theorem native_background_still_running_left_running
   · simp [restartDisposition, h_owner]
   · simp [restartDisposition, h_owner, h_native, h_process]
 
-/-- RB2: a background subagent bridge with a live parent is left running on
-    restart — the durable bridge row survives the process and projects the
-    child terminal later. -/
-theorem background_subagent_bridge_live_parent_left_running
+/-- RB2: a session-message row is left running under every resolvable parent
+    without expiry — live, interrupted or terminal. The started session is
+    addressed directly and owns its own lifetime; its caused request's
+    terminal later closes the row through the completion observer. -/
+theorem session_message_row_left_running
     (row : RestartRow)
-    (h_bridge : row.isBackgroundSubagentBridge)
-    (h_live : row.parent = .live)
-    (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = false) :
+    (h_session : row.sessionMessage = true)
+    (h_deadline : row.deadlineExpired = false) :
     restartDisposition row = .leaveRunning := by
-  have h_child : row.childLinked = true := h_bridge.2
   have h_not_native : ¬ row.isNativeBackgroundTool := by
-    simp [RestartRow.isNativeBackgroundTool, h_child]
-  simp [restartDisposition, h_not_native, h_live, h_deadline, h_unclaimed,
-    ParentObservation.observedTerminal]
+    simp [RestartRow.isNativeBackgroundTool, h_session]
+  by_cases h_owner : row.parent = .missing
+  · simp [restartDisposition, h_owner]
+  · simp [restartDisposition, h_owner, h_not_native, h_deadline, h_session]
 
-/-- RB3: a child-linked bridge under any terminal parent is retained in
-    background, whatever its cancellation policy and await mode — neither
-    interrupting, failing nor completing the parent is a cancel signal for its
-    subagents, and an awaited bridge's child terminal must still be delivered
-    as a completion notification. -/
-theorem child_linked_terminal_parent_retained_in_background
-    (row : RestartRow)
-    (h_child : row.childLinked = true)
-    (h_parent : row.parent.observedTerminal)
-    (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = false) :
-    restartDisposition row = .retainInBackground ∧
-      (restartDisposition row).postAwaitModeContract = some "background" := by
-  have h_not_native : ¬ row.isNativeBackgroundTool := by
-    simp [RestartRow.isNativeBackgroundTool, h_child]
-  have h_present : row.parent ≠ .missing := by
-    intro h; simp [h, ParentObservation.observedTerminal] at h_parent
-  have h : restartDisposition row = .retainInBackground := by
-    simp [restartDisposition, h_not_native, h_child, h_parent, h_present,
-      h_deadline, h_unclaimed]
-  exact ⟨h, by rw [h]; rfl⟩
-
-/-- Whether a disposition terminalizes only on the row's own expiry. -/
-def RestartDisposition.expiryOnly : RestartDisposition → Bool
-  | .terminalize .deadlineExceeded => true
-  | .terminalize .unclaimedCrossPrincipalSpawn => true
-  | .terminalize _ => false
-  | _ => true
-
-/-- No parent observation ever terminalizes a child-linked bridge: only its
-    own deadline or an unclaimed spawn does. -/
-theorem child_linked_bridge_terminalizes_only_on_expiry
+/-- No parent observation ever terminalizes a session-message row: only its
+    own deadline does. -/
+theorem session_message_row_terminalizes_only_on_expiry
     (row : RestartRow) (cause : ToolRecoveryCause)
-    (h_child : row.childLinked = true)
+    (h_session : row.sessionMessage = true)
     (h : restartDisposition row = .terminalize cause) :
-    cause = .deadlineExceeded ∨ cause = .unclaimedCrossPrincipalSpawn := by
-  have h_only : (restartDisposition row).expiryOnly = true := by
-    rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-      deadlineExpired, unclaimedExpired, process, childObserved⟩
-    simp only at h_child
-    subst h_child
-    cases awaitMode <;> cases cancelPolicy <;> cases parent <;>
-      cases deadlineExpired <;> cases unclaimedExpired <;> cases process <;>
-      cases childObserved <;> decide
-  rw [h] at h_only
-  cases cause <;> simp_all [RestartDisposition.expiryOnly]
+    cause = .deadlineExceeded := by
+  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
+  simp only at h_session
+  subst h_session
+  cases awaitMode <;> cases parent <;> cases deadlineExpired <;> cases process <;>
+    simp [restartDisposition, RestartRow.isNativeBackgroundTool,
+      ParentObservation.observedTerminal] at h <;> (subst h; rfl)
 
 /-! ## Exhaustive characterizations
 
 Every field of `RestartRow` is finite, so these are proved by exhausting the
-full 640-row input space (2 await modes × 2 cancel policies × 2 child links ×
-5 parent observations × 2 deadline flags × 2 unclaimed flags × 4 stop
-outcomes) — they are
-complete characterizations of the classifier, not spot checks. -/
+full 160-row input space (2 await modes × 2 tool kinds × 5 parent observations
+× 2 deadline flags × 4 stop outcomes) — they are complete characterizations of
+the classifier, not spot checks. -/
 
 /-- The restart interrupt fires **exactly** for a native background tool with
-    a resolvable parent, no expiry and an observed stop — never for a subagent
-    bridge, never over deadline/unclaimed precedence. -/
+    a resolvable parent, no expiry and an observed stop — never for a
+    session-message row, never over deadline precedence. -/
 theorem restart_interrupt_iff_native_background_resolvable_parent
     (row : RestartRow) :
     restartDisposition row =
         .terminalize .terminalizeBackgroundedAsInterrupted ↔
       (row.isNativeBackgroundTool ∧ row.parent ≠ .missing ∧
-        row.deadlineExpired = false ∧ row.unclaimedExpired = false ∧
-        row.process = .stopped) := by
-  rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-    deadlineExpired, unclaimedExpired, process, childObserved⟩
-  cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>
-    cases parent <;> cases deadlineExpired <;> cases unclaimedExpired <;>
-    cases process <;> cases childObserved <;> decide
+        row.deadlineExpired = false ∧ row.process = .stopped) := by
+  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+    cases deadlineExpired <;> cases process <;> decide
 
 /-- Leave-running fires exactly on the preserved shapes: a missing parent
     regardless of expiry, a native background process still observed running,
-    and a live parent without the native-background shape and without
-    expiry. -/
+    and, without expiry, a session-message row or a non-native row under a
+    live parent. -/
 theorem leave_running_iff_preserved_shapes (row : RestartRow) :
     restartDisposition row = .leaveRunning ↔
       (row.parent = .missing ∨
         (row.isNativeBackgroundTool ∧ row.process = .stillRunning) ∨
-        (row.deadlineExpired = false ∧ row.unclaimedExpired = false ∧
-          row.parent = .live ∧ ¬ row.isNativeBackgroundTool)) := by
-  rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-    deadlineExpired, unclaimedExpired, process, childObserved⟩
-  cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>
-    cases parent <;> cases deadlineExpired <;> cases unclaimedExpired <;>
-    cases process <;> cases childObserved <;> decide
-
-/-- Retention fires exactly for a child-linked bridge under a terminal parent
-    without expiry. -/
-theorem retain_in_background_iff_child_linked_terminal_parent (row : RestartRow) :
-    restartDisposition row = .retainInBackground ↔
-      (row.childLinked = true ∧ row.parent.observedTerminal ∧
-        row.deadlineExpired = false ∧ row.unclaimedExpired = false) := by
-  rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-    deadlineExpired, unclaimedExpired, process, childObserved⟩
-  cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>
-    cases parent <;> cases deadlineExpired <;> cases unclaimedExpired <;>
-    cases process <;> cases childObserved <;> decide
+        (row.deadlineExpired = false ∧ ¬ row.isNativeBackgroundTool ∧
+          (row.sessionMessage = true ∨ row.parent = .live))) := by
+  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+    cases deadlineExpired <;> cases process <;> decide
 
 /-- Every terminalized row lands on a terminal tool-call state (feeds
     `toolCallRecoverySweep`'s convergence contract). -/
@@ -506,17 +382,15 @@ theorem terminalize_lands_terminal
   cause.terminalState_terminal
 
 /-- Notification is owed exactly when a resolvable native background process
-    is terminalized. Subagent bridges owe nothing here; their notification
-    comes from child-completion projection later. -/
+    is terminalized. Session-message rows owe nothing here; their
+    notification comes from the completion observer later. -/
 theorem notification_iff_terminalized_native_background (row : RestartRow) :
     row.notification.isSome = true ↔
       (row.isNativeBackgroundTool ∧ row.parent ≠ .missing ∧
         restartDisposition row ≠ .leaveRunning) := by
-  rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-    deadlineExpired, unclaimedExpired, process, childObserved⟩
-  cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>
-    cases parent <;> cases deadlineExpired <;> cases unclaimedExpired <;>
-    cases process <;> cases childObserved <;> decide
+  rcases row with ⟨awaitMode, sessionMessage, parent, deadlineExpired, process⟩
+  cases awaitMode <;> cases sessionMessage <;> cases parent <;>
+    cases deadlineExpired <;> cases process <;> decide
 
 /-- Deadline expiry outranks the restart interrupt: an expired native
     background tool times out (external failure) instead of reading as an
@@ -528,58 +402,5 @@ theorem deadline_precedes_restart_interrupt
     (h_expired : row.deadlineExpired = true) :
     restartDisposition row = .terminalize .deadlineExceeded := by
   simp [restartDisposition, h_owner, h_process, h_expired]
-
-/-- Unclaimed-spawn expiry outranks every leave-running exemption: a bridge
-    whose spawn was never claimed fails even under a live parent. -/
-theorem unclaimed_precedes_leave_running_exemptions
-    (row : RestartRow)
-    (h_owner : row.parent ≠ .missing)
-    (h_process : row.process = .stopped)
-    (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = true)
-    (h_unobserved : row.childObserved = false) :
-    restartDisposition row = .terminalize .unclaimedCrossPrincipalSpawn := by
-  simp [restartDisposition, h_owner, h_process, h_deadline, h_unclaimed, RestartRow.fenceWorld,
-    h_unobserved, SpawnClaimFence.expire, SpawnClaimFence.fence,
-    SpawnClaimFence.World.initial]
-
-/-- Unclaimed expiry that observes the child links the bridge instead. -/
-theorem unclaimed_observed_child_links
-    (row : RestartRow)
-    (h_owner : row.parent ≠ .missing)
-    (h_deadline : row.deadlineExpired = false)
-    (h_unclaimed : row.unclaimedExpired = true)
-    (h_child : row.childLinked = true)
-    (h_observed : row.childObserved = true) :
-    restartDisposition row = .link := by
-  have h_not_native : ¬ row.isNativeBackgroundTool := by
-    simp [RestartRow.isNativeBackgroundTool, h_child]
-  simp [restartDisposition, h_owner, h_deadline, h_unclaimed, RestartRow.fenceWorld,
-    h_child, h_observed, h_not_native, SpawnClaimFence.expire, SpawnClaimFence.World.initial]
-
-/-- The spawn fence a restart settlement of a child-linked row writes: the
-    same `SpawnClaimFence` transition that the deadline which fired first
-    selects. `none` when restart recovery does not settle the row by expiry. -/
-def RestartRow.spawnFence (row : RestartRow) : Option SpawnClaimFence.World :=
-  if row.childLinked ∧ row.parent ≠ .missing then
-    if row.deadlineExpired then some (SpawnClaimFence.deadline row.fenceWorld)
-    else if row.unclaimedExpired then some (SpawnClaimFence.expire row.fenceWorld)
-    else none
-  else none
-
-/-- A restart expiry of an unobserved child-linked row always fences it. -/
-theorem restart_expiry_fences_unobserved_child (row : RestartRow)
-    (h_child : row.childLinked = true) (h_owner : row.parent ≠ .missing)
-    (h_unobserved : row.childObserved = false)
-    (h_expired : row.deadlineExpired = true ∨ row.unclaimedExpired = true) :
-    ∃ w, row.spawnFence = some w ∧ w.cancelIntent = true ∧ w.ackPending = true := by
-  rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
-    deadlineExpired, unclaimedExpired, process, childObserved⟩
-  simp at h_child h_unobserved h_owner
-  subst h_child h_unobserved
-  cases deadlineExpired <;> cases unclaimedExpired <;> simp at h_expired <;>
-    simp [RestartRow.spawnFence, RestartRow.fenceWorld, h_owner,
-      SpawnClaimFence.deadline, SpawnClaimFence.expire, SpawnClaimFence.fence,
-      SpawnClaimFence.World.initial]
 
 end Recovery

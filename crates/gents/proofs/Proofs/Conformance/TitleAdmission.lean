@@ -22,7 +22,8 @@ private def baseRow : _root_.TitleAdmission.RequestRowEvidence :=
   , signedFields := Enrollment.agentRequestAdmissionFields request admission
   , physicalBindingCurrent := true
   , branchFieldsExact := true
-  , pendingDeadlineAbsent := true }
+  , pendingDeadlineAbsent := true
+  , maxRequestHop := CausalHop.defaultMaxRequestHop }
 
 private structure Case where
   name : String
@@ -66,12 +67,10 @@ private def world (c : Case) : World :=
   , sessionId := session
   , purpose := request.purpose
   , principal := agent
-  , remoteRoutes := []
   , lease := RequestExecutionLease.initial Nat
   , segments := []
   , messages := []
   , transcript := { sessionId := session, nextSeq := 0, messages := [], toolCalls := [], inFlight := ∅ }
-  , delegatedCalls := []
   , terminalSelection := none
   , gateOwner := some 9
   , gateSchedule := ⟨.storage, true, false⟩
@@ -107,7 +106,7 @@ private theorem wrong_world_physical_rejects_valid_activation :
 private theorem unavailable_observation_retries_without_claim :
     Enrollment.titlePendingDisposition false ({} : Enrollment.State) request admission
       evidence request.behaviorId unavailableCase.row.branchFieldsExact
-      unavailableCase.row.pendingDeadlineAbsent = .retry ∧
+      unavailableCase.row.pendingDeadlineAbsent unavailableCase.row.maxRequestHop = .retry ∧
       (claimed unavailableCase).isNone = true := by
   native_decide
 

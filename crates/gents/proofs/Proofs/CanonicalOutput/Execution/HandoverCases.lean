@@ -17,7 +17,6 @@ def nextAdmission (requester : Option Nat := none) : PhysicalRequestAdmission :=
 
 def nextActivation (requester : Option Nat := none) : Activation :=
   { request := nextAdmission requester, evidence := .ordinary
-  , configuredRoutes := [(44, 2, 9)], routesAuthenticated := true
   , generation := 8, duration := 5, deadline := 11 }
 
 def reacquire (state : World) : Option World := do
@@ -26,8 +25,8 @@ def reacquire (state : World) : Option World := do
   pure held
 
 def terminalRunningParent : Option World := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
@@ -43,14 +42,13 @@ def claimedNext : Option World := do
 
 def actualHandoverLateToolAndFinish : Option Bool := do
   let claimed ← claimedNext
-  if claimed.remoteRoutes != [(44, 2, 9)] then none
   let held ← reacquire claimed
   let begun ← beginProcessing held 1 6 8
   let toolHeld ← reacquire begun
-  let oldTool ← ownedToolByDocument? toolHeld 600
+  let _ ← ownedToolByDocument? toolHeld 600
   let lateClose := { toolOutputClose with createdAt := 7 }
   let closeState ← Gate.commit toolHeld 1 7
-    (.toolClose 600 (.bridge (completedBridge oldTool.context) .bridge_complete) lateClose)
+    (.toolClose 600 (.native .complete) lateClose)
   let terminalHeld ← reacquire closeState
   let terminal ← Gate.commit terminalHeld 1 7
     (.terminalize 8 .failed .noMessage)
@@ -88,16 +86,15 @@ theorem begin_uses_current_time_and_rejects_expired_lease :
     expiredBeginRejected = some true := by native_decide
 
 def wakeClaimed : Option World := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let parentTerminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? parentTerminal 600
   let closed ← (ToolDelivery.closeToolOutput parentTerminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let message := wakeNotificationMessage 2
   let binding := wakeBinding message
   let composed ← BackgroundContinuation.publishAndEnqueue?
@@ -115,8 +112,6 @@ def wakeClaimed : Option World := do
   let activation : Activation :=
     { request := request
     , evidence := .backgroundWake snapshot
-    , configuredRoutes := []
-    , routesAuthenticated := true
     , generation := 8
     , duration := 5
     , deadline := 11 }

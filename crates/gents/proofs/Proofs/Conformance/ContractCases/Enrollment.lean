@@ -10,10 +10,9 @@ private def requestAdmissionKindName : AgentRequestAdmissionKind → String
   | .enrollment => "enrollment"
   | .localSelf => "local-self"
   | .runtimeInternal => "runtime-internal"
+  | .peer => "peer"
 
 private def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
-  | .localChild => "local-child"
-  | .crossPrincipalChild => "cross-principal-child"
   | .localControl => "local-control"
   | .automatedTrigger => "automated-trigger"
 
@@ -37,7 +36,6 @@ private def requestAdmissionCase (name : String)
   , signerMatchesTarget := observation.signerMatchesTarget
   , signerMatchesIssuer := observation.signerMatchesIssuer
   , requesterMatchesIssuer := observation.requesterMatchesIssuer
-  , requesterMatchesBridgeAuthor := observation.requesterMatchesBridgeAuthor
   , currentApproval := observation.currentApproval
   , exactGeneration := observation.exactGeneration
   , authorizationFresh := observation.authorizationFresh
@@ -47,11 +45,9 @@ private def requestAdmissionCase (name : String)
   , sourceBindingCurrent := observation.sourceBindingCurrent
   , triggerConfigDocumentBindingCurrent := observation.triggerConfigDocumentBindingCurrent
   , sourceDocumentBindingCurrent := observation.sourceDocumentBindingCurrent
-  , sourceToolCallBindingCurrent := observation.sourceToolCallBindingCurrent
   , targetPolicyAllows := observation.targetPolicyAllows
-  , bridgeAuthorBindingCurrent := observation.bridgeAuthorBindingCurrent
-  , bridgeAuthorAuthorizationFresh := observation.bridgeAuthorAuthorizationFresh
-  , targetCrossPrincipalPolicyAllows := observation.targetCrossPrincipalPolicyAllows
+  , peerAuthorityAllows := observation.peerAuthorityAllows
+  , hopWithinBound := observation.hopWithinBound
   , expectedAdmitted := projectAgentRequestAdmission observation
   , expectedDisposition := requestAdmissionDispositionName
       (projectAgentRequestAdmissionDisposition observationAvailable observation) }
@@ -68,7 +64,6 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , signerMatchesTarget := true
   , signerMatchesIssuer := true
   , requesterMatchesIssuer := true
-  , requesterMatchesBridgeAuthor := false
   , currentApproval := true
   , exactGeneration := true
   , authorizationFresh := true
@@ -78,11 +73,9 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , sourceBindingCurrent := false
   , triggerConfigDocumentBindingCurrent := false
   , sourceDocumentBindingCurrent := false
-  , sourceToolCallBindingCurrent := false
   , targetPolicyAllows := false
-  , bridgeAuthorBindingCurrent := false
-  , bridgeAuthorAuthorizationFresh := false
-  , targetCrossPrincipalPolicyAllows := false }
+  , peerAuthorityAllows := false
+  , hopWithinBound := true }
 
 def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   [ requestAdmissionCase "valid-current-enrollment" (requestAdmissionBase .enrollment)
@@ -101,22 +94,25 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
       { requestAdmissionBase .runtimeInternal with
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceDocumentBindingCurrent := true }
-  , requestAdmissionCase "valid-runtime-local-child"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .localChild
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceDocumentBindingCurrent := true
-          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
-  , requestAdmissionCase "valid-runtime-cross-principal-child-without-parent-document"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := false, requesterMatchesTarget := false
-          requesterMatchesBridgeAuthor := true
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceDocumentBindingCurrent := false
-          sourceToolCallBindingCurrent := true, bridgeAuthorBindingCurrent := true
-          bridgeAuthorAuthorizationFresh := true
-          targetCrossPrincipalPolicyAllows := true }
+  , requestAdmissionCase "valid-peer"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true }
+  , requestAdmissionCase "peer-authority-denied"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := false }
+  , requestAdmissionCase "peer-same-principal-is-not-peer"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := true, peerAuthorityAllows := true }
+  , requestAdmissionCase "peer-forged-signer"
+      { requestAdmissionBase .peer with
+          signerMatchesRequester := false, requesterMatchesTarget := false
+          peerAuthorityAllows := true }
+  , requestAdmissionCase "peer-hop-exceeds-bound"
+      { requestAdmissionBase .peer with
+          requesterMatchesTarget := false, peerAuthorityAllows := true
+          hopWithinBound := false }
+  , requestAdmissionCase "local-self-hop-exceeds-bound"
+      { requestAdmissionBase .localSelf with hopWithinBound := false }
   , requestAdmissionCase "valid-runtime-automated-trigger"
       { requestAdmissionBase .runtimeInternal with
           runtimeSourceKind := .automatedTrigger
@@ -136,76 +132,17 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
           runtimeSourceKind := .automatedTrigger
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
-          sourceDocumentBindingCurrent := true
-          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
+          sourceDocumentBindingCurrent := true, targetPolicyAllows := true }
   , requestAdmissionCase "stale-runtime-source-document"
       { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .localChild
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
-          sourceDocumentBindingCurrent := false
-          sourceToolCallBindingCurrent := true, targetPolicyAllows := true }
-  , requestAdmissionCase "stale-runtime-tool-call-document"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .localChild
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
-          sourceDocumentBindingCurrent := true
-          sourceToolCallBindingCurrent := false, targetPolicyAllows := true }
+          sourceBindingCurrent := true, sourceDocumentBindingCurrent := false }
   , requestAdmissionCase "runtime-target-policy-denied"
       { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .localChild
+          runtimeSourceKind := .automatedTrigger
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := true
-          sourceDocumentBindingCurrent := true
-          sourceToolCallBindingCurrent := true, targetPolicyAllows := false }
-  , requestAdmissionCase "cross-principal-author-revoked"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := false, requesterMatchesTarget := false
-          requesterMatchesBridgeAuthor := true
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
-          bridgeAuthorBindingCurrent := true
-          bridgeAuthorAuthorizationFresh := false
-          targetCrossPrincipalPolicyAllows := true }
-  , requestAdmissionCase "cross-principal-target-policy-denied"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := false, requesterMatchesTarget := false
-          requesterMatchesBridgeAuthor := true
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
-          bridgeAuthorBindingCurrent := true
-          bridgeAuthorAuthorizationFresh := true
-          targetCrossPrincipalPolicyAllows := false }
-  , requestAdmissionCase "cross-principal-wrong-requester"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := false, requesterMatchesTarget := false
-          requesterMatchesBridgeAuthor := false
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
-          bridgeAuthorBindingCurrent := true, bridgeAuthorAuthorizationFresh := true
-          targetCrossPrincipalPolicyAllows := true }
-  , requestAdmissionCase "cross-principal-requester-is-host-not-coordinator"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := true, requesterMatchesTarget := true
-          requesterMatchesBridgeAuthor := false
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
-          bridgeAuthorBindingCurrent := true, bridgeAuthorAuthorizationFresh := true
-          targetCrossPrincipalPolicyAllows := true }
-  , requestAdmissionCase "cross-principal-wrong-bridge-author-binding"
-      { requestAdmissionBase .runtimeInternal with
-          runtimeSourceKind := .crossPrincipalChild
-          requesterMatchesIssuer := false, requesterMatchesTarget := false
-          requesterMatchesBridgeAuthor := true
-          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
-          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
-          bridgeAuthorBindingCurrent := false, bridgeAuthorAuthorizationFresh := true
-          targetCrossPrincipalPolicyAllows := true }
+          targetPolicyAllows := false }
   , requestAdmissionCase "cross-target-local-self"
       { requestAdmissionBase .localSelf with requesterMatchesTarget := false }
   , requestAdmissionCase "tampered-signed-request-fields"
@@ -267,17 +204,16 @@ def titleAdmissionUnsigned : AgentRequestAdmission :=
   , enrollmentAdminDid := "", enrollmentAuthorizationSequence := 0
   , enrollmentAuthorizationExpiresAt := ""
   , issuerDid := "a", sourceRequestId := titleParentLink.requestId
-  , runtimeSourceKind := .localControl, bridgeAuthorDid := ""
+  , runtimeSourceKind := .localControl
   , signedFields := [], signatureValid := true }
 
 def titleEvidence : RuntimeInternalEvidence :=
   { sourceKind := .localControl, issuerDid := "a"
-  , sourceRequestId := titleParentLink.requestId, bridgeAuthorDid := ""
+  , sourceRequestId := titleParentLink.requestId
   , targetAgent := "a", targetRuntimeAttestationValid := true
   , sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
-  , sourceDocumentBindingCurrent := true, sourceToolCallBindingCurrent := false
-  , targetPolicyAllows := false, bridgeAuthorBindingCurrent := false
-  , bridgeAuthorAuthorizationFresh := false, targetCrossPrincipalPolicyAllows := false
+  , sourceDocumentBindingCurrent := true
+  , targetPolicyAllows := false
   , titleParent := some titleParentEvidence }
 
 def signTitleAdmission (request : AgentRequestSemantics)
@@ -300,16 +236,18 @@ private def titleRequestAdmissionCase (name : String) (request : AgentRequestSem
   , branchFieldsExact, pendingDeadlineAbsent, request, admission
   , runtimeEvidence := evidence, sessionBehavior
   , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
-      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent)
+      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
+      false CausalHop.defaultMaxRequestHop)
   , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      sessionBehavior []
+      false CausalHop.defaultMaxRequestHop sessionBehavior []
       (fun _ => false) (fun _ => false))
   , expectedDisposition := titlePendingDisposition observationAvailable ({} : Enrollment.State)
       request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+      CausalHop.defaultMaxRequestHop
   , expectedPendingState := (titlePendingStep? observationAvailable ({} : Enrollment.State)
       request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
-      titlePendingContext).map (·.state) }
+      CausalHop.defaultMaxRequestHop titlePendingContext).map (·.state) }
 
 def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let signed := signTitleAdmission titleRequest
@@ -318,7 +256,7 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let wrongParent := { titleRequest with
     parentFields := titleParentFields { titleParentLink with documentId := "forged-doc" } }
   let toolParent := { titleRequest with
-    parentFields := textFieldsToBytes ["0", "some", titleParentLink.requestId,
+    parentFields := textFieldsToBytes ["some", titleParentLink.requestId,
       "some", titleParentLink.documentId, "some", "forged-tool", "some", "forged-tool-doc"] }
   let queuedQueue : RequestQueue := { source := .user, policy := .append }
   let queued := { titleRequest with input := ({ queue := some queuedQueue } : RequestInput) }
@@ -381,7 +319,7 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
       (some titleEvidence)
   , titleRequestAdmissionCase "title-cross-source-forbidden" titleRequest
       (signTitleAdmission titleRequest
-        { titleAdmissionUnsigned with runtimeSourceKind := .localChild })
+        { titleAdmissionUnsigned with runtimeSourceKind := .automatedTrigger })
       (some titleEvidence)
   ]
 

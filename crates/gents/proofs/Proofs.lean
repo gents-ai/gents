@@ -26,7 +26,6 @@ import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture
 import Proofs.DurableLineage
-import Proofs.SpawnClaimFence
 import Proofs.QueuedSteering
 import Proofs.RuntimeReconcile
 import Proofs.PairingReconcile

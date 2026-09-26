@@ -1,4 +1,4 @@
-import Proofs.Background.Properties.Budget
+import Proofs.Background.Budget
 import Proofs.Background.ToolOutput
 import Proofs.Background.CompletionContinuation
 import Proofs.Background.ProcessControl
@@ -21,10 +21,8 @@ def r6Case
   , action := action
   , legal := legal
   , preLiveCount := preLiveCount
-  , maxBackgrounded := Subagent.maxBackgroundedPerParent
+  , maxBackgrounded := Background.maxBackgroundedPerParent
   , awaitMode := "background"
-  , cancelPolicy := "cascade"
-  , childRequestId := none
   , terminalState := terminalState
   , result := result
   , reason := reason
@@ -37,7 +35,7 @@ def r6Case
 The production `new_background_tool` constructor starts pending/background;
 `start_running` supplies the running/committed shape modeled here. -/
 def r6NativeToolFixture
-    (awaitMode : Subagent.AwaitMode := .background) :
+    (awaitMode : ToolExecution.AwaitMode := .background) :
     ToolExecution.ToolCallContext :=
   { callId := 77
   , requestId := 900
@@ -49,13 +47,10 @@ def r6NativeToolFixture
   , failureClass := none
   , persistence := .committed
   , awaitMode := awaitMode
-  , cancelPolicy := .cascade
-  , childRequestId := none
   }
 
 /-- Execute one native-tool action and project its actual post-state into the
-R6 JSON row. No caller supplies `legal`, `terminalState`, mode, policy, or
-child-link values. -/
+R6 JSON row. No caller supplies `legal`, `terminalState` or mode values. -/
 def r6NativeStepCase
     (name actionName : String)
     (pre : ToolExecution.ToolCallContext)
@@ -70,8 +65,6 @@ def r6NativeStepCase
       { base with
           legal := true
         , awaitMode := post.awaitMode.toDefraDB
-        , cancelPolicy := post.cancelPolicy.toDefraDB
-        , childRequestId := post.childRequestId.map toString
         , terminalState := post.state.toDefraDB
       }
 
@@ -79,7 +72,7 @@ def r6NativeStepCase
 creating another live background row. -/
 def r6BudgetCase (name : String) (preLiveCount : Nat) :
     R6BackgroundingCase :=
-  let legal := (Subagent.admitBackground preLiveCount).isSome
+  let legal := (Background.admitBackground preLiveCount).isSome
   r6Case name "budget" "spawn_process" legal preLiveCount
     (if legal then "running" else "rejected")
     none none
@@ -90,11 +83,9 @@ drives `ToolCallLifecycle::recover_all` conformance. -/
 def r6RestartCase : R6BackgroundingCase :=
   let row : Recovery.RestartRow :=
     { awaitMode := .background
-    , cancelPolicy := .cascade
-    , childLinked := false
+    , sessionMessage := false
     , parent := .live
     , deadlineExpired := false
-    , unclaimedExpired := false
     , process := .stopped
     }
   let disposition := Recovery.restartDisposition row
@@ -104,10 +95,8 @@ def r6RestartCase : R6BackgroundingCase :=
   , action := disposition.causeContract.getD ""
   , legal := true
   , preLiveCount := 1
-  , maxBackgrounded := Subagent.maxBackgroundedPerParent
+  , maxBackgrounded := Background.maxBackgroundedPerParent
   , awaitMode := row.awaitMode.toDefraDB
-  , cancelPolicy := row.cancelPolicy.toDefraDB
-  , childRequestId := if row.childLinked then some "linked" else none
   , terminalState := disposition.terminalStateContract.getD "running"
   , result := none
   , reason := notification.map (·.notificationReason)
@@ -152,14 +141,15 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
 /-- These fields drive actual notification publication and failed-wake
-redrive consumers; they do not model-check a duplicate Rust reference machine. -/
+redrive consumers; they do not model-check a duplicate Rust reference machine.
+The Goal status is a row input only: Goals and background wakes are
+independent, so the owner functions do not read it. -/
 def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6BackgroundingCase :=
   let notified := BackgroundCompletion.appendNotification?
     BackgroundCompletion.canonicalCompletion BackgroundCompletion.canonicalWaitReservedTranscript
   let queued := notified.bind fun notification =>
-    BackgroundCompletion.enqueueWakeForOwner? goal notification BackgroundCompletion.canonicalQueue
-  let redrive := BackgroundCompletion.redriveWakeForOwner? goal
-    (BackgroundCompletion.failedWakeFixture)
+    BackgroundCompletion.enqueueWake? notification BackgroundCompletion.canonicalQueue
+  let redrive := BackgroundCompletion.redriveWake? (BackgroundCompletion.failedWakeFixture)
   { r6Case name "completion_continuation_owner" "notify_and_select_continuation_owner"
       notified.isSome 1 "completed" with
     goalStatus := goal.map Goals.Status.toDefraDB
@@ -184,7 +174,7 @@ def r6FailedWakeRedriveCase
     (wake : BackgroundCompletion.FailedWake) (latest : Bool := true) : R6BackgroundingCase :=
   let parent := wakeParent wake
   let rows := if latest then [parent] else [parent, newerInteractive]
-  let post := (BackgroundCompletion.redriveWakeFromRows? none wakeSession rows 101 wake
+  let post := (BackgroundCompletion.redriveWakeFromRows? wakeSession rows 101 wake
     wakeSuccessor "wake" 3).map (·.1)
   let legal := post.isSome
   { r6Case
@@ -300,24 +290,24 @@ def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
 
 def processScope
     (requestId sessionId agentDid : String)
-    (requesterDid : Option String) : Subagent.ProcessControl.Scope :=
+    (requesterDid : Option String) : Background.ProcessControl.Scope :=
   { requestId, sessionId, agentDid, requesterDid }
 
 def r6ProcessControlCase
     (name action scenario : String)
-    (caller owner : Subagent.ProcessControl.Scope) : R6BackgroundingCase :=
+    (caller owner : Background.ProcessControl.Scope) : R6BackgroundingCase :=
   r6Case name "process_control_authorization" action
-    (Subagent.ProcessControl.authorized caller owner)
+    (Background.ProcessControl.authorized caller owner)
     1 "running" none (some scenario)
 
 def r6WaitBoundaryCase
-    (name : String) (boundary : Subagent.ProcessControl.WaitBoundary) :
+    (name : String) (boundary : Background.ProcessControl.WaitBoundary) :
     R6BackgroundingCase :=
   let observation :=
-    Subagent.ProcessControl.observeBoundary Subagent.ChildTerminal.running boundary
+    Background.ProcessControl.observeBoundary ToolExecution.ToolCallState.running boundary
   r6Case name "wait_boundary" "wait_process"
     (!observation.cancellationRequested)
-    1 (Subagent.ChildTerminal.toDefraDB observation.processState)
+    1 (ToolExecution.ToolCallState.toDefraDB observation.processState)
     none (some observation.reason)
 
 /-- The standalone wait observation describes why polling stopped, while the
@@ -326,8 +316,8 @@ request's deadline is authoritative, the existing tool timeout transition
 terminalizes the wait call; it never changes the separately backgrounded
 process observed above. -/
 def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
-  let observation := Subagent.ProcessControl.observeBoundary
-    Subagent.ChildTerminal.running .callerDeadline
+  let observation := Background.ProcessControl.observeBoundary
+    ToolExecution.ToolCallState.running .callerDeadline
   let waitCall := { r6NativeToolFixture .foreground with
     deadline := 10, currentTime := 11 }
   let base := r6Case
@@ -340,17 +330,16 @@ def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
       { base with
           legal := !observation.cancellationRequested
           awaitMode := callerPost.awaitMode.toDefraDB
-          cancelPolicy := callerPost.cancelPolicy.toDefraDB
           terminalState := callerPost.state.toDefraDB
-          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+          result := some (ToolExecution.ToolCallState.toDefraDB observation.processState) }
 
 /-- An observational wait does not cancel the background process. The caller's
 own accepted foreground wait can nevertheless lose the request-interruption
 race through the existing Running tool cancellation transition. This case
 describes that branch, not a required winner against observer completion. -/
 def r6CallerInterruptDispatchCase : R6BackgroundingCase :=
-  let observation := Subagent.ProcessControl.observeBoundary
-    Subagent.ChildTerminal.running .callerInterrupted
+  let observation := Background.ProcessControl.observeBoundary
+    ToolExecution.ToolCallState.running .callerInterrupted
   let waitCall := r6NativeToolFixture .foreground
   let base := r6Case
     "caller_interrupt_cancels_wait_call_preserves_background_process"
@@ -363,9 +352,8 @@ def r6CallerInterruptDispatchCase : R6BackgroundingCase :=
       { base with
           legal := !observation.cancellationRequested
           awaitMode := callerPost.awaitMode.toDefraDB
-          cancelPolicy := callerPost.cancelPolicy.toDefraDB
           terminalState := callerPost.state.toDefraDB
-          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+          result := some (ToolExecution.ToolCallState.toDefraDB observation.processState) }
 
 theorem r6_caller_interrupt_dispatch_uses_both_existing_owners :
     (r6CallerInterruptDispatchCase.legal,
@@ -380,8 +368,8 @@ interruption sweep cancels that call. Completion belongs to the wait call;
 the observed background process remains running. This is the other possible
 owner ordering, not a rule selecting a winner. -/
 def r6CallerInterruptObserverCompletionCase : R6BackgroundingCase :=
-  let observation := Subagent.ProcessControl.observeBoundary
-    Subagent.ChildTerminal.running .callerInterrupted
+  let observation := Background.ProcessControl.observeBoundary
+    ToolExecution.ToolCallState.running .callerInterrupted
   let waitCall := r6NativeToolFixture .foreground
   let base := r6Case
     "caller_interrupt_observer_completes_wait_call_preserves_background_process"
@@ -393,9 +381,8 @@ def r6CallerInterruptObserverCompletionCase : R6BackgroundingCase :=
       { base with
           legal := !observation.cancellationRequested
           awaitMode := callerPost.awaitMode.toDefraDB
-          cancelPolicy := callerPost.cancelPolicy.toDefraDB
           terminalState := callerPost.state.toDefraDB
-          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+          result := some (ToolExecution.ToolCallState.toDefraDB observation.processState) }
 
 theorem r6_caller_interrupt_observer_completion_uses_both_existing_owners :
     (r6CallerInterruptObserverCompletionCase.legal,
@@ -434,12 +421,12 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
   , r6GoalOwnerCase "no_goal_preserves_background_wake" none
-  , r6GoalOwnerCase "active_goal_owns_background_continuation" (some .active)
-  , r6GoalOwnerCase "paused_goal_does_not_background_resume" (some .paused)
-  , r6GoalOwnerCase "blocked_goal_does_not_background_resume" (some .blocked)
-  , r6GoalOwnerCase "usage_limited_goal_does_not_background_resume" (some .usageLimited)
-  , r6GoalOwnerCase "budget_limited_goal_owns_wrapup" (some .budgetLimited)
-  , r6GoalOwnerCase "complete_goal_does_not_background_resume" (some .complete)
+  , r6GoalOwnerCase "active_goal_keeps_background_wake" (some .active)
+  , r6GoalOwnerCase "paused_goal_keeps_background_wake" (some .paused)
+  , r6GoalOwnerCase "blocked_goal_keeps_background_wake" (some .blocked)
+  , r6GoalOwnerCase "usage_limited_goal_keeps_background_wake" (some .usageLimited)
+  , r6GoalOwnerCase "budget_limited_goal_keeps_background_wake" (some .budgetLimited)
+  , r6GoalOwnerCase "complete_goal_keeps_background_wake" (some .complete)
   , r6FailedWakeRedriveCase
       "failed_background_wake_with_budget_redrives"
       (BackgroundCompletion.failedWakeFixture (retryCount := 1))
@@ -547,122 +534,123 @@ theorem r6BackgroundingCases_pinned :
     r6BackgroundingCases.map
         (fun witness =>
           (witness.name, witness.legal, witness.awaitMode,
-            witness.childRequestId, witness.terminalState,
+            witness.terminalState,
             witness.queueSource, witness.queueKey)) =
       [ ("background_tool_budget_count_7_admits_spawn", true, "background",
-          none, "running", none, none)
+          "running", none, none)
       , ("background_tool_budget_count_8_rejects_spawn", false, "background",
-          none, "rejected", none, none)
+          "rejected", none, none)
       , ("tool_kind_background_mode_executes", true, "background",
-          none, "running", none, none)
+          "running", none, none)
       , ("tool_kind_bridge_complete_persists_result", true, "background",
-          none, "completed", none, none)
+          "completed", none, none)
       , ("tool_kind_explicit_cancel_projects_explicit_cancel",
-          true, "background", none, "cancelled", none, none)
+          true, "background", "cancelled", none, none)
       , ("background_recovery_running_live_parent_to_cancelled", true,
-          "background", none, "cancelled", some "background_completion",
+          "background", "cancelled", some "background_completion",
           some "background_completion:900")
       , ("background_completion_source_writes_canonical_key", true,
-          "background", none, "completed", some "background_completion",
+          "background", "completed", some "background_completion",
           some "background_completion:900")
       , ("terminal_completion_message_precedes_claimed_continuation", true,
-          "background", none, "completed", some "background_completion",
+          "background", "completed", some "background_completion",
           some "background_completion:900")
-      , ("no_goal_preserves_background_wake", true, "background", none, "completed", none, none)
-      , ("active_goal_owns_background_continuation", true, "background", none, "completed", none, none)
-      , ("paused_goal_does_not_background_resume", true, "background", none, "completed", none, none)
-      , ("blocked_goal_does_not_background_resume", true, "background", none, "completed", none, none)
-      , ("usage_limited_goal_does_not_background_resume", true, "background", none, "completed", none, none)
-      , ("budget_limited_goal_owns_wrapup", true, "background", none, "completed", none, none)
-      , ("complete_goal_does_not_background_resume", true, "background", none, "completed", none, none)
+      , ("no_goal_preserves_background_wake", true, "background", "completed", none, none)
+      , ("active_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("paused_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("blocked_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("usage_limited_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("budget_limited_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("complete_goal_keeps_background_wake", true, "background", "completed", none, none)
       , ("failed_background_wake_with_budget_redrives", true,
-          "background", none, "failed", some "background_completion",
+          "background", "failed", some "background_completion",
           some "background_completion:900")
       , ("failed_background_wake_exhausted_budget_stops", false,
-          "background", none, "failed", some "background_completion",
+          "background", "failed", some "background_completion",
           some "background_completion:900")
       , ("generic_scheduled_failure_is_not_background_redrive", false,
-          "background", none, "failed", some "user", some "user:900")
+          "background", "failed", some "user", some "user:900")
       , ("non_latest_background_wake_does_not_redrive", false,
-          "background", none, "failed", some "background_completion",
+          "background", "failed", some "background_completion",
           some "background_completion:900")
       , ("aged_background_wake_precedes_new_descendant", true,
-          "background", none, "pending", some "background_completion",
+          "background", "pending", some "background_completion",
           some "background_completion:900")
       , ("fresh_background_wake_preserves_fifo", false,
-          "background", none, "pending", some "background_completion",
+          "background", "pending", some "background_completion",
           some "background_completion:900")
       , ("completed_wake_acknowledges_exact_claim_snapshot", true,
-          "background", none, "completed", some "background_completion",
+          "background", "completed", some "background_completion",
           some "background_completion:900")
       , ("failed_wake_retains_claim_snapshot_unacknowledged", true,
-          "background", none, "failed", some "background_completion",
+          "background", "failed", some "background_completion",
           some "background_completion:900")
       , ("restart_before_claim_preserves_pending_notification", true,
-          "background", none, "pending", some "background_completion",
+          "background", "pending", some "background_completion",
           some "background_completion:900")
       , ("live_inference_retains_snapshot_without_ack_or_redrive", true,
-          "background", none, "processing", some "background_completion",
+          "background", "processing", some "background_completion",
           some "background_completion:900")
       , ("acknowledgement_projection_restart_is_atomic", true,
-          "background", none, "completed", some "background_completion",
+          "background", "completed", some "background_completion",
           some "background_completion:900")
       , ("noncanonical_subagent_completion_source_is_rejected", true,
-          "background", none, "completed", some "subagent_completion",
+          "background", "completed", some "subagent_completion",
           none)
       , ("list_processes_same_requester_next_turn_authorized", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("read_process_same_requester_next_turn_authorized", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("wait_process_same_requester_next_turn_authorized", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("cancel_process_same_requester_next_turn_authorized", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("originating_request_without_matching_requester_is_denied", false,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("absent_requester_next_turn_authorized", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("empty_requester_does_not_alias_absent", false,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("process_control_cross_session_denied", false,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("process_control_cross_agent_denied", false,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("process_control_cross_requester_denied", false,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("wait_timeout_preserves_running_process", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("caller_interrupt_preserves_running_process", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("caller_deadline_preserves_running_process", true,
-          "background", none, "running", none, none)
+          "background", "running", none, none)
       , ("caller_deadline_times_out_wait_call_preserves_background_process", true,
-          "foreground", none, "timedOut", none, none)
+          "foreground", "timedOut", none, none)
       , ("caller_interrupt_cancels_wait_call_preserves_background_process", true,
-          "foreground", none, "cancelled", none, none)
+          "foreground", "cancelled", none, none)
       , ("caller_interrupt_observer_completes_wait_call_preserves_background_process", true,
-          "foreground", none, "completed", none, none)
+          "foreground", "completed", none, none)
       ] := by
   rfl
 
 /-- Pin ownership inputs and durable outcomes, not only the older common
-R6 fields. Every emitted owner case retains its notification; only the
-non-Goal case may enqueue or redrive a background wake. -/
+R6 fields. Goals and background wakes are independent: every emitted case
+retains its notification, enqueues the wake and allows failed-wake redrive,
+whatever the Goal status. -/
 theorem goal_owner_delivery_cases_pin_all_outcomes :
     ((r6BackgroundingCases.filter fun c => c.group == "completion_continuation_owner").map
       fun c => (c.name, c.goalStatus, c.notificationPersisted, c.wakeCreated, c.redriveAllowed)) =
       [ ("no_goal_preserves_background_wake", none, some true, some true, some true)
-      , ("active_goal_owns_background_continuation", some "active", some true, some false, some false)
-      , ("paused_goal_does_not_background_resume", some "paused", some true, some false, some false)
-      , ("blocked_goal_does_not_background_resume", some "blocked", some true, some false, some false)
-      , ("usage_limited_goal_does_not_background_resume", some "usage_limited", some true, some false, some false)
-      , ("budget_limited_goal_owns_wrapup", some "budget_limited", some true, some false, some false)
-      , ("complete_goal_does_not_background_resume", some "complete", some true, some false, some false) ] := by
+      , ("active_goal_keeps_background_wake", some "active", some true, some true, some true)
+      , ("paused_goal_keeps_background_wake", some "paused", some true, some true, some true)
+      , ("blocked_goal_keeps_background_wake", some "blocked", some true, some true, some true)
+      , ("usage_limited_goal_keeps_background_wake", some "usage_limited", some true, some true, some true)
+      , ("budget_limited_goal_keeps_background_wake", some "budget_limited", some true, some true, some true)
+      , ("complete_goal_keeps_background_wake", some "complete", some true, some true, some true) ] := by
   rfl
 
 /-! ## Tool output paging witnesses (#937)
 
-Outputs are computed from `Subagent.ToolOutput.readSlice`; the pinned tuple
+Outputs are computed from `Background.ToolOutput.readSlice`; the pinned tuple
 theorem below fails at Lean build time if the slice model drifts, and the
 Rust `background_tools` unit test fails if `read_retained_output_slice`
 drifts from the emitted rows. -/
@@ -672,12 +660,12 @@ def toolOutputPagingCase
     (retainedLen totalBytes offset maxBytes : Nat)
     (theoremName : String) : ToolOutputPagingCase :=
   let firstOffset := 0
-  let window : Subagent.ToolOutput.RetainedWindow :=
+  let window : Background.ToolOutput.RetainedWindow :=
     { firstOffset := firstOffset
     , retainedLen := retainedLen
     , totalBytes := totalBytes
     }
-  let slice := Subagent.ToolOutput.readSlice window offset maxBytes
+  let slice := Background.ToolOutput.readSlice window offset maxBytes
   { name := name
   , firstOffset := firstOffset
   , retainedLen := retainedLen
@@ -695,13 +683,13 @@ def toolOutputPagingCase
 
 def toolOutputPagingCases : List ToolOutputPagingCase :=
   [ toolOutputPagingCase "paging_head_page" 8 8 0 4
-      "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
+      "Background.ToolOutput.readSlice_contiguous_from_live_cursor"
   , toolOutputPagingCase "paging_continuation_no_gap" 8 8 4 4
-      "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
+      "Background.ToolOutput.readSlice_contiguous_from_live_cursor"
   , toolOutputPagingCase "paging_cursor_past_end_parks" 4 4 9 4
-      "Subagent.ToolOutput.readSlice_past_end_empty"
+      "Background.ToolOutput.readSlice_past_end_empty"
   , toolOutputPagingCase "paging_mid_window_bounded_budget" 7 7 3 2
-      "Subagent.ToolOutput.readSlice_progress"
+      "Background.ToolOutput.readSlice_progress"
   ]
 
 /-- Pinned expected outputs: fails at Lean build time if `readSlice` drifts,
@@ -729,25 +717,13 @@ theorem toolOutputPagingCases_head_and_continuation_tile :
   native_decide
 
 def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
-  [ { theoremName := "Subagent.admitted_background_count_bounded"
+  [ { theoremName := "Background.admitted_background_count_bounded"
     , witnessKind := "admission_bound"
     , scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
-    , numericBound := Subagent.maxBackgroundedPerParent
+    , numericBound := Background.maxBackgroundedPerParent
     , kindFields :=
         [ ("await_mode", "background")
-        , ("cancel_policy", "cascade")
         , ("error_code_on_violation", "background_tool_budget_exceeded")
-        ]
-    }
-  , { theoremName := "Subagent.BridgedState.cascade_cancels_child"
-    , witnessKind := "reachability_trace"
-    , scenario := "explicit_cascade_bridge_cancel_interrupts_processing_child"
-    , numericBound := 2
-    , kindFields :=
-        [ ("cancel_policy", "cascade")
-        , ("child_pre_state", "processing")
-        , ("child_pre_admission", "executing")
-        , ("child_post_state", "interrupted")
         ]
     }
   ]
@@ -756,7 +732,6 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
 flag. Publication output carries both successor rows and the session observation. -/
 structure WakeRowsCase where
   name : String
-  goal : Option Goals.Status := none
   session : AgentSession.Document := wakeSession
   rows : List AgentSession.RequestFact := [wakeParent BackgroundCompletion.failedWakeFixture]
   parentDoc : Nat := 101
@@ -764,7 +739,7 @@ structure WakeRowsCase where
   successor : AgentSession.RequestFact := wakeSuccessor
 
 def WakeRowsCase.result (c : WakeRowsCase) :=
-  BackgroundCompletion.redriveWakeFromRows? c.goal c.session c.rows c.parentDoc c.wake
+  BackgroundCompletion.redriveWakeFromRows? c.session c.rows c.parentDoc c.wake
     c.successor "wake" 3
 
 def backgroundWakeRowsCases : List WakeRowsCase :=
@@ -778,7 +753,6 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
       successor := { wakeSuccessor with observed := ⟨102, 901, .pending⟩ } }
   , { name := "older-successor-cannot-advance-head",
       successor := { wakeSuccessor with createdAt := 0 } }
-  , { name := "goal-owner-blocks-background-redrive", goal := some .active }
   , { name := "published-successor-prevents-second-redrive",
       rows := [wakeParent BackgroundCompletion.failedWakeFixture, wakeSuccessor],
       successor := { wakeSuccessor with createdAt := 4, observed := ⟨104, 904, .pending⟩ } }
@@ -790,7 +764,7 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
 
 theorem background_recovery_rows_pinned :
     backgroundWakeRowsCases.map (fun c => c.result.isSome) =
-      [true, false, false, false, false, false, false, false, true, false] := by native_decide
+      [true, false, false, false, false, false, false, true, false] := by native_decide
 
 theorem background_successor_publication_pinned :
     ((WakeRowsCase.result { name := "publication" }).map fun post =>

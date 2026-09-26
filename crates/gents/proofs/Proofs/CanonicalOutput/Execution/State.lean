@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Delegation
+import Proofs.CanonicalOutput.Message
 import Proofs.Request.State
 import Proofs.RequestExecutionLease
 import Proofs.Transcript
@@ -32,8 +32,6 @@ structure PhysicalRequestAdmission where
   session : SessionId
   requester : Option Nat
   authenticated : Bool
-  subagentDepth : Nat := 0
-  workspace : Option DelegatedWorkspace := none
   deriving DecidableEq, Repr
 
 structure GoalChildReceipt where
@@ -73,8 +71,6 @@ inductive ClaimEvidence where
 structure Activation where
   request : PhysicalRequestAdmission
   evidence : ClaimEvidence
-  configuredRoutes : List (DocId × Nat × Nat)
-  routesAuthenticated : Bool
   generation : Generation
   duration : Time
   deadline : Time
@@ -95,7 +91,6 @@ authority and need not equal `document`. -/
 structure ToolAdmission where
   document : DocId
   context : ToolExecution.ToolCallContext
-  delegatedWorkspace : Option DelegatedWorkspace := none
   deriving DecidableEq, Repr
 
 inductive ToolProvenance where
@@ -107,20 +102,15 @@ structure ToolGenesis where
   logicalCallId : ToolExecution.ToolCallId
   logicalRequestId : RequestId
   operation : ToolExecution.ToolOperation
-  childRequestId : Option RequestId
-  spawnBehaviorId : Option Nat
   deriving DecidableEq, Repr
 
 def ToolGenesis.fromContext (context : ToolExecution.ToolCallContext) : ToolGenesis :=
   { logicalCallId := context.callId
   , logicalRequestId := context.requestId
-  , operation := context.operation
-  , childRequestId := context.childRequestId
-  , spawnBehaviorId := context.spawnBehaviorId }
+  , operation := context.operation }
 
-/-- Exact accepted-header ownership plus projections of existing durable native
-cancellation/reconciliation fields. None of these fields claims that a running
-host effect has stopped. -/
+/-- Exact accepted-header ownership plus the durable uncertainty handoff
+(`stuck_since`). It never claims that a running host effect has stopped. -/
 structure OwnedTool where
   document : DocId
   requestDoc : DocId
@@ -128,9 +118,6 @@ structure OwnedTool where
   acceptedSequence : Transcript.Sequence
   provenance : ToolProvenance := .acceptedIntent
   context : ToolExecution.ToolCallContext
-  delegatedWorkspace : Option DelegatedWorkspace := none
-  cancelCascadeIntentAt : Option Time := none
-  cancelPendingRemoteAck : Bool := false
   stuckSince : Option Time := none
   deriving DecidableEq, Repr
 
@@ -153,32 +140,13 @@ structure WakeDocumentBinding where
   authenticated : Bool
   deriving DecidableEq, Repr
 
-/-- Authenticated observation of the canonical Goal owner selected in the
-same transaction as a parent-bound completion notification. -/
-structure GoalNotificationBinding where
-  goalDocument : DocId
-  parentRequestDocument : DocId
-  agent : Nat
-  session : SessionId
-  status : Goals.Status
-  authenticated : Bool
-  deriving DecidableEq, Repr
-
 structure World where
   requestId : DocId
   sessionId : SessionId
   purpose : RequestPurpose
-  /-- Authenticated coordinator principal supplied by existing DID/ACP ownership
-  at the local gate. It is not inferred from a source or remote target. -/
+  /-- Authenticated principal supplied by existing DID/ACP ownership at the
+  local gate. It is not inferred from a source. -/
   principal : Nat
-  /-- Current accepted physical request depth, read from its owner at publication. -/
-  subagentDepth : Nat := 0
-  /-- Parent workspace stamp from the same authenticated request owner. -/
-  workspace : Option DelegatedWorkspace := none
-  /-- Exact `(physical tool document, remote target, selected behavior)` subset projected from the
-  existing configured routing owner for the turn being accepted. Local calls
-  are absent. This is an authenticated owner snapshot, not caller-created ACP. -/
-  remoteRoutes : List (DocId × Nat × Nat)
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope
@@ -187,7 +155,6 @@ structure World where
   must allocate strictly beyond it; exact replay does not allocate. -/
   compactionCursor : Option Transcript.Sequence := none
   toolContexts : List OwnedTool := []
-  delegatedCalls : List DelegatedCall
   terminalSelection : Option TerminalSelection
   gateOwner : Option Nat := none
   gateSchedule : StorageWriteGate.State := ⟨.released, true, false⟩
@@ -207,16 +174,6 @@ def World.currentGeneration? (world : World) : Option Generation :=
   match world.lease.lease with
   | .active generation _ _ => some generation
   | _ => none
-
-/-- Routing/ACP validates these configured principals natively. This model binds
-the addressed call to exact reconstructed argument bytes before constructing the
-remote-only row. -/
-structure RemoteTarget where
-  call : DocId
-  coordinator : Nat
-  target : Nat
-  behavior : Nat
-  deriving DecidableEq, Repr
 
 /-- Evidence projected from the existing cancellation and tool-policy owners at
 the same local gate. This execution model does not duplicate either policy
@@ -260,7 +217,6 @@ inductive Error where
   | transcriptRejected
   | terminalRejected
   | publicationIncomplete
-  | invalidDelegation
   deriving DecidableEq, Repr
 
 /-- The execution model carries no denial oracle. ACP-denied dependency behavior

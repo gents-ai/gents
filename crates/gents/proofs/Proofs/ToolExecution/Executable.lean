@@ -11,7 +11,6 @@ inductive Action where
   | timeout
   | background
   | foreground
-  | detach
   | cancelBeforeDispatch (cause : CancelCause)
   | cancelDuringRun (cause : CancelCause)
   deriving DecidableEq, Repr
@@ -28,7 +27,7 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
       else
         none
   | .complete =>
-      if pre.state = .running ∧ pre.persistence = .committed ∧ pre.childRequestId = none then
+      if pre.state = .running ∧ pre.persistence = .committed then
         some { pre with state := .completed }
       else
         none
@@ -48,14 +47,9 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
       else
         none
   | .foreground =>
-      if pre.state = .running ∧ pre.awaitMode = .background then
+      if pre.state = .running ∧ pre.awaitMode = .background ∧
+          pre.operation ≠ .sessionMessage then
         some { pre with awaitMode := .foreground }
-      else
-        none
-  | .detach =>
-      if (pre.state = .pending ∨ pre.state = .running) ∧
-          pre.cancelPolicy = .cascade then
-        some { pre with cancelPolicy := .detach }
       else
         none
   | .cancelBeforeDispatch _ =>
@@ -84,8 +78,8 @@ theorem step_refines_transition
       exact Transition.spawnFailed failure (h_state := h_state) (h_post := h_post.symm)
   | complete =>
       simp [step?] at h_step
-      rcases h_step with ⟨⟨h_state, h_persist, h_native⟩, h_post⟩
-      exact Transition.complete (h_state := h_state) (h_persist := h_persist) (h_native := h_native) (h_post := h_post.symm)
+      rcases h_step with ⟨⟨h_state, h_persist⟩, h_post⟩
+      exact Transition.complete (h_state := h_state) (h_persist := h_persist) (h_post := h_post.symm)
   | fail failure =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩
@@ -101,13 +95,8 @@ theorem step_refines_transition
         (h_post := h_post.symm)
   | foreground =>
       simp [step?] at h_step
-      rcases h_step with ⟨⟨h_state, h_mode⟩, h_post⟩
-      exact Transition.foreground (h_state := h_state) (h_mode := h_mode)
-        (h_post := h_post.symm)
-  | detach =>
-      simp [step?] at h_step
-      rcases h_step with ⟨⟨h_live, h_policy⟩, h_post⟩
-      exact Transition.detach (h_live := h_live) (h_pol := h_policy)
+      rcases h_step with ⟨⟨h_state, h_mode, h_op⟩, h_post⟩
+      exact Transition.foreground (h_state := h_state) (h_mode := h_mode) (h_op := h_op)
         (h_post := h_post.symm)
   | cancelBeforeDispatch cause =>
       simp [step?] at h_step

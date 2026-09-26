@@ -1,6 +1,10 @@
-import Proofs.Background.State
+import Proofs.Basic
 
-namespace Subagent
+namespace Background
+
+/-- Live background rows one request may own (`MAX_BACKGROUNDED_TOOLS_PER_PARENT`).
+Every started session occupies one slot until its row terminalizes. -/
+def maxBackgroundedPerParent : Nat := 8
 
 /-- Existing background admission gate. A successful create consumes one slot.
 The caller supplies the count of live background rows observed by its owner;
@@ -21,4 +25,4 @@ theorem full_background_budget_rejected (liveCount : Nat)
     (h : maxBackgroundedPerParent ≤ liveCount) : admitBackground liveCount = none := by
   simp [admitBackground, Nat.not_lt.mpr h]
 
-end Subagent
+end Background

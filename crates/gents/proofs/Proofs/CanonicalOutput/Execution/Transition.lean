@@ -208,18 +208,12 @@ def toolIntentPresent (world : World) (turn : Transcript.AssistantTurn)
     call.callId == callId && call.sessionId == turn.sessionId &&
       call.messageSequence == turn.sequence
 
-def delegatedRowsPresent (world : World) (rows : List DelegatedCall) : Bool :=
-  rows.all fun row => row ∈ world.delegatedCalls
-
 def acceptedPublicationPresent (world : World) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget) : Bool :=
+    (message : MessageEnvelope) : Bool :=
   let turn := messageTurn message
   closing ∈ world.segments && message ∈ world.messages &&
     publicationRowPresent world message.header turn &&
-    turn.callIds.all (toolIntentPresent world turn) &&
-    match prepareDelegatedCalls world world.segments message targets with
-    | .error _ => false
-    | .ok rows => delegatedRowsPresent world rows
+    turn.callIds.all (toolIntentPresent world turn)
 
 def acceptedToolsPresent (world : World) (message : MessageEnvelope) : Bool :=
   (toolIntents message).all fun intent =>
@@ -230,37 +224,31 @@ def acceptedToolsPresent (world : World) (message : MessageEnvelope) : Bool :=
     | none => false
 
 /-- Replay must present the same physical admissions and immutable genesis as
-the accepted transaction. In particular, alias drift cannot retarget an
-already accepted remote subagent call to another behavior. -/
+the accepted transaction. -/
 def acceptedAdmissionsPresent (world : World) (admissions : List ToolAdmission) : Bool :=
   admissions.all fun admission =>
     match ownedToolByDocument? world admission.document with
     | some tool => ToolGenesis.fromContext tool.context ==
-        ToolGenesis.fromContext admission.context &&
-        tool.delegatedWorkspace == admission.delegatedWorkspace
+        ToolGenesis.fromContext admission.context
     | none => false
 
 def acceptedReplayPresent (world : World) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget)
-    (admissions : List ToolAdmission) : Bool :=
-  acceptedPublicationPresent world closing message targets &&
+    (message : MessageEnvelope) (admissions : List ToolAdmission) : Bool :=
+  acceptedPublicationPresent world closing message &&
     acceptedToolsPresent world message && acceptedAdmissionsPresent world admissions
 
 /-- Accepted provider turn transaction: validated Complete closure, typed native
-message, assistant transcript row, every ordered pending tool intent, and each
-requested remote-only delegated argument row appear together before dispatch. -/
+message, assistant transcript row and every ordered pending tool intent appear
+together before dispatch. -/
 def acceptAndPublishCore (world : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission) :
     Except Error World :=
   let header := message.header
   let turn := messageTurn message
   if segmentIdentityCollision world closing ∨ messageIdentityCollision world message then
     .error .identityCollision
-  else if ¬ (targets.map (fun target => target.call)).Nodup then .error .invalidDelegation
-  else if remoteTargetsMatchConfiguredRoutes world message targets = false then
-    .error .invalidDelegation
-  else if acceptedReplayPresent world closing message targets admissions then
+  else if acceptedReplayPresent world closing message admissions then
     if !messageIdentityCollision world message && closedComplete closing &&
         validateClosingRecord world.segments closing &&
         acceptedMessageValid world generation world.segments message &&
@@ -286,23 +274,19 @@ def acceptAndPublishCore (world : World) (generation : Generation)
       .error .invalidHeader
     else if ¬ world.transcript.PublishableTurn turn ||
         admissionsValid world message admissions = false then .error .transcriptRejected
-    else match prepareDelegatedCalls world segments message targets with
-    | .error error => .error error
-    | .ok delegated =>
-        match RequestExecutionLease.step? world.lease
-            (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
-        | none => .error .leaseRejected
-        | some lease =>
-            let candidate : World :=
-              { world with
-              lease := lease
-              segments := segments
-              messages := world.messages ++ [message]
-              transcript := world.transcript.publishAcceptedAssistant header.id turn
-              toolContexts := installAcceptedTools world message admissions
-              delegatedCalls := world.delegatedCalls ++ delegated }
-            if toolProjectionCoherent candidate then .ok candidate
-            else .error .transcriptRejected
+    else match RequestExecutionLease.step? world.lease
+        (.authorizeProducerDecision .mutationWriteGate generation .acceptAndPublish) with
+    | none => .error .leaseRejected
+    | some lease =>
+        let candidate : World :=
+          { world with
+          lease := lease
+          segments := segments
+          messages := world.messages ++ [message]
+          transcript := world.transcript.publishAcceptedAssistant header.id turn
+          toolContexts := installAcceptedTools world message admissions }
+        if toolProjectionCoherent candidate then .ok candidate
+        else .error .transcriptRejected
 
 set_option maxHeartbeats 1000000 in
 /-- Successful acceptance is either identity replay or the single fresh atomic
@@ -310,11 +294,11 @@ post-state constructed by the core.  This is the common elimination lemma for
 consumers of acceptance; they need not repeat its admission branch ladder. -/
 theorem acceptAndPublishCore_success_effect
     (world post : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission)
-    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
+    (h : acceptAndPublishCore world generation closing message admissions = .ok post) :
     (post = world ∧ toolProjectionCoherent post = true) ∨
-      ∃ lease delegated,
+      ∃ lease,
         world.transcript.PublishableTurn (messageTurn message) ∧
         post = { world with
           lease := lease
@@ -322,8 +306,7 @@ theorem acceptAndPublishCore_success_effect
           messages := world.messages ++ [message]
           transcript := world.transcript.publishAcceptedAssistant
             message.header.id (messageTurn message)
-          toolContexts := installAcceptedTools world message admissions
-          delegatedCalls := world.delegatedCalls ++ delegated } ∧
+          toolContexts := installAcceptedTools world message admissions } ∧
         toolProjectionCoherent post = true := by
   simp (config := { maxSteps := 1000000 }) [acceptAndPublishCore] at h
   by_cases hc : segmentIdentityCollision world closing = true ∨
@@ -331,44 +314,27 @@ theorem acceptAndPublishCore_success_effect
   · simp only [if_pos hc] at h
     contradiction
   · simp only [if_neg hc] at h
-    by_cases hn : (targets.map (fun target => target.call)).Nodup
-    · simp only [if_pos hn] at h
-      by_cases hr : remoteTargetsMatchConfiguredRoutes world message targets = false
-      · simp only [if_pos hr] at h
-        contradiction
-      · simp only [if_neg hr] at h
-        by_cases hp : acceptedReplayPresent world closing message targets admissions = true
-        · simp only [if_pos hp] at h
-          split at h <;> try contradiction
-          rename_i hvalid
-          cases h
-          exact Or.inl ⟨rfl, hvalid.2⟩
-        · simp only [if_neg hp] at h
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          split at h <;> try contradiction
-          all_goals cases h
-          all_goals first | exact Or.inr ⟨_, _, by simp_all, rfl, by assumption⟩
-    · simp only [if_neg hn] at h
-      contradiction
+    by_cases hp : acceptedReplayPresent world closing message admissions = true
+    · simp only [if_pos hp] at h
+      split at h <;> try contradiction
+      rename_i hvalid
+      cases h
+      exact Or.inl ⟨rfl, hvalid.2⟩
+    · simp only [if_neg hp] at h
+      repeat' (split at h <;> try contradiction)
+      all_goals cases h
+      all_goals first | exact Or.inr ⟨_, by simp_all, rfl, by assumption⟩
 
 /-- Both replay and fresh publication establish the complete tool projection
 inside the atomic core.  Callers need not recompute it after success. -/
 theorem acceptAndPublishCore_success_toolProjectionCoherent
     (world post : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission)
-    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
+    (h : acceptAndPublishCore world generation closing message admissions = .ok post) :
     toolProjectionCoherent post = true := by
-  rcases acceptAndPublishCore_success_effect world post generation closing message targets
-    admissions h with ⟨_, hcoherent⟩ | ⟨_, _, _, _, hcoherent⟩
+  rcases acceptAndPublishCore_success_effect world post generation closing message
+    admissions h with ⟨_, hcoherent⟩ | ⟨_, _, _, hcoherent⟩
   · exact hcoherent
   · exact hcoherent
 
@@ -503,14 +469,7 @@ def dispatchPublicationValid (world : World) (generation : Generation)
           | .error _ => false
           | .ok closing => closedComplete closing &&
               validateClosingRecord world.segments closing &&
-              acceptedSourceBound world generation closing message &&
-              match world.remoteRoutes.filter (fun route => route.1 == callId) with
-              | [] => true
-              | [route] => match prepareDelegatedCalls world world.segments message
-                  [⟨callId, world.principal, route.2.1, route.2.2⟩] with
-                | .error _ => false
-                | .ok rows => delegatedRowsPresent world rows
-              | _ => false
+              acceptedSourceBound world generation closing message
   | _ => false
 
 def toolDispatchPublicationValid (world : World) (generation : Generation)
@@ -535,7 +494,7 @@ def dispatchCore (world : World) (generation : Generation)
   else if physicalRunning world callId then .ok world
   else if !permit.cancellationAllows || !permit.toolPolicyAllows then .error .transcriptRejected
   else if toolReadyToDispatch world callId = false ||
-      remoteExecutionAdmitted world callId = false then .error .transcriptRejected
+      executionAdmitted world callId = false then .error .transcriptRejected
   else match ownedToolByDocument? world callId with
   | none => .error .transcriptRejected
   | some tool =>
@@ -557,10 +516,10 @@ def dispatchCore (world : World) (generation : Generation)
                   callId context.awaitMode }
 
 def toolControlAction : ToolExecution.ToolCallContext.Action → Bool
-  | .background | .foreground | .detach => true
+  | .background | .foreground => true
   | _ => false
 
-/-- Explicit mode/policy control for the exact accepted physical tool. It is
+/-- Explicit mode control for the exact accepted physical tool. It is
 generation-fenced through the request owner, and foreground reacquisition is
 forbidden after durable handoff or parent terminalization. -/
 def changeToolControlCore (world : World) (generation : Generation) (document : DocId)
@@ -570,7 +529,7 @@ def changeToolControlCore (world : World) (generation : Generation) (document : 
   | none => .error .transcriptRejected
   | some tool =>
       if acceptedHeaderBindsToolGeneration world tool generation = false ||
-          tool.cancelCascadeIntentAt.isSome || tool.stuckSince.isSome then
+          tool.stuckSince.isSome then
         .error .transcriptRejected
       else if action == .foreground && world.terminalSelection.isSome then
         .error .terminalRejected
@@ -759,18 +718,11 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
     else true
 
 /-- A running call outlives its request's exceptional terminal: the handoff
-records uncertainty and writes no cascade intent, since a request terminal is
-never a cancel signal for a subagent. An awaited subagent bridge becomes
-background work (`Subagent.Interrupt`'s background disposition); native
-publishes its one invocation receipt in the same terminal transaction, so the
-child's terminal is later delivered as a completion notification. -/
+records uncertainty and never cancels. A request terminal is not a cancel
+signal for a session that request started; its background row keeps running
+and later delivers that session's result as a completion notification. -/
 def handoffRunningTool (world : World) (tool : OwnedTool) : OwnedTool :=
-  { tool with
-    context :=
-      if tool.context.childRequestId.isSome then
-        { tool.context with awaitMode := .background }
-      else tool.context
-    stuckSince := some world.lease.now }
+  { tool with stuckSince := some world.lease.now }
 
 def accountOneOwnedTool (world : World) (generation : Generation)
     (interruptRunning : Bool) (tool : OwnedTool) : OwnedTool × Transcript.TranscriptState :=
@@ -963,16 +915,15 @@ def retractBeforeRetry (world : World) (generation : Generation)
     (retractBeforeRetryCore world generation record)
 
 def acceptAndPublish (world : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission) :
     Except Error World :=
   checked (fun post =>
-    acceptedPublicationPresent post closing message targets && acceptedToolsPresent post message &&
-      remoteTargetsMatchConfiguredRoutes post message targets &&
+    acceptedPublicationPresent post closing message && acceptedToolsPresent post message &&
       validateClosingRecord post.segments closing &&
       acceptedMessageValid post generation post.segments message &&
       acceptedSourceBound post generation closing message)
-    (acceptAndPublishCore world generation closing message targets admissions)
+    (acceptAndPublishCore world generation closing message admissions)
 
 def dispatch (world : World) (generation : Generation)
     (permit : DispatchPermit) : Except Error World :=

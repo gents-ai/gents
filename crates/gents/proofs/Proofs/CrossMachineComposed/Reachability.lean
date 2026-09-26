@@ -41,8 +41,7 @@ def withPendingTool : ComposedState :=
 def detachedTool : ToolExecution.ToolCallContext :=
   { pendingTool with
     callId := 2
-    cancelPolicy := .detach
-    childRequestId := some 42 }
+    operation := .sessionMessage }
 
 def withDetachedTool : ComposedState :=
   { processing with tools := [detachedTool] }

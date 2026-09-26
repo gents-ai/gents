@@ -25,14 +25,13 @@ def recoveryCase
 
 def orphanedBackgroundRecoveryCase
     (name : String)
-    (deadlineExpired unclaimedExpired parentLive parentInterrupted
+    (deadlineExpired parentLive parentInterrupted
       parentTerminal executionRegistered : Bool)
     (process : ManagedExec.StopOutcome := .stopped)
     (ownerTaskDeleted : Bool := false) : RecoverySweepCase :=
   let row : OrphanedBackgroundToolRow :=
     { call := r6NativeToolFixture
     , deadlineExpired := deadlineExpired
-    , unclaimedExpired := unclaimedExpired
     , parentLive := parentLive
     , parentInterrupted := parentInterrupted
     , parentTerminal := parentTerminal
@@ -50,12 +49,6 @@ def orphanedBackgroundRecoveryCase
         | .parentInterrupted => "parent_interrupted"
         | .parentTerminal => "parent_terminal"
         | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
-        | .childCompleted => "child_completed"
-        | .childFailed => "child_failed"
-        | .childDead => "child_dead"
-        | .childInterrupted => "child_interrupted"
-        | .childSuperseded => "child_superseded"
-        | .unclaimedCrossPrincipalSpawn => "unclaimed_spawn_timeout"
         | .processLost => "process_lost"
         | .taskDeleted => "task_deleted"
     else
@@ -69,7 +62,6 @@ def orphanedBackgroundRecoveryCase
       (orphanedBackgroundToolMeasure row)
       (orphanedBackgroundToolMeasure recovered)) with
     deadlineExpired := some row.deadlineExpired
-    unclaimedExpired := some row.unclaimedExpired
     parentLive := some row.parentLive
     parentInterrupted := some row.parentInterrupted
     parentTerminal := some row.parentTerminal
@@ -137,40 +129,34 @@ def recoverySweepCases : List RecoverySweepCase :=
       "gents-1858-process-ownership"
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_without_execution_to_cancelled"
-      false false true false false false
+      false true false false false
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_expired_missing_parent_deferred"
-      true false false false false false
-  , orphanedBackgroundRecoveryCase
-      "orphaned_background_tool_unclaimed_missing_parent_deferred"
-      false true false false false false
+      true false false false false
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_expired_terminal_parent_to_timed_out"
-      true false false false true false
-  , orphanedBackgroundRecoveryCase
-      "orphaned_background_tool_unclaimed_to_failed"
-      false true true false false false
+      true false false true false
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_terminal_parent_to_cancelled"
-      false false false false true false
+      false false false true false
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_unowned_process_to_failed"
-      false false true false false false (process := .notOwned)
+      false true false false false (process := .notOwned)
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_exited_process_to_failed"
-      false false false false true false (process := .alreadyExited)
+      false false false true false (process := .alreadyExited)
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_still_running_deferred"
-      false false true false false false (process := .stillRunning)
+      false true false false false (process := .stillRunning)
   , orphanedBackgroundRecoveryCase
       "registered_background_tool_left_to_worker_deferred"
-      false false true false false true
+      false true false false true
   , orphanedBackgroundRecoveryCase
       "registered_background_tool_task_deleted_to_cancelled"
-      false false true false false true (ownerTaskDeleted := true)
+      false true false false true (ownerTaskDeleted := true)
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_interrupted_parent_to_cancelled"
-      false false false true false false
+      false false true false false
   , recoveryCase
       backgroundCompletionSideEffectSweep
       "terminal_background_tool_missing_completion_side_effects_to_converged"
@@ -178,71 +164,35 @@ def recoverySweepCases : List RecoverySweepCase :=
       "failed"
       "r6-cross-turn-background-process-durability"
   , recoveryCase
-      toolCallRecoverySweep
-      "tool_running_unclaimed_cross_principal_spawn_to_failed"
-      "running"
-      "failed"
-      "r5-cross-principal-subagents-design"
-  , recoveryCase
-      toolCallRecoverySweep
-      "tool_running_child_completed_to_completed"
+      sessionMessageRecoverySweep
+      "session_message_request_completed_to_completed"
       "running"
       "completed"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
+      "session-message-stack-observer-arm"
   , recoveryCase
-      toolCallRecoverySweep
-      "tool_running_child_failed_to_failed"
+      sessionMessageRecoverySweep
+      "session_message_request_failed_to_failed"
       "running"
       "failed"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
+      "session-message-stack-observer-arm"
   , recoveryCase
-      toolCallRecoverySweep
-      "tool_running_child_interrupted_to_cancelled"
+      sessionMessageRecoverySweep
+      "session_message_request_interrupted_to_cancelled"
       "running"
       "cancelled"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
+      "session-message-stack-observer-arm"
   , recoveryCase
-      detachedBridgeRecoverySweep
-      "detached_bridge_child_completed_to_completed"
-      "running"
-      "completed"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
-  , recoveryCase
-      detachedBridgeRecoverySweep
-      "detached_bridge_child_failed_to_failed"
+      sessionMessageRecoverySweep
+      "session_message_request_dead_to_failed"
       "running"
       "failed"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
+      "session-message-stack-observer-arm"
   , recoveryCase
-      detachedBridgeRecoverySweep
-      "detached_bridge_child_interrupted_to_cancelled"
-      "running"
-      "cancelled"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
-  , recoveryCase
-      detachedBridgeRecoverySweep
-      "detached_bridge_deadline_exceeded_to_timed_out"
+      sessionMessageRecoverySweep
+      "session_message_deadline_exceeded_to_timed_out"
       "running"
       "timedOut"
-      "deadline-plumbing-audit-2026-05-12-subagent-bridge-terminal-lifetime"
-  , recoveryCase
-      toolCallRecoverySweep
-      "tool_running_child_dead_to_failed"
-      "running"
-      "failed"
-      "gents-465-subagent-liveness"
-  , recoveryCase
-      expiredSubagentChildSweep
-      "expired_processing_child_to_dead"
-      "processing"
-      "dead"
-      "gents-465-subagent-liveness"
-  , recoveryCase
-      expiredSubagentChildSweep
-      "expired_claimed_child_to_dead"
-      "claimed"
-      "dead"
-      "gents-465-subagent-liveness"
+      "session-message-stack-observer-arm"
   , recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"
@@ -276,42 +226,30 @@ recovery must preserve. -/
 
 def restartDispositionCase
     (name : String)
-    (awaitMode : Subagent.AwaitMode)
-    (cancelPolicy : Subagent.CancelPolicy)
-    (childLinked : Bool)
+    (awaitMode : ToolExecution.AwaitMode)
+    (sessionMessage : Bool)
     (parent : ParentObservation)
     (theoremName : String)
     (deadlineExpired : Bool := false)
-    (unclaimedExpired : Bool := false)
-    (process : ManagedExec.StopOutcome := .stopped)
-    (childObserved : Bool := false) : RestartDispositionCase :=
+    (process : ManagedExec.StopOutcome := .stopped) : RestartDispositionCase :=
   let row : RestartRow :=
     { awaitMode := awaitMode
-    , cancelPolicy := cancelPolicy
-    , childLinked := childLinked
+    , sessionMessage := sessionMessage
     , parent := parent
     , deadlineExpired := deadlineExpired
-    , unclaimedExpired := unclaimedExpired
     , process := process
-    , childObserved := childObserved
     }
   let disposition := restartDisposition row
   { name := name
   , rustFunction := "ToolCallLifecycle::recover_all"
   , awaitMode := awaitMode.toDefraDB
-  , cancelPolicy := cancelPolicy.toDefraDB
-  , childLinked := childLinked
+  , sessionMessage := sessionMessage
   , parentObservation := parent.toContract
   , deadlineExpired := deadlineExpired
-  , unclaimedExpired := unclaimedExpired
   , processOutcome := process.toContract
-  , childObserved := childObserved
-  , bridgeCancelIntent := row.spawnFence.map (·.cancelIntent)
-  , bridgeAckPending := row.spawnFence.map (·.ackPending)
   , disposition := disposition.toContract
   , cause := disposition.causeContract
   , terminalState := disposition.terminalStateContract
-  , postAwaitMode := disposition.postAwaitModeContract
   , notificationReason :=
       row.notification.map RestartNotificationObligation.notificationReason
   , queueSource :=
@@ -324,121 +262,84 @@ def restartDispositionCase
 def restartDispositionCases : List RestartDispositionCase :=
   [ restartDispositionCase
       "restart_native_background_live_parent_interrupted"
-      .background .cascade false .live
+      .background false .live
       "Recovery.native_background_tool_live_parent_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_unowned_process_lost"
-      .background .cascade false .live
+      .background false .live
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .notOwned)
   , restartDispositionCase
       "restart_native_background_exited_process_lost"
-      .background .cascade false .otherTerminal
+      .background false .otherTerminal
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .alreadyExited)
   , restartDispositionCase
       "restart_native_background_still_running_left_running"
-      .background .cascade false .live
+      .background false .live
       "Recovery.native_background_still_running_left_running"
       (process := .stillRunning)
   , restartDispositionCase
-      "restart_background_subagent_live_parent_left_running"
-      .background .cascade true .live
-      "Recovery.background_subagent_bridge_live_parent_left_running"
+      "restart_session_message_live_parent_left_running"
+      .background true .live
+      "Recovery.session_message_row_left_running"
   , restartDispositionCase
-      "restart_detached_bridge_interrupted_parent_retained"
-      .background .detach true .interrupted
-      "Recovery.child_linked_terminal_parent_retained_in_background"
+      "restart_session_message_interrupted_parent_left_running"
+      .background true .interrupted
+      "Recovery.session_message_row_left_running"
   , restartDispositionCase
-      "restart_cascade_bridge_interrupted_parent_retained"
-      .background .cascade true .interrupted
-      "Recovery.child_linked_terminal_parent_retained_in_background"
+      "restart_session_message_failed_parent_left_running"
+      .background true .otherTerminal
+      "Recovery.session_message_row_left_running"
   , restartDispositionCase
-      "restart_awaited_bridge_interrupted_parent_backgrounded"
-      .foreground .cascade true .interrupted
-      "Recovery.child_linked_terminal_parent_retained_in_background"
+      "restart_session_message_clean_complete_parent_left_running"
+      .background true .cleanlyCompleted
+      "Recovery.session_message_row_left_running"
   , restartDispositionCase
-      "restart_awaited_bridge_failed_parent_backgrounded"
-      .foreground .cascade true .otherTerminal
-      "Recovery.child_linked_terminal_parent_retained_in_background"
-  , restartDispositionCase
-      "restart_background_bridge_failed_parent_retained"
-      .background .cascade true .otherTerminal
-      "Recovery.child_linked_terminal_parent_retained_in_background"
-  , restartDispositionCase
-      "restart_clean_complete_child_linked_retained"
-      .background .cascade true .cleanlyCompleted
-      "Recovery.child_linked_terminal_parent_retained_in_background"
+      "restart_session_message_deadline_expired_times_out"
+      .background true .live
+      "Recovery.session_message_row_terminalizes_only_on_expiry"
+      (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_deadline_expired_times_out"
-      .background .cascade false .live
+      .background false .live
       "Recovery.deadline_precedes_restart_interrupt"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_interrupted_parent_lost_on_restart"
-      .background .cascade false .interrupted
+      .background false .interrupted
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_terminal_parent_lost_on_restart"
-      .background .cascade false .otherTerminal
+      .background false .otherTerminal
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_foreground_interrupted_parent_cancelled"
-      .foreground .cascade false .interrupted
+      .foreground false .interrupted
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
-      .foreground .cascade false .live
+      .foreground false .live
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
-      "restart_subagent_missing_parent_left_running"
-      .background .cascade true .missing
+      "restart_session_message_missing_parent_left_running"
+      .background true .missing
       "Recovery.missing_parent_never_terminalizes"
+      (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_expired_missing_parent_deferred"
-      .background .cascade false .missing
+      .background false .missing
       "Recovery.missing_parent_never_terminalizes"
       (deadlineExpired := true)
-  , restartDispositionCase
-      "restart_unclaimed_missing_parent_deferred"
-      .background .cascade true .missing
-      "Recovery.missing_parent_never_terminalizes"
-      (unclaimedExpired := true)
-  , -- Unclaimed cross-principal spawn expiry outranks every leave-running
-    -- exemption: an unclaimed bridge under a live parent still fails.
-    restartDispositionCase
-      "restart_unclaimed_spawn_expired_fails"
-      .background .cascade true .live
-      "Recovery.unclaimed_precedes_leave_running_exemptions"
-      (unclaimedExpired := true)
-  , restartDispositionCase
-      "restart_unclaimed_observed_child_links"
-      .background .cascade true .live
-      "Recovery.unclaimed_observed_child_links"
-      (unclaimedExpired := true) (childObserved := true)
-  , restartDispositionCase
-      "restart_deadline_unobserved_child_fenced"
-      .background .cascade true .cleanlyCompleted
-      "Recovery.restart_expiry_fences_unobserved_child"
-      (deadlineExpired := true)
-  , restartDispositionCase
-      "restart_both_expired_unobserved_child_fenced"
-      .background .cascade true .live
-      "Recovery.restart_expiry_fences_unobserved_child"
-      (deadlineExpired := true) (unclaimedExpired := true)
   ]
 
-/-- The witness family covers every disposition, including expired and
-    unclaimed rows whose missing physical parent defers classification. -/
+/-- The witness family covers every disposition, including expired rows whose
+    missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_every_disposition :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 6 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 8 ∧
       (restartDispositionCases.filter
-        (fun witness => witness.disposition = "retain_in_background")).length = 6 ∧
-      (restartDispositionCases.filter
-        (fun witness => witness.disposition = "terminalize")).length = 10 ∧
-      (restartDispositionCases.filter
-        (fun witness => witness.disposition = "link")).length = 1 := by
+        (fun witness => witness.disposition = "terminalize")).length = 8 := by
   native_decide
 
 /-- Every terminal native background witness with a resolvable parent owes a

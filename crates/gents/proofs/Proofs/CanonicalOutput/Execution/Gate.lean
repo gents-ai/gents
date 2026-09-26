@@ -23,7 +23,7 @@ inductive Operation where
   | closeAuxiliary (generation : Generation) (closing : Segment)
   | retract (generation : Generation) (record : Segment)
   | accept (generation : Generation) (closing : Segment)
-      (message : MessageEnvelope) (targets : List RemoteTarget)
+      (message : MessageEnvelope)
       (admissions : List ToolAdmission)
   | authored (generation : Generation) (closing : Segment) (message : MessageEnvelope)
   | headerOnly (generation : Generation) (message : MessageEnvelope)
@@ -38,8 +38,6 @@ inductive Operation where
   | toolComplete (document : DocId) (authority : ToolDelivery.CloseAuthority)
       (record : Segment) (message : MessageEnvelope)
   | toolDeliver (document : DocId) (message : MessageEnvelope)
-  | toolGoalDeliver (document : DocId) (binding : GoalNotificationBinding)
-      (message : MessageEnvelope)
   | backgroundReceipt (parentDocument : DocId) (closing : Segment)
       (message : MessageEnvelope)
   | compact (cursor : Transcript.Sequence)
@@ -140,8 +138,8 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
       (Execution.closeAuxiliary world generation closing).mapError .execution
   | .retract generation record =>
       (retractBeforeRetry world generation record).mapError .execution
-  | .accept generation closing message targets admissions =>
-      (acceptAndPublish world generation closing message targets admissions).mapError .execution
+  | .accept generation closing message admissions =>
+      (acceptAndPublish world generation closing message admissions).mapError .execution
   | .authored generation closing message =>
       (publishAuthored world generation closing message).mapError .execution
   | .headerOnly generation message admissions =>
@@ -159,8 +157,6 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
       (ToolDelivery.completeAndDeliver world document authority record message).mapError .delivery
   | .toolDeliver document message =>
       (ToolDelivery.publishToolDelivery world document message).mapError .delivery
-  | .toolGoalDeliver document binding message =>
-      (ToolDelivery.publishGoalNotification world document binding message).mapError .delivery
   | .backgroundReceipt parentDocument closing message =>
       (ToolDelivery.publishBackgroundReceipt world parentDocument closing message).mapError .delivery
   | .compact cursor =>
@@ -190,9 +186,9 @@ theorem evaluate_success_core (operation : Operation) (before after : World)
   exact h
 
 theorem title_rejects_publication (world : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission) (h : world.purpose = .titleAudit) :
-    evaluate (.accept generation closing message targets admissions) world =
+    evaluate (.accept generation closing message admissions) world =
       .error .purposeRejected := by
   simp [evaluate, purposeAllows, titleOperationAllowed, h]
 
@@ -220,9 +216,9 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | retract generation record =>
       have h' := mapError_success Error.execution _ _ h
       rw [retractBeforeRetry_preserves_nextSeq before after generation record h']
-  | accept generation closing message targets admissions =>
+  | accept generation closing message admissions =>
       exact acceptAndPublish_nextSeq_monotone before after generation closing message
-        targets admissions (mapError_success Error.execution _ _ h)
+        admissions (mapError_success Error.execution _ _ h)
   | authored generation closing message =>
       exact publishAuthored_nextSeq_monotone before after generation closing message
         (mapError_success Error.execution _ _ h)
@@ -253,9 +249,6 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
         (ToolDelivery.publication_nextSeq_monotone closed after document message hdeliver)
   | toolDeliver document message =>
       exact ToolDelivery.publication_nextSeq_monotone before after document message
-        (mapError_success Error.delivery _ _ h)
-  | toolGoalDeliver document binding message =>
-      exact ToolDelivery.goal_notification_nextSeq_monotone before after document binding message
         (mapError_success Error.delivery _ _ h)
   | backgroundReceipt document closing message =>
       exact ToolDelivery.background_receipt_nextSeq_monotone before after document closing message
@@ -456,11 +449,11 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
       subst after
       unfold Compaction.advanceCursor? at hc
       repeat' first | contradiction | (solve | cases hc; exact ⟨rfl, rfl⟩) | split at hc
-  case accept generation closing message targets admissions =>
+  case accept generation closing message admissions =>
     have hcore := mapError_success Error.execution _ _ h
     replace hcore := checked_core_success _ _ _ hcore
-    rcases acceptAndPublishCore_success_effect before after generation closing message targets
-      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+    rcases acceptAndPublishCore_success_effect before after generation closing message
+      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
   case closeAuxiliary generation closing =>
     rcases closeAuxiliary_success_effect before after generation closing
       (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> exact ⟨rfl, rfl⟩

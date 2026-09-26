@@ -58,6 +58,12 @@ pub enum AgentRequestAdmissionKind {
     Enrollment,
     LocalSelf,
     RuntimeInternal,
+    /// A request authored by another principal's agent (a cross-principal
+    /// `create_session`/`send_message`). The requester signs, the target
+    /// differs from the requester, and the target's `PeerAdmissionAuthority`
+    /// ACP authorizes the requester DID. Replies route back to `requester_did`
+    /// best-effort; there is no bridge, claim fence or cancel mirror.
+    Peer,
 }
 
 impl AgentRequestAdmissionKind {
@@ -66,6 +72,7 @@ impl AgentRequestAdmissionKind {
             Self::Enrollment => "enrollment",
             Self::LocalSelf => "local-self",
             Self::RuntimeInternal => "runtime-internal",
+            Self::Peer => "peer",
         }
     }
 }
@@ -78,6 +85,7 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
             "enrollment" => Ok(Self::Enrollment),
             "local-self" => Ok(Self::LocalSelf),
             "runtime-internal" => Ok(Self::RuntimeInternal),
+            "peer" => Ok(Self::Peer),
             _ => Err("unknown AgentRequest admission kind"),
         }
     }
@@ -86,8 +94,6 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeInternalSourceKind {
-    LocalChild,
-    CrossPrincipalChild,
     LocalControl,
     AutomatedTrigger,
 }
@@ -95,8 +101,6 @@ pub enum RuntimeInternalSourceKind {
 impl RuntimeInternalSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::LocalChild => "local-child",
-            Self::CrossPrincipalChild => "cross-principal-child",
             Self::LocalControl => "local-control",
             Self::AutomatedTrigger => "automated-trigger",
         }
@@ -108,8 +112,6 @@ impl TryFrom<&str> for RuntimeInternalSourceKind {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "local-child" => Ok(Self::LocalChild),
-            "cross-principal-child" => Ok(Self::CrossPrincipalChild),
             "local-control" => Ok(Self::LocalControl),
             "automated-trigger" => Ok(Self::AutomatedTrigger),
             _ => Err("unknown runtime-internal source kind"),
@@ -129,7 +131,6 @@ pub struct AgentRequestAdmissionObservation {
     pub signer_matches_target: bool,
     pub signer_matches_issuer: bool,
     pub requester_matches_issuer: bool,
-    pub requester_matches_bridge_author: bool,
     pub current_approval: bool,
     pub exact_generation: bool,
     pub authorization_fresh: bool,
@@ -139,11 +140,11 @@ pub struct AgentRequestAdmissionObservation {
     pub source_binding_current: bool,
     pub trigger_config_document_binding_current: bool,
     pub source_document_binding_current: bool,
-    pub source_tool_call_binding_current: bool,
     pub target_policy_allows: bool,
-    pub bridge_author_binding_current: bool,
-    pub bridge_author_authorization_fresh: bool,
-    pub target_cross_principal_policy_allows: bool,
+    /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
+    pub peer_authority_allows: bool,
+    /// `subagent_depth <= AgentPrincipal.max_request_hop` for the target.
+    pub hop_within_bound: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +170,7 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
         || !observation.signed_fields_match
         || !observation.branch_fields_exact
         || !observation.pending_deadline_absent
+        || !observation.hop_within_bound
     {
         return false;
     }
@@ -182,6 +184,11 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
         AgentRequestAdmissionKind::LocalSelf => {
             observation.signer_matches_requester && observation.requester_matches_target
         }
+        AgentRequestAdmissionKind::Peer => {
+            observation.signer_matches_requester
+                && !observation.requester_matches_target
+                && observation.peer_authority_allows
+        }
         AgentRequestAdmissionKind::RuntimeInternal => {
             let common = observation.runtime_evidence_present
                 && observation.signer_matches_issuer
@@ -190,20 +197,6 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
                 && observation.source_binding_current;
             common
                 && match observation.runtime_source_kind {
-                    RuntimeInternalSourceKind::LocalChild => {
-                        observation.requester_matches_issuer
-                            && observation.requester_matches_target
-                            && observation.source_document_binding_current
-                            && observation.source_tool_call_binding_current
-                            && observation.target_policy_allows
-                    }
-                    RuntimeInternalSourceKind::CrossPrincipalChild => {
-                        observation.requester_matches_bridge_author
-                            && observation.source_tool_call_binding_current
-                            && observation.bridge_author_binding_current
-                            && observation.bridge_author_authorization_fresh
-                            && observation.target_cross_principal_policy_allows
-                    }
                     RuntimeInternalSourceKind::LocalControl => {
                         observation.requester_matches_issuer
                             && observation.requester_matches_target
@@ -326,7 +319,7 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
         require_enum(
             "caused_by_trigger_kind",
             kind,
-            &["manual", "event", "schedule", "subagent", "goal"],
+            &["manual", "event", "schedule", "goal"],
         )?;
     }
     validate_workspace_reference(
@@ -355,7 +348,6 @@ pub struct AgentRequestAdmissionRecord {
     pub runtime_issuer_did: Option<String>,
     pub runtime_source_request_id: Option<String>,
     pub runtime_source_kind: Option<RuntimeInternalSourceKind>,
-    pub runtime_bridge_author_did: Option<String>,
 }
 
 impl AgentRequestAdmissionRecord {
@@ -372,7 +364,14 @@ impl AgentRequestAdmissionRecord {
             runtime_issuer_did: None,
             runtime_source_request_id: None,
             runtime_source_kind: None,
-            runtime_bridge_author_did: None,
+        }
+    }
+
+    /// Cross-principal request signed by its requester (`signer_did`).
+    pub fn peer(signer_did: impl Into<String>) -> Self {
+        Self {
+            kind: AgentRequestAdmissionKind::Peer,
+            ..Self::local_self(signer_did)
         }
     }
 
@@ -380,7 +379,6 @@ impl AgentRequestAdmissionRecord {
         target_did: impl Into<String>,
         source_request_id: impl Into<String>,
         source_kind: RuntimeInternalSourceKind,
-        bridge_author_did: Option<String>,
     ) -> Self {
         let target_did = target_did.into();
         Self {
@@ -395,33 +393,7 @@ impl AgentRequestAdmissionRecord {
             runtime_issuer_did: Some(target_did),
             runtime_source_request_id: Some(source_request_id.into()),
             runtime_source_kind: Some(source_kind),
-            runtime_bridge_author_did: bridge_author_did,
         }
-    }
-
-    pub fn runtime_local_child(
-        target_did: impl Into<String>,
-        source_request_id: impl Into<String>,
-    ) -> Self {
-        Self::runtime_internal(
-            target_did,
-            source_request_id,
-            RuntimeInternalSourceKind::LocalChild,
-            None,
-        )
-    }
-
-    pub fn runtime_cross_principal_child(
-        target_did: impl Into<String>,
-        source_request_id: impl Into<String>,
-        bridge_author_did: impl Into<String>,
-    ) -> Self {
-        Self::runtime_internal(
-            target_did,
-            source_request_id,
-            RuntimeInternalSourceKind::CrossPrincipalChild,
-            Some(bridge_author_did.into()),
-        )
     }
 
     pub fn runtime_local_control(
@@ -432,7 +404,6 @@ impl AgentRequestAdmissionRecord {
             target_did,
             source_request_id,
             RuntimeInternalSourceKind::LocalControl,
-            None,
         )
     }
 
@@ -444,7 +415,6 @@ impl AgentRequestAdmissionRecord {
             target_did,
             source_request_id,
             RuntimeInternalSourceKind::AutomatedTrigger,
-            None,
         )
     }
 
@@ -469,7 +439,6 @@ impl AgentRequestAdmissionRecord {
             runtime_issuer_did: None,
             runtime_source_request_id: None,
             runtime_source_kind: None,
-            runtime_bridge_author_did: None,
         }
     }
 
@@ -486,7 +455,6 @@ impl AgentRequestAdmissionRecord {
         runtime_issuer_did: Option<&str>,
         runtime_source_request_id: Option<&str>,
         runtime_source_kind: Option<&str>,
-        runtime_bridge_author_did: Option<&str>,
     ) -> Result<Self, &'static str> {
         let kind = kind
             .ok_or("request admission kind is missing")
@@ -523,7 +491,6 @@ impl AgentRequestAdmissionRecord {
             runtime_source_kind: runtime_source_kind
                 .map(RuntimeInternalSourceKind::try_from)
                 .transpose()?,
-            runtime_bridge_author_did: canonical_optional(runtime_bridge_author_did)?,
         };
         record.validate_branch_fields()?;
         Ok(record)
@@ -558,27 +525,15 @@ impl AgentRequestAdmissionRecord {
             && self.runtime_source_kind.is_some();
         let runtime_absent = self.runtime_issuer_did.is_none()
             && self.runtime_source_request_id.is_none()
-            && self.runtime_source_kind.is_none()
-            && self.runtime_bridge_author_did.is_none();
+            && self.runtime_source_kind.is_none();
         match self.kind {
             AgentRequestAdmissionKind::Enrollment if enrollment_present && runtime_absent => Ok(()),
-            AgentRequestAdmissionKind::LocalSelf if enrollment_absent && runtime_absent => Ok(()),
-            AgentRequestAdmissionKind::RuntimeInternal
-                if enrollment_absent
-                    && runtime_present
-                    && matches!(
-                        (
-                            self.runtime_source_kind,
-                            self.runtime_bridge_author_did.as_deref()
-                        ),
-                        (
-                            Some(RuntimeInternalSourceKind::CrossPrincipalChild),
-                            Some(_)
-                        ) | (Some(RuntimeInternalSourceKind::LocalChild), None)
-                            | (Some(RuntimeInternalSourceKind::LocalControl), None)
-                            | (Some(RuntimeInternalSourceKind::AutomatedTrigger), None)
-                    ) =>
+            AgentRequestAdmissionKind::LocalSelf | AgentRequestAdmissionKind::Peer
+                if enrollment_absent && runtime_absent =>
             {
+                Ok(())
+            }
+            AgentRequestAdmissionKind::RuntimeInternal if enrollment_absent && runtime_present => {
                 Ok(())
             }
             _ => Err("request admission branch fields are incomplete or mixed"),
@@ -601,10 +556,6 @@ impl AgentRequestAdmissionRecord {
             (
                 "runtime_source_request_id",
                 self.runtime_source_request_id.as_deref(),
-            ),
-            (
-                "runtime_bridge_author_did",
-                self.runtime_bridge_author_did.as_deref(),
             ),
         ] {
             require_optional_identifier(name, value)?;
@@ -669,7 +620,6 @@ impl AgentRequestAdmissionRecord {
             self.runtime_source_kind
                 .map(RuntimeInternalSourceKind::as_str),
         );
-        push_option(&mut fields, self.runtime_bridge_author_did.as_deref());
         serialize_fields(&fields)
     }
 }
@@ -1154,11 +1104,6 @@ impl AgentRequestCreate {
                 .runtime_source_kind
                 .map(RuntimeInternalSourceKind::as_str),
         );
-        optional_text(
-            &mut fields,
-            "runtime_bridge_author_did",
-            self.admission.runtime_bridge_author_did.as_deref(),
-        );
         text(
             &mut fields,
             "lifecycle_state",
@@ -1418,10 +1363,7 @@ mod tests {
         changed!("runtime_source_kind", |v: &mut AgentRequestCreate| v
             .admission
             .runtime_source_kind =
-            Some(RuntimeInternalSourceKind::LocalChild));
-        changed!("runtime_bridge_author_did", |v: &mut AgentRequestCreate| {
-            v.admission.runtime_bridge_author_did = Some("did:key:bridge".into())
-        });
+            Some(RuntimeInternalSourceKind::AutomatedTrigger));
         for (name, variant) in variants {
             assert_ne!(
                 variant.signing_payload(),
@@ -1601,25 +1543,13 @@ mod tests {
         internal.runtime_source_request_id = None;
         assert!(internal.validate_branch_fields().is_err());
 
-        let mut cross = AgentRequestAdmissionRecord::runtime_cross_principal_child(
-            "did:key:agent",
-            "source",
-            "did:key:bridge",
-        );
-        cross.signature = vec![1; 64];
-        assert!(cross.validate_branch_fields().is_ok());
-        cross.runtime_source_kind = Some(RuntimeInternalSourceKind::LocalChild);
+        let mut peer = AgentRequestAdmissionRecord::peer("did:key:requester");
+        peer.signature = vec![1; 64];
+        assert!(peer.validate_branch_fields().is_ok());
+        peer.runtime_source_kind = Some(RuntimeInternalSourceKind::LocalControl);
         assert!(
-            cross.validate_branch_fields().is_err(),
-            "cross bridge evidence cannot switch to the local-child branch"
-        );
-
-        let mut local = AgentRequestAdmissionRecord::runtime_local_child("did:key:agent", "source");
-        local.signature = vec![1; 64];
-        local.runtime_source_kind = Some(RuntimeInternalSourceKind::CrossPrincipalChild);
-        assert!(
-            local.validate_branch_fields().is_err(),
-            "local evidence cannot switch to cross-principal without a bridge author"
+            peer.validate_branch_fields().is_err(),
+            "peer admission carries no runtime-internal evidence"
         );
     }
 
@@ -1643,7 +1573,6 @@ mod tests {
                 runtime_source.map(|_| "did:key:member"),
                 runtime_source,
                 runtime_source.map(|_| "local-control"),
-                None,
             )
         };
 

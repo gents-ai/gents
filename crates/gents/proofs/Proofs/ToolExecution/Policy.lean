@@ -60,6 +60,11 @@ inductive ToolOperation where
   | mcpListTools
   | mcpCall
   | nativeCommand
+  /-- `create_session` or `send_message`: materializes or steers a request in
+  another session through `lifecycle::materialize`. The row has no host
+  process; its terminal is the caused request's terminal output, delivered to
+  the calling session as a completion notification. -/
+  | sessionMessage
   deriving DecidableEq, Repr
 
 namespace ToolOperation
@@ -68,9 +73,10 @@ def toDefraDB : ToolOperation → String
   | .mcpListTools => "mcpListTools"
   | .mcpCall => "mcpCall"
   | .nativeCommand => "nativeCommand"
+  | .sessionMessage => "sessionMessage"
 
 def all : List ToolOperation :=
-  [ .mcpListTools, .mcpCall, .nativeCommand ]
+  [ .mcpListTools, .mcpCall, .nativeCommand, .sessionMessage ]
 
 end ToolOperation
 
@@ -81,9 +87,6 @@ inductive FailureClass where
   | toolReturnedError
   | policyDenied
   | external
-  /-- No host claimed a cross-principal spawn before its unclaimed deadline
-      (#1807). A scheduling outcome, not an unavailable service. -/
-  | spawnUnclaimed
   deriving DecidableEq, Repr
 
 namespace FailureClass
@@ -95,7 +98,6 @@ def toDefraDB : FailureClass → String
   | .toolReturnedError => "toolReturnedError"
   | .policyDenied => "policyDenied"
   | .external => "external"
-  | .spawnUnclaimed => "spawnUnclaimed"
 
 def all : List FailureClass :=
   [ .argumentInvalid
@@ -104,7 +106,6 @@ def all : List FailureClass :=
   , .toolReturnedError
   , .policyDenied
   , .external
-  , .spawnUnclaimed
   ]
 
 end FailureClass

@@ -25,20 +25,19 @@ def terminalWakeQueue : SessionQueue.SessionQueueState :=
   { wakeQueue with terminal := {wakeEntry.requestId} }
 
 /-- One complete shared-owner trace: accepted provider intent, dispatch,
-immediate background receipt, parent completion, verified bridge close,
+immediate background receipt, parent completion, caused-request terminal close,
 atomic notification+wake publication, claim, and exact replay after both
 claim and finish. -/
 def wakeContinuationTrace : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let parentTerminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? parentTerminal 600
   let closed ← (ToolDelivery.closeToolOutput parentTerminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let message := wakeNotificationMessage 2
   let binding := wakeBinding message
   let composed ← BackgroundContinuation.publishAndEnqueue?
@@ -74,16 +73,15 @@ theorem accepted_background_completion_claims_and_replays_after_finish :
 /-- An authenticated row identity cannot turn a fresh publication into replay
 after its logical wake has already become active or terminal. -/
 def freshNotificationCannotAttachToConsumedWake : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let parentTerminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? parentTerminal 600
   let closed ← (ToolDelivery.closeToolOutput parentTerminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let message := wakeNotificationMessage 2
   let binding := wakeBinding message
   pure ((BackgroundContinuation.publishAndEnqueue?
@@ -95,16 +93,15 @@ theorem fresh_notification_is_rejected_for_active_and_terminal_wake :
     freshNotificationCannotAttachToConsumedWake = some true := by native_decide
 
 def wrongWakeBindingsRejected : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let parentTerminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? parentTerminal 600
   let closed ← (ToolDelivery.closeToolOutput parentTerminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let message := wakeNotificationMessage 2
   let physicalAlias := { wakeBinding message with wakeDocument := 801 }
   let logicalAliasEntry := { wakeEntry with requestId := 902 }
@@ -117,34 +114,9 @@ def wrongWakeBindingsRejected : Option Bool := do
 theorem physical_wake_document_and_logical_queue_id_are_both_exact :
     wrongWakeBindingsRejected = some true := by native_decide
 
-/-- Goal-owned notification uses the ordinary local gate and never constructs
-or mutates a background-completion queue. -/
-def goalGateDoesNotCreateWake : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [foregroundAdmission]).toOption
-  let dispatched ← (dispatch accepted 7 permit).toOption
-  let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
-  let closed ← (ToolDelivery.closeToolOutput backgrounded 600
-    (.native .complete) toolOutputClose).toOption
-  let held ← Gate.acquire (Gate.initial closed) 1 true
-  let before := { held with queue := wakeQueue }
-  let committed ← Gate.commit before 1 5
-    (.toolGoalDeliver 600 goalBinding (toolDeliveryMessage 1))
-  pure (committed.messages.contains (toolDeliveryMessage 1) &&
-    committed.transcript.nextSeq == 2 &&
-    committed.queue.scope.agent == before.queue.scope.agent &&
-    committed.queue.sessionId == before.queue.sessionId &&
-    committed.queue.scope.requester == before.queue.scope.requester &&
-    committed.queue.active == before.queue.active &&
-    committed.queue.pending == before.queue.pending &&
-    committed.queue.terminal.card == before.queue.terminal.card)
-
-theorem typed_goal_gate_publication_has_no_background_queue_effect :
-    goalGateDoesNotCreateWake = some true := by native_decide
-
 def restartObservation (context : ToolExecution.ToolCallContext)
     (registered : Bool := false) : Recovery.OrphanedBackgroundToolRow :=
-  { call := context, deadlineExpired := false, unclaimedExpired := false
+  { call := context, deadlineExpired := false
     parentLive := true, parentInterrupted := false, parentTerminal := false
     executionRegistered := registered, process := .stopped
     ownerTaskDeleted := false }
@@ -168,7 +140,7 @@ def restartBinding (context : ToolExecution.ToolCallContext)
     authenticated := true }
 
 def restartReadyWorld : Option World := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption

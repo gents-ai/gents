@@ -25,6 +25,9 @@ structure RequestRowEvidence where
   physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
+  /-- The target principal's configured `max_request_hop`, read by the same
+  admission observation. -/
+  maxRequestHop : Nat
 
 def rowBound (row : RequestRowEvidence) (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission) : Prop :=
@@ -45,7 +48,7 @@ def activation? (ids : Identities) (available : Bool) (enrollment : Enrollment.S
     (duration deadline : Time) : Option Handover.TitleActivation :=
   if request.purpose = .titleAudit ∧ rowBound row request admission ∧
       Enrollment.titlePendingDisposition available enrollment request admission evidence
-        behavior row.branchFieldsExact row.pendingDeadlineAbsent = .admit then
+        behavior row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit then
     match evidence.bind (·.titleParent) with
     | none => none
     | some parent => some
@@ -71,7 +74,7 @@ theorem activation_requires_admitted_observation
       row generation duration deadline = some activation) :
     request.purpose = .titleAudit ∧ rowBound row request admission ∧
       Enrollment.titlePendingDisposition available enrollment request admission evidence
-        behavior row.branchFieldsExact row.pendingDeadlineAbsent = .admit := by
+        behavior row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit := by
   unfold activation? at h
   split at h
   · assumption

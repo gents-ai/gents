@@ -31,14 +31,16 @@ def Coherent (pre : ComposedState) (toolPre : ToolExecution.ToolCallContext) : P
   toolPre.deadline = pre.request.deadline ∧
   toolPre.currentTime = pre.request.currentTime
 
+/-- A `create_session`/`send_message` row outlives its request's deadline:
+its terminal is another request's terminal output, not this request's clock. -/
 def IsDetached (t : ToolExecution.ToolCallContext) : Prop :=
-  t.cancelPolicy = .detach
+  t.operation = .sessionMessage
 
 instance (t : ToolExecution.ToolCallContext) : Decidable (IsDetached t) := by
   unfold IsDetached; infer_instance
 
 def Persistent (s : ComposedState) (t : ToolExecution.ToolCallContext) : Prop :=
-  t.requestId = s.requestId ∧ t.childRequestId.isSome
+  t.requestId = s.requestId ∧ t.operation = .sessionMessage
 
 def AllToolsCoherent (s : ComposedState) : Prop :=
   ∀ t ∈ s.tools, ¬ IsDetached t → Coherent s t

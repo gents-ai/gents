@@ -10,9 +10,9 @@ immutable origin messages, closing records, exact extent segments and the
 request/tool provenance derived from those records. Mutable provenance enters
 only after its existing owner returns an explicit access observation.
 
-There is deliberately no input for delegated-call provenance. A remote
-`delegated_input.source` explains copied arguments; it is not a capability,
-hydration root, or grant of a parent output document.
+There is deliberately no input for cross-session provenance. A request's
+`caused_by_parent_*` lineage explains why it exists; it is not a capability,
+hydration root, or grant of the calling session's output documents.
 -/
 namespace CanonicalOutput.Hydration
 
@@ -305,7 +305,7 @@ theorem denied_message_is_not_missing (messages : List MessageEnvelope)
 theorem absent_message_is_unavailable (id : DocId) :
     lookupMessage [] [] id = .error .headerUnavailable := by rfl
 
-theorem delegated_provenance_is_not_a_base (key : AuthorizedBase) :
+theorem causal_provenance_is_not_a_base (key : AuthorizedBase) :
     key.key.collection ≠ .agentMessage ∧ key.key.collection ≠ .agentOutputSegment := by
   cases key <;> simp [AuthorizedBase.key]
 

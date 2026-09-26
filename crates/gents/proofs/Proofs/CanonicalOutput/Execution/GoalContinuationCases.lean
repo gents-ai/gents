@@ -38,9 +38,9 @@ def parentLease : RequestExecutionLease.World Generation :=
   , continuationCount := 0, tokenChargeCount := 0 }
 
 def parentWorld : World :=
-  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1, remoteRoutes := []
+  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1
   , lease := parentLease, segments := [], messages := [], transcript := transcript
-  , compactionCursor := none, toolContexts := [], delegatedCalls := []
+  , compactionCursor := none, toolContexts := []
   , terminalSelection := some .noMessage }
 
 def idleQueue : SessionQueue.SessionQueueState :=
@@ -69,7 +69,7 @@ def freshReplayAndClaim : Option Bool := do
       replay.after.queue.terminal != replay.before.queue.terminal
     then none
   let activated ← Handover.claimAndActivate replay.after 1 5
-    (childActivation replay [] true 8 5 10)
+    (childActivation replay 8 5 10)
   pure (activated.requestId == 200 &&
     activated.queue.active == some 20 &&
     activated.claimed.map (·.logicalRequest) == some 20)

@@ -35,10 +35,6 @@ def wakeBinding (message : MessageEnvelope := wakeNotificationMessage) : WakeDoc
     notificationSequence := message.sequence
     wakeDocument := 800, authenticated := true }
 
-def goalBinding : GoalNotificationBinding :=
-  { goalDocument := 900, parentRequestDocument := 10, agent := 1, session := 1
-    status := .active, authenticated := true }
-
 def foregroundResultMessage (sequence : Nat := 1) : MessageEnvelope :=
   { toolDeliveryMessage sequence with
     key := "tool-result-600"
@@ -55,55 +51,24 @@ def backgroundReceiptMessage : MessageEnvelope :=
     blocks := [.toolResult 600 "native-call" none
       [.text ⟨⟨702, 0⟩, .composed [.literal [91], .range 0 1, .literal [93]]⟩]] }
 
-def bridgeAdmission : ToolAdmission :=
-  ⟨600, { foregroundToolContext with childRequestId := some 42 }, none⟩
+/-- A `create_session`/`send_message` row. Its closing authority is the
+native action projected from the caused request's terminal output. -/
+def sessionMessageAdmission : ToolAdmission :=
+  ⟨600, { foregroundToolContext with operation := .sessionMessage }⟩
 
-def requestContext (state : RequestState) (requestId : RequestId) : RequestContext :=
-  { state := state
-    origin := .interactive
-    backend := ⟨"test"⟩
-    admission := if isTerminal state then .released else .executing
-    deadline := 30
-    claimTime := 0
-    currentTime := 5
-    retryCount := 0
-    maxRetries := 1
-    messageSeq := 0
-    persistence := .committed
-    causedByParentRequestId := if requestId == 42 then some 10 else none
-    causedByParentToolCallId := if requestId == 42 then some 600 else none }
-
-def composed (requestId : RequestId) (state : RequestState)
-    (tools : List ToolExecution.ToolCallContext := []) : ComposedState :=
-  { requestId := requestId
-  , process := .ready
-  , request := requestContext state requestId
-  , call :=
-      { callId := requestId
-      , requestId := requestId
-      , backend := ⟨"test"⟩
-      , state := .completed }
-  , tools := tools }
-
-def completedBridge (context : ToolExecution.ToolCallContext) : Subagent.BridgedState :=
-  { parent := composed 10 .completed [context]
-  , child := composed 42 .completed
-  , bridgeCallId := context.callId }
-
-/-- A linked background child publishes its immediate native result while the
-physical call is running, the parent can then finish, and verified child
-terminal state closes the tool source before the ordinary late notification. -/
-def bridgeReceiptThenNotification : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+/-- A started session publishes its immediate receipt while the physical call
+is running, the calling request can then finish, and the caused request's
+terminal closes the tool source before the ordinary late notification. -/
+def sessionReceiptThenNotification : Option Bool := do
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let terminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? terminal 600
   let closed ← (ToolDelivery.closeToolOutput terminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let delivered ← (ToolDelivery.publishWakeNotification closed 600
     (wakeBinding (wakeNotificationMessage 2)) (wakeNotificationMessage 2)).toOption
   let receiptReplay ← (ToolDelivery.publishBackgroundReceipt delivered 600
@@ -120,28 +85,27 @@ def bridgeReceiptThenNotification : Option Bool := do
     delivered.messages.contains backgroundReceiptMessage &&
     delivered.messages.contains (wakeNotificationMessage 2))
 
-theorem linked_background_receipt_bridge_and_notification_trace :
-    bridgeReceiptThenNotification = some true := by native_decide
+theorem session_message_receipt_and_notification_trace :
+    sessionReceiptThenNotification = some true := by native_decide
 
 /-- An immediate background receipt remains the one native result if the
-owner later waits in the foreground.  Completion is blocked while the bridge
-is physically running; verified bridge close changes lifecycle only and does
+owner later waits in the foreground.  Completion is blocked while the call
+is physically running; the native close changes lifecycle only and does
 not allocate or publish another result. -/
 def receiptThenForegroundClose : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [foregroundAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let foregrounded ← (changeToolControl receipted 7 600 .foreground).toOption
-  let running ← ownedToolByDocument? foregrounded 600
   let completionBlocked :=
     match terminalize foregrounded 7 .completed (.message 501) with
     | .error _ => true
     | .ok _ => false
   let closed ← (ToolDelivery.closeToolOutput foregrounded 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let terminal ← (terminalize closed 7 .completed (.message 501)).toOption
   let finalTool ← ownedToolByDocument? terminal 600
   let row ← transcriptToolByDocument? terminal 600
@@ -176,7 +140,7 @@ theorem authored_receipt_requires_exact_writer_and_request_but_fork_retains_ref 
 
 def closeAndPublishState (action : ToolExecution.ToolCallContext.Action)
     (expected : ToolExecution.ToolCallState) (now : Time := 5) : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false
@@ -204,7 +168,7 @@ theorem timed_out_delivery_preserves_timed_out_lifecycle :
     closeAndPublishState .timeout .timedOut 21 = true := by native_decide
 
 def wrongProviderResultRejected : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false
@@ -223,16 +187,15 @@ theorem result_provider_id_is_bound_to_accepted_intent :
     wrongProviderResultRejected = true := by native_decide
 
 def secondTerminalNotificationRejected : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
-    [bridgeAdmission]).toOption
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
+    [sessionMessageAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
   let receipted ← (ToolDelivery.publishBackgroundReceipt backgrounded 600
     backgroundReceiptClose backgroundReceiptMessage).toOption
   let terminal ← (terminalize receipted 7 .completed (.message 501)).toOption
-  let running ← ownedToolByDocument? terminal 600
   let closed ← (ToolDelivery.closeToolOutput terminal 600
-    (.bridge (completedBridge running.context) .bridge_complete) toolOutputClose).toOption
+    (.native .complete) toolOutputClose).toOption
   let delivered ← (ToolDelivery.publishWakeNotification closed 600
     (wakeBinding (wakeNotificationMessage 2)) (wakeNotificationMessage 2)).toOption
   let second := { wakeNotificationMessage 3 with
@@ -248,8 +211,8 @@ def secondTerminalNotificationRejected : Option Bool := do
 theorem a_physical_tool_has_at_most_one_terminal_notification :
     secondTerminalNotificationRejected = some true := by native_decide
 
-def authenticatedGoalOwnsParentNotification : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] with
+def backgroundNotificationRequiresExactWake : Bool :=
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false
@@ -269,21 +232,18 @@ def authenticatedGoalOwnsParentNotification : Bool :=
               fakeWake (toolDeliveryMessage 1) with
             | .error .publication => true
             | _ => false
-          match ToolDelivery.publishGoalNotification closed 600 goalBinding
-              (toolDeliveryMessage 1) with
-            | .ok delivered => rawRejected && parentAsWakeRejected &&
-                delivered.transcript.nextSeq == 2 &&
-                delivered.messages.contains (toolDeliveryMessage 1)
-            | .error _ => false
+          rawRejected && parentAsWakeRejected
 
-theorem typed_goal_owner_publishes_without_background_wake :
-    authenticatedGoalOwnsParentNotification = true := by native_decide
+/-- A background notification is published only against its exact physical
+wake document, whether or not the session has a Goal. -/
+theorem background_notification_requires_exact_wake :
+    backgroundNotificationRequiresExactWake = true := by native_decide
 
 def distinctLogicalAdmission : ToolAdmission :=
-  ⟨600, { foregroundToolContext with callId := 999 }, none⟩
+  ⟨600, { foregroundToolContext with callId := 999 }⟩
 
 def physicalDocumentDoesNotAliasLogicalCallId : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [distinctLogicalAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [distinctLogicalAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false
@@ -309,7 +269,7 @@ def emptyCancelledResult : MessageEnvelope :=
     blocks := [.toolResult 600 "native-call" none []], createdAt := 5 }
 
 def pendingCancellationCanPublishResult : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match terminalize accepted 7 .completed (.message 501) with
     | .error _ => false
@@ -329,7 +289,7 @@ theorem pending_cancellation_has_empty_closure_and_native_result :
     pendingCancellationCanPublishResult = true := by native_decide
 
 def beyondExtentReplayAndCompactedPublication : Bool :=
-  match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
     | .error _ => false

@@ -18,7 +18,7 @@ def held (phase : CompletionRetry.Phase) (attempt : Nat := 0) : Option Canonical
   pure { gate with retry := retry phase attempt }
 
 def acceptance : Operation :=
-  .accept 7 (emptyClose 100 0 .complete 5) (emptyAssistant 200 5) [] []
+  .accept 7 (emptyClose 100 0 .complete 5) (emptyAssistant 200 5) []
 
 def acceptanceCommitsPolicyAndCanonicalOutput : Bool :=
   match held .streaming with

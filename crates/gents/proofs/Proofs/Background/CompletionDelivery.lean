@@ -6,10 +6,12 @@ missing delivery marker. BackgroundCompletion composes notification persistence
 with the existing session wake owner, including its canonical Goal exclusion.
 -/
 
-namespace Subagent.CompletionDelivery
+namespace Background.CompletionDelivery
 
 /-!
-The tool/subagent bridge is terminalized with a compare-and-set. A concurrent
+A background row (a native process or a `create_session`/`send_message`
+row, whose terminal is its caused request's terminal output) is terminalized
+with a compare-and-set. A concurrent
 recovery or cancellation may win that CAS first. The losing executor must not
 publish the outcome it observed locally, because that outcome can contradict
 the durable winner. Publication itself is keyed and idempotent so retrying the
@@ -100,4 +102,4 @@ theorem reconciled_marker_implies_notification
       cases terminal <;> cases present <;> cases marked <;>
         simp_all [reconcileDelivery, publishOnce, DeliveryInvariant]
 
-end Subagent.CompletionDelivery
+end Background.CompletionDelivery

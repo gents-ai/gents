@@ -165,15 +165,12 @@ def physicalRunning (world : World) (document : DocId) : Bool :=
   | some tool => tool.context.state == .running
   | none => false
 
-/-- Replicated argument bytes are not permission to start. The authoritative
-tool document must still be pending and free of cancellation/reconcile handoff
-markers at the shared-state admission boundary. Replication latency and the
-native remote gate that supplies this observation are refinement premises. -/
-def remoteExecutionAdmitted (world : World) (document : DocId) : Bool :=
+/-- A pending row is not permission to start. The authoritative tool document
+must still be pending and free of the uncertainty handoff marker at the
+shared-state admission boundary. -/
+def executionAdmitted (world : World) (document : DocId) : Bool :=
   match ownedToolByDocument? world document with
-  | some tool => tool.context.state == .pending &&
-      tool.cancelCascadeIntentAt.isNone && !tool.cancelPendingRemoteAck &&
-      tool.stuckSince.isNone
+  | some tool => tool.context.state == .pending && tool.stuckSince.isNone
   | none => false
 
 def transcriptToolByDocument? (world : World) (document : DocId) :
@@ -240,8 +237,7 @@ def acceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
   | .acceptedIntent => directAcceptedHeaderMetadataBindsTool world tool
   | .spawnedBackground parentDoc =>
       spawnParentIntentValid world tool parentDoc &&
-        tool.document != parentDoc && tool.context.awaitMode == .background &&
-        tool.context.childRequestId.isNone
+        tool.document != parentDoc && tool.context.awaitMode == .background
 
 def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
     (generation : Generation) : Bool :=
@@ -372,15 +368,7 @@ def admissionsValid (world : World) (message : MessageEnvelope)
     (admissions.map (fun admission => admission.document)).Nodup &&
     admissions.all (fun admission =>
       admission.context.state == .pending &&
-        !(world.toolContexts.any (fun tool => tool.document == admission.document)) &&
-        (match world.remoteRoutes.filter (fun route => route.1 == admission.document) with
-        | [] => admission.context.spawnBehaviorId.isNone
-        | [route] => admission.context.awaitMode == .background &&
-            admission.context.childRequestId.isSome &&
-            admission.context.spawnBehaviorId == some route.2.2 &&
-            receiveDelegatedWorkspace world.workspace admission.delegatedWorkspace
-        | _ => false
-        ))
+        !(world.toolContexts.any (fun tool => tool.document == admission.document)))
 
 def installAcceptedTools (world : World) (message : MessageEnvelope)
     (admissions : List ToolAdmission) : List OwnedTool :=
@@ -390,8 +378,7 @@ def installAcceptedTools (world : World) (message : MessageEnvelope)
     , session := message.header.session
     , acceptedSequence := message.sequence
     , provenance := .acceptedIntent
-    , context := admission.context
-    , delegatedWorkspace := admission.delegatedWorkspace })
+    , context := admission.context })
 
 def spawnedAdmissionValid (world : World) (generation : Generation)
     (admission : SpawnedToolAdmission) : Bool :=
@@ -401,7 +388,6 @@ def spawnedAdmissionValid (world : World) (generation : Generation)
     admission.document != admission.parentToolDoc &&
     admission.context.state == .pending &&
     admission.context.awaitMode == .background &&
-    admission.context.childRequestId.isNone &&
     match ownedToolByDocument? world admission.parentToolDoc with
     | some parent => parent.provenance == .acceptedIntent &&
         parent.context.state == .running &&
@@ -440,33 +426,6 @@ def spawnedAdmissionReplayValid (world : World)
       ToolGenesis.fromContext tool.context == ToolGenesis.fromContext admission.context &&
       acceptedHeaderBindsTool world tool
   | _ => false
-
-/-- `RemoteTarget.call` and `ToolIntent.call` are the exact physical pending
-tool document identity carried by the typed block. `providerId` remains native
-provider metadata and never substitutes for this document key. The authenticated
-execution principal must be the coordinator, and `prepareDelegatedCall` enforces
-that only a distinct remote target receives copied argument bytes. -/
-def prepareDelegatedCalls (world : World) (segments : List Segment) (message : MessageEnvelope) :
-    List RemoteTarget → Except Error (List DelegatedCall)
-  | [] => .ok []
-  | target :: rest => do
-      let intent ← match targetIntent message target.call with
-        | none => .error .invalidDelegation
-        | some intent => .ok intent
-      if target.coordinator != world.principal then .error .invalidDelegation
-      let row ← match prepareDelegatedCall segments noDeniedDocuments message intent
-          target.coordinator target.target target.behavior world.subagentDepth world.workspace with
-        | .error _ => .error .invalidDelegation
-        | .ok row => .ok row
-      let later ← prepareDelegatedCalls world segments message rest
-      .ok (row :: later)
-
-def remoteTargetsMatchConfiguredRoutes (world : World) (message : MessageEnvelope)
-    (targets : List RemoteTarget) : Bool :=
-  targets.map (fun target => (target.call, target.target, target.behavior)) == world.remoteRoutes &&
-    targets.all (fun target => target.coordinator == world.principal) &&
-    world.remoteRoutes.all (fun route =>
-      (toolIntents message).any (fun intent => intent.call == route.1))
 
 def indexedDeclarations : Streams → Nat → List (Nat × Declaration)
   | [], _ => []

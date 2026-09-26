@@ -19,10 +19,7 @@ structure SurfaceView where
   memory : Bool
   sessionHistory : Bool
   contextBudget : Bool
-  spawn : Bool
-  steering : Bool
-  background : Bool
-  crossPrincipal : Bool
+  sessionMessages : Bool
   skills : Bool
   lsp : Bool
   bashMode : Nat
@@ -214,7 +211,7 @@ def bashPolicyRich (forbidden : List (List String))
   , sandbox := true }
 
 def surface (file : FileCap) (bash : BashPolicy)
-    (ordinary defraQuery spawn : Bool)
+    (ordinary defraQuery sessionMessages : Bool)
     (mcp : EndpointScope ToolId Unit)
     (write : EndpointScope (String × String) (Finset String)) : Surface :=
   { file := file
@@ -226,10 +223,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , memory := ordinary
   , sessionHistory := ordinary
   , contextBudget := ordinary
-  , spawn := spawn
-  , steering := ordinary
-  , background := spawn
-  , crossPrincipal := spawn
+  , sessionMessages := sessionMessages
   , skills := ordinary
   , lsp := ordinary
   , cliTools := .all
@@ -253,10 +247,7 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , memory := s.memory
   , sessionHistory := s.sessionHistory
   , contextBudget := s.contextBudget
-  , spawn := s.spawn
-  , steering := s.steering
-  , background := s.background
-  , crossPrincipal := s.crossPrincipal
+  , sessionMessages := s.sessionMessages
   , skills := s.skills
   , lsp := s.lsp
   , bashMode := ToolPolicy.executionModeContractCode s.bash.mode
@@ -389,9 +380,7 @@ def ceilingClampsEachCategory : Surface :=
   , lsp := false
   , sessionHistory := false
   , contextBudget := false
-  , steering := false
-  , background := false
-  , crossPrincipal := false
+  , sessionMessages := false
   , skills := false
   , selfConfig := false
   , cliTools := cliOnly [("svc-a", ["field_a"])]

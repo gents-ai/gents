@@ -11,8 +11,6 @@ structure NamedTransition where
   name : String
   source : String
   target : String
-  requiresNative : Bool := false
-  requiresChild : Bool := false
   deriving Repr
 
 structure VocabularyContract where
@@ -122,9 +120,7 @@ def NamedTransition.toJson (t : NamedTransition) : String :=
   "{"
     ++ "\"name\":" ++ jsonString t.name ++ ","
     ++ "\"from\":" ++ jsonString t.source ++ ","
-    ++ "\"to\":" ++ jsonString t.target ++ ","
-    ++ "\"requires_native\":" ++ boolJson t.requiresNative ++ ","
-    ++ "\"requires_child\":" ++ boolJson t.requiresChild
+    ++ "\"to\":" ++ jsonString t.target
     ++ "}"
 
 def VocabularyContract.toJson (contract : VocabularyContract) : String :=

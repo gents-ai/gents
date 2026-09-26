@@ -232,11 +232,11 @@ private theorem evaluate_preserves_purpose_principal
     rcases closeAuxiliary_success_effect before after generation closing
       (mapError_success Gate.Error.execution _ _ hc) with rfl | ⟨_, rfl⟩ <;>
       exact ⟨rfl, rfl⟩
-  case accept generation closing message targets admissions =>
+  case accept generation closing message admissions =>
     have hcore := mapError_success Gate.Error.execution _ _ hc
     replace hcore := checked_core_success _ _ _ hcore
-    rcases acceptAndPublishCore_success_effect before after generation closing message targets
-      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+    rcases acceptAndPublishCore_success_effect before after generation closing message
+      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
   case toolComplete document authority record message =>
     have hcomposed := mapError_success Gate.Error.delivery _ _ hc
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
@@ -369,17 +369,17 @@ theorem Trace.claimCoherent {before after : World}
   | activateTitle actor now activation scope budget deadline h =>
       exact title_activation_preserves_claimCoherent _ _ actor now activation scope budget deadline h
   | finish actor acknowledged h => exact finish_preserves_claimCoherent _ _ actor acknowledged h
-  | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
+  | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
       rename_i prior next
       unfold SessionComposition.activateGoal at h
       cases hc : Handover.claimAndActivate prior actor now
-          (GoalContinuation.childActivation result routes authenticated generation duration leaseDeadline) with
+          (GoalContinuation.childActivation result generation duration leaseDeadline) with
       | none => simp [hc] at h
       | some session =>
           simp [hc] at h
           cases h
           exact claimed_with_initialRetry_coherent prior session actor now
-            (GoalContinuation.childActivation result routes authenticated generation duration
+            (GoalContinuation.childActivation result generation duration
               leaseDeadline) scope budget deadline hc
   | beginProcessing before after actor now generation h =>
       rw [Handover.successful_begin_frame before after actor now generation h]

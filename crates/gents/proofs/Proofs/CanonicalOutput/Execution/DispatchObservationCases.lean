@@ -10,7 +10,7 @@ open Examples Gate
 def accepted : Option World := do
   let held ← acquire (initial (world 5)) 1 true
   let published ← commit held 1 5
-    (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+    (.accept 7 providerTurn providerMessage [foregroundAdmission])
   scheduling published 1 .release
 
 structure Input where
@@ -106,7 +106,7 @@ def afterPolicySettlement (inputs : List Input) : Option PolicySettlement := do
 def spawnAccepted : Option World := do
   let held ← acquire (initial (world 5)) 1 true
   let published ← commit held 1 5 (.accept 7 Gate.Cases.spawnProviderTurn
-    Gate.Cases.spawnProviderMessage [] [foregroundAdmission])
+    Gate.Cases.spawnProviderMessage [foregroundAdmission])
   scheduling published 1 .release
 
 /-- The accepted `spawn_process` call after it won its own dispatch election. -/

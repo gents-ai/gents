@@ -8,13 +8,19 @@ but document identifiers are the authoritative edges.  This model describes
 the ingest boundary for request lineage:
 
 * logical and physical halves of an edge are either both present or absent;
-* a request is a root, a full subagent bridge, or an explicitly marked
-  request-only control continuation;
+* a request is a root, a session-message request (the full calling request
+  and tool call edge written by `create_session`/`send_message`), or an
+  explicitly marked request-only control continuation;
 * malformed replicated rows are rejected individually, without preventing a
   later well-formed row from being considered; and
 * queued steering admission retains signed raw input; canonical publication of
   the prepared message belongs to the owned execution start, not this lineage
   ingest boundary (see `QueuedSteering`).
+
+`subagentDepth` is the causal hop (`CausalHop`): a session-message request is
+one further than its calling request and every continuation keeps its
+predecessor's hop. The edge is provenance only; it grants no hierarchy,
+cascade or authority over the calling session.
 -/
 
 namespace DurableLineage
@@ -74,7 +80,7 @@ def steeringContinuation (subagentDepth : Nat) : RawLineage :=
   , controlAllowedAtDepthZero := true
   }
 
-/-- Steering is request-linked, not a new child spawn.  Normalization keeps
+/-- Steering is request-linked, not a new send.  Normalization keeps
     both halves of the parent request edge and clears both halves of the old
     tool-call bridge. -/
 theorem steering_continuation_is_admissible
@@ -94,7 +100,7 @@ def backgroundCompletionContinuation (subagentDepth : Nat) : RawLineage :=
   }
 
 /-- A background-completion wake is a control continuation, not a new
-    subagent generation.  It therefore preserves the parent's depth, including
+    send.  It therefore preserves the parent's depth, including
     depth zero for a top-level or goal-continuation session. -/
 theorem background_completion_continuation_is_admissible
     (depth : Nat) :
@@ -112,9 +118,9 @@ def goalContinuation (subagentDepth : Nat) : RawLineage :=
   , controlAllowedAtDepthZero := true
   }
 
-/-- A durable-goal continuation preserves subagent depth and carries both the
+/-- A durable-goal continuation preserves the hop and carries both the
     logical and physical parent request edge. It is controller work, not a new
-    subagent generation. Session and behavior preservation are runtime request-
+    send. Session and behavior preservation are runtime request-
     construction obligations outside `RawLineage`. -/
 theorem goal_continuation_is_admissible (depth : Nat) :
     admissible (goalContinuation depth) = true := by

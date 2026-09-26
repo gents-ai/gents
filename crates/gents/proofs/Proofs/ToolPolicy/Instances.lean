@@ -21,10 +21,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , memory := a.memory && b.memory
   , sessionHistory := a.sessionHistory && b.sessionHistory
   , contextBudget := a.contextBudget && b.contextBudget
-  , spawn := a.spawn && b.spawn
-  , steering := a.steering && b.steering
-  , background := a.background && b.background
-  , crossPrincipal := a.crossPrincipal && b.crossPrincipal
+  , sessionMessages := a.sessionMessages && b.sessionMessages
   , skills := a.skills && b.skills
   , lsp := a.lsp && b.lsp
   , cliTools := a.cliTools.meet rootVM b.cliTools
@@ -132,36 +129,14 @@ theorem effective_contextBudget_le_behavior :
     (effective behavior ceiling runtime).contextBudget = true → behavior.contextBudget = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
-theorem effective_spawn_le_ceiling :
-    (effective behavior ceiling runtime).spawn = true → ceiling.spawn = true := by
+theorem effective_sessionMessages_le_ceiling :
+    (effective behavior ceiling runtime).sessionMessages = true →
+      ceiling.sessionMessages = true := by
   exact fun h => bool_and_right (bool_and_left h)
 
-theorem effective_spawn_le_behavior :
-    (effective behavior ceiling runtime).spawn = true → behavior.spawn = true := by
-  exact fun h => bool_and_left (bool_and_left h)
-
-theorem effective_steering_le_ceiling :
-    (effective behavior ceiling runtime).steering = true → ceiling.steering = true := by
-  exact fun h => bool_and_right (bool_and_left h)
-
-theorem effective_steering_le_behavior :
-    (effective behavior ceiling runtime).steering = true → behavior.steering = true := by
-  exact fun h => bool_and_left (bool_and_left h)
-
-theorem effective_background_le_ceiling :
-    (effective behavior ceiling runtime).background = true → ceiling.background = true := by
-  exact fun h => bool_and_right (bool_and_left h)
-
-theorem effective_background_le_behavior :
-    (effective behavior ceiling runtime).background = true → behavior.background = true := by
-  exact fun h => bool_and_left (bool_and_left h)
-
-theorem effective_crossPrincipal_le_ceiling :
-    (effective behavior ceiling runtime).crossPrincipal = true → ceiling.crossPrincipal = true := by
-  exact fun h => bool_and_right (bool_and_left h)
-
-theorem effective_crossPrincipal_le_behavior :
-    (effective behavior ceiling runtime).crossPrincipal = true → behavior.crossPrincipal = true := by
+theorem effective_sessionMessages_le_behavior :
+    (effective behavior ceiling runtime).sessionMessages = true →
+      behavior.sessionMessages = true := by
   exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_skills_le_ceiling :

@@ -342,7 +342,7 @@ def auxiliaryOutputCaseJson
     [⟨recoveryClosing, some (CanonicalOutput.Execution.Examples.recoveryMessage 201 101 0 20)⟩]
   let publication := CanonicalOutput.Execution.acceptAndPublish
     (CanonicalOutput.Execution.Examples.world 5 [raw]) 7 closing
-    publicationMessage [] []
+    publicationMessage []
   "{\"name\":" ++ jsonString witness.name ++
     ",\"raw\":" ++ canonicalSegmentJson raw ++
     ",\"closing\":" ++ canonicalSegmentJson closing ++
@@ -436,7 +436,6 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"measure_before\":" ++ toString witness.measureBefore ++ ","
     ++ "\"measure_after\":" ++ toString witness.measureAfter ++ ","
     ++ "\"deadline_expired\":" ++ jsonOptionalBool witness.deadlineExpired ++ ","
-    ++ "\"unclaimed_expired\":" ++ jsonOptionalBool witness.unclaimedExpired ++ ","
     ++ "\"parent_live\":" ++ jsonOptionalBool witness.parentLive ++ ","
     ++ "\"parent_interrupted\":" ++ jsonOptionalBool witness.parentInterrupted ++ ","
     ++ "\"parent_terminal\":" ++ jsonOptionalBool witness.parentTerminal ++ ","
@@ -457,20 +456,14 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
     ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
-    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
-    ++ "\"child_linked\":" ++ boolString witness.childLinked ++ ","
+    ++ "\"session_message\":" ++ boolString witness.sessionMessage ++ ","
     ++ "\"parent_observation\":"
       ++ jsonString witness.parentObservation ++ ","
     ++ "\"deadline_expired\":" ++ boolString witness.deadlineExpired ++ ","
-    ++ "\"unclaimed_expired\":" ++ boolString witness.unclaimedExpired ++ ","
     ++ "\"process_outcome\":" ++ jsonString witness.processOutcome ++ ","
-    ++ "\"child_observed\":" ++ boolString witness.childObserved ++ ","
-    ++ "\"bridge_cancel_intent\":" ++ jsonOptionalBool witness.bridgeCancelIntent ++ ","
-    ++ "\"bridge_ack_pending\":" ++ jsonOptionalBool witness.bridgeAckPending ++ ","
     ++ "\"disposition\":" ++ jsonString witness.disposition ++ ","
     ++ "\"cause\":" ++ jsonOptionalString witness.cause ++ ","
     ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
-    ++ "\"post_await_mode\":" ++ jsonOptionalString witness.postAwaitMode ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","
     ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","

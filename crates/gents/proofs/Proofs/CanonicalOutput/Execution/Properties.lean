@@ -34,10 +34,10 @@ theorem renew_preserves_canonical_output
     (world post : World) (generation : Generation) (expectedDeadline : Time)
     (h : renew world generation expectedDeadline = .ok post) :
     post.segments = world.segments ∧ post.messages = world.messages ∧
-      post.transcript = world.transcript ∧ post.delegatedCalls = world.delegatedCalls := by
+      post.transcript = world.transcript := by
   obtain ⟨lease, _, rfl⟩ := renew_success_is_exact_lease_cas world post generation
     expectedDeadline h
-  exact ⟨rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl⟩
 
 /-- Renewal admission and its resulting lease depend only on the lease owner
 state. Arbitrary canonical records—including conflicting or future-dated
@@ -98,10 +98,10 @@ theorem exact_raw_replay_core_is_identity
     (hshape : rawReplayShape world generation record = true)
     (h : appendRawCore world generation record = .ok post) :
     post.segments = world.segments ∧ post.messages = world.messages ∧
-      post.transcript = world.transcript ∧ post.delegatedCalls = world.delegatedCalls := by
+      post.transcript = world.transcript := by
   simp only [appendRawCore, hcollision, Bool.false_eq_true, ↓reduceIte, hmem, hshape] at h
   cases h
-  exact ⟨rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl⟩
 
 theorem retraction_precedes_retry
     (pre post : World) (generation : Generation) (record : Segment)
@@ -114,44 +114,35 @@ theorem retraction_precedes_retry
 
 theorem accepted_publication_is_composed_atomically
     (pre post : World) (generation : Generation) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget)
+    (message : MessageEnvelope)
     (admissions : List ToolAdmission)
-    (h : acceptAndPublish pre generation closing message targets admissions = .ok post) :
-    acceptedPublicationPresent post closing message targets = true ∧
+    (h : acceptAndPublish pre generation closing message admissions = .ok post) :
+    acceptedPublicationPresent post closing message = true ∧
       acceptedToolsPresent post message = true ∧
       toolProjectionCoherent post = true ∧
-      remoteTargetsMatchConfiguredRoutes post message targets = true ∧
       validateClosingRecord post.segments closing = true ∧
       acceptedMessageValid post generation post.segments message = true ∧
       acceptedSourceBound post generation closing message = true := by
   have hcore := checked_core_success _ _ _ h
   have hcoherent := acceptAndPublishCore_success_toolProjectionCoherent
-    pre post generation closing message targets admissions hcore
+    pre post generation closing message admissions hcore
   have hp := checked_success _ _ _ h
   simp only [Bool.and_eq_true] at hp
-  exact ⟨hp.1.1.1.1.1, hp.1.1.1.1.2, hcoherent,
-    hp.1.1.1.2, hp.1.1.2, hp.1.2, hp.2⟩
+  exact ⟨hp.1.1.1.1, hp.1.1.1.2, hcoherent, hp.1.1.2, hp.1.2, hp.2⟩
 
 theorem fresh_accept_core_success_requires_exact_extent
     (world post : World) (generation : Generation) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget)
+    (message : MessageEnvelope)
     (admissions : List ToolAdmission)
-    (hnotReplay : acceptedPublicationPresent world closing message targets = false)
-    (h : acceptAndPublishCore world generation closing message targets admissions = .ok post) :
+    (hnotReplay : acceptedPublicationPresent world closing message = false)
+    (h : acceptAndPublishCore world generation closing message admissions = .ok post) :
     freshCompleteExtentExact (world.segments ++ [closing]) closing = true := by
   by_contra hnotExact
   have hexact : freshCompleteExtentExact (world.segments ++ [closing]) closing = false :=
     Bool.eq_false_of_not_eq_true hnotExact
   simp (config := { maxSteps := 1000000 })
     [acceptAndPublishCore, acceptedReplayPresent, hnotReplay, hexact] at h
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> contradiction
+  repeat' (split at h <;> try contradiction)
 
 theorem dispatch_requires_committed_intent_and_marks_running
     (pre post : World) (generation : Generation)
@@ -339,18 +330,15 @@ theorem accounting_hands_off_running_without_claiming_stop
       (handoffRunningTool world tool).context.state = .running ∧
       tool.document ∉
         (world.transcript.releaseParentInFlight tool.document).inFlight := by
-  cases hc : tool.context.childRequestId <;>
-    simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool, hc,
-      Transcript.TranscriptState.releaseParentInFlight]
+  simp [accountOneOwnedTool, howned, hrunning, handoffRunningTool,
+    Transcript.TranscriptState.releaseParentInFlight]
 
-/-- An exceptional request terminal hands an owned running subagent bridge
-off to background work instead of leaving it awaited. -/
-theorem handoff_backgrounds_child_linked_bridge
-    (world : World) (tool : OwnedTool)
-    (hchild : tool.context.childRequestId.isSome = true) :
-    (handoffRunningTool world tool).context.awaitMode = .background ∧
-      (handoffRunningTool world tool).context.state = tool.context.state := by
-  simp [handoffRunningTool, hchild]
+/-- An exceptional request terminal never changes a running call's await mode
+or state: background work, including a started session's row, keeps running. -/
+theorem handoff_preserves_mode_and_state
+    (world : World) (tool : OwnedTool) :
+    (handoffRunningTool world tool).context = tool.context := by
+  simp [handoffRunningTool]
 
 theorem accounting_ignores_foreign_request_even_same_generation
     (world : World) (generation : Generation) (tool : OwnedTool)
@@ -368,7 +356,6 @@ theorem explicit_background_control_updates_physical_and_parent_hook
     (howned : acceptedHeaderBindsToolGeneration world tool generation = true)
     (hrunning : tool.context.state = .running)
     (hforeground : tool.context.awaitMode = .foreground)
-    (hcancel : tool.cancelCascadeIntentAt = none)
     (hstuck : tool.stuckSince = none)
     (hlease : RequestExecutionLease.step? world.lease
       (.authorizeProducerDecision .mutationWriteGate generation .dispatch) = some lease) :
@@ -378,7 +365,7 @@ theorem explicit_background_control_updates_physical_and_parent_hook
         toolContexts := replaceOwnedTool world.toolContexts tool.document
           { tool with context := { tool.context with awaitMode := .background } }
         transcript := world.transcript.releaseParentInFlight tool.document } := by
-  simp [changeToolControlCore, toolControlAction, hlookup, howned, hcancel, hstuck,
+  simp [changeToolControlCore, toolControlAction, hlookup, howned, hstuck,
     ToolExecution.ToolCallContext.step?, hrunning, hforeground, hlease]
 
 theorem tool_control_success_preserves_projection_coherence
@@ -428,11 +415,11 @@ theorem fresh_completed_core_requires_foreground_accounting
   · split at h <;> try contradiction
     simp [hfalse] at h
 
-theorem remote_bytes_do_not_bypass_execution_admission
+theorem pending_row_does_not_bypass_execution_admission
     (world : World) (generation : Generation) (permit : DispatchPermit)
     (hpublication : toolDispatchPublicationValid world generation permit.call = true)
     (hnotRunning : physicalRunning world permit.call = false)
-    (hdenied : remoteExecutionAdmitted world permit.call = false) :
+    (hdenied : executionAdmitted world permit.call = false) :
     dispatchCore world generation permit = .error .transcriptRejected := by
   simp [dispatchCore, hpublication, hnotRunning, hdenied]
 
@@ -467,7 +454,6 @@ theorem metadata_owned_running_is_handed_off_without_fake_stop
     (hrunning : tool.context.state = .running) :
     (accountOneMetadataOwnedTool world generation tool).1.context.state = .running ∧
       (accountOneMetadataOwnedTool world generation tool).1.stuckSince = some world.lease.now := by
-  cases hc : tool.context.childRequestId <;>
-    simp [accountOneMetadataOwnedTool, howned, hrunning, handoffRunningTool, hc]
+  simp [accountOneMetadataOwnedTool, howned, hrunning, handoffRunningTool]
 
 end CanonicalOutput.Execution

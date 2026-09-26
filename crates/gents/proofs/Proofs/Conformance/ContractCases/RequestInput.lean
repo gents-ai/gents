@@ -120,7 +120,7 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal, verifiedGoalContinuation := some ⟨2, false⟩ }
   , { name := "other-runtime-source-is-not-goal-control",
       input := { goalContinuation := some ⟨1, false⟩ }, contextSkillIds := [],
-      admissionKind := .runtimeInternal, runtimeSource := .localChild,
+      admissionKind := .runtimeInternal, runtimeSource := .automatedTrigger,
       verifiedGoalContinuation := some ⟨1, false⟩ }
 
   , { name := "encoding-all-queue-fields-and-unicode-before-admission"

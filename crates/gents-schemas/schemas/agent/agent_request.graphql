@@ -26,7 +26,6 @@ type AgentRequest @branchable {
     runtime_issuer_did: String @index @immutable
     runtime_source_request_id: String @index @immutable
     runtime_source_kind: String @index @immutable
-    runtime_bridge_author_did: String @index @immutable
     behavior_id: String @index @immutable
     session_id: String @index @immutable
     retry_parent_request: String @immutable
@@ -89,6 +88,13 @@ type AgentRequest @branchable {
     max_retries: Int @immutable
     interrupt_requested_at: String       # RFC3339; null until interrupt requested
     valid_until: String @immutable      # RFC3339; null = no TTL
+    # Session-message lineage. Filled only on a request materialized by
+    # create_session/send_message (the parent tool call) or a request-only
+    # control continuation; null on roots. subagent_depth is the causal hop
+    # (null means hop 0, a root):
+    # a tool-caused request is parent + 1, continuations copy it, and admission
+    # refuses depth > AgentPrincipal.max_request_hop. A Peer request's
+    # requester_did is the originating agent that receives the reply.
     subagent_depth: Int @immutable
     caused_by_parent_request_id: String @index @immutable
     caused_by_parent_request_doc_id: String @index @immutable

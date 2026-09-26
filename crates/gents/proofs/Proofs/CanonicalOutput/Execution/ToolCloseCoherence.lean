@@ -8,7 +8,6 @@ theorem terminalContext_isTerminal (world : World) (tool : OwnedTool)
     (h : terminalContext? world tool authority = some context) : isTerminal context.state := by
   cases authority <;> simp only [terminalContext?, Bind.bind, Option.bind] at h
   all_goals repeat' first | contradiction | (solve | simp_all) | (dsimp only at h) | split at h
-  all_goals cases h; simpa using ‹decide (isTerminal _) = true›
 
 theorem closeToolOutput_preserves_toolProjectionCoherent
     (before after : World) (document : DocId) (authority : CloseAuthority) (record : Segment)

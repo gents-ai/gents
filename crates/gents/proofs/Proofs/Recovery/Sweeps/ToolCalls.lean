@@ -6,11 +6,13 @@ namespace Recovery
 
 open ToolExecution
 
-def isDetachedBridgeCall (call : ToolCallContext) : Prop :=
-  call.childRequestId.isSome ∧ call.cancelPolicy = .detach
+/-- A `create_session`/`send_message` row: no host process backs it; its
+terminal is the caused request's terminal output. -/
+def isSessionMessageCall (call : ToolCallContext) : Prop :=
+  call.operation = .sessionMessage
 
-instance (call : ToolCallContext) : Decidable (isDetachedBridgeCall call) := by
-  unfold isDetachedBridgeCall
+instance (call : ToolCallContext) : Decidable (isSessionMessageCall call) := by
+  unfold isSessionMessageCall
   infer_instance
 
 inductive ToolRecoveryCause where
@@ -18,12 +20,6 @@ inductive ToolRecoveryCause where
   | parentInterrupted
   | parentTerminal
   | terminalizeBackgroundedAsInterrupted
-  | childCompleted
-  | childFailed
-  | childDead
-  | childInterrupted
-  | childSuperseded
-  | unclaimedCrossPrincipalSpawn
   /-- The host owner could not prove the process stopped: it was unrecorded,
       its pid was reused, or it exited while no owner observed its result. -/
   | processLost
@@ -38,12 +34,6 @@ def toContract : ToolRecoveryCause → String
   | .parentInterrupted => "parentInterrupted"
   | .parentTerminal => "parentTerminal"
   | .terminalizeBackgroundedAsInterrupted => "TerminalizeBackgroundedAsInterrupted"
-  | .childCompleted => "childCompleted"
-  | .childFailed => "childFailed"
-  | .childDead => "childDead"
-  | .childInterrupted => "childInterrupted"
-  | .childSuperseded => "childSuperseded"
-  | .unclaimedCrossPrincipalSpawn => "unclaimedCrossPrincipalSpawn"
   | .processLost => "processLost"
   | .taskDeleted => "taskDeleted"
 
@@ -52,12 +42,6 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .parentInterrupted => .cancelled
   | .parentTerminal => .failed
   | .terminalizeBackgroundedAsInterrupted => .cancelled
-  | .childCompleted => .completed
-  | .childFailed => .failed
-  | .childDead => .failed
-  | .childInterrupted => .cancelled
-  | .childSuperseded => .failed
-  | .unclaimedCrossPrincipalSpawn => .failed
   | .processLost => .failed
   | .taskDeleted => .cancelled
 
@@ -84,8 +68,9 @@ structure ToolCallRecoveryRow where
   cause : ToolRecoveryCause
   deriving Repr
 
+/-- Session-message rows are recovered by `sessionMessageRecoverySweep`. -/
 def toolCallRecoveryStale (row : ToolCallRecoveryRow) : Prop :=
-  row.call.state = .running ∧ ¬ isDetachedBridgeCall row.call
+  row.call.state = .running ∧ ¬ isSessionMessageCall row.call
 
 instance (row : ToolCallRecoveryRow) : Decidable (toolCallRecoveryStale row) := by
   unfold toolCallRecoveryStale
@@ -117,7 +102,7 @@ theorem toolCallRecover_zero :
     cases row.cause <;> simp [ToolRecoveryCause.terminalState]
   have h_not : ¬ toolCallRecoveryStale (toolCallRecover row) := by
     intro h_stale
-    rcases h_stale with ⟨h_running, _h_not_detached⟩
+    rcases h_stale with ⟨h_running, _h_session⟩
     simp [toolCallRecover] at h_running
     exact h_terminal_not_running h_running
   simp [toolCallRecoveryMeasure, h_not]
@@ -149,7 +134,6 @@ and closes the panic path without touching live registered workers. -/
 structure OrphanedBackgroundToolRow where
   call : ToolCallContext
   deadlineExpired : Bool
-  unclaimedExpired : Bool
   parentLive : Bool
   parentInterrupted : Bool
   parentTerminal : Bool
@@ -169,8 +153,8 @@ def OrphanedBackgroundToolRow.parentResolvable
   row.parentLive || row.parentInterrupted || row.parentTerminal
 
 /-- The periodic orphan sweep uses the same precedence as startup recovery.
-    Owner resolution precedes expiry, since neither deadline nor unclaimed
-    status licenses a write to a tool whose parent scope is unavailable.
+    Owner resolution precedes expiry, since a deadline does not license a
+    write to a tool whose parent scope is unavailable.
     A live registered worker owns its row unless its task was deleted; that
     worker is proven ownership, and like an explicit cancellation its terminal
     cause is persisted before the worker is signalled, so the worker cannot
@@ -193,8 +177,6 @@ def orphanedBackgroundToolCause
     | .stopped =>
       if row.deadlineExpired then
         some .deadlineExceeded
-      else if row.unclaimedExpired then
-        some .unclaimedCrossPrincipalSpawn
       else if row.ownerTaskDeleted then
         some .taskDeleted
       else
@@ -232,7 +214,7 @@ theorem orphanedBackgroundTool_registered_live_worker_untouched
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
   row.call.awaitMode = .background ∧
-  row.call.childRequestId = none ∧
+  ¬ isSessionMessageCall row.call ∧
   (row.executionRegistered = false ∨ row.ownerTaskDeleted = true) ∧
   (orphanedBackgroundToolCause row).isSome = true
 
@@ -323,7 +305,16 @@ structure BackgroundCompletionSideEffectRow where
   deriving Repr
 
 def isNativeBackgroundCall (call : ToolCallContext) : Prop :=
-  call.awaitMode = .background ∧ call.childRequestId = none
+  call.awaitMode = .background ∧ ¬ isSessionMessageCall call
+
+/-- Every background row, native or session-message, delivers its terminal
+through the same completion notification and coalesced wake. -/
+def isBackgroundCall (call : ToolCallContext) : Prop :=
+  call.awaitMode = .background
+
+instance (call : ToolCallContext) : Decidable (isBackgroundCall call) := by
+  unfold isBackgroundCall
+  infer_instance
 
 instance (call : ToolCallContext) : Decidable (isNativeBackgroundCall call) := by
   unfold isNativeBackgroundCall
@@ -332,7 +323,7 @@ instance (call : ToolCallContext) : Decidable (isNativeBackgroundCall call) := b
 def backgroundCompletionSideEffectStale
     (row : BackgroundCompletionSideEffectRow) : Prop :=
   isTerminal row.call.state ∧
-  isNativeBackgroundCall row.call ∧
+  isBackgroundCall row.call ∧
   row.parentResolvable = true ∧
   row.sideEffectsDone = false
 
@@ -389,44 +380,29 @@ def backgroundCompletionSideEffectSweep : RecoverySweep :=
   , h_recover_zero := backgroundCompletionSideEffectRecover_zero
   }
 
-/- Native background calls are disjoint from this sweep: the orphan sweep owns
-   their volatile-registration gate and deadline/unclaimed precedence. -/
+/- Background calls are disjoint from this sweep: the orphan sweep owns native
+   rows' volatile-registration gate and deadline precedence, and a
+   session-message row is never terminalized by its parent's fate. -/
 structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
   deriving Repr
 
-def isChildLinkedBridge (call : ToolCallContext) : Prop :=
-  call.childRequestId.isSome
-
-instance (call : ToolCallContext) : Decidable (isChildLinkedBridge call) := by
-  unfold isChildLinkedBridge
-  infer_instance
-
-/-- No terminal parent is a cancel signal for a child-linked bridge, whatever
-    its cancellation policy: the bridge is retained as background work
-    (`Recovery.restartDisposition`'s `retainInBackground`, applied in the
-    parent's terminal accounting), never terminalized by this sweep. -/
+/-- No terminal parent is a cancel signal for background work: a started
+    session keeps running and a native background process keeps its own
+    owner. Only foreground rows are terminalized by this sweep. -/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
-  ¬ isChildLinkedBridge row.call ∧
-  ¬ isNativeBackgroundCall row.call
+  ¬ isBackgroundCall row.call
 
-theorem terminalParent_native_background_not_stale
+theorem terminalParent_background_not_stale
     (row : TerminalParentToolRow)
-    (h_native : isNativeBackgroundCall row.call) :
+    (h_background : isBackgroundCall row.call) :
     ¬ terminalParentToolStale row := by
   intro h_stale
-  exact h_stale.2.2.2 h_native
-
-theorem terminalParent_child_linked_not_stale
-    (row : TerminalParentToolRow)
-    (h_child : isChildLinkedBridge row.call) :
-    ¬ terminalParentToolStale row := by
-  intro h_stale
-  exact h_stale.2.2.1 h_child
+  exact h_stale.2.2 h_background
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
@@ -455,7 +431,7 @@ theorem terminalParentToolRecover_terminal :
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
   ·
     have h_term : row.parentTerminal = true := by
-      rcases h_stale with ⟨_, h_parent, _, _⟩
+      rcases h_stale with ⟨_, h_parent, _⟩
       cases h_parent with
       | inl h => exact absurd h (by simpa using h_int)
       | inr h => exact h
@@ -468,7 +444,7 @@ theorem terminalParentToolRecover_zero :
   intro row h_stale
   have h_not : ¬ terminalParentToolStale (terminalParentToolRecover row) := by
     intro h
-    rcases h with ⟨h_running, _, _, _⟩
+    rcases h with ⟨h_running, _, _⟩
     unfold terminalParentToolRecover at h_running
     by_cases h_int : row.parentInterrupted
     · simp [h_int, ToolRecoveryCause.terminalState] at h_running

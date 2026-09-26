@@ -1,8 +1,7 @@
 import Proofs.Recovery.Sweeps.Requests
 import Proofs.Recovery.Sweeps.ToolCalls
-import Proofs.Recovery.Sweeps.DetachedBridge
+import Proofs.Recovery.Sweeps.SessionMessage
 import Proofs.Recovery.Sweeps.Inference
-import Proofs.Recovery.Sweeps.SubagentLiveness
 
 namespace Recovery
 
@@ -12,9 +11,8 @@ def registeredRecoverySweeps : List RecoverySweep :=
   , orphanedBackgroundToolSweep
   , backgroundCompletionSideEffectSweep
   , terminalParentOwnedToolSweep
-  , detachedBridgeRecoverySweep
+  , sessionMessageRecoverySweep
   , inferenceCallRecoverySweep
-  , expiredSubagentChildSweep
   ]
 
 def registeredRecoverySweepIds : List String :=

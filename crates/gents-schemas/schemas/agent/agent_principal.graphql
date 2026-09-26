@@ -7,4 +7,7 @@ type AgentPrincipal @branchable {
     updated_at: DateTime @index(direction: DESC)
     created_by: String
     tags: [String]
+    # Admission refuses a request whose subagent_depth (causal hop) exceeds
+    # this bound; null means the default of 8.
+    max_request_hop: Int
 }
