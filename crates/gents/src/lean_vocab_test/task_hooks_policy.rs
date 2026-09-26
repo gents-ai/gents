@@ -65,7 +65,10 @@ fn generated_task_hook_admission_cases_fence_production_validation() {
 fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
     let run_cases = lean_task_hook_run_cases();
     let recovery_cases = lean_task_hook_recovery_cases();
-    assert!(!run_cases.is_empty(), "task hook run cases must not be empty");
+    assert!(
+        !run_cases.is_empty(),
+        "task hook run cases must not be empty"
+    );
     assert!(
         !recovery_cases.is_empty(),
         "task hook recovery cases must not be empty"
