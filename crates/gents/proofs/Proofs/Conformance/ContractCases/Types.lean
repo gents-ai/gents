@@ -556,6 +556,9 @@ structure R6BackgroundingCase where
   notificationPersisted : Option Bool := none
   wakeCreated : Option Bool := none
   redriveAllowed : Option Bool := none
+  /-- `ToolOperation` of the executed native-lifecycle row; a
+      `sessionMessage` row is background-only. -/
+  operation : Option String := none
   deriving Repr
 
 structure BackgroundTheoremWitness where

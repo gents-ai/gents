@@ -116,6 +116,9 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) wake_created: Option<bool>,
     #[serde(default)]
     pub(crate) redrive_allowed: Option<bool>,
+    /// `ToolOperation` of an executed native-lifecycle row.
+    #[serde(default)]
+    pub(crate) operation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

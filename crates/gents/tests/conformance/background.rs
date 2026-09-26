@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 43);
+    assert_eq!(cases.len(), 45);
 
     let names = cases
         .iter()
@@ -25,6 +25,8 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_explicit_cancel_projects_explicit_cancel",
+            "native_background_row_foregrounds",
+            "session_message_row_refuses_foreground",
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
