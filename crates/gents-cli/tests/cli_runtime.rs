@@ -1,5 +1,5 @@
 //! Runtime-surface CLI suites (server-backed): chat, requests, status,
-//! sessions, subagents, goals, holds, init, reconciliation.
+//! sessions, goals, holds, init, reconciliation.
 
 mod support;
 
@@ -23,5 +23,3 @@ mod cli_response;
 mod cli_session;
 #[path = "suites/cli_status.rs"]
 mod cli_status;
-#[path = "suites/cli_subagent.rs"]
-mod cli_subagent;

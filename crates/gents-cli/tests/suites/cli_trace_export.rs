@@ -1455,7 +1455,6 @@ async fn seed_canonical_trace_tool(
     lifecycle_state: &str,
     result: Option<&str>,
     failure_class: Option<&str>,
-    child_request_id: Option<&str>,
 ) -> Result<String> {
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -1471,8 +1470,8 @@ async fn seed_canonical_trace_tool(
     let arguments = arguments.to_string();
     let tool_doc_id = exec_doc_id(
         node,
-        &format!(r#"mutation {{ create_AgentToolCall(input: {{tool_call_key: "{}:{}", agent_did: "{}", request_id: "{}", request_doc_id: "{}", session_id: "{}", message_sequence: {}, tool_name: "{}", tool_call_id: "{}", lifecycle_state: "{}", tool_failure_class: {}, child_request_id: {}, started_at: "2026-05-04T12:00:04.500Z", completed_at: "2026-05-04T12:00:06Z"}}) {{_docID}} }}"#,
-            escape_graphql_string(request_doc_id), escape_graphql_string(tool_call_id), escape_graphql_string(agent_did), escape_graphql_string(request_id), escape_graphql_string(request_doc_id), escape_graphql_string(session_id), sequence, escape_graphql_string(tool_name), escape_graphql_string(tool_call_id), escape_graphql_string(lifecycle_state), failure_class.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into()), child_request_id.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into())),
+        &format!(r#"mutation {{ create_AgentToolCall(input: {{tool_call_key: "{}:{}", agent_did: "{}", request_id: "{}", request_doc_id: "{}", session_id: "{}", message_sequence: {}, tool_name: "{}", tool_call_id: "{}", lifecycle_state: "{}", tool_failure_class: {}, started_at: "2026-05-04T12:00:04.500Z", completed_at: "2026-05-04T12:00:06Z"}}) {{_docID}} }}"#,
+            escape_graphql_string(request_doc_id), escape_graphql_string(tool_call_id), escape_graphql_string(agent_did), escape_graphql_string(request_id), escape_graphql_string(request_doc_id), escape_graphql_string(session_id), sequence, escape_graphql_string(tool_name), escape_graphql_string(tool_call_id), escape_graphql_string(lifecycle_state), failure_class.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into())),
         "AgentToolCall",
     ).await?;
     let generation = format!("trace:{request_doc_id}");
@@ -1837,7 +1836,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "completed",
         Some("README contents"),
         None,
-        None,
     )
     .await?;
     let parent_tool_call_doc_id = seed_canonical_trace_tool(
@@ -1853,7 +1851,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "failed",
         Some(&failed_result),
         Some("toolReturnedError"),
-        Some("req-child"),
     )
     .await?;
 
@@ -1933,7 +1930,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "failed",
         Some(&missing_tool_result),
         Some("serviceUnavailable"),
-        None,
     )
     .await?;
     seed_canonical_trace_tool(
@@ -1948,7 +1944,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         json!({"command":"sleep 120"}),
         "timedOut",
         Some(""),
-        None,
         None,
     )
     .await?;
@@ -2007,7 +2002,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         json!({"path":"README.md"}),
         "completed",
         Some("README contents"),
-        None,
         None,
     )
     .await?;
@@ -2291,7 +2285,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
             tool_call_doc_id: "doc-tool-delegate".into(),
             id: "call-delegate".into(),
             call_id: Some("call-delegate".into()),
-            name: "spawn_subagent".into(),
+            name: "create_session".into(),
             arguments: PayloadRef {
                 close_doc_id: "doc-segment-root-args".into(),
                 stream: 0,
@@ -2529,7 +2523,7 @@ fn projection_mock_output_segments(query: &str) -> Value {
                 StreamPayload::ToolArguments {
                     id: "call-delegate".into(),
                     call_id: Some("call-delegate".into()),
-                    name: "spawn_subagent".into(),
+                    name: "create_session".into(),
                 },
             ),
             segment(
@@ -2591,7 +2585,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
                 "request_doc_id": "doc-request-root",
                 "session_id": "session-acp",
                 "message_sequence": 1,
-                "tool_name": "spawn_subagent",
+                "tool_name": "create_session",
                 "tool_call_id": "call-delegate",
                 "status": "completed",
                 "lifecycle_state": "completed",
@@ -2599,7 +2593,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
                 "deadline_at": null,
                 "completed_at": "2026-06-05T18:00:02Z",
                 "selected_service_id": "gents",
-                "selected_tool_name": "spawn_subagent",
+                "selected_tool_name": "create_session",
                 "tool_failure_class": null,
                 "denial_reason": null,
                 "denied_argv": [],
@@ -2611,9 +2605,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
                 "policy_network": null,
                 "latency_ms": 1000,
                 "await_mode": "background",
-                "cancel_policy": null,
-                "cancel_cause": null,
-                "child_request_id": "req-acp-child"
+                "cancel_cause": null
             }
         )],
     )
