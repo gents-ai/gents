@@ -1737,10 +1737,146 @@ mod tests {
         assert!(!lifecycle_is_terminal("pending"));
     }
 
+    fn steer_admission_name(admission: crate::background_tools::SteerAdmission) -> &'static str {
+        use crate::background_tools::SteerAdmission;
+        match admission {
+            SteerAdmission::NotAuthorized => "not_authorized",
+            SteerAdmission::NotBackgrounded => "not_backgrounded",
+            SteerAdmission::Cancelled => "cancelled",
+            SteerAdmission::Terminal => "terminal",
+            SteerAdmission::AwaitingMaterialization => "awaiting_materialization",
+            SteerAdmission::Fenced => "fenced",
+            SteerAdmission::Append => "append",
+        }
+    }
+
+    fn edge_from_lean_case(
+        case: &crate::lean_vocab_test::LeanDescendantGraphCase,
+    ) -> DescendantEdge {
+        let (materialization_state, authorization_state) = if case.readable {
+            let materialized = if case.materialization == "replicated" {
+                DescendantMaterializationState::MaterializedRemote
+            } else {
+                DescendantMaterializationState::MaterializedLocal
+            };
+            (materialized, DescendantAuthorizationState::Authorized)
+        } else if case.materialization == "pending" {
+            (
+                DescendantMaterializationState::AwaitingChild,
+                DescendantAuthorizationState::PendingMaterialization,
+            )
+        } else {
+            (
+                DescendantMaterializationState::AuthorizationPending,
+                DescendantAuthorizationState::RejectedPhysicalLineage,
+            )
+        };
+        let control_authority = match authorization_state {
+            DescendantAuthorizationState::Authorized if case.controllable => {
+                DescendantControlAuthority::Authorized
+            }
+            DescendantAuthorizationState::Authorized => DescendantControlAuthority::VisibilityOnly,
+            DescendantAuthorizationState::PendingMaterialization => {
+                DescendantControlAuthority::PendingMaterialization
+            }
+            DescendantAuthorizationState::RejectedPhysicalLineage => {
+                DescendantControlAuthority::RejectedPhysicalLineage
+            }
+        };
+        let child_request_id = case.child_request_id.to_string();
+        DescendantEdge {
+            cursor: child_request_id.clone(),
+            root_request_id: case.root_request_id.to_string(),
+            immediate_parent_request_id: case.parent_request_id.to_string(),
+            immediate_parent_request_doc_id: "parent-doc".into(),
+            immediate_parent_agent_did: "did:owner".into(),
+            immediate_parent_requester_did: None,
+            immediate_parent_tool_call_doc_id: "bridge-doc".into(),
+            immediate_parent_session_id: "conversation".into(),
+            immediate_parent_tool_call_id: "bridge".into(),
+            child_request_id: child_request_id.clone(),
+            child_request_doc_id: case.readable.then(|| "child-doc".into()),
+            child_requester_did: None,
+            child_session_id: case.readable.then(|| "child-session".into()),
+            principal_did: None,
+            behavior_id: None,
+            target: None,
+            await_mode: case.await_mode.clone(),
+            cancel_policy: None,
+            lifecycle_state: case.lifecycle.clone(),
+            child_lifecycle_state: None,
+            materialization_state,
+            terminal_result_ref: None,
+            transcript_cursor: 0,
+            authorization_state,
+            control_authority,
+            diagnostic: None,
+            depth: if case.direct { 1 } else { 2 },
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn generated_steer_admission_cases_fence_terminal_child_steering() {
+        let cases = lean_descendant_graph_cases();
+        for case in cases {
+            let evidence = crate::background_tools::SteerEvidence {
+                child: case.child_state.as_deref().map(|state| {
+                    RequestLifecycleState::parse(state)
+                        .unwrap_or_else(|_| panic!("{}: unknown child state {state}", case.name))
+                }),
+                spawn_unclaimed: case.spawn_unclaimed,
+                cancel_intent: case.cancel_intent,
+            };
+            let actual = if case.visible {
+                steer_admission_name(crate::background_tools::steer_admission(
+                    &edge_from_lean_case(case),
+                    &evidence,
+                ))
+            } else {
+                "not_authorized"
+            };
+            assert_eq!(actual, case.steer_admission, "{}", case.name);
+        }
+        let admitted = |admission: &str| {
+            cases
+                .iter()
+                .filter(|case| case.steer_admission == admission)
+                .map(|case| case.name.as_str())
+                .collect::<Vec<_>>()
+        };
+        for finished in [
+            "terminal_result_edge",
+            "failed_child_continues",
+            "timed_out_child_continues",
+            "completed_child_continues",
+            "converging_bridge_finished_child",
+            "finished_child_of_interrupted_parent_turn",
+        ] {
+            assert!(admitted("append").contains(&finished), "{finished}");
+        }
+        assert_eq!(
+            admitted("fenced"),
+            [
+                "unclaimed_spawn_late_child_failure",
+                "unclaimed_spawn_class_only",
+                "settled_bridge_with_cancel_intent",
+            ]
+        );
+        assert_eq!(
+            admitted("cancelled"),
+            [
+                "cancelled_child_not_resurrected",
+                "cancelled_bridge_with_failed_child"
+            ]
+        );
+    }
+
     #[test]
     fn generated_descendant_graph_cases_fence_visibility_and_control() {
         let cases = lean_descendant_graph_cases();
-        assert_eq!(cases.len(), 20);
+        assert_eq!(cases.len(), 35);
         for case in cases {
             let owner = AgentRequestRow {
                 doc_id: Some("owner-doc".into()),

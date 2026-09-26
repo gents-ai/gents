@@ -21,6 +21,10 @@ pub(crate) struct LeanDescendantGraphCase {
     pub(crate) caller_requester: Option<String>,
     pub(crate) session_authorized: bool,
     pub(crate) session_controllable: bool,
+    pub(crate) child_state: Option<String>,
+    pub(crate) spawn_unclaimed: bool,
+    pub(crate) cancel_intent: bool,
+    pub(crate) steer_admission: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -442,46 +442,65 @@ impl DefraSessionHook {
             ));
         }
 
-        let edge = match load_steer_subagent_target(&self.node, &request_id, &child_request_id)
-            .await?
-        {
-            SteerSubagentTarget::Found(edge) => edge,
-            SteerSubagentTarget::NotAuthorized => {
-                finish!(tool_not_allowed_payload(
-                    STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    &child_request_id,
-                    "child not owned by this parent request",
-                    Vec::new(),
-                ));
-            }
-            SteerSubagentTarget::NotBackgrounded => {
-                finish!(tool_not_allowed_payload(
-                    STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    &child_request_id,
-                    "foreground subagents cannot be steered; call cancel_subagent first",
-                    Vec::new(),
-                ));
-            }
-            SteerSubagentTarget::AwaitingMaterialization { message, retryable } => {
-                let result = service_unavailable_payload(
-                    STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    message,
-                    retryable,
-                );
-                finish!(result);
-            }
-            SteerSubagentTarget::Terminal(state) => {
-                let result = invalid_tool_arguments_payload(
-                    STEER_SUBAGENT_TOOL_NAME,
-                    "/child_request_id",
-                    format!("child is in terminal state '{state}'; spawn a new subagent instead"),
-                );
-                finish!(result);
-            }
-        };
+        let edge =
+            match load_steer_subagent_target(&self.node, &request_id, &child_request_id).await? {
+                SteerSubagentTarget::Found(edge) => edge,
+                SteerSubagentTarget::NotAuthorized => {
+                    finish!(tool_not_allowed_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        &child_request_id,
+                        "child not owned by this parent request",
+                        Vec::new(),
+                    ));
+                }
+                SteerSubagentTarget::NotBackgrounded => {
+                    finish!(tool_not_allowed_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        &child_request_id,
+                        "foreground subagents cannot be steered; call cancel_subagent first",
+                        Vec::new(),
+                    ));
+                }
+                SteerSubagentTarget::AwaitingMaterialization { message, retryable } => {
+                    let result = service_unavailable_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        message,
+                        retryable,
+                    );
+                    finish!(result);
+                }
+                SteerSubagentTarget::Terminal(state) => {
+                    let result = invalid_tool_arguments_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        format!(
+                            "child bridge is in terminal state '{state}' and its child never \
+                         materialized a session; spawn a new subagent instead"
+                        ),
+                    );
+                    finish!(result);
+                }
+                SteerSubagentTarget::Cancelled => {
+                    let result = invalid_tool_arguments_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        "child was cancelled and stays cancelled; spawn a new subagent instead",
+                    );
+                    finish!(result);
+                }
+                SteerSubagentTarget::Fenced => {
+                    let result = invalid_tool_arguments_payload(
+                        STEER_SUBAGENT_TOOL_NAME,
+                        "/child_request_id",
+                        "child spawn was fenced after no host claimed it in time and \
+                         cannot be given new work; spawn a new subagent instead",
+                    );
+                    finish!(result);
+                }
+            };
 
         let mut interrupted_active_request_id = None;
         let mut drained_wake_up_request_ids = Vec::new();

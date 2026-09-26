@@ -1324,6 +1324,12 @@ def caseCoverage : List CoverageEntry :=
       "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_fence_cases_replay_native_owners")
       "background-tools" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "descendant_graph_cases"
+      "DescendantGraphCases"
+      "descendant_graph::tests::generated_steer_admission_cases_fence_terminal_child_steering"
+      "Generated steer admissions bind the native steer_admission decision to DescendantGraph.steerAdmission over the modeled edge and SteerEvidence (child request state, unclaimed-spawn failure class and cancel intent). Readable and controllable edge facts are adapted from the same generated case, which the visibility consumer fences separately. The database-backed steer_subagent tests exercise the fence loader, the append to a finished child's session and cancelChildSession through cancel_subagent.")
+      "descendant-graph" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
       "conformance::unmaterialized_child_status_matches_runtime_vocabulary"

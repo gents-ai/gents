@@ -177,7 +177,7 @@ private def edgeJson (edge : DescendantGraph.Edge) : String :=
     | .pending => "pending" | .local => "local" | .replicated => "replicated"
   let lifecycle := match edge.lifecycle with
     | .pending => "pending" | .running => "running" | .completed => "completed"
-    | .failed => "failed" | .cancelled => "cancelled"
+    | .failed => "failed" | .timedOut => "timedOut" | .cancelled => "cancelled"
   "{" ++ "\"root_request_id\":" ++ toString edge.rootRequestId ++ ","
     ++ "\"root_session_id\":" ++ toString edge.rootSessionId ++ ","
     ++ "\"parent_request_id\":" ++ toString edge.parentRequestId ++ ","

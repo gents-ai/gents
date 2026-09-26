@@ -413,20 +413,362 @@ async fn steer_subagent_append_persists_admission_without_transcript_message() {
     );
 }
 
+async fn spawn_bridge_doc(node: &EmbeddedNode, spawn_call_id: &str) -> Value {
+    let tool_call_id = escape_graphql_string(&format!("model-{spawn_call_id}"));
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 2) {{
+                _docID agent_did requester_did session_id lifecycle_state
+            }} }}"#
+        ))
+        .await;
+    let rows: Vec<Value> = gents::graphql::rows(&response, "AgentToolCall").unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("one spawn bridge row, got {rows:?}");
+    };
+    row.clone()
+}
+
+/// Settles the spawn bridge the way its own child's terminal does.
+async fn settle_spawn_bridge(
+    node: &std::sync::Arc<EmbeddedNode>,
+    spawn_call_id: &str,
+    outcome: RequestLifecycleState,
+) {
+    let row = spawn_bridge_doc(node, spawn_call_id).await;
+    let doc_id = row["_docID"].as_str().unwrap();
+    if outcome == RequestLifecycleState::Failed {
+        assert!(crate::background_tools::fail_running_subagent_tool_call(
+            node,
+            doc_id,
+            "MaxTurnError: reached max turn limit",
+            gents::tool_call_lifecycle::FailureClass::External,
+        )
+        .await
+        .unwrap());
+        return;
+    }
+    let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        doc_id,
+        row["agent_did"].as_str().unwrap(),
+        row["session_id"].as_str().unwrap(),
+        row["requester_did"].as_str(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(lifecycle.bridge_complete("done".into()).await.unwrap());
+}
+
+async fn session_request_ids(node: &EmbeddedNode, session_id: &str) -> Vec<String> {
+    let session_id = escape_graphql_string(session_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }} }}"#
+        ))
+        .await;
+    let rows: Vec<Value> = gents::graphql::rows(&response, "AgentRequest").unwrap();
+    let mut ids = rows
+        .iter()
+        .map(|row| row["request_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+async fn finished_child(
+    name: &str,
+    outcome: RequestLifecycleState,
+) -> (
+    crate::support::TestDb,
+    crate::support::fixtures::SubagentSourceGuard,
+    DefraSessionHook,
+    String,
+    String,
+) {
+    let (db, source) = setup_db(&format!("r4c-steer-{name}")).await;
+    let hook = create_parent_hook(&db, &format!("parent-{name}"), &format!("session-{name}")).await;
+    let spawn_call_id = format!("spawn-{name}");
+    let child = spawn_background_child(db.node.as_ref(), &hook, &spawn_call_id, "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap().to_owned();
+    let child_session_id = child["child_session_id"].as_str().unwrap().to_owned();
+    update_request_state(db.node.as_ref(), &child_request_id, outcome.as_str()).await;
+    settle_spawn_bridge(&db.node, &spawn_call_id, outcome).await;
+    (db, source, hook, child_request_id, child_session_id)
+}
+
+async fn steer_child(hook: &DefraSessionHook, call_id: &str, child_request_id: &str) -> Value {
+    steer_subagent(
+        hook,
+        call_id,
+        json!({ "child_request_id": child_request_id, "message": "continue" }),
+    )
+    .await
+}
+
 #[tokio::test]
-async fn steer_subagent_rejects_terminal_child() {
+async fn steer_subagent_appends_to_child_that_finished_before_its_bridge_settles() {
     let (db, _source) = setup_db("r4c-steer-terminal").await;
     let hook = create_parent_hook(&db, "parent-terminal", "session-terminal").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
     update_request_state(db.node.as_ref(), child_request_id, "completed").await;
+
+    let result = steer_child(&hook, "steer-terminal", child_request_id).await;
+    let queued_request_id = result["queued_request_id"].as_str().expect("appended");
+    assert_eq!(
+        fetch_request(db.node.as_ref(), queued_request_id)
+            .await
+            .session_id
+            .as_deref(),
+        Some(child_session_id)
+    );
+}
+
+#[tokio::test]
+async fn steer_subagent_continues_finished_child_in_same_session() {
+    for outcome in [
+        RequestLifecycleState::Completed,
+        RequestLifecycleState::Failed,
+    ] {
+        let name = format!("finished-{}", outcome.as_str());
+        let (db, _source, hook, child_request_id, child_session_id) =
+            finished_child(&name, outcome).await;
+        let bridge_state = spawn_bridge_doc(db.node.as_ref(), &format!("spawn-{name}")).await
+            ["lifecycle_state"]
+            .clone();
+
+        let result = steer_child(&hook, &format!("steer-{name}"), &child_request_id).await;
+        assert_eq!(
+            result["child_request_id"].as_str(),
+            Some(child_request_id.as_str())
+        );
+        assert_eq!(
+            result["child_session_id"].as_str(),
+            Some(child_session_id.as_str())
+        );
+        let queued_request_id = result["queued_request_id"].as_str().expect("appended");
+        assert_ne!(queued_request_id, child_request_id);
+
+        assert_eq!(
+            fetch_request(db.node.as_ref(), &child_request_id)
+                .await
+                .lifecycle_state,
+            Some(outcome),
+            "the finished request keeps its outcome"
+        );
+        assert_eq!(
+            spawn_bridge_doc(db.node.as_ref(), &format!("spawn-{name}")).await["lifecycle_state"],
+            bridge_state,
+            "the settled bridge keeps its outcome"
+        );
+        let queued = fetch_request(db.node.as_ref(), queued_request_id).await;
+        assert_eq!(
+            queued.session_id.as_deref(),
+            Some(child_session_id.as_str())
+        );
+        assert_eq!(queued.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
+        assert_eq!(queued.lifecycle_state, Some(RequestLifecycleState::Pending));
+        let queue = queued.input.as_ref().unwrap().queue.as_ref().unwrap();
+        assert_eq!(
+            queue.source,
+            gents_protocol::request_input::QueueSource::Steering
+        );
+        let mut expected = vec![child_request_id.clone(), queued_request_id.to_owned()];
+        expected.sort();
+        assert_eq!(
+            session_request_ids(db.node.as_ref(), &child_session_id).await,
+            expected,
+            "one explicit steer admits exactly one request"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancel_subagent_stops_queued_work_steered_into_a_finished_child() {
+    let (db, _source, hook, child_request_id, _child_session_id) =
+        finished_child("cancel-queued", RequestLifecycleState::Failed).await;
+    let steered = steer_child(&hook, "steer-cancel-queued", &child_request_id).await;
+    let steered_id = steered["queued_request_id"].as_str().unwrap().to_owned();
+
+    let cancelled = skip_reason_json(
+        accepted_call(
+            &hook,
+            "cancel_subagent",
+            Some("model-cancel-queued".into()),
+            "cancel-queued",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    assert_eq!(cancelled["queued_drained"], 1, "{cancelled}");
+    assert_eq!(
+        fetch_request(db.node.as_ref(), &steered_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Interrupted),
+        "cancel reaches the request a steer queued in the finished child's session"
+    );
+    assert_eq!(
+        fetch_request(db.node.as_ref(), &child_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+}
+
+#[tokio::test]
+async fn cancel_subagent_interrupts_running_work_steered_into_a_finished_child() {
+    let (db, _source, hook, child_request_id, _child_session_id) =
+        finished_child("cancel-running", RequestLifecycleState::Completed).await;
+    let steered = steer_child(&hook, "steer-cancel-running", &child_request_id).await;
+    let steered_id = steered["queued_request_id"].as_str().unwrap().to_owned();
+    update_request_state(db.node.as_ref(), &steered_id, "processing").await;
+
+    let cancelled = skip_reason_json(
+        accepted_call(
+            &hook,
+            "cancel_subagent",
+            Some("model-cancel-running".into()),
+            "cancel-running",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    assert_eq!(cancelled["active_interrupted"], true, "{cancelled}");
+    assert!(
+        fetch_interrupt_requested_at(db.node.as_ref(), &steered_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "cancel latches the steered request's interrupt"
+    );
+}
+
+#[tokio::test]
+async fn steer_subagent_queues_behind_active_work_of_a_finished_child() {
+    let (db, _source, hook, child_request_id, child_session_id) =
+        finished_child("queue-behind", RequestLifecycleState::Failed).await;
+    let first = steer_child(&hook, "steer-queue-behind-1", &child_request_id).await;
+    let first_id = first["queued_request_id"].as_str().unwrap().to_owned();
+    update_request_state(db.node.as_ref(), &first_id, "processing").await;
+
+    let second = steer_child(&hook, "steer-queue-behind-2", &child_request_id).await;
+    let second_id = second["queued_request_id"].as_str().expect("appended");
+    assert_eq!(
+        fetch_request(db.node.as_ref(), second_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Pending),
+        "a steer queues behind the session's active request instead of running beside it"
+    );
+    assert_eq!(
+        session_request_ids(db.node.as_ref(), &child_session_id)
+            .await
+            .len(),
+        3
+    );
+}
+
+async fn mark_bridge(node: &EmbeddedNode, spawn_call_id: &str, input: &str) {
+    let tool_call_id = escape_graphql_string(&format!("model-{spawn_call_id}"));
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }},
+                input: {{ {input} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+}
+
+#[tokio::test]
+async fn steer_subagent_continues_finished_child_of_an_interrupted_parent_turn() {
+    let (db, _source) = setup_db("r4c-steer-interrupted-turn").await;
+    let hook = create_parent_hook(&db, "parent-interrupted-turn", "session-interrupted-turn").await;
+    let spawn_call_id = "spawn-interrupted-turn";
+    let child = spawn_background_child(db.node.as_ref(), &hook, spawn_call_id, "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap().to_owned();
+    let child_session_id = child["child_session_id"].as_str().unwrap().to_owned();
+    // A parent interrupt marks its running tools stuck; the child keeps running.
+    let at = chrono::Utc::now().to_rfc3339();
+    mark_bridge(
+        db.node.as_ref(),
+        spawn_call_id,
+        &format!(r#"stuck_since: "{at}""#),
+    )
+    .await;
+    update_request_state(db.node.as_ref(), &child_request_id, "completed").await;
+    settle_spawn_bridge(&db.node, spawn_call_id, RequestLifecycleState::Completed).await;
+
+    let result = steer_child(&hook, "steer-interrupted-turn", &child_request_id).await;
+    let queued_request_id = result["queued_request_id"].as_str().expect("appended");
+    assert_eq!(
+        fetch_request(db.node.as_ref(), queued_request_id)
+            .await
+            .session_id
+            .as_deref(),
+        Some(child_session_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn steer_subagent_refuses_an_unclaimed_spawn_fence() {
+    let at = chrono::Utc::now().to_rfc3339();
+    for (label, input) in [
+        ("intent", format!(r#"cancel_cascade_intent_at: "{at}""#)),
+        (
+            "unclaimed",
+            r#"tool_failure_class: "spawnUnclaimed""#.to_owned(),
+        ),
+    ] {
+        let name = format!("fenced-{label}");
+        let (db, _source, hook, child_request_id, child_session_id) =
+            finished_child(&name, RequestLifecycleState::Failed).await;
+        mark_bridge(db.node.as_ref(), &format!("spawn-{name}"), &input).await;
+        let refused = steer_child(&hook, &format!("steer-{name}"), &child_request_id).await;
+        assert_eq!(refused["ok"], false, "{label}: {refused}");
+        assert_eq!(
+            refused["failure_class"], "invalid_tool_arguments",
+            "{label}: {refused}"
+        );
+        assert_eq!(
+            session_request_ids(db.node.as_ref(), &child_session_id).await,
+            vec![child_request_id.clone()],
+            "{label}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn steer_subagent_does_not_resurrect_cancelled_child() {
+    let (db, _source) = setup_db("r4c-steer-cancelled").await;
+    let hook = create_parent_hook(&db, "parent-cancelled", "session-cancelled").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cancelled", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    let cancelled = skip_reason_json(
+        accepted_call(
+            &hook,
+            "cancel_subagent",
+            Some("model-cancel-cancelled".into()),
+            "cancel-cancelled",
+            &json!({ "child_request_id": child_request_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    update_request_state(db.node.as_ref(), child_request_id, "failed").await;
 
     let result = steer_subagent(
         &hook,
-        "steer-terminal",
+        "steer-cancelled",
         json!({
             "child_request_id": child_request_id,
-            "message": "do more"
+            "message": "continue"
         }),
     )
     .await;
@@ -434,6 +776,10 @@ async fn steer_subagent_rejects_terminal_child() {
     assert_eq!(
         result["failure_class"].as_str(),
         Some("invalid_tool_arguments")
+    );
+    assert_eq!(
+        session_request_ids(db.node.as_ref(), child_session_id).await,
+        vec![child_request_id.to_owned()]
     );
 }
 

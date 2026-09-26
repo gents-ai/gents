@@ -28,7 +28,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
-use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
+use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCallState};
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
@@ -499,6 +499,111 @@ pub enum SteerSubagentTarget {
         retryable: bool,
     },
     Terminal(String),
+    /// The parent cancelled this edge; a steer never resumes it.
+    Cancelled,
+    /// The unclaimed-spawn fence settled this bridge; its child is never given
+    /// new work.
+    Fenced,
+}
+
+/// Native refinement of `DescendantGraph.SteerEvidence`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SteerEvidence {
+    pub(crate) child: Option<RequestLifecycleState>,
+    pub(crate) spawn_unclaimed: bool,
+    pub(crate) cancel_intent: bool,
+}
+
+impl SteerEvidence {
+    fn fenced(&self) -> bool {
+        self.spawn_unclaimed || self.cancel_intent
+    }
+}
+
+/// Native refinement of `DescendantGraph.steerAdmission` for an edge the
+/// caller can already see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SteerAdmission {
+    NotAuthorized,
+    NotBackgrounded,
+    Cancelled,
+    Terminal,
+    AwaitingMaterialization,
+    Fenced,
+    Append,
+}
+
+pub(crate) fn steer_admission(
+    edge: &crate::DescendantEdge,
+    evidence: &SteerEvidence,
+) -> SteerAdmission {
+    if !edge.is_direct() {
+        return SteerAdmission::NotAuthorized;
+    }
+    if edge.await_mode != AwaitMode::Background.as_str() {
+        return SteerAdmission::NotBackgrounded;
+    }
+    if edge.lifecycle_state.trim() == ToolCallState::Cancelled.as_str() {
+        return SteerAdmission::Cancelled;
+    }
+    if !edge.readable() {
+        return if edge.is_terminal() {
+            SteerAdmission::Terminal
+        } else {
+            SteerAdmission::AwaitingMaterialization
+        };
+    }
+    if !edge.controllable() {
+        return SteerAdmission::NotAuthorized;
+    }
+    if edge.is_terminal() && evidence.fenced() {
+        return SteerAdmission::Fenced;
+    }
+    if evidence.child.is_some() {
+        SteerAdmission::Append
+    } else {
+        SteerAdmission::NotAuthorized
+    }
+}
+
+/// Persisted `tool_failure_class` of an unclaimed-spawn fence expiry (#1851).
+const SPAWN_UNCLAIMED_FAILURE_CLASS: &str = "spawnUnclaimed";
+
+#[derive(Deserialize)]
+struct BridgeFenceMarkers {
+    tool_failure_class: Option<String>,
+    cancel_cascade_intent_at: Option<String>,
+}
+
+fn present(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Reads a settled bridge's unclaimed-spawn fence markers into `evidence`.
+async fn load_bridge_fence(
+    node: &EmbeddedNode,
+    bridge_doc_id: &str,
+    evidence: &mut SteerEvidence,
+) -> Result<()> {
+    let bridge_doc_id = escape_graphql_string(bridge_doc_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{bridge_doc_id}" }} }}, limit: 2) {{
+                tool_failure_class cancel_cascade_intent_at
+            }} }}"#
+        ),
+        "steer bridge fence markers",
+    )
+    .await?;
+    let bridges: Vec<BridgeFenceMarkers> = crate::graphql::rows(&response, "AgentToolCall")?;
+    let [bridge] = bridges.as_slice() else {
+        anyhow::bail!("steer found {} rows for its settled bridge", bridges.len());
+    };
+    evidence.spawn_unclaimed =
+        bridge.tool_failure_class.as_deref().map(str::trim) == Some(SPAWN_UNCLAIMED_FAILURE_CLASS);
+    evidence.cancel_intent = present(bridge.cancel_cascade_intent_at.as_deref());
+    Ok(())
 }
 
 pub async fn handle_list_subagents(
@@ -1311,42 +1416,43 @@ pub async fn load_steer_subagent_target(
     else {
         return Ok(SteerSubagentTarget::NotAuthorized);
     };
-    // Only the immediate owning parent may steer. Keep this structural check
-    // separate from materialization: pending direct edges intentionally do
-    // not have control_authority yet, but still need an accurate bridge-level
-    // diagnostic below.
-    if !canonical.is_direct() {
-        return Ok(SteerSubagentTarget::NotAuthorized);
+    let direct_control = canonical.is_direct()
+        && canonical.await_mode == AwaitMode::Background.as_str()
+        && canonical.controllable();
+    let mut evidence = SteerEvidence::default();
+    if direct_control {
+        evidence.child = load_child_terminal_row(node, &canonical.child_request_id)
+            .await?
+            .and_then(|row| row.lifecycle_state);
+        if canonical.is_terminal() {
+            load_bridge_fence(
+                node,
+                &canonical.immediate_parent_tool_call_doc_id,
+                &mut evidence,
+            )
+            .await?;
+        }
     }
-    if canonical.await_mode != AwaitMode::Background.as_str() {
-        return Ok(SteerSubagentTarget::NotBackgrounded);
-    }
-    if canonical.is_terminal() {
-        return Ok(SteerSubagentTarget::Terminal(
-            canonical.lifecycle_state.clone(),
-        ));
-    }
-    if !canonical.readable() {
-        return Ok(SteerSubagentTarget::AwaitingMaterialization {
+    Ok(match steer_admission(&canonical, &evidence) {
+        SteerAdmission::NotAuthorized => SteerSubagentTarget::NotAuthorized,
+        SteerAdmission::NotBackgrounded => SteerSubagentTarget::NotBackgrounded,
+        SteerAdmission::Cancelled => SteerSubagentTarget::Cancelled,
+        SteerAdmission::Terminal => {
+            SteerSubagentTarget::Terminal(canonical.lifecycle_state.clone())
+        }
+        SteerAdmission::AwaitingMaterialization => SteerSubagentTarget::AwaitingMaterialization {
             retryable: canonical.retryable(),
             message: canonical
                 .diagnostic
+                .clone()
                 .unwrap_or_else(|| format!("child request {child_request_id} is not materialized")),
-        });
-    }
-    if !canonical.controllable() {
-        return Ok(SteerSubagentTarget::NotAuthorized);
-    }
-    let edge = ChildEdge::from_descendant(&canonical)
-        .context("authorized descendant edge lacks materialized child identity")?;
-    let Some(terminal_row) = load_child_terminal_row(node, &edge.child_request_id).await? else {
-        return Ok(SteerSubagentTarget::NotAuthorized);
-    };
-    if let Some(state) = child_terminal_state_name(&terminal_row) {
-        return Ok(SteerSubagentTarget::Terminal(state));
-    }
-
-    Ok(SteerSubagentTarget::Found(edge))
+        },
+        SteerAdmission::Fenced => SteerSubagentTarget::Fenced,
+        SteerAdmission::Append => SteerSubagentTarget::Found(
+            ChildEdge::from_descendant(&canonical)
+                .context("authorized descendant edge lacks materialized child identity")?,
+        ),
+    })
 }
 
 pub(crate) async fn append_steering_request(

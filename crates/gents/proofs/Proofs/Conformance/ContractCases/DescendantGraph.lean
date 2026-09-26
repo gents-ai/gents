@@ -24,6 +24,10 @@ structure DescendantGraphCase where
   callerRequester : Option String
   sessionAuthorized : Bool
   sessionControllable : Bool
+  childState : Option String
+  spawnUnclaimed : Bool
+  cancelIntent : Bool
+  steerAdmission : String
   deriving Repr
 
 def viewer : Viewer :=
@@ -65,13 +69,30 @@ def lifecycleString : Lifecycle → String
   | .running => "running"
   | .completed => "completed"
   | .failed => "failed"
+  | .timedOut => "timedOut"
   | .cancelled => "cancelled"
+
+def steerAdmissionString : SteerAdmission → String
+  | .notAuthorized => "not_authorized"
+  | .notBackgrounded => "not_backgrounded"
+  | .cancelled => "cancelled"
+  | .terminal => "terminal"
+  | .awaitingMaterialization => "awaiting_materialization"
+  | .fenced => "fenced"
+  | .append => "append"
+
+/-- Evidence beside an unfenced child whose request is in `child`. -/
+def childEvidence (child : RequestState) : SteerEvidence :=
+  { child := some child, spawnUnclaimed := false, cancelIntent := false }
+
+def liveEvidence : SteerEvidence := childEvidence .processing
 
 def sessionOwner : SessionOwner :=
   { sessionId := "conversation", agentDid := "did:owner", requesterDid := none }
 
 def descendantCase (name : String) (edge : Edge)
-    (caller : SessionOwner := sessionOwner) : DescendantGraphCase :=
+    (caller : SessionOwner := sessionOwner)
+    (evidence : SteerEvidence := liveEvidence) : DescendantGraphCase :=
   { name
   , rootRequestId := edge.rootRequestId
   , parentRequestId := edge.parentRequestId
@@ -93,7 +114,11 @@ def descendantCase (name : String) (edge : Edge)
   , callerAgent := caller.agentDid
   , callerRequester := caller.requesterDid
   , sessionAuthorized := sameSessionOwner caller sessionOwner
-  , sessionControllable := DescendantGraph.sessionControllable caller sessionOwner viewer edge }
+  , sessionControllable := DescendantGraph.sessionControllable caller sessionOwner viewer edge
+  , childState := evidence.child.map RequestState.toDefraDB
+  , spawnUnclaimed := evidence.spawnUnclaimed
+  , cancelIntent := evidence.cancelIntent
+  , steerAdmission := steerAdmissionString (DescendantGraph.steerAdmission viewer edge evidence) }
 
 def descendantGraphCases : List DescendantGraphCase :=
   [ descendantCase "background_direct" baseEdge
@@ -113,6 +138,7 @@ def descendantGraphCases : List DescendantGraphCase :=
           lifecycle := .failed }
   , descendantCase "terminal_result_edge"
       { { baseEdge with childRequestId := 8 } with lifecycle := .completed }
+      (evidence := childEvidence .completed)
   , descendantCase "replicated_remote_materialization"
       { baseEdge with childRequestId := 9, materialization := .replicated }
   , descendantCase "unauthorized_principal"
@@ -140,6 +166,53 @@ def descendantGraphCases : List DescendantGraphCase :=
       { sessionOwner with agentDid := " \t" }
   , descendantCase "blank_session" baseEdge
       { sessionOwner with sessionId := " \t" }
+  , descendantCase "failed_child_continues"
+      { { baseEdge with childRequestId := 15 } with lifecycle := .failed }
+      (evidence := childEvidence .failed)
+  , descendantCase "timed_out_child_continues"
+      { { baseEdge with childRequestId := 16 } with lifecycle := .timedOut }
+      (evidence := childEvidence .dead)
+  , descendantCase "completed_child_continues"
+      { { baseEdge with childRequestId := 17 } with lifecycle := .completed }
+      (evidence := childEvidence .completed)
+  , descendantCase "cancelled_child_not_resurrected"
+      { { baseEdge with childRequestId := 18 } with lifecycle := .cancelled }
+      (evidence := childEvidence .interrupted)
+  , descendantCase "cancelled_bridge_with_failed_child"
+      { { baseEdge with childRequestId := 19 } with lifecycle := .cancelled }
+      (evidence := childEvidence .failed)
+  , descendantCase "failed_foreground_child"
+      { { { baseEdge with childRequestId := 20 } with lifecycle := .failed } with
+          awaitMode := .foreground }
+      (evidence := childEvidence .failed)
+  , descendantCase "failed_nested_child"
+      { { { { baseEdge with childRequestId := 21 } with lifecycle := .failed } with
+          directFromRoot := false } with controlPrincipal := 11 }
+      (evidence := childEvidence .failed)
+  , descendantCase "failed_uncorroborated_child"
+      { { { baseEdge with childRequestId := 22 } with lifecycle := .failed } with
+          physicalCorroborated := false }
+      (evidence := childEvidence .failed)
+  , descendantCase "converging_bridge_finished_child"
+      { baseEdge with childRequestId := 23 } (evidence := childEvidence .failed)
+  , descendantCase "running_child_absent_row"
+      { baseEdge with childRequestId := 24 }
+      (evidence := { liveEvidence with child := none })
+  , descendantCase "finished_child_absent_row"
+      { { baseEdge with childRequestId := 25 } with lifecycle := .completed }
+      (evidence := { liveEvidence with child := none })
+  , descendantCase "unclaimed_spawn_late_child_failure"
+      { { baseEdge with childRequestId := 26 } with lifecycle := .failed }
+      (evidence := { childEvidence .failed with spawnUnclaimed := true, cancelIntent := true })
+  , descendantCase "unclaimed_spawn_class_only"
+      { { baseEdge with childRequestId := 27 } with lifecycle := .failed }
+      (evidence := { childEvidence .failed with spawnUnclaimed := true })
+  , descendantCase "settled_bridge_with_cancel_intent"
+      { { baseEdge with childRequestId := 28 } with lifecycle := .failed }
+      (evidence := { childEvidence .failed with cancelIntent := true })
+  , descendantCase "finished_child_of_interrupted_parent_turn"
+      { { baseEdge with childRequestId := 29 } with lifecycle := .completed }
+      (evidence := childEvidence .completed)
   ]
 
 /-- One edge of a cursor case: its durable identity and the lifecycle it has

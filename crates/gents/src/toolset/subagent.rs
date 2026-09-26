@@ -439,7 +439,7 @@ impl Tool for SteerSubagentTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Append a steering message to a visible background subagent, optionally interrupting its active request first."
+            description: "Append a steering message to a visible background subagent, optionally interrupting its active request first. A child that already finished (completed, failed or timed out) continues this way: a new request runs in its session with its history, and the finished request keeps its outcome. A cancelled child cannot be steered."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
