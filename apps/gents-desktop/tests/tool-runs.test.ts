@@ -69,12 +69,12 @@ const edit = (path: string, status = "completed") =>
     status,
   );
 
-const worker = (action: string, name: string, childRequestId: string | null = null) =>
+const worker = (action: string, name: string, sessionId: string | null = null) =>
   call({
     kind: "subagent",
     action,
     name,
-    childRequestId,
+    sessionId,
     description: null,
     output: null,
   });
@@ -205,11 +205,11 @@ describe("folding a worker", () => {
      that deliberately moves a row past another */
   it("gathers one worker’s scattered steps into a single row", () => {
     const out = runs([
-      worker("spawn", "Implementer", "c1"),
+      worker("start", "Implementer", "s1"),
       read("a.rs"),
-      worker("steer", "Implementer", "c1"),
+      worker("message", "Implementer", "s1"),
       read("b.rs"),
-      worker("wait", "Implementer", "c1"),
+      worker("message", "Implementer", "s1"),
     ]);
     const workers = out.filter((r) => r.kind === "worker");
     expect(workers).toHaveLength(1);
@@ -218,23 +218,32 @@ describe("folding a worker", () => {
 
   it("keeps two workers apart", () => {
     const out = runs([
-      worker("spawn", "Implementer", "c1"),
-      worker("spawn", "Reviewer", "c2"),
-      worker("wait", "Implementer", "c1"),
-      worker("wait", "Reviewer", "c2"),
+      worker("start", "Implementer", "s1"),
+      worker("start", "Reviewer", "s2"),
+      worker("message", "Implementer", "s1"),
+      worker("message", "Reviewer", "s2"),
     ]);
     expect(out.filter((r) => r.kind === "worker")).toHaveLength(2);
   });
 
+  it("keeps two sessions of the same agent apart", () => {
+    const out = runs([
+      worker("start", "Reviewer", "s1"),
+      worker("start", "Reviewer", "s2"),
+      worker("message", "Reviewer", "s1"),
+    ]);
+    const workers = out.filter((r) => r.kind === "worker");
+    expect(workers).toHaveLength(1);
+    expect(workers[0]!.tools).toHaveLength(2);
+  });
+
   it("tells the worker’s story in the order it happened", () => {
     const story = workerStory([
-      worker("spawn", "Implementer", "c1"),
-      worker("steer", "Implementer", "c1"),
-      worker("steer", "Implementer", "c1"),
-      worker("wait", "Implementer", "c1"),
+      worker("start", "Implementer", "s1"),
+      worker("message", "Implementer", "s1"),
+      worker("message", "Implementer", "s1"),
     ]);
-    expect(story).toMatch(/told/);
-    expect(story.indexOf("started")).toBeLessThan(story.indexOf("told"));
+    expect(story).toBe("started · messaged ×2");
   });
 });
 

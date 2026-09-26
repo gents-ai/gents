@@ -1,9 +1,9 @@
-import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import type {
-  DesktopListSubagentTreeRequest,
+  CausedRequestView,
+  SessionProvenanceView,
   SessionSummary,
-  SubagentTreeView,
 } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 
@@ -36,113 +36,116 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary =>
     ...overrides,
   }) as SessionSummary;
 
-/* The parent has moved on: its latest request is a newer one, not the
-   request that spawned the child, and it has completed. */
 const parent = session({
   sessionId: "session-parent",
-  latestRequestId: "req-parent-later",
-  latestRequestDocId: "bae-parent-later-doc",
+  title: "Lead",
+  behaviorId: "default",
   turnState: "completed",
 });
+const other = session({ sessionId: "session-other", title: "Reviewer" });
 const child = session({
   sessionId: "session-child",
-  latestRequestId: "req-child",
   provenance: { parent_request_doc_id: PARENT_DOC } as SessionSummary["provenance"],
 });
 
-const tree: SubagentTreeView = {
-  rootRequestId: "req-parent",
-  nodes: [
-    {
-      requestId: "req-parent",
-      resolvedVia: null,
-      sessionId: "session-parent",
-      agentDid: AGENT,
-      behaviorId: "default",
-      lifecycleState: "completed",
-      subagentDepth: 0,
-      causedByParentRequestId: null,
-      causedByParentToolCallId: null,
-      backendId: null,
-    },
-    {
-      requestId: "req-child",
-      resolvedVia: null,
-      sessionId: "session-child",
-      agentDid: AGENT,
-      behaviorId: "crew-explorer",
-      lifecycleState: "completed",
-      subagentDepth: 1,
-      causedByParentRequestId: "req-parent",
-      causedByParentToolCallId: "spawn-1",
-      backendId: null,
-    },
-  ],
-  edges: [
-    {
-      parentRequestId: "req-parent",
-      childRequestId: "req-child",
-      parentToolCallId: "spawn-1",
-      toolName: "spawn_subagent",
-      awaitMode: "background",
-      cancelPolicy: "detach",
-      lifecycleState: "completed",
-    },
-  ],
-  truncated: false,
-  partialErrors: [],
-} as unknown as SubagentTreeView;
+const received = (
+  requestId: string,
+  causedByRequestDocId: string,
+  causedBySessionId: string | null,
+  createdAt: string,
+): CausedRequestView => ({
+  requestId,
+  requestDocId: `doc-${requestId}`,
+  sessionId: "session-child",
+  agentDid: AGENT,
+  behaviorId: "crew-explorer",
+  lifecycleState: "completed",
+  interruptRequestedAt: null,
+  createdAt,
+  hop: 1,
+  causedByRequestId: "req-parent",
+  causedByRequestDocId,
+  causedByToolCallId: "call-1",
+  causedBySessionId,
+});
 
-function shellFor(listSubagentTree: (r: DesktopListSubagentTreeRequest) => unknown) {
+const view = (rows: CausedRequestView[], sessionId = "session-child") =>
+  ({ sessionId, received: rows, sent: [], truncated: false }) as SessionProvenanceView;
+
+function shellFor(sessions: SessionSummary[] = [parent, other, child]) {
   return {
     selectedSessionId: "session-child",
     selectedDeployment: {
       agentDid: AGENT,
-      sessions: [parent, child],
+      sessions,
       behaviors: [],
       behaviorConfigs: [],
-    },
-    api: {
-      listSubagentTree: vi.fn(listSubagentTree),
-      fetchSessionSnapshot: vi.fn(async () => ({ timelineItems: [] })),
     },
   } as unknown as Shell;
 }
 
-describe("a child session's parent work", () => {
-  it("roots the lineage at the provenance document and finds the parent through it", async () => {
-    const shell = shellFor(async () => tree);
-    const { result } = renderHook(() => useParentWork(shell));
-
-    await waitFor(() =>
-      expect(result.current.parent?.sessionId).toBe("session-parent"),
+describe("the sessions that sent work into this one", () => {
+  it("names the session whose call started it, through its provenance document", () => {
+    const { result } = renderHook(() =>
+      useParentWork(
+        shellFor(),
+        view([
+          received("req-child-2", "doc-other", "session-other", "2"),
+          received("req-child", PARENT_DOC, "session-parent", "1"),
+        ]),
+      ),
     );
-    expect(shell.api.listSubagentTree).toHaveBeenCalledWith({
-      rootRequestDocId: PARENT_DOC,
-      agentDid: AGENT,
-      includeTerminal: true,
-    });
-    expect(result.current.node?.requestId).toBe("req-child");
-    expect(result.current.edge?.lifecycleState).toBe("completed");
-    expect(shell.api.fetchSessionSnapshot).toHaveBeenCalledWith(
-      "session-parent",
-      AGENT,
-      null,
-      undefined,
-    );
+    expect(result.current.parent?.sessionId).toBe("session-parent");
+    expect(result.current.parent?.summary?.title).toBe("Lead");
+    expect(result.current.hasSenders).toBe(true);
   });
 
-  it("does not guess a parent when the lineage cannot resolve the document", async () => {
-    const shell = shellFor(async () => ({
-      ...tree,
-      rootRequestId: "",
-      nodes: [],
-      edges: [],
-    }));
-    const { result } = renderHook(() => useParentWork(shell));
+  it("marks each turn by the session whose call caused its request", () => {
+    const { result } = renderHook(() =>
+      useParentWork(
+        shellFor(),
+        view([
+          received("req-child", PARENT_DOC, "session-parent", "1"),
+          received("req-child-2", "doc-other", "session-other", "2"),
+        ]),
+      ),
+    );
+    expect(result.current.sentBy("req-child")?.sessionId).toBe("session-parent");
+    expect(result.current.sentBy("req-child-2")?.summary?.title).toBe("Reviewer");
+    /* the person's own turn, and a turn with no request, have no sender */
+    expect(result.current.sentBy("req-mine")).toBeNull();
+    expect(result.current.sentBy(null)).toBeNull();
+  });
 
-    await waitFor(() => expect(shell.api.listSubagentTree).toHaveBeenCalled());
+  it("does not guess a parent when the session was not started by another", () => {
+    const root = session({ sessionId: "session-child" });
+    const { result } = renderHook(() =>
+      useParentWork(
+        shellFor([parent, root]),
+        view([received("req-child", "doc-x", "session-parent", "1")]),
+      ),
+    );
     expect(result.current.parent).toBeNull();
-    expect(result.current.node).toBeNull();
+    expect(result.current.sentBy("req-child")?.sessionId).toBe("session-parent");
+  });
+
+  it("keeps a sender it cannot list as a bare session, without a title", () => {
+    const { result } = renderHook(() =>
+      useParentWork(
+        shellFor([child]),
+        view([received("req-child", PARENT_DOC, "session-elsewhere", "1")]),
+      ),
+    );
+    expect(result.current.parent).toEqual({
+      sessionId: "session-elsewhere",
+      summary: null,
+      behaviorName: null,
+    });
+  });
+
+  it("has nothing to say without provenance", () => {
+    const { result } = renderHook(() => useParentWork(shellFor(), null));
+    expect(result.current.parent).toBeNull();
+    expect(result.current.hasSenders).toBe(false);
   });
 });

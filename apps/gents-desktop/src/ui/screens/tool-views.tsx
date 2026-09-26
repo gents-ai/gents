@@ -141,7 +141,6 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       <Meta
         items={[
           tool.awaitMode && `await: ${tool.awaitMode}`,
-          tool.cancelPolicy && `cancel: ${tool.cancelPolicy}`,
           tool.deadlineAt && `deadline: ${tool.deadlineAt}`,
         ]}
       />
@@ -210,10 +209,10 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {p.kind === "subagent" && (
         <>
           <Payload
-            label={p.action === "spawn" ? "assignment" : "instruction"}
+            label={p.action === "start" ? "assignment" : "message"}
             value={p.description}
           />
-          {p.childRequestId && <Meta items={[`child request · ${p.childRequestId}`]} />}
+          {p.sessionId && <Meta items={[`session · ${p.sessionId}`]} />}
           <Payload label="result" value={p.output} />
         </>
       )}

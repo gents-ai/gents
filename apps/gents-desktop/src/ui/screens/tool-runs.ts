@@ -439,13 +439,12 @@ function foldRuns(tools: RenderedToolCallView[]): ToolRun[] {
    The other folds are contiguous: they never move a row past another,
    because a transcript is a sequence and rearranging it would lie about
    what happened. This one is different on purpose. A worker's steps are
-   scattered through the parent's turn — started here, told twice there,
-   waited for later — and read as a dozen unrelated rows about five
-   workers. Gathering them is not a claim about when they happened; the
+   scattered through the turn — started here, messaged twice there — and
+   read as a dozen unrelated rows about five workers. Gathering them is not a claim about when they happened; the
    group sits where the worker first appears, and its steps keep their
    order inside it.
 
-   Only a worker with more than one step is gathered. One spawn and
+   Only a worker with more than one step is gathered. One start and
    nothing else is already a row about one thing. */
 type WorkerRun = {
   kind: "worker";
@@ -458,7 +457,7 @@ export type TranscriptRun = ToolRun | WorkerRun;
 const workerKey = (tool: RenderedToolCallView) => {
   const p = tool.presentation;
   if (p.kind !== "subagent") return null;
-  return p.childRequestId ?? p.name ?? null;
+  return p.sessionId ?? p.name ?? null;
 };
 
 export function foldWorkers(tools: RenderedToolCallView[]): TranscriptRun[] {
@@ -503,13 +502,7 @@ export function workerStory(tools: RenderedToolCallView[]): string {
     const p = tool.presentation;
     if (p.kind !== "subagent") continue;
     const verb =
-      p.action === "spawn"
-        ? "started"
-        : p.action === "steer"
-          ? "told"
-          : p.action === "wait"
-            ? "waited"
-            : p.action;
+      p.action === "start" ? "started" : p.action === "message" ? "messaged" : p.action;
     counts.set(verb, (counts.get(verb) ?? 0) + 1);
   }
   return [...counts].map(([verb, n]) => (n > 1 ? `${verb} ×${n}` : verb)).join(" · ");

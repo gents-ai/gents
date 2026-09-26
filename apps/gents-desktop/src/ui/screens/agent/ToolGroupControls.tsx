@@ -286,14 +286,6 @@ export function ToolGroupControls({
             })
           }
         />
-        {seconds(
-          "tools-subagent-spawn-timeout",
-          "Remote spawn claim timeout seconds",
-          groups.subagents?.cross_principal_spawn_timeout_secs,
-          (cross_principal_spawn_timeout_secs) =>
-            update("subagents", { cross_principal_spawn_timeout_secs }),
-          "60",
-        )}
       </Group>
       <Group title="Runtime tools">
         {flags("built_ins", [
@@ -317,26 +309,10 @@ export function ToolGroupControls({
         </Note>
       </Group>
       <Group title="Subagents">
-        {flags("subagents", [
-          ["spawn_enabled", "Spawn subagents"],
-          ["steering_enabled", "Steer subagents"],
-          ["background_enabled", "Background subagents"],
-          ["allow_cross_principal", "Allow cross-principal delegation"],
-        ])}
-        <ChoiceRow
-          id="tools-subagent-await"
-          label="Default subagent wait"
-          value={groups.subagents?.default_await_mode ?? ""}
-          items={[
-            { value: "", label: "Runtime default (foreground)" },
-            { value: "foreground", label: "Foreground" },
-            { value: "background", label: "Background" },
-          ]}
-          onChange={(mode) => update("subagents", { default_await_mode: mode || null })}
-        />
+        {flags("subagents", [["enabled", "Start and message subagent sessions"]])}
         <DocumentSelection
           label="Subagent targets"
-          description="Explicit delegation targets. Enabling spawn does not grant access to unselected behaviors."
+          description="The agents this one may start sessions with or message. Enabling subagents does not grant access to unselected behaviors."
           options={(deployment.subagentTargets ?? []).map((target) => ({
             value: target.target_id,
             label: target.name,

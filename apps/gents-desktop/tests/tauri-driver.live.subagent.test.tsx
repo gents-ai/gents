@@ -9,12 +9,12 @@ import {
 } from "./tauri-driver-live/helpers";
 
 const SUBAGENT_PROMPT =
-  'Use the configured local subagent target. Call spawn_subagent with await_mode "background" and ask the child to read workspace/AGENTS.md and return the phrase live-subagent-smoke with one short finding. Then call wait_subagent for that child request and reply with one sentence containing live-subagent-smoke.';
+  "Use the configured local subagent target. Call create_session with that agent and ask it to read workspace/AGENTS.md and return the phrase live-subagent-smoke with one short finding. Then reply with one sentence saying it has started.";
 const FOLLOW_UP_PROMPT =
   "Without calling tools, reply with one short sentence containing live-subagent-followup.";
 
-describeLive("Tauri app live subagent backgrounding", () => {
-  it("spawns a configured local subagent and projects its lineage", async () => {
+describeLive("Tauri app live subagent sessions", () => {
+  it("starts a session with a configured target and projects its provenance", async () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find(
         (behavior) =>
@@ -35,9 +35,7 @@ describeLive("Tauri app live subagent backgrounding", () => {
         "live fixture did not expose a subagent target",
       ).toBeDefined();
       const subagentBehaviorId = subagentTarget?.behavior_id;
-      const subagents = defaultTools?.subagents;
-      expect(subagents?.spawn_enabled).toBe(true);
-      expect(subagents?.background_enabled).toBe(true);
+      expect(defaultTools?.subagents?.enabled).toBe(true);
 
       await driver.ready();
       await driver.openChat();
@@ -71,88 +69,54 @@ describeLive("Tauri app live subagent backgrounding", () => {
         item.kind === "toolGroup" ? item.tools.map((tool) => tool.toolName) : [],
       );
       expect(
-        toolNames.some((name) => /spawn_subagent/i.test(name)),
-        `expected spawn_subagent in tool names: ${JSON.stringify(toolNames)}`,
-      ).toBe(true);
-      expect(
-        toolNames.some((name) => /wait_subagent/i.test(name)),
-        `expected wait_subagent in tool names (prompt asked the parent to await the child): ${JSON.stringify(toolNames)}`,
-      ).toBe(true);
-
-      const parentReply = collectAssistantText(session.timelineItems);
-      expect(
-        /live-subagent-smoke/i.test(parentReply),
-        `parent reply did not echo the sentinel "live-subagent-smoke"; reply=${parentReply.slice(0, 400)}`,
+        toolNames.some((name) => /create_session/i.test(name)),
+        `expected create_session in tool names: ${JSON.stringify(toolNames)}`,
       ).toBe(true);
 
       await waitFor(
         async () => {
-          const tree = await runner.adapter.listSubagentTree({
-            rootRequestId: submitted.requestId,
+          const provenance = await runner.adapter.sessionProvenance({
+            sessionId: submitted.sessionId,
             agentDid: runner.agentDid,
-            includeTerminal: true,
           });
-          expect(tree.edges.length).toBeGreaterThan(0);
-          expect(tree.edges.some((edge) => edge.awaitMode === "background")).toBe(true);
-          expect(
-            tree.nodes.some((node) => node.behaviorId === subagentBehaviorId),
-          ).toBe(true);
-          const childNodes = tree.nodes.filter(
-            (node) => node.behaviorId === subagentBehaviorId,
+          const caused = provenance.sent.filter(
+            (request) => request.causedByRequestId === submitted.requestId,
+          );
+          expect(caused.length).toBeGreaterThan(0);
+          expect(caused.every((request) => request.hop === 1)).toBe(true);
+          const started = caused.filter(
+            (request) => request.behaviorId === subagentBehaviorId,
           );
           expect(
-            childNodes.some((node) => node.lifecycleState === "completed"),
-            `expected at least one subagent child to reach a completed terminal state; nodes=${JSON.stringify(childNodes)}`,
+            started.some((request) => request.lifecycleState === "completed"),
+            `expected the started session's request to complete; caused=${JSON.stringify(caused)}`,
+          ).toBe(true);
+          const child = started[0]!;
+          expect(child.sessionId).not.toBe(submitted.sessionId);
+
+          const received = await runner.adapter.sessionProvenance({
+            sessionId: child.sessionId!,
+            agentDid: runner.agentDid,
+          });
+          expect(
+            received.received.some(
+              (request) => request.causedBySessionId === submitted.sessionId,
+            ),
           ).toBe(true);
 
-          const parentNode = tree.nodes.find(
-            (node) => node.requestId === submitted.requestId,
-          );
-          const childNode = tree.nodes.find(
-            (node) => node.behaviorId === subagentBehaviorId,
-          );
-          // `backendId` on a subagent node is the runtime request's resolved
-          // inference backend observation (AgentRequest.backend_id), not a
-          // config copy. The parent and child profiles must resolve through
-          // behavior -> inference_profile_id -> InferenceProfile.
-          const parentProfile = deployment.inferenceProfiles.find(
-            (profile) =>
-              profile.profile_id ===
-              deployment.behaviors.find(
-                (behavior) => behavior.behaviorId === parentNode?.behaviorId,
-              )?.inferenceProfileId,
-          );
           const childProfile = deployment.inferenceProfiles.find(
             (profile) =>
               profile.profile_id ===
               deployment.behaviors.find(
-                (behavior) => behavior.behaviorId === childNode?.behaviorId,
+                (behavior) => behavior.behaviorId === child.behaviorId,
               )?.inferenceProfileId,
           );
           expect(
-            parentProfile,
-            "parent behavior should reference a resolvable inference profile",
-          ).toBeDefined();
-          expect(
             childProfile,
-            "child behavior should reference a resolvable inference profile",
+            "the target behavior should reference a resolvable inference profile",
           ).toBeDefined();
-          expect(
-            parentNode?.backendId,
-            "parent backendId should be populated",
-          ).toBeTruthy();
-          expect(
-            childNode?.backendId,
-            "child backendId should be populated",
-          ).toBeTruthy();
-          if (process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
-            // Separate subagent backend endpoint: the child's profile must
-            // select a different backend than the parent's profile.
-            expect(childProfile?.backend_id).not.toBe(parentProfile?.backend_id);
-            expect(childNode?.backendId).not.toBe(parentNode?.backendId);
-          }
         },
-        { timeout: 60_000 },
+        { timeout: 120_000 },
       );
 
       await waitFor(() => {

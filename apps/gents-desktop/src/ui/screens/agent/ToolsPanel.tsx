@@ -148,10 +148,6 @@ export function ToolsEditor({
         ["Background bash timeout", advanced.host?.bash?.background_timeout_secs],
         ["Bash wait timeout", advanced.host?.bash?.wait_timeout_secs],
         ["Maximum bash wait timeout", advanced.host?.bash?.max_wait_timeout_secs],
-        [
-          "Subagent spawn timeout",
-          advanced.subagents?.cross_principal_spawn_timeout_secs,
-        ],
         ["Language server timeout", advanced.integrations?.lsp?.timeout_secs],
         [
           "Maximum language server timeout",

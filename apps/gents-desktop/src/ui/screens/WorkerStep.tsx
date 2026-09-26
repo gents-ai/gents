@@ -1,10 +1,14 @@
-/* A delegated piece of work as a row in the transcript's activity block:
-   what the agent asked of a worker, the receipt, and where that worker is
-   now. Replaces the plain tool step for subagent and background-process
-   calls. The words come from the contract's own states. */
+/* A call that started or messaged another session — a subagent — or ran a
+   background process, as a row in the transcript's activity block: what the
+   agent asked, the receipt, and where that work is now. Replaces the plain
+   tool step for those calls. The words come from the contract's own
+   states. */
 import { type ReactNode } from "react";
 import { ArrowUpRight, Ban, CircleCheck, CircleX } from "lucide-react";
-import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
+import type {
+  CausedRequestView,
+  RenderedToolCallView,
+} from "@source-inc/gents-desktop-client";
 import { Spinner } from "@gents/ui/components/spinner";
 import { BehaviorAvatar } from "./parts";
 import { behaviorName } from "./behavior";
@@ -21,7 +25,7 @@ import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { when } from "./time";
 import { isLive } from "@/lib/live";
-import type { WorkerState, Workers } from "./workers";
+import type { Subagent, Workers } from "./workers";
 import { WorkerStop } from "./WorkerActions";
 
 type Tone = "running" | "done" | "failed" | "stopped" | "unknown";
@@ -30,39 +34,32 @@ const firstLine = (s: string | null | undefined) => s?.trim().split("\n")[0] ?? 
 const since = (iso: string | null | undefined) =>
   iso ? duration(Math.max(0, Date.now() - Date.parse(iso))) : null;
 
-/* the worker's state, from the bridge's own facts in order of freshness:
-   the child session's turn (turn_state_label), then the lineage node's
-   request lifecycle, then the edge's, then the tool call. Nothing here
-   guesses at replication: a worker with no summary yet reads as its
-   lifecycle says. */
-const WAITING = new Set([
-  "waitingforclaim",
-  "pending",
-  "claimed",
-  "workspace_binding_pending",
-  "workspacebindingpending",
-]);
+/* where a subagent is, from the bridge's own facts in order of freshness:
+   its session's turn (turn_state_label), then the lifecycle of the request
+   this call caused there. Nothing here guesses at replication: a subagent
+   with no summary yet reads as its request says. */
+const WAITING = new Set(["waitingforclaim", "pending", "claimed"]);
 
 export function workerNow(
   tool: RenderedToolCallView,
-  w: WorkerState | null,
+  reached: { subagent: Subagent; request: CausedRequestView } | null,
 ): { tone: Tone; text: string; detail?: string | null } {
-  const turn = w?.summary?.turnState ?? null;
-  const node = w?.node?.lifecycleState ?? null;
-  const edge = w?.edge?.lifecycleState ?? null;
+  const turn = reached?.subagent.summary?.turnState ?? null;
+  const request =
+    reached?.subagent.live?.lifecycleState ?? reached?.request.lifecycleState;
   const failure = firstLine(
     tool.presentation.kind === "subagent" ? tool.presentation.output : null,
   );
-  const state = turn ?? node ?? edge;
+  const state = turn ?? request ?? null;
   if (!state) {
-    /* no session or lineage fact: only the parent's tool call speaks, and its
-       status (tool_status_kind: success, error, running, unknown) is about
-       the call, so it never makes a worker look live on its own */
+    /* no session or lineage fact: only the call speaks, and its status
+       (tool_status_kind: success, error, running, unknown) is about the
+       call, so it never makes a subagent look live on its own */
     switch (tool.statusKind) {
       case "running":
         return { tone: "running", text: "starting" };
       case "success":
-        return { tone: "done", text: "finished" };
+        return { tone: "done", text: "started" };
       case "error":
         return { tone: "failed", text: "failed", detail: failure };
       default:
@@ -72,15 +69,7 @@ export function workerNow(
   if (WAITING.has(state.toLowerCase()))
     return { tone: "running", text: "waiting for the agent to pick it up" };
   if (isLive(state)) {
-    /* the request the parent spawned ended, yet the session works on: both
-       facts, side by side (gents#1541) */
-    if (edge === "failed")
-      return {
-        tone: "running",
-        text: "request failed · session still working",
-        detail: failure,
-      };
-    const s = when(w?.summary?.updatedAt ?? null);
+    const s = when(reached?.subagent.summary?.updatedAt ?? null);
     return {
       tone: "running",
       text: s && s !== "now" ? `working · last change ${s}` : "working",
@@ -240,7 +229,7 @@ export function WorkerStep({
   const deployment = useDeployment();
   const p = tool.presentation;
   if (p.kind === "process") {
-    const bg = workers.byToolCall(tool);
+    const bg = workers.background(tool);
     const running = tool.statusKind === "running";
     const overdue = bg?.deadlineExpired
       ? `past its deadline by ${since(bg.deadlineAt) ?? "?"}`
@@ -260,11 +249,7 @@ export function WorkerStep({
             ? (overdue ?? `running${bg ? ` · ${since(bg.startedAt)}` : ""}`)
             : tool.statusKind
         }
-        detail={
-          bg?.nativeExecutor
-            ? `pid ${bg.nativeExecutor.pid}${bg.cancelPolicy ? ` · on cancel: ${bg.cancelPolicy}` : ""}`
-            : null
-        }
+        detail={bg?.nativeExecutor ? `pid ${bg.nativeExecutor.pid}` : null}
         sessionId={null}
       >
         <ToolBody tool={tool} />
@@ -272,13 +257,14 @@ export function WorkerStep({
     );
   }
   if (p.kind !== "subagent") return null;
-  const w = p.childRequestId ? workers.byChildRequest(p.childRequestId) : null;
-  const name = w?.summary?.title ?? p.name ?? p.childRequestId ?? "a worker";
-  const sessionId = w?.sessionId ?? null;
-  /* the same mark the gathered rows and the session list use, so a worker
-     looks like itself wherever it appears. A worker with no summary has no
-     behavior to wear, and keeps the tone's glyph. */
-  const behaviorId = w?.summary?.behaviorId ?? null;
+  const reached = workers.byToolCall(tool);
+  const subagent = reached?.subagent ?? null;
+  const name = subagentName(subagent, p.name);
+  const sessionId = subagent?.sessionId ?? p.sessionId ?? null;
+  /* the same mark the session list uses, so a subagent looks like itself
+     wherever it appears. One with no summary has no behavior to wear, and
+     keeps the tone's glyph. */
+  const behaviorId = subagent?.summary?.behaviorId ?? null;
   const mark = behaviorId ? (
     <BehaviorAvatar
       name={behaviorName(behaviorId, deployment)}
@@ -286,102 +272,78 @@ export function WorkerStep({
       className="size-4 text-[8px]"
     />
   ) : undefined;
-  const now = workerNow(tool, w);
-  switch (p.action) {
-    case "spawn":
-      return (
-        <Row
-          tone={now.tone}
-          verb="Started"
-          mark={mark}
-          name={name}
-          state={now.text}
-          detail={now.detail}
-          sessionId={sessionId}
-          menu={
-            <WorkerStop
-              name={name}
-              currentRequestId={w?.summary?.latestRequestId ?? p.childRequestId ?? null}
-              running={now.tone === "running"}
-            />
-          }
-        >
-          <ToolBody tool={tool} />
-        </Row>
-      );
-    case "steer": {
-      const interrupt = p.description?.startsWith("[interrupt]");
-      return (
-        <Row
-          tone={
-            tool.statusKind === "running"
-              ? "running"
-              : tool.statusKind === "error"
-                ? "failed"
-                : "done"
-          }
-          verb={interrupt ? "Interrupted and told" : "Told"}
-          name={name}
-          state={
-            firstLine(p.output) ??
-            (tool.statusKind === "success" ? "delivered" : tool.statusKind)
-          }
-          detail={p.description?.replace(/^\[interrupt\]\s*/, "")}
-          sessionId={sessionId}
-        >
-          <ToolBody tool={tool} />
-        </Row>
-      );
-    }
-    case "wait": {
-      const out = firstLine(p.output) ?? "";
-      const timedOut = /timed out/i.test(out);
-      return (
-        <Row
-          tone={
-            tool.statusKind === "running" ? "running" : timedOut ? "stopped" : "done"
-          }
-          verb="Waited for"
-          name={name}
-          state={
-            tool.statusKind === "running"
-              ? "waiting"
-              : timedOut
-                ? `timed out · worker ${now.tone === "running" ? "still working" : now.text}`
-                : out || "returned"
-          }
-          detail={firstLine(p.description)}
-          sessionId={sessionId}
-        >
-          <ToolBody tool={tool} />
-        </Row>
-      );
-    }
-    case "cancel":
-      return (
-        <Row
-          tone={tool.statusKind === "running" ? "running" : "stopped"}
-          verb="Cancelled"
-          name={name}
-          state={now.tone === "running" ? `still ${now.text}` : now.text}
-          detail={firstLine(p.output) ?? firstLine(p.description)}
-          sessionId={sessionId}
-        >
-          <ToolBody tool={tool} />
-        </Row>
-      );
-    default:
-      return (
-        <Row
-          tone={tool.statusKind === "running" ? "running" : "done"}
-          verb={p.action}
-          name={name}
-          state={now.text}
-          detail={firstLine(p.description)}
-          sessionId={sessionId}
-        >
-          <ToolBody tool={tool} />
-        </Row>
-      );
-  }
+  const now = workerNow(tool, reached);
+  const stop = <WorkerStop name={name} live={subagent?.live ?? null} />;
+  if (p.action === "start")
+    return (
+      <Row
+        tone={now.tone}
+        verb="Started"
+        mark={mark}
+        name={name}
+        state={now.text}
+        detail={now.detail ?? firstLine(p.description)}
+        sessionId={sessionId}
+        menu={stop}
+      >
+        <ToolBody tool={tool} />
+      </Row>
+    );
+  return (
+    <Row
+      tone={now.tone}
+      verb="Messaged"
+      mark={mark}
+      name={name}
+      state={now.text}
+      detail={firstLine(p.description)}
+      sessionId={sessionId}
+      menu={stop}
+    >
+      <ToolBody tool={tool} />
+    </Row>
+  );
+}
+
+export const subagentName = (subagent: Subagent | null, target?: string | null) =>
+  subagent?.summary?.title ?? target ?? "a subagent";
+
+/* The sessions this one started or messaged, each as the session it is:
+   where it got to, a way in, and a stop while it works. */
+export function SubagentList({ workers }: { workers: Workers }) {
+  const deployment = useDeployment();
+  if (workers.all.length === 0) return null;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span>Subagents</span>
+      {workers.all.map((subagent) => {
+        const name = subagentName(subagent);
+        const behaviorId = subagent.summary?.behaviorId ?? null;
+        const state =
+          subagent.summary?.turnState ??
+          subagent.live?.lifecycleState ??
+          subagent.requests[subagent.requests.length - 1]?.lifecycleState ??
+          null;
+        return (
+          <span key={subagent.sessionId} className="flex min-w-0 items-center gap-1">
+            <a
+              href={href({ name: "session", sessionId: subagent.sessionId })}
+              className="flex min-w-0 items-center gap-1 hover:text-foreground hover:underline"
+            >
+              {behaviorId && (
+                <BehaviorAvatar
+                  name={behaviorName(behaviorId, deployment)}
+                  behaviorId={behaviorId}
+                  className="size-4 text-[8px]"
+                />
+              )}
+              <span className="truncate">{name}</span>
+              {state && <span className="shrink-0">· {state}</span>}
+            </a>
+            <WorkerStop name={name} live={subagent.live} />
+          </span>
+        );
+      })}
+    </div>
+  );
 }

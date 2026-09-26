@@ -18,12 +18,15 @@ import { isLive } from "@/lib/live";
 function pulse(deployment: DeploymentView, ops: DesktopOperationsSnapshot | null) {
   const live = deployment.sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
-  const workers = tools.filter((t) => t.childRequestId).length;
-  const jobs = tools.filter((t) => !t.childRequestId).length;
+  /* a started session is a background row of a session-message call */
+  const subagent = (t: (typeof tools)[number]) =>
+    t.toolName === "create_session" || t.toolName === "send_message";
+  const workers = tools.filter(subagent).length;
+  const jobs = tools.length - workers;
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [
     live ? `${live} ${live === 1 ? "session" : "sessions"} live` : null,
-    workers ? `${workers} ${workers === 1 ? "worker" : "workers"}` : null,
+    workers ? `${workers} ${workers === 1 ? "subagent" : "subagents"}` : null,
     jobs ? `${jobs} background ${jobs === 1 ? "job" : "jobs"}` : null,
     overdue ? `${overdue} past ${overdue === 1 ? "its" : "their"} deadline` : null,
   ].filter(Boolean) as string[];
