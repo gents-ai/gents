@@ -311,24 +311,17 @@ fn name_argument(
     };
     let arguments = u32::from(arguments?).checked_sub(1)?;
     let trailing = arguments.checked_sub(position)?;
-    let jumps: Vec<(u32, u32)> = (0..)
-        .map_while(|index| {
-            instructions
-                .get(index)
-                .map(|instruction| (index, instruction))
-        })
-        .filter_map(|(index, instruction)| Some((index, jump_target(instruction)?)))
-        .collect();
+    let landings = outside_landings(instructions, filter_index);
     // A jump from outside `region..filter_index` landing at or after `first`
     // lets control reach the filter without running the region in order.
+    // A region the landings do not cover is one this walk cannot judge, so it
+    // reads as entered and leaves the name to fire time.
     let entered_from_outside = |region: u32, first: u32| {
-        jumps.iter().any(|&(at, target)| {
-            !(region..filter_index).contains(&at) && (first..=filter_index).contains(&target)
-        })
+        landings.get(region as usize).copied().unwrap_or(i64::MAX) >= i64::from(first)
     };
+    let heights = expression_heights(instructions, filter_index);
     let trailing_start = (0..=filter_index).rev().find(|&start| {
-        expression_values(instructions, start, filter_index) == Some(trailing)
-            && !entered_from_outside(start, start + 1)
+        !entered_from_outside(start, start + 1) && heights.values(start) == Some(trailing)
     })?;
     let name_index = trailing_start.checked_sub(1)?;
     let Some(Instruction::LoadConst(value)) = instructions.get(name_index) else {
@@ -341,90 +334,231 @@ fn name_argument(
     Some((use_site, name))
 }
 
-/// How many values the instructions in `start..end` leave on the stack when
-/// they run as self-contained expression code: `None` when they consume a
-/// value pushed before `start`, jump outside `start..=end`, disagree on the
-/// stack height where branches join, or contain anything but expression
-/// instructions with a fixed stack effect.
-fn expression_values(instructions: &Instructions<'_>, start: u32, end: u32) -> Option<u32> {
-    let mut joins: Vec<(u32, u32)> = Vec::new();
-    let mut height = Some(0u32);
-    for index in start..end {
-        height = join_height(height, &joins, index)?;
-        let depth = height?;
-        let instruction = instructions.get(index)?;
-        let (pops, pushes, jump_keeps) = match instruction {
-            Instruction::LoadConst(_) | Instruction::Lookup(_) => (0, 1, None),
-            Instruction::GetAttr(_) | Instruction::Not | Instruction::Neg => (1, 1, None),
-            Instruction::GetItem
-            | Instruction::Add
-            | Instruction::Sub
-            | Instruction::Mul
-            | Instruction::Div
-            | Instruction::IntDiv
-            | Instruction::Rem
-            | Instruction::Pow
-            | Instruction::Eq
-            | Instruction::Ne
-            | Instruction::Gt
-            | Instruction::Gte
-            | Instruction::Lt
-            | Instruction::Lte
-            | Instruction::StringConcat
-            | Instruction::In => (2, 1, None),
-            Instruction::Slice => (4, 1, None),
-            Instruction::CompareAndPreserve(_) | Instruction::Swap => (2, 2, None),
-            Instruction::DupTop => (1, 2, None),
-            Instruction::DiscardTop => (1, 0, None),
-            Instruction::BuildMap(pairs) | Instruction::BuildKwargs(pairs) => {
-                (u32::try_from(*pairs).ok()?.checked_mul(2)?, 1, None)
-            }
-            Instruction::MergeKwargs(count) | Instruction::BuildList(Some(count)) => {
-                (u32::try_from(*count).ok()?, 1, None)
-            }
-            Instruction::UnpackList(count) => (1, u32::try_from(*count).ok()?, None),
-            Instruction::ApplyFilter(_, Some(count), _)
-            | Instruction::PerformTest(_, Some(count), _)
-            | Instruction::CallFunction(_, Some(count))
-            | Instruction::CallMethod(_, Some(count))
-            | Instruction::CallObject(Some(count)) => (u32::from(*count), 1, None),
-            Instruction::JumpIfFalse(target) => (1, 0, Some((*target, depth.checked_sub(1)?))),
-            Instruction::JumpIfFalseOrPop(target) | Instruction::JumpIfTrueOrPop(target) => {
-                (1, 0, Some((*target, depth)))
-            }
-            Instruction::Jump(target) => {
-                joins.push((*target, depth));
-                if !(index + 1..=end).contains(target) {
-                    return None;
-                }
-                height = None;
-                continue;
-            }
-            _ => return None,
-        };
-        if let Some((target, kept)) = jump_keeps {
-            if !(index + 1..=end).contains(&target) {
-                return None;
-            }
-            joins.push((target, kept));
-        }
-        height = Some(depth.checked_sub(pops)?.checked_add(pushes)?);
+/// The furthest index at or before `filter_index` that a jump from outside
+/// `region..filter_index` lands on, for every `region` in `0..=filter_index`,
+/// and `-1` for a region no jump from outside lands after.
+fn outside_landings(instructions: &Instructions<'_>, filter_index: u32) -> Vec<i64> {
+    let landing = |index: u32| match instructions.get(index).and_then(jump_target) {
+        Some(target) if target <= filter_index => i64::from(target),
+        _ => -1,
+    };
+    let mut furthest = -1i64;
+    let mut after = filter_index;
+    while instructions.get(after).is_some() {
+        furthest = furthest.max(landing(after));
+        after += 1;
     }
-    join_height(height, &joins, end)?
+    let mut landings = vec![furthest; filter_index as usize + 1];
+    for region in 0..filter_index {
+        furthest = furthest.max(landing(region));
+        landings[region as usize + 1] = furthest;
+    }
+    landings
 }
 
-/// The stack height at `index`, joining the fall-through height with every
-/// jump into it; `Some(None)` when nothing reaches it and `None` when the
-/// arriving heights disagree.
-fn join_height(fall_through: Option<u32>, joins: &[(u32, u32)], index: u32) -> Option<Option<u32>> {
-    let mut height = fall_through;
-    for &(_, arriving) in joins.iter().filter(|(target, _)| *target == index) {
-        match height {
-            Some(existing) if existing != arriving => return None,
-            _ => height = Some(arriving),
+/// Where a run of self-contained expression code can begin, and how deep the
+/// stack is along it.
+struct ExpressionHeights {
+    /// The stack height at every index of the pass, counted from the start of
+    /// the run the index belongs to.
+    height: Vec<i64>,
+    /// The lowest height any instruction in `index..end` leaves after its pops.
+    floor: Vec<i64>,
+    /// The first index a run reaching the end of the pass can begin at.
+    first: u32,
+}
+
+impl ExpressionHeights {
+    /// How many values `start..end` leaves on the stack when it runs as
+    /// self-contained expression code: `None` when it consumes a value pushed
+    /// before `start`, when an instruction in it has no fixed stack effect or
+    /// jumps outside `start..=end`, or when branches in it join on disagreeing
+    /// stack heights.
+    ///
+    /// These heights are one run's, so they answer for a `start` no jump from
+    /// outside `start..end` lands after: such a jump carries into the run a join
+    /// that `start..end` does not have. The caller rules one out itself.
+    fn values(&self, start: u32) -> Option<u32> {
+        if start < self.first {
+            return None;
+        }
+        let index = usize::try_from(start).ok()?;
+        let base = *self.height.get(index)?;
+        if *self.floor.get(index)? < base {
+            return None;
+        }
+        u32::try_from(self.height.last().copied()? - base).ok()
+    }
+}
+
+/// Reads `0..=end` as expression code in one forward pass, so that judging a
+/// candidate start costs a comparison instead of a rescan.
+///
+/// An instruction with no fixed stack effect and a jump leaving `index..=end`
+/// both begin a new run after themselves, because control leaves the run there.
+/// An index nothing reaches and a join on disagreeing heights begin one at
+/// themselves: a run covering such an index is not reading a single expression,
+/// while a run beginning at it carries neither the jump that skipped it nor the
+/// joins that disagree.
+fn expression_heights(instructions: &Instructions<'_>, end: u32) -> ExpressionHeights {
+    let span = end as usize + 1;
+    let mut height = Vec::with_capacity(span);
+    let mut post_pop = Vec::with_capacity(span);
+    let mut arriving = vec![Arriving::Nothing; span];
+    let mut fall_through = Some(0i64);
+    let mut first = 0u32;
+    for index in 0..=end {
+        let depth = match join_height(fall_through, arriving[index as usize]) {
+            Some(Some(depth)) => depth,
+            _ => {
+                first = index;
+                0
+            }
+        };
+        height.push(depth);
+        if index == end {
+            break;
+        }
+        match instructions
+            .get(index)
+            .and_then(|instruction| expression_step(instruction, depth, index, end))
+        {
+            Some(step) => {
+                post_pop.push(depth - step.pops);
+                if let Some((target, kept)) = step.keeps {
+                    record_arrival(&mut arriving[target as usize], kept);
+                }
+                fall_through = step
+                    .falls_through
+                    .then_some(depth - step.pops + step.pushes);
+            }
+            None => {
+                first = index + 1;
+                post_pop.push(i64::MAX);
+                fall_through = Some(0);
+            }
         }
     }
-    Some(height)
+    let mut floor = vec![i64::MAX; span];
+    for index in (0..post_pop.len()).rev() {
+        floor[index] = floor[index + 1].min(post_pop[index]);
+    }
+    ExpressionHeights {
+        height,
+        floor,
+        first,
+    }
+}
+
+/// What one instruction does to the stack.
+struct Step {
+    pops: i64,
+    pushes: i64,
+    /// The target a jump in the instruction takes, and the height it keeps there.
+    keeps: Option<(u32, i64)>,
+    /// Whether the next instruction continues from this one.
+    falls_through: bool,
+}
+
+/// The stack effect of one expression instruction; `None` for an instruction
+/// whose effect is not fixed, and for a jump leaving `index..=end`, which takes
+/// control out of the run rather than through it.
+///
+/// `JumpIfFalse` pops its condition however it goes, so its target runs one
+/// value lower; `JumpIfFalseOrPop` and `JumpIfTrueOrPop` pop only where they
+/// fall through, so the branch they take keeps the condition.
+fn expression_step(
+    instruction: &Instruction<'_>,
+    depth: i64,
+    index: u32,
+    end: u32,
+) -> Option<Step> {
+    let (pops, pushes, keeps, falls_through) = match instruction {
+        Instruction::LoadConst(_) | Instruction::Lookup(_) => (0, 1, None, true),
+        Instruction::GetAttr(_) | Instruction::Not | Instruction::Neg => (1, 1, None, true),
+        Instruction::GetItem
+        | Instruction::Add
+        | Instruction::Sub
+        | Instruction::Mul
+        | Instruction::Div
+        | Instruction::IntDiv
+        | Instruction::Rem
+        | Instruction::Pow
+        | Instruction::Eq
+        | Instruction::Ne
+        | Instruction::Gt
+        | Instruction::Gte
+        | Instruction::Lt
+        | Instruction::Lte
+        | Instruction::StringConcat
+        | Instruction::In => (2, 1, None, true),
+        Instruction::Slice => (4, 1, None, true),
+        Instruction::CompareAndPreserve(_) | Instruction::Swap => (2, 2, None, true),
+        Instruction::DupTop => (1, 2, None, true),
+        Instruction::DiscardTop => (1, 0, None, true),
+        Instruction::BuildMap(pairs) | Instruction::BuildKwargs(pairs) => (
+            i64::from(u32::try_from(*pairs).ok()?.checked_mul(2)?),
+            1,
+            None,
+            true,
+        ),
+        Instruction::MergeKwargs(count) | Instruction::BuildList(Some(count)) => {
+            (i64::from(u32::try_from(*count).ok()?), 1, None, true)
+        }
+        Instruction::UnpackList(count) => (1, i64::from(u32::try_from(*count).ok()?), None, true),
+        Instruction::ApplyFilter(_, Some(count), _)
+        | Instruction::PerformTest(_, Some(count), _)
+        | Instruction::CallFunction(_, Some(count))
+        | Instruction::CallMethod(_, Some(count))
+        | Instruction::CallObject(Some(count)) => (i64::from(*count), 1, None, true),
+        Instruction::JumpIfFalse(target) => (1, 0, Some((*target, depth - 1)), true),
+        Instruction::JumpIfFalseOrPop(target) | Instruction::JumpIfTrueOrPop(target) => {
+            (1, 0, Some((*target, depth)), true)
+        }
+        Instruction::Jump(target) => (0, 0, Some((*target, depth)), false),
+        _ => return None,
+    };
+    if let Some((target, _)) = keeps {
+        if !(index + 1..=end).contains(&target) {
+            return None;
+        }
+    }
+    Some(Step {
+        pops,
+        pushes,
+        keeps,
+        falls_through,
+    })
+}
+
+/// What the jumps into one index keep on the stack.
+#[derive(Clone, Copy)]
+enum Arriving {
+    Nothing,
+    Height(i64),
+    /// Two jumps keep different heights there, so the index has no one height.
+    Disagree,
+}
+
+fn record_arrival(arriving: &mut Arriving, kept: i64) {
+    *arriving = match *arriving {
+        Arriving::Nothing => Arriving::Height(kept),
+        Arriving::Height(existing) if existing == kept => Arriving::Height(kept),
+        _ => Arriving::Disagree,
+    };
+}
+
+/// The stack height at an index, joining the fall-through height with the one
+/// the jumps into it keep; `Some(None)` when nothing reaches it and `None` when
+/// the arriving heights disagree.
+fn join_height(fall_through: Option<i64>, arriving: Arriving) -> Option<Option<i64>> {
+    match (fall_through, arriving) {
+        (_, Arriving::Disagree) => None,
+        (Some(height), Arriving::Height(kept)) if height != kept => None,
+        (Some(height), _) => Some(Some(height)),
+        (None, Arriving::Height(kept)) => Some(Some(kept)),
+        (None, Arriving::Nothing) => Some(None),
+    }
 }
 
 fn jump_target(instruction: &Instruction<'_>) -> Option<u32> {

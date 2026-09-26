@@ -482,3 +482,44 @@ fn conditional_name_arguments_that_admission_defers_render_for_their_invocations
         assert_eq!(render_template(template, &scope).expect(template), "a,b");
     }
 }
+
+#[test]
+fn admission_defers_a_name_a_later_argument_puts_out_of_reach() {
+    // The walk reads the arguments after the name as one run of fixed stack
+    // effects, and a splat nested in one of them has no fixed effect, so the
+    // literal before the run is left to fire time.
+    for template in [
+        "{{ doc.items | map('nosuchfilter', range(*doc.z)) }}",
+        "{{ doc.rows | select('nosuchtest', range(*doc.z)) }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn admission_reads_a_long_argument_expression_once() {
+    // The parser caps a call at 2000 arguments, but not the size of one
+    // argument's expression: a list literal filling the template size cap
+    // compiles to tens of thousands of instructions, every task carries two
+    // template fields, and admission judges every candidate task in a plan.
+    let elements = (MAX_TEMPLATE_BYTES - 64) / ",1".len();
+    let template = format!(
+        "{{{{ doc.items | map('lower', 1, [doc.x{}]) }}}}",
+        ",1".repeat(elements)
+    );
+    assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());
+    check_template_vocabulary(&template).expect("long argument expression");
+}
+
+#[test]
+fn admission_reads_a_long_run_of_branching_arguments_once() {
+    // A conditional argument compiles to jumps whose targets the walk has to
+    // join, so a run of them costs it the branches as well as the length. The
+    // parser caps a call at 2000 arguments, the name taking the first.
+    let template = format!(
+        "{{{{ doc.items | map('lower'{}) }}}}",
+        ",1 if doc.flag else 2".repeat(1_999)
+    );
+    assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());
+    check_template_vocabulary(&template).expect("branching argument run");
+}
