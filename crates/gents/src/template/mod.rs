@@ -4,7 +4,7 @@
 mod tests;
 
 use minijinja::{
-    machinery::{self, Instruction},
+    machinery::{self, Instruction, Instructions},
     AutoEscape, Environment, ErrorKind, UndefinedBehavior,
 };
 use std::collections::HashSet;
@@ -44,6 +44,9 @@ pub(crate) const MAX_RENDERED_BYTES: usize = 1024 * 1024;
 /// filter body rather than through the formatter, so the auto-escape callback
 /// below does not make it escape-neutral: text piped through it reaches the
 /// provider carrying those escape sequences instead of the source characters.
+/// `{% autoescape %}` likewise decides from the value the tag names rather than
+/// from the callback, so a block under `{% autoescape "json" %}` reaches the
+/// provider JSON-serialized and one under `{% autoescape true %}` HTML-escaped.
 fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -105,18 +108,20 @@ fn template_context(scope: &TemplateScope) -> serde_json::Value {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum NameKind {
+enum NameUse {
     Filter,
     Test,
     Function,
+    FilterArgument,
+    TestArgument,
 }
 
-impl NameKind {
+impl NameUse {
     fn label(self) -> &'static str {
         match self {
-            NameKind::Filter => "filter",
-            NameKind::Test => "test",
-            NameKind::Function => "function",
+            NameUse::Filter | NameUse::FilterArgument => "filter",
+            NameUse::Test | NameUse::TestArgument => "test",
+            NameUse::Function => "function",
         }
     }
 }
@@ -125,18 +130,28 @@ impl NameKind {
 /// template admits names the engine can never provide and every fire of the
 /// task then fails. Configuration admission rejects those names here.
 ///
-/// The compiled program carries the whole vocabulary: MiniJinja names every
-/// filter, test and called function statically in one flat instruction stream,
-/// so a branch no render would enter cannot hide one. Block bodies compile into
-/// a second stream this walk does not visit, and cannot occur: `{% block %}`
-/// needs MiniJinja's `multi_template` feature, which the workspace does not
-/// enable, so it fails to parse.
+/// MiniJinja names each filter, test and called function in one flat
+/// instruction stream, so a branch no render would enter cannot hide one.
+/// Block bodies compile into a second stream this walk does not visit, and
+/// cannot occur: `{% block %}` needs MiniJinja's `multi_template` feature,
+/// which the workspace does not enable, so it fails to parse.
+///
+/// Compiling is part of the check, so this also reports a template that does
+/// not parse or exceeds the size cap, as a parse error rather than a name.
 ///
 /// A rejection reports only that nothing can provide a name, never that a
 /// render failed: invocation values do not exist at authoring time, so
 /// value-dependent failures are not admission facts. For the same reason a
 /// method call (`{{ doc.name.upper() }}`) is out of reach here - it resolves
 /// against the value it is called on, which authoring does not have.
+///
+/// Three kinds of name survive to fire time, each so that a template a fire
+/// would run is not refused. A name a builtin resolves from a non-constant
+/// argument is unpredictable (`{{ items | map(doc.filter_name) }}`), as is one
+/// an argument splat hides (`{{ items | map(*args.spec) }}`). And a called name
+/// is admitted when the program binds it anywhere, without regard to scope or
+/// order, so `{% if doc.fmt %}{% set f = doc.fmt %}{% endif %}{{ f() }}` and
+/// `{{ f() }}{% set f = args.formatter %}` are admitted and fail on a fire.
 pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
     if template.len() > MAX_TEMPLATE_BYTES {
         return Err(TemplateError::Parse(format!(
@@ -150,23 +165,28 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
         .template_from_str(template)
         .map_err(|error| TemplateError::Parse(error.to_string()))?;
 
-    let mut used: Vec<(NameKind, String)> = Vec::new();
+    let mut used: Vec<(NameUse, String)> = Vec::new();
     let mut bound = callable_scope_names();
     let instructions = &machinery::get_compiled_template(&compiled).instructions;
     let mut index = 0u32;
     while let Some(instruction) = instructions.get(index) {
         match instruction {
-            Instruction::ApplyFilter(name, _, _) => {
-                used.push((NameKind::Filter, engine_name(name)));
+            Instruction::ApplyFilter(name, arguments, _) => {
+                let name = engine_name(name);
+                let argument = name_argument(instructions, index, &name, *arguments);
+                used.push((NameUse::Filter, name));
+                used.extend(argument);
             }
             Instruction::PerformTest(name, _, _) => {
-                used.push((NameKind::Test, engine_name(name)));
+                used.push((NameUse::Test, engine_name(name)));
             }
             Instruction::CallFunction(name, _) => {
-                used.push((NameKind::Function, (*name).to_string()));
+                used.push((NameUse::Function, (*name).to_string()));
             }
             // Assignment targets, `{% with %}` bindings and loop targets all
-            // compile to this, and a call finds them before the environment.
+            // compile to this. A call resolves through the frames before the
+            // environment, and admission judges the bindings program-wide,
+            // without regard to scope or order.
             Instruction::StoreLocal(name) => {
                 bound.insert((*name).to_string());
             }
@@ -174,6 +194,8 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
             Instruction::PushLoop(_) => {
                 bound.insert("loop".to_string());
             }
+            // Judged by the filter that resolves a name from it, not here.
+            Instruction::LoadConst(_) => {}
             // Named exhaustively: a MiniJinja instruction set that grows a new
             // name-carrying instruction, or changes the arity of one above,
             // must fail to compile rather than leave the walk silently partial.
@@ -183,7 +205,6 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
             | Instruction::SetAttr(_)
             | Instruction::GetItem
             | Instruction::Slice
-            | Instruction::LoadConst(_)
             | Instruction::BuildMap(_)
             | Instruction::BuildKwargs(_)
             | Instruction::MergeKwargs(_)
@@ -234,25 +255,73 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
     }
 
     let mut judged = HashSet::new();
-    for (kind, name) in used {
-        if !judged.insert((kind, name.clone())) {
+    for (use_site, name) in used {
+        if !judged.insert((use_site, name.clone())) {
             continue;
         }
-        let provided = match kind {
-            NameKind::Filter => engine_resolves(&env, &format!("{{{{ 0 | {name} }}}}")),
-            NameKind::Test => engine_resolves(&env, &format!("{{{{ 0 is {name} }}}}")),
-            NameKind::Function => {
+        let provided = match use_site {
+            NameUse::Filter => engine_resolves(&env, &format!("{{{{ 0 | {name} }}}}"), None),
+            NameUse::Test => engine_resolves(&env, &format!("{{{{ 0 is {name} }}}}"), None),
+            NameUse::FilterArgument => engine_resolves(&env, "{{ [] | map(probe) }}", Some(&name)),
+            NameUse::TestArgument => engine_resolves(&env, "{{ [] | select(probe) }}", Some(&name)),
+            NameUse::Function => {
                 bound.contains(&name) || env.globals().any(|(global, _)| global == name)
             }
         };
         if !provided {
             return Err(TemplateError::UnknownName {
-                kind: kind.label(),
+                kind: use_site.label(),
                 name,
             });
         }
     }
     Ok(())
+}
+
+/// `map` resolves a filter, and the `select`/`reject` family a test, from a
+/// string argument while rendering: the only names the engine looks up from a
+/// value rather than from the source. The lookup runs before the piped value is
+/// iterated, so an undefined input does not spare it, and no other builtin
+/// reads an argument as a name.
+///
+/// A keyword argument carries no name - `map(attribute=...)` looks an attribute
+/// up instead - and an argument list too short to hold the name leaves the
+/// builtin nothing to resolve.
+///
+/// The filter pops the piped value and then one value per argument, each of
+/// which its expression pushes exactly once, so a run of that many constants
+/// ending at the filter pushed the arguments themselves, in order. A conditional
+/// argument compiles a constant per branch and its false branch ends the run, so
+/// `map('a' if c else 'b')` is judged on `b` alone.
+fn name_argument(
+    instructions: &Instructions<'_>,
+    filter_index: u32,
+    filter: &str,
+    arguments: Option<u16>,
+) -> Option<(NameUse, String)> {
+    let (use_site, position) = match filter {
+        "map" => (NameUse::FilterArgument, 1u32),
+        "select" | "reject" => (NameUse::TestArgument, 1),
+        "selectattr" | "rejectattr" => (NameUse::TestArgument, 2),
+        _ => return None,
+    };
+    let arguments = u32::from(arguments?).checked_sub(1)?;
+    if arguments < position {
+        return None;
+    }
+    let first = filter_index.checked_sub(arguments)?;
+    let mut resolved = None;
+    for offset in 0..arguments {
+        match instructions.get(first + offset) {
+            Some(Instruction::LoadConst(value)) => {
+                if offset + 1 == position {
+                    resolved = value.as_str().map(str::to_string);
+                }
+            }
+            _ => return None,
+        }
+    }
+    resolved.map(|name| (use_site, name))
 }
 
 /// Names a call resolves to without the environment providing them: the VM
@@ -284,9 +353,21 @@ fn engine_name(name: &str) -> String {
 
 /// Only the engine's own refusal of the name counts: any other probe failure is
 /// about the probe's operand, so the name exists.
-fn engine_resolves(env: &Environment<'static>, probe: &str) -> bool {
+///
+/// A name the source carries is a lexed identifier, so it interpolates into a
+/// probe that passes no argument; and with no argument no builtin reaches a name
+/// lookup of its own, so `{{ 0 | select }}` reports its operand rather than
+/// `select`'s absent test argument as an unknown name. A name a filter argument
+/// carries is arbitrary text, so `argument` binds it through the context
+/// instead, and that probe pipes an empty sequence so the builtin's own lookup
+/// is all that can fail.
+fn engine_resolves(env: &Environment<'static>, probe: &str, argument: Option<&str>) -> bool {
+    let rendered = match argument {
+        Some(name) => env.render_str(probe, serde_json::json!({ "probe": name })),
+        None => env.render_str(probe, ()),
+    };
     !matches!(
-        env.render_str(probe, ()).err().map(|error| error.kind()),
+        rendered.err().map(|error| error.kind()),
         Some(ErrorKind::UnknownFilter | ErrorKind::UnknownTest)
     )
 }

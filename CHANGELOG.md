@@ -173,10 +173,15 @@ source consistency checks, not a separate runtime compatibility version.
 - Task `prompt_template` and `goal_objective_template` are refused at configure
   time when they name a filter, test or function the template engine does not
   provide, instead of being accepted and failing on every trigger fire with
-  `template render error: unknown filter`. Every name the compiled template
-  uses is checked, so a conditional branch does not hide one. A method call on
-  a value (`{{ doc.name.upper() }}`) resolves against that value, so it is
-  still reported when the task fires (#1744).
+  `template render error: unknown filter`. Each name the compiled template
+  carries is checked, so a conditional branch does not hide one, including the
+  filter or test `map`, `select`, `reject`, `selectattr` and `rejectattr`
+  resolve from a quoted argument. Three kinds of name are still reported only
+  when the task fires: a method call on a value (`{{ doc.name.upper() }}`), one
+  of those filter arguments when it is not a literal
+  (`{{ items | map(doc.filter_name) }}`), and a call on a name the template
+  binds only in a branch that did not run
+  (`{% if doc.fmt %}{% set f = doc.fmt %}{% endif %}{{ f() }}`) (#1744).
 - Task templates can use `tojson`. The template engine's `json` feature is
   enabled, so the filter the configurator already emits resolves instead of
   being rejected. It escapes `<`, `>`, `&` and `'` as `\uXXXX` sequences, which

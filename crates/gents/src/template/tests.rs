@@ -203,6 +203,8 @@ fn authoring_rejects_an_unresolvable_name_a_fire_would_only_reach_conditionally(
         "{% if doc.urgent %}ok{% else %}{{ doc.body | toyaml }}{% endif %}",
         "{{ doc.body | trim | toyaml }}",
         "{% if doc.body is jsonish %}yes{% endif %}",
+        "{% if doc.urgent %}{{ doc.items | map('nosuchfilter') }}{% endif %}",
+        "{% for row in doc.rows %}{{ row.tags | select('notempty') }}{% endfor %}",
     ] {
         let error = check_template_vocabulary(template).unwrap_err();
         assert!(
@@ -287,4 +289,122 @@ fn authoring_reports_a_syntax_error_rather_than_a_missing_name() {
             "{template}: {error}"
         );
     }
+}
+
+#[test]
+fn authoring_rejects_a_filter_name_map_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.items | map('nosuchfilter') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "nosuchfilter"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_select_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.rows | select('notempty') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "notempty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_reject_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.rows | reject('notempty') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "notempty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_selectattr_resolves_from_its_argument() {
+    let error =
+        check_template_vocabulary("{{ doc.rows | selectattr('id', 'nosuchtest') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "nosuchtest"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_rejectattr_resolves_from_its_argument() {
+    let error =
+        check_template_vocabulary("{{ doc.rows | rejectattr('id', 'nosuchtest') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "nosuchtest"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_the_engine_cannot_provide() {
+    // `trim` is a registered filter and not a registered test, so judging a name
+    // in test position against the filters would admit it.
+    for (template, unknown) in [
+        ("{% if doc.body is jsonish %}yes{% endif %}", "jsonish"),
+        ("{% if doc.body is trim %}yes{% endif %}", "trim"),
+        ("{{ doc.rows | select('trim') }}", "trim"),
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == unknown),
+            "{template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_accepts_a_name_argument_admission_cannot_decide() {
+    for template in [
+        "{{ doc.items | map('lower') }}",
+        "{{ doc.items | map(attribute='username') }}",
+        "{{ doc.items | map(attribute='username', default='anonymous') }}",
+        "{{ doc.rows | select('odd') }}",
+        "{{ doc.rows | select('gt', 3) }}",
+        "{{ doc.rows | reject('none') }}",
+        "{{ doc.rows | selectattr('id', 'even') }}",
+        "{{ doc.rows | selectattr('active') }}",
+        "{{ doc.rows | rejectattr('id', 'gt', 3) }}",
+        "{{ doc.rows | select }}",
+        // A name no constant carries is not an admission fact.
+        "{{ doc.items | map(doc.filter_name) }}",
+        "{{ doc.items | map(*args.spec) }}",
+        "{{ doc.items | map('lower', doc.extra) }}",
+        // `is filter` and `is test` answer whether a name resolves rather than
+        // resolving it, so an absent name is their result, not a failure.
+        "{% if 'nosuchfilter' is filter %}yes{% endif %}",
+        "{% if 'nosuchtest' is test %}yes{% endif %}",
+        // A conditional argument compiles both values and is judged on the one
+        // its false branch pushes.
+        "{{ doc.items | map('nosuchfilter' if doc.conditional else 'lower') }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_accepts_a_call_on_every_name_the_render_scope_resolves() {
+    // Emit position compiles `super()` and a one-argument `loop()` into their
+    // own instructions, so only a call inside an expression reaches the walk.
+    for template in [
+        "{% for row in group.docs recursive %}{% set sub = loop(row.children) %}{{ sub }}{% endfor %}",
+        "{% set inherited = super() %}{{ inherited }}",
+        "{{ doc() }} {{ args() }} {{ event() }} {{ group() }} {{ node() }} {{ ctx() }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_judges_a_conditional_name_argument_on_its_false_branch() {
+    let error = check_template_vocabulary(
+        "{{ doc.items | map('lower' if doc.conditional else 'toyaml') }}",
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "toyaml"),
+        "{error}"
+    );
 }
