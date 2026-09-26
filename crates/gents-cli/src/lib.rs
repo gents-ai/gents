@@ -620,11 +620,26 @@ pub(crate) async fn resolve_config_access(
     Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
 }
 
-/// Bounds the two store terms a local agent pays out of its own address
-/// space. Regolith bounds memtable-attributable memory at
+/// Lowers the two resident store terms that a local agent sizes by
+/// configuration. Regolith bounds memtable-attributable memory at
 /// `2*M*(W + c) + M*W` for `max_write_buffer_number` M, `write_buffer_size` W
-/// and the arena's chunk cap c, which is 388 MiB at the server's 64 MiB
-/// buffer, on top of a 512 MiB block cache.
+/// and the arena's chunk cap c; at the server's 64 MiB buffer and 1 MiB cap
+/// the whole expression is 388 MiB, on top of a 512 MiB block cache.
+///
+/// Regolith's accounting has a third resident term, per-SSTable index and
+/// filter bytes, plus transient flush and compaction buffers. The third term
+/// keeps the server's defaults — `cache_index_and_filter_blocks` and
+/// `partitioned_index` both off — although regolith names it as the one that
+/// grows without bound as the database grows. Charging it to the cache would
+/// bound it by `block_cache_size`, but 32 MiB is the wrong cache to charge it
+/// to: over the server's 64 shards each shard's share is 512 KiB, a 64 MiB
+/// SSTable's flat index holds one entry per 16 KiB block, and with
+/// `strict_capacity_limit` off regolith admits a block larger than one
+/// shard's share by emptying that whole shard, so one file's index can cost a
+/// shard of data blocks. Every point read would also pay a cache lookup, and
+/// re-read an evicted filter from disk. `partitioned_index` does not bound the
+/// term either: it moves index leaves into the cache and leaves each file's
+/// top-level index and its whole filter region pinned.
 ///
 /// Deliberately not built on `RegolithStoreOptions::embedded()`. That profile
 /// targets a device with no spare core and tens of MiB of flash, and most of
@@ -632,9 +647,8 @@ pub(crate) async fn resolve_config_access(
 /// every compaction onto whichever thread is writing and fails a write with
 /// `Busy` when the picker declines while a stop threshold holds; the L0 and
 /// pending-byte triggers stall writes at a few MiB of un-compacted L0; and its
-/// 256 KiB `target_file_size` multiplies the per-SSTable index and filter
-/// bytes that stay resident outside the cache, the one term regolith says
-/// grows without bound as the database grows. It also pins
+/// 256 KiB `target_file_size` makes 256 times as many SSTables for the same
+/// data, which is what multiplies that per-file term. It also pins
 /// `block_cache_num_shard_bits` to 0 so a caller that raises the cache budget
 /// gets a single shard, and caps `max_value_size` at one write buffer so no
 /// accepted write is larger than the memtable can hold.
@@ -651,6 +665,16 @@ fn local_agent_store_options() -> storage::RegolithStoreOptions {
 /// about 52 MiB. Not the embedded profile's 256 KiB: at the server's file and
 /// level sizes a buffer that small flushes a stream of tiny L0 files.
 ///
+/// Regolith's write stalls trigger on counts, not bytes: `stall_state`
+/// compares a count of L0 files against `level0_stop_writes_trigger` and
+/// `level0_slowdown_writes_trigger`, and a count of memtables against
+/// `2 * max_write_buffer_number`. An eighth of the buffer makes every memtable
+/// and every flushed L0 file an eighth the size, so those unchanged counts
+/// hold an eighth the bytes: the memtable stop arrives at about 32 MiB of
+/// un-flushed writes instead of 256 MiB, and the 36-file L0 stop at about
+/// 288 MiB of un-compacted L0 instead of 2.3 GiB. Sustained bulk writing
+/// reaches back-pressure eight times sooner in bytes written.
+///
 /// This lowers the buffer while leaving `max_value_size` at the server
 /// ceiling, so a value larger than the buffer is still accepted and sizes its
 /// own arena chunk while it is written. The alternative is refusing a document
@@ -663,6 +687,13 @@ const LOCAL_AGENT_WRITE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 /// A budget, not a reservation: shard maps start empty and each shard caps its
 /// entries at its share of this, so it bounds how much of the store a
 /// long-lived agent may keep resident rather than what it allocates at open.
+///
+/// The budget is a hard cache-wide bound at any block size, but it changes
+/// which blocks stay cached. Over the server's 64 shards each shard's share is
+/// 512 KiB: with `strict_capacity_limit` off regolith admits a block past that
+/// share by emptying the shard it lands in, and refuses one larger than the
+/// whole budget outright. A document near the write buffer therefore evicts a
+/// shard on the way in, where the server's 512 MiB cache absorbed it.
 const LOCAL_AGENT_BLOCK_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> Result<NodeBuilder> {
@@ -830,9 +861,11 @@ mod tests {
         assert_eq!(node.node_identity_did(), Some(did.as_str()));
     }
 
-    /// The budget changes how much memory the store may hold and nothing
-    /// else: what a document may contain, when a write stalls, and which
-    /// thread compacts all stay at the server's values.
+    /// The budget lowers how much memory the store may hold, and leaves what a
+    /// document may contain and which thread compacts at the server's values.
+    /// It does not leave stall timing alone: the thresholds below are counts of
+    /// L0 files and memtables, so an eighth of the write buffer is an eighth of
+    /// the bytes each count stands for.
     #[test]
     fn the_local_agent_budget_shrinks_memory_without_moving_the_write_contract() {
         let server = storage::RegolithStoreOptions::default();
@@ -847,41 +880,107 @@ mod tests {
         );
         assert_eq!(
             options.engine.level0_stop_writes_trigger, server.engine.level0_stop_writes_trigger,
-            "writes must not stall at the embedded profile's L0 count"
+            "the L0 file count that stops writes stays the server's, not the embedded profile's 8"
         );
         assert_eq!(
             options.engine.hard_pending_compaction_bytes_limit,
             server.engine.hard_pending_compaction_bytes_limit,
-            "writes must not stop at the embedded profile's pending bytes"
+            "the pending-compaction byte limit stays the server's, not the embedded profile's 16 MiB"
+        );
+        assert_eq!(
+            options.engine.cache_index_and_filter_blocks,
+            server.engine.cache_index_and_filter_blocks,
+            "per-SSTable index and filter bytes stay outside the cache budget; see the reason on \
+             local_agent_store_options before moving them into a 32 MiB cache"
         );
         assert_eq!(
             options.engine.block_cache_num_shard_bits, server.engine.block_cache_num_shard_bits,
-            "a raised cache budget must keep the server's shard geometry"
+            "the cache asks for the server's shard count, not the embedded profile's single shard"
+        );
+        assert!(
+            LOCAL_AGENT_BLOCK_CACHE_BYTES >> server.engine.block_cache_num_shard_bits >= 64 * 1024,
+            "the lowered budget must leave each requested shard above regolith's 64 KiB minimum, \
+             below which it halves the shard count until the share clears it"
         );
 
-        assert!(
-            options.engine.write_buffer_size < server.engine.write_buffer_size,
-            "the write buffer must shrink"
+        assert_eq!(
+            options.engine.arena_profile, server.engine.arena_profile,
+            "the memtable bound's c is the server arena's chunk cap"
         );
-        assert!(
-            options.engine.block_cache_size < server.engine.block_cache_size,
-            "the block cache must shrink"
+        assert_eq!(
+            options.engine.max_write_buffer_number, server.engine.max_write_buffer_number,
+            "the memtable bound's M is the server's write buffer count"
+        );
+        assert_eq!(
+            options.engine.target_file_size, server.engine.target_file_size,
+            "SSTables stay server-sized, so the per-file index and filter term is not multiplied"
+        );
+
+        assert_eq!(
+            options.engine.write_buffer_size, LOCAL_AGENT_WRITE_BUFFER_BYTES,
+            "the write buffer is the local agent's, not the server's {}",
+            server.engine.write_buffer_size
+        );
+        assert_eq!(
+            options.engine.block_cache_size, LOCAL_AGENT_BLOCK_CACHE_BYTES,
+            "the block cache is the local agent's, not the server's {}",
+            server.engine.block_cache_size
+        );
+        assert_eq!(
+            LOCAL_AGENT_BLOCK_CACHE_BYTES,
+            32 * 1024 * 1024,
+            "the 512 KiB per-shard share reasoned about on LOCAL_AGENT_BLOCK_CACHE_BYTES is this \
+             budget over the server's shard count"
+        );
+
+        // Regolith's own memtable bound, `2*M*(W + c) + M*W`, evaluated over
+        // the options each profile actually opens with.
+        let memtable_bound = |m: usize, w: usize, c: usize| 2 * m * (w + c) + m * w;
+        let m = server.engine.max_write_buffer_number;
+        let c = server.engine.arena_profile.max_chunk_size;
+        assert_eq!(
+            memtable_bound(m, server.engine.write_buffer_size, c),
+            388 * 1024 * 1024,
+            "the server bound quoted on local_agent_store_options"
+        );
+        assert_eq!(
+            memtable_bound(m, options.engine.write_buffer_size, c),
+            52 * 1024 * 1024,
+            "the 52 MiB bound quoted on LOCAL_AGENT_WRITE_BUFFER_BYTES"
         );
     }
 
-    /// A transcript-sized document is ordinary here, and the embedded
-    /// profile's 256 KiB value ceiling would refuse one. Writes a value past
-    /// that ceiling through the builder the CLI opens the store with, reopens
-    /// the store, and reads it back.
+    /// The invariant this profile breaks is regolith's `embedded()`
+    /// convention that `max_value_size` never exceeds one write buffer: a
+    /// value larger than the memtable is accepted here and sizes its own arena
+    /// chunk. Only a blob past `LOCAL_AGENT_WRITE_BUFFER_BYTES` exercises
+    /// that; one past the embedded profile's 256 KiB ceiling stays 32 times
+    /// below the buffer and proves nothing about it.
+    ///
+    /// One byte past the buffer, not the 64 MiB `max_value_size` ceiling:
+    /// crossing the buffer is what selects the oversized-chunk path, and a
+    /// blob eight times larger would pay eight times the encode, WAL and
+    /// GraphQL-parse cost for the same path. Writes through the builder the
+    /// CLI opens the store with, shuts down, reopens from the same path and
+    /// reads the value back.
     #[tokio::test]
-    async fn a_document_past_the_embedded_value_ceiling_survives_a_reopen() {
+    async fn a_document_larger_than_the_local_agent_write_buffer_survives_a_reopen() {
         let temp = tempfile::tempdir().unwrap();
         let data = temp.path().join("data");
-        let blob = "g".repeat(
-            storage::RegolithStoreOptions::embedded()
-                .engine
-                .max_value_size
-                + 1,
+        let blob = "g".repeat(LOCAL_AGENT_WRITE_BUFFER_BYTES + 1);
+        assert!(
+            blob.len()
+                > storage::RegolithStoreOptions::embedded()
+                    .engine
+                    .max_value_size,
+            "the blob must also clear the embedded profile's value ceiling"
+        );
+        assert!(
+            blob.len()
+                <= storage::RegolithStoreOptions::default()
+                    .engine
+                    .max_value_size,
+            "the blob must stay inside the server ceiling this profile keeps"
         );
 
         let node = persistent_node_builder(&data)
@@ -920,11 +1019,20 @@ mod tests {
         reopened.shutdown().await;
 
         let rows = response.data.expect("the reopened store answers the query");
+        let stored = rows["LargeValueProbe"][0]["blob"]
+            .as_str()
+            .expect("the document survived the reopen");
+        // Compared without handing the blob to assert_eq!, which would print
+        // both copies on failure.
         assert_eq!(
-            rows["LargeValueProbe"][0]["blob"]
-                .as_str()
-                .expect("the document survived the reopen"),
-            blob
+            stored.len(),
+            blob.len(),
+            "the reopened store returned a value of the wrong length"
+        );
+        assert!(
+            stored == blob,
+            "the reopened store returned {} bytes of the right length but the wrong content",
+            stored.len()
         );
     }
 

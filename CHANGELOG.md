@@ -20,9 +20,11 @@ source consistency checks, not a separate runtime compatibility version.
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 - A local agent opens its store with an 8 MiB write buffer and a 32 MiB block
-  cache instead of the server defaults, bounding what the store may hold inside
+  cache instead of the server defaults, lowering what the store holds inside
   the agent's own process. Document key and value ceilings are unchanged, so
-  every write a server peer accepts is still accepted here (#1757).
+  every write a server peer accepts is still accepted here. Sustained bulk
+  writing now meets the store's write back-pressure after fewer bytes, since
+  those thresholds count memtables and files rather than bytes (#1757).
 
 ### Fixed
 
