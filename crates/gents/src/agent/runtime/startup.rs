@@ -296,7 +296,9 @@ async fn run_agent_with_runtime_status(
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let terminal_observer = agent.process_state_observer.clone();
-    let shutdown_progress = agent.shutdown_progress.clone();
+    agent
+        .shutdown_progress
+        .observe_process_state(runtime_status.readiness().subscribe_observation());
     let initialized = runtime_status
         .initialize_startup(agent.default_behavior_id())
         .await;
@@ -314,7 +316,6 @@ async fn run_agent_with_runtime_status(
         Err(error) => Err(error.context("initialize runtime behavior readiness")),
     };
 
-    shutdown_progress.set_phase("terminal process state and readiness owner close");
     finish_run_agent(
         body_result,
         runtime_status_owner,
@@ -1043,7 +1044,6 @@ async fn run_agent_owned(
     };
 
     let mut teardown_error = None;
-    shutdown_progress.set_phase("lifecycle.begin_shutdown");
     if let Err(error) = lifecycle.begin_shutdown().await {
         tracing::error!(error = %error, "failed to begin ordered runtime shutdown");
         teardown_error = Some(error);
@@ -1051,7 +1051,6 @@ async fn run_agent_owned(
 
     runtime_shutdown_tx.send_replace(true);
     cancel.cancel();
-    shutdown_progress.set_phase("background_tasks.join_next");
     while let Some(joined) = background_tasks.join_next().await {
         if let Err(error) = joined {
             if !error.is_cancelled() {
@@ -1060,24 +1059,16 @@ async fn run_agent_owned(
         }
     }
 
-    shutdown_progress.set_phase("readiness watchdog join");
     let _ = readiness_handle.await;
-    shutdown_progress.set_phase("trigger engine join");
     let _ = trigger_engine_handle.await;
-    shutdown_progress.set_phase("callback engine join");
     let _ = callback_engine_handle.await;
-    shutdown_progress.set_phase("health checker join");
     let _ = health_checker.await;
-    shutdown_progress.set_phase("backend prober join");
     let _ = backend_prober.await;
     if let Some(handle) = runtime_snapshot_observer_handle {
-        shutdown_progress.set_phase("runtime snapshot observer join");
         let _ = handle.await;
     }
-    shutdown_progress.set_phase("lsp pool shutdown");
     lsp_pool.shutdown().await;
 
-    shutdown_progress.set_phase("lifecycle.finish_shutdown");
     if let Err(error) = lifecycle.finish_shutdown().await {
         tracing::error!(error = %error, "failed to finish ordered runtime shutdown");
         if teardown_error.is_none() {

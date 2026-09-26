@@ -141,7 +141,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
         let behavior_id = self.behavior.behavior_id.clone();
-        let shutdown_progress = self.shutdown_progress.clone();
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.behavior.model_name.clone();
         // The rendered-request capture scope is installed by `handle_request`,
@@ -505,8 +504,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 Some(item) => item,
                                 None => break,
                             };
-                            let item_progress =
-                                shutdown_progress.process_item(&behavior_id, &request_id);
                             let processed = match await_with_request_deadline(
                                 request_deadline,
                                 processor.process_item(item),
@@ -534,7 +531,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     return Err(error);
                                 }
                             };
-                            drop(item_progress);
                             match processed {
                                 Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
                                 Ok(crate::agent::stream_processor::StreamAction::Done) => break,

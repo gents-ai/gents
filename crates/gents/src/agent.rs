@@ -334,7 +334,10 @@ impl Gents {
     }
 
     /// What a run of this runtime is still awaiting; clones observe the same
-    /// run. Diagnostic only.
+    /// run. Diagnostic only: it never gates, orders or cancels work. Public
+    /// only so integration-test support can report it when a shutdown bound
+    /// expires.
+    #[doc(hidden)]
     pub fn shutdown_progress(&self) -> RuntimeShutdownProgress {
         self.shutdown_progress.clone()
     }

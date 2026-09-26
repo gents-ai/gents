@@ -301,6 +301,10 @@ impl EnrollmentAuthorityOwner {
 /// Consumers only read [`EnrollmentAuthorityHandle`]. This loop alone queries
 /// the full authority set, publishes its immutable projection, owns
 /// `source="enrollment"` data-plane rows, and retries exact terminal delivery.
+///
+/// `progress` is diagnostic only: the loop records which sweep or authority
+/// command it is awaiting so an overdue shutdown can name it, and nothing
+/// gates, orders or cancels on that record.
 pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,

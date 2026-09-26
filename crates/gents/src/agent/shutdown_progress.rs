@@ -3,13 +3,19 @@ use std::fmt;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use tokio::sync::watch;
+
+use crate::behavior_readiness_publisher::BehaviorAdmissionObservation;
+
 /// What one agent run is still awaiting, so a caller whose shutdown bound
 /// expires can name the outstanding owner instead of only the elapsed time.
 ///
-/// Diagnostic only: nothing reads it to gate, order or cancel work, and every
-/// label is a static phase name or an identifier already carried by the
-/// request row, never payload text. The run's shutdown owner labels its own
-/// awaits; the enrollment reconciler and behavior daemons label theirs.
+/// Diagnostic only: nothing reads it to gate, order or cancel work. The
+/// process lifecycle phase is read from the readiness publisher that owns it;
+/// this type records only what no other owner does: the background tasks the
+/// shutdown owner has not yet joined, which await the enrollment reconciler is
+/// in, and which requests are inside `process_request`. Labels are static
+/// names or identifiers already carried by the request row, never payload text.
 #[derive(Clone, Default)]
 pub struct RuntimeShutdownProgress {
     state: Arc<Mutex<ProgressState>>,
@@ -17,16 +23,10 @@ pub struct RuntimeShutdownProgress {
 
 #[derive(Default)]
 struct ProgressState {
-    phase: Option<&'static str>,
+    process_state: Option<watch::Receiver<BehaviorAdmissionObservation>>,
     tasks: BTreeMap<&'static str, usize>,
     enrollment: Option<&'static str>,
-    requests: BTreeMap<(String, String), ActiveRequest>,
-}
-
-#[derive(Default)]
-struct ActiveRequest {
-    processes: usize,
-    items: usize,
+    requests: BTreeMap<(String, String), usize>,
 }
 
 impl RuntimeShutdownProgress {
@@ -38,8 +38,11 @@ impl RuntimeShutdownProgress {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub(crate) fn set_phase(&self, phase: &'static str) {
-        self.state().phase = Some(phase);
+    pub(crate) fn observe_process_state(
+        &self,
+        observation: watch::Receiver<BehaviorAdmissionObservation>,
+    ) {
+        self.state().process_state = Some(observation);
     }
 
     /// Count `name` as pending from now until the returned future completes or
@@ -67,27 +70,13 @@ impl RuntimeShutdownProgress {
         }
     }
 
-    pub(crate) fn process_request(&self, behavior_id: &str, request_id: &str) -> ActiveWork {
+    /// Held for one whole request; the request's own span covers its items.
+    pub(crate) fn process_request(&self, behavior_id: &str, request_id: &str) -> ActiveRequest {
         let key = (behavior_id.to_owned(), request_id.to_owned());
-        self.state()
-            .requests
-            .entry(key.clone())
-            .or_default()
-            .processes += 1;
-        ActiveWork {
+        *self.state().requests.entry(key.clone()).or_default() += 1;
+        ActiveRequest {
             progress: self.clone(),
             key,
-            item: false,
-        }
-    }
-
-    pub(crate) fn process_item(&self, behavior_id: &str, request_id: &str) -> ActiveWork {
-        let key = (behavior_id.to_owned(), request_id.to_owned());
-        self.state().requests.entry(key.clone()).or_default().items += 1;
-        ActiveWork {
-            progress: self.clone(),
-            key,
-            item: true,
         }
     }
 }
@@ -95,7 +84,14 @@ impl RuntimeShutdownProgress {
 impl fmt::Display for RuntimeShutdownProgress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state();
-        write!(f, "phase={}", state.phase.unwrap_or("<running>"))?;
+        match &state.process_state {
+            Some(observation) => write!(
+                f,
+                "process_state={:?}",
+                observation.borrow().process_state()
+            )?,
+            None => write!(f, "process_state=<not initialized>")?,
+        }
         let tasks: Vec<_> = state
             .tasks
             .iter()
@@ -104,7 +100,7 @@ impl fmt::Display for RuntimeShutdownProgress {
                 count => format!("{name}x{count}"),
             })
             .collect();
-        write!(f, "; pending background tasks=[{}]", tasks.join(", "))?;
+        write!(f, "; unjoined background tasks=[{}]", tasks.join(", "))?;
         write!(
             f,
             "; enrollment reconciler awaiting={}",
@@ -112,19 +108,10 @@ impl fmt::Display for RuntimeShutdownProgress {
         )?;
         let requests: Vec<_> = state
             .requests
-            .iter()
-            .map(|((behavior_id, request_id), active)| {
-                let mut work = Vec::new();
-                if active.processes > 0 {
-                    work.push("process_request");
-                }
-                if active.items > 0 {
-                    work.push("process_item");
-                }
-                format!("{behavior_id}/{request_id} in {}", work.join("+"))
-            })
+            .keys()
+            .map(|(behavior_id, request_id)| format!("{behavior_id}/{request_id}"))
             .collect();
-        write!(f, "; active requests=[{}]", requests.join(", "))
+        write!(f, "; requests in process_request=[{}]", requests.join(", "))
     }
 }
 
@@ -155,25 +142,19 @@ impl Drop for EnrollmentAwait {
     }
 }
 
-pub(crate) struct ActiveWork {
+pub(crate) struct ActiveRequest {
     progress: RuntimeShutdownProgress,
     key: (String, String),
-    item: bool,
 }
 
-impl Drop for ActiveWork {
+impl Drop for ActiveRequest {
     fn drop(&mut self) {
         let mut state = self.progress.state();
-        let Some(active) = state.requests.get_mut(&self.key) else {
-            return;
-        };
-        if self.item {
-            active.items = active.items.saturating_sub(1);
-        } else {
-            active.processes = active.processes.saturating_sub(1);
-        }
-        if active.processes == 0 && active.items == 0 {
-            state.requests.remove(&self.key);
+        if let Some(count) = state.requests.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                state.requests.remove(&self.key);
+            }
         }
     }
 }
@@ -191,28 +172,22 @@ mod tests {
         }));
         progress.track_task("router", async {}).await;
         let request = progress.process_request("behavior-a", "request-1");
-        let item = progress.process_item("behavior-a", "request-1");
         let enrollment = progress.enrollment_await("periodic sweep");
-        progress.set_phase("background_tasks.join_next");
         assert_eq!(
             progress.to_string(),
-            "phase=background_tasks.join_next; pending background tasks=[enrollment_reconcile]; \
+            "process_state=<not initialized>; unjoined background tasks=[enrollment_reconcile]; \
              enrollment reconciler awaiting=periodic sweep; \
-             active requests=[behavior-a/request-1 in process_request+process_item]"
+             requests in process_request=[behavior-a/request-1]"
         );
 
-        drop(item);
         drop(enrollment);
-        assert!(progress.to_string().contains(
-            "awaiting=<idle>; active requests=[behavior-a/request-1 in process_request]"
-        ));
         drop(request);
         release.send(()).unwrap();
         pending.await.unwrap();
         assert_eq!(
             progress.to_string(),
-            "phase=background_tasks.join_next; pending background tasks=[]; \
-             enrollment reconciler awaiting=<idle>; active requests=[]"
+            "process_state=<not initialized>; unjoined background tasks=[]; \
+             enrollment reconciler awaiting=<idle>; requests in process_request=[]"
         );
     }
 
