@@ -2616,15 +2616,6 @@ mod tests {
                 graphql,
             },
         ));
-        let projections = Arc::new(ProjectionEngine::new(
-            node.clone(),
-            super::super::projection::BoundModelContext::new(
-                "grok-control-model".into(),
-                "Grok control model".into(),
-                262_144,
-            ),
-        ));
-        let service = AcpService::new(config, turns, projections);
         let runtime_identity: Arc<dyn gents::AgentIdentity> = identity;
         let agent = gents::Gents::from_default_behavior_documents(
             node.clone(),
@@ -2636,6 +2627,20 @@ mod tests {
         )
         .await
         .unwrap();
+        // As in production, task kill reaches the runtime's own background
+        // execution owner; a separate registry cannot prove it owns the process.
+        let projections = Arc::new(
+            ProjectionEngine::new(
+                node.clone(),
+                super::super::projection::BoundModelContext::new(
+                    "grok-control-model".into(),
+                    "Grok control model".into(),
+                    262_144,
+                ),
+            )
+            .with_background_executions(agent.background_execution_registry()),
+        );
+        let service = AcpService::new(config, turns, projections);
         let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
         let runtime = tokio::spawn(agent.run(shutdown_rx));
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
