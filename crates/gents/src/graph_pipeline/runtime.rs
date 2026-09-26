@@ -15,7 +15,10 @@ use crate::config_client::{
 };
 use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 
-use super::{verify_graph_plan_digest, DeliveryConcurrency, DeliveryMode, GraphPlan, PackagePlan};
+use super::{
+    verify_graph_plan_digest, DeliveryConcurrency, DeliveryMode, GraphPlan, PackagePlan,
+    StageTarget,
+};
 
 const TRIGGER_PREFIX: &str = "graph-trigger-";
 
@@ -523,7 +526,7 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
     let mut task_ids = plan
         .nodes
         .iter()
-        .map(|node| node.task_id.clone())
+        .filter_map(|node| node.target.task_id().map(str::to_owned))
         .collect::<Vec<_>>();
     let mut trigger_ids = plan
         .entries
@@ -895,16 +898,11 @@ async fn materialize_in_txn(
     let task_ids = plan
         .nodes
         .iter()
-        .map(|node| node.task_id.clone())
+        .filter_map(|node| node.target.task_id().map(str::to_owned))
         .collect::<Vec<_>>();
     let enabled_tasks = query_enabled_task_ids(txn, owner_did, &task_ids).await?;
-    for planned_node in &plan.nodes {
-        if !enabled_tasks.contains(&planned_node.task_id) {
-            anyhow::bail!(
-                "approved task {:?} is missing or disabled",
-                planned_node.task_id
-            );
-        }
+    if let Some(missing) = task_ids.iter().find(|id| !enabled_tasks.contains(*id)) {
+        anyhow::bail!("approved task {missing:?} is missing or disabled");
     }
 
     let mut trigger_documents = Vec::new();
@@ -914,18 +912,24 @@ async fn materialize_in_txn(
             entry.name, entry.to.node_id, entry.to.port
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
-        trigger_documents.extend(planned_trigger_documents(
-            owner_did,
-            &id,
-            &entry.target_task_id,
-            &entry.collection,
-            &entry.correlation_field,
-            &None,
-            &DeliveryConcurrency::Parallel,
-            None,
-            planned_workspace_authority(plan, &entry.to.node_id),
-            now,
-        )?);
+        trigger_documents.extend(
+            planned_route_documents(
+                txn,
+                plan,
+                owner_did,
+                &id,
+                &entry.to.node_id,
+                &entry.target,
+                &entry.collection,
+                &entry.correlation_field,
+                &None,
+                &DeliveryConcurrency::Parallel,
+                None,
+                planned_workspace_authority(plan, &entry.to.node_id),
+                now,
+            )
+            .await?,
+        );
     }
     for (index, edge) in plan.edges.iter().enumerate() {
         let route = format!(
@@ -933,18 +937,24 @@ async fn materialize_in_txn(
             edge.from.node_id, edge.from.port, edge.to.node_id, edge.to.port,
         );
         let id = graph_trigger_id(&plan.digest, &route)?;
-        trigger_documents.extend(planned_trigger_documents(
-            owner_did,
-            &id,
-            &edge.target_task_id,
-            &edge.source_collection,
-            &edge.correlation_field,
-            &edge.delivery,
-            &edge.concurrency,
-            edge.predicate.as_deref(),
-            planned_workspace_authority(plan, &edge.to.node_id),
-            now,
-        )?);
+        trigger_documents.extend(
+            planned_route_documents(
+                txn,
+                plan,
+                owner_did,
+                &id,
+                &edge.to.node_id,
+                &edge.target,
+                &edge.source_collection,
+                &edge.correlation_field,
+                &edge.delivery,
+                &edge.concurrency,
+                edge.predicate.as_deref(),
+                planned_workspace_authority(plan, &edge.to.node_id),
+                now,
+            )
+            .await?,
+        );
     }
 
     apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(trigger_documents)?).await?;
@@ -973,10 +983,17 @@ async fn materialize_in_txn(
     materialization_receipt(plan)
 }
 
-fn planned_trigger_documents(
+/// The documents that deliver a route's source documents to its target node:
+/// an event source, plus a trigger that starts the Task for an agent node, or
+/// a callback that runs the plugin for a plugin node.
+#[allow(clippy::too_many_arguments)]
+async fn planned_route_documents(
+    txn: &ConfigApplyTxn<'_>,
+    plan: &GraphPlan,
     owner_did: &str,
     id: &str,
-    task_id: &str,
+    target_node: &str,
+    target: &StageTarget,
     source_collection: &str,
     correlation_field: &str,
     delivery: &DeliveryMode,
@@ -993,23 +1010,76 @@ fn planned_trigger_documents(
         "group": delivery, "workspace_authority": workspace_authority,
         "created_at": now, "updated_at": now,
     });
-    let trigger = json!({
-        "agent_did": owner_did, "trigger_id": id, "task_id": task_id,
-        "source": {"kind": "event", "event_source_id": id},
-        "enabled": true, "concurrency": concurrency,
-        "created_at": now, "updated_at": now,
-    });
-    Ok([
-        (crate::Collection::EventSource, source),
-        (crate::Collection::Trigger, trigger),
-    ]
-    .into_iter()
-    .map(|(collection, value)| DesiredStateApplyDocument {
-        collection,
-        add: value.clone(),
-        update: value,
-    })
-    .collect())
+    let delivered = match target {
+        StageTarget::Task { task_id } => vec![(
+            crate::Collection::Trigger,
+            json!({
+                "agent_did": owner_did, "trigger_id": id, "task_id": task_id,
+                "source": {"kind": "event", "event_source_id": id},
+                "enabled": true, "concurrency": concurrency,
+                "created_at": now, "updated_at": now,
+            }),
+        )],
+        StageTarget::Plugin {
+            plugin,
+            digest,
+            max_attempts,
+        } => {
+            let digest = digest
+                .as_deref()
+                .with_context(|| format!("plugin {plugin} is not pinned to an artifact digest"))?;
+            let outputs = &plan
+                .nodes
+                .iter()
+                .find(|node| node.node_id == target_node)
+                .with_context(|| format!("graph plan has no node {target_node:?}"))?
+                .output_ports;
+            let introspected = txn
+                .execute(&crate::trigger_engine::event_source::source_fields_query(
+                    source_collection,
+                )?)
+                .await?;
+            // The plugin sees the source document's own fields, never a
+            // secret-bearing one: the binding would refuse those anyway.
+            let input_fields = crate::trigger_engine::event_source::source_fields_from(
+                introspected.get("data"),
+                source_collection,
+            )?
+            .into_iter()
+            .filter(|field| !crate::toolset::is_secret_env_name(field))
+            .collect::<Vec<_>>();
+            // DefraDB takes null, never [], for an empty list.
+            let input_fields = (!input_fields.is_empty()).then_some(input_fields);
+            vec![
+                (
+                    crate::Collection::Callback,
+                    json!({
+                        "agent_did": owner_did, "callback_id": id, "enabled": true,
+                        "handler": {
+                            "kind": "plugin", "plugin": plugin, "digest": digest,
+                            "correlation_field": correlation_field, "outputs": outputs,
+                            "max_attempts": max_attempts,
+                        },
+                    }),
+                ),
+                (
+                    crate::Collection::CallbackBinding,
+                    json!({
+                        "agent_did": owner_did, "binding_id": id, "event_source_id": id,
+                        "callback_id": id, "input_fields": input_fields, "enabled": true,
+                    }),
+                ),
+            ]
+        }
+    };
+    Ok(std::iter::once((crate::Collection::EventSource, source))
+        .chain(delivered)
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect())
 }
 
 /// Compare-and-swap the one mutable pointer that makes a complete immutable
@@ -1670,7 +1740,9 @@ mod tests {
                 workspace_authority: None,
                 capability_id: "worker".to_owned(),
                 revision: "v1".to_owned(),
-                task_id: format!("worker-{configuration}"),
+                target: crate::graph_pipeline::StageTarget::Task {
+                    task_id: format!("worker-{configuration}"),
+                },
                 input_ports: vec![input],
                 output_ports: vec![output],
                 allowed_callers: vec![graph_test_owner().to_owned()],
@@ -1776,7 +1848,9 @@ mod tests {
                     workspace_authority: None,
                     capability_id: "producer".to_owned(),
                     revision: "v1".to_owned(),
-                    task_id: "producer-task".to_owned(),
+                    target: crate::graph_pipeline::StageTarget::Task {
+                        task_id: "producer-task".to_owned(),
+                    },
                     input_ports: vec![input],
                     output_ports: vec![output],
                     allowed_callers: vec![graph_test_owner().to_owned()],
@@ -1787,7 +1861,9 @@ mod tests {
                     workspace_authority: None,
                     capability_id: "consumer".to_owned(),
                     revision: "v1".to_owned(),
-                    task_id: "consumer-task".to_owned(),
+                    target: crate::graph_pipeline::StageTarget::Task {
+                        task_id: "consumer-task".to_owned(),
+                    },
                     input_ports: vec![grouped_input],
                     output_ports: vec![],
                     allowed_callers: vec![graph_test_owner().to_owned()],
@@ -1861,7 +1937,9 @@ mod tests {
                 workspace_authority: None,
                 capability_id: "worker".to_owned(),
                 revision: "v1".to_owned(),
-                task_id: "worker-result".to_owned(),
+                target: crate::graph_pipeline::StageTarget::Task {
+                    task_id: "worker-result".to_owned(),
+                },
                 input_ports: vec![input],
                 output_ports: vec![output],
                 allowed_callers: vec![graph_test_owner().to_owned()],
@@ -1913,7 +1991,7 @@ mod tests {
             &plan
                 .nodes
                 .iter()
-                .map(|node| node.task_id.as_str())
+                .filter_map(|node| node.target.task_id())
                 .collect::<Vec<_>>(),
         )
         .await;

@@ -75,6 +75,7 @@ structure Surface where
   queryTools : EndpointScope (String × String) (Finset String)
   ethQueryMethods : EndpointScope String Unit
   ethCallTools : EndpointScope ToolId Unit
+  pluginTools : EndpointScope ToolId Unit
 
 abbrev Avail := Surface
 

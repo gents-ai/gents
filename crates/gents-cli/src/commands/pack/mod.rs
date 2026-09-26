@@ -1,10 +1,19 @@
 //! One package-facing CLI; install writes stay with their existing owners.
+pub(crate) mod account;
 mod build;
+mod check;
 mod cli_process;
+mod edit;
+mod import;
+mod inspect;
+mod local;
 pub(crate) mod registry;
+mod scaffold;
 mod scenario;
 mod secscan;
 mod server;
+mod test;
+pub(crate) mod update;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
@@ -46,34 +55,34 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
             })).collect();
             crate::print_json(&json!({"packs":entries}))
         }
-        PackCommand::Show(args) => {
-            let pack = resolve_pack(&args.package)?;
-            let dependency_origins = pack
-                .manifest
-                .metadata
-                .dependencies
-                .iter()
-                .map(|dependency| {
-                    Ok(json!({
-                        "pack": dependency,
-                        "origin_tag": gents::pack::pack_origin_tag(dependency)?,
-                    }))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            crate::print_json(&json!({
-                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest.name)?,
-                "dependency_origins": dependency_origins,
-                "manifest": pack.manifest,
-                "digest": pack.digest,
-            }))
-        }
+        PackCommand::Show(args) => inspect::show(args).await,
+        PackCommand::Verify(args) => inspect::verify(args),
+        PackCommand::New(args) => scaffold::new(args),
+        PackCommand::Init(args) => scaffold::init(args),
+        PackCommand::Import(args) => import::import(args).await,
+        PackCommand::Add(args) => edit::add(args),
+        PackCommand::RemovePart(args) => edit::remove_part(args),
+        PackCommand::Fmt(args) => edit::fmt(args),
+        PackCommand::Diff(args) => inspect::diff(args).await,
+        PackCommand::Test(args) => test::test(args).await,
+        PackCommand::Check(args) => check::check(args).await,
+        PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,
+        PackCommand::Remove(args) => remove(args).await,
+        PackCommand::Outdated(args) => update::outdated(args).await,
+        PackCommand::Update(args) => update::update(args).await,
         PackCommand::Prune(args) => prune(args),
-        PackCommand::Run(args) => scenario::run(args).await,
-        PackCommand::Init(args) => scenario::init_pack(args).await,
-        PackCommand::Seed(args) => scenario::seed(args).await,
+        PackCommand::Scenario(PackScenarioCommand::Run(args)) => scenario::run(args).await,
+        PackCommand::Scenario(PackScenarioCommand::Init(args)) => scenario::init_pack(args).await,
+        PackCommand::Scenario(PackScenarioCommand::Seed(args)) => scenario::seed(args).await,
         PackCommand::Build(args) => build::dispatch(args),
         PackCommand::Search(args) => registry::search(args).await,
+        PackCommand::Info(args) => account::info(args).await,
+        PackCommand::Login(args) => account::login(args).await,
+        PackCommand::Logout(args) => account::logout(args),
+        PackCommand::Whoami(args) => account::whoami(args).await,
+        PackCommand::Yank(args) => account::yank(args).await,
+        PackCommand::Owner(args) => account::owner(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
         PackCommand::Fetch(args) => registry::fetch(args).await,
     }
@@ -86,6 +95,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
 enum PackSource {
     Bundled(ResolvedPack),
     Registry(registry::RegistryPack),
+    /// Named by digest or path, and opened from the home's pack store.
+    Stored(gents::pack_archive::PackArchive),
 }
 
 impl PackSource {
@@ -93,6 +104,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => &pack.manifest,
             Self::Registry(pack) => pack.archive.manifest(),
+            Self::Stored(pack) => pack.manifest(),
         }
     }
 
@@ -102,6 +114,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => &pack.digest,
             Self::Registry(pack) => &pack.digest,
+            Self::Stored(pack) => pack.digest(),
         }
     }
 
@@ -109,6 +122,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => pack.asset(path),
             Self::Registry(pack) => pack.archive.asset(path),
+            Self::Stored(pack) => pack.asset(path),
         }
     }
 
@@ -116,6 +130,7 @@ impl PackSource {
         match self {
             Self::Bundled(_) => "bundled",
             Self::Registry(_) => "registry",
+            Self::Stored(_) => "local",
         }
     }
 
@@ -124,6 +139,7 @@ impl PackSource {
     fn describe(&self) -> String {
         match self {
             Self::Bundled(_) => self.label().to_owned(),
+            Self::Stored(pack) => format!("{} ({})", self.label(), pack.digest()),
             Self::Registry(pack) => format!(
                 "{} ({}/{}@{})",
                 self.label(),
@@ -142,19 +158,26 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
     gents::pack_registry::split_pack_coordinate(name)
 }
 
-/// Resolves a pack compiled into this binary first; only when that fails
-/// does it fall back to the registry, downloading, verifying, and caching
-/// the result. Both failures are reported together so a real problem with
-/// the bundled lookup is never masked by a registry error.
-async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Result<PackSource> {
+/// Resolves a pack named by digest or path from the home's store; otherwise
+/// a pack compiled into this binary first, and only when that fails the
+/// registry, downloading, verifying, and storing the result. Both bundled and
+/// registry failures are reported together so a real problem with the
+/// bundled lookup is never masked by a registry error.
+async fn resolve_pack_source(
+    name: &str,
+    registry_override: Option<&str>,
+    home: &std::path::Path,
+) -> Result<PackSource> {
+    if let Some(local) = local::classify(name) {
+        return local::open(&local, home).map(PackSource::Stored);
+    }
     match resolve_pack(name) {
         Ok(pack) => Ok(PackSource::Bundled(pack)),
         Err(bundled_error) => {
             let (namespace, pack_name) = split_namespace(name);
             let base_url = registry::resolve_registry_url(registry_override);
             let client = registry::RegistryClient::new(base_url.clone());
-            let home = crate::home_state::resolve_home_dir(None);
-            let fetched = registry::fetch_pack(&client, Some(&home), namespace, pack_name)
+            let fetched = registry::fetch_pack(&client, Some(home), namespace, pack_name, None)
                 .await
                 .map_err(|registry_error| {
                     anyhow::anyhow!(
@@ -362,7 +385,7 @@ pub(crate) async fn resolve_subject_pack(
             _lease: None,
         });
     }
-    let pack = resolve_pack_source(spec, registry).await?;
+    let pack = resolve_pack_source(spec, registry, home).await?;
     let manifest = pack.manifest().clone();
     if !directory && matches!(pack, PackSource::Bundled(_)) {
         return Ok(SubjectPack {
@@ -441,8 +464,168 @@ fn prune(args: PackPruneArgs) -> Result<()> {
     }))
 }
 
-async fn install(args: PackInstallArgs) -> Result<()> {
-    let pack = resolve_pack_source(&args.package, args.registry.as_deref()).await?;
+/// Admits and stores every plugin a pack ships in `home`'s plugin store, the
+/// one `gents plugin install` uses, so a plugin that arrived inside a pack
+/// runs by name like one installed alone. `pack_digest` is the pack's own
+/// content digest, recorded on each plugin's record for operator visibility
+/// (see [`super::plugin::store::InstalledPlugin::owner_pack_digest`]).
+pub(crate) fn install_pack_plugins<'a>(
+    home: &std::path::Path,
+    manifest: &PackManifest,
+    pack_digest: &str,
+    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    consent: bool,
+) -> Result<Vec<super::plugin::store::InstalledPlugin>> {
+    let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            let instructions = plugin
+                .instructions
+                .as_deref()
+                .map(|path| gents::pack::tool_instructions(&plugin.name, asset(path)?))
+                .transpose()?;
+            super::plugin::install_from_pack(
+                home,
+                &manifest.metadata.namespace,
+                &pack_coordinate,
+                &manifest.version,
+                pack_digest,
+                plugin,
+                asset(&plugin.artifact)?,
+                instructions,
+                consent,
+            )
+        })
+        .collect()
+}
+
+/// Every plugin `manifest` would install and its plugin-store record before
+/// any write, so a failure later in the same pack install can restore
+/// exactly what was there (or remove what was not) instead of leaving an
+/// orphaned plugin record behind. `None` means the name was not installed.
+pub(crate) fn snapshot_pack_plugin_records(
+    home: &std::path::Path,
+    manifest: &PackManifest,
+) -> Vec<(
+    String,
+    String,
+    Option<super::plugin::store::InstalledPlugin>,
+)> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            let previous =
+                super::plugin::store::read_record(home, &manifest.metadata.namespace, &plugin.name)
+                    .ok();
+            (
+                manifest.metadata.namespace.clone(),
+                plugin.name.clone(),
+                previous,
+            )
+        })
+        .collect()
+}
+
+/// Restores each `(namespace, name)` plugin record to what [`snapshot_pack_plugin_records`]
+/// observed before the install that must now be undone: the previous record is
+/// put back, or removed if there was none. Best-effort and never fails the
+/// caller: a restore that cannot complete is logged loudly rather than
+/// masking the original error that triggered the rollback.
+pub(crate) fn rollback_pack_plugin_records(
+    home: &std::path::Path,
+    previous: &[(
+        String,
+        String,
+        Option<super::plugin::store::InstalledPlugin>,
+    )],
+) {
+    for (namespace, name, record) in previous {
+        let result = match record {
+            Some(record) => super::plugin::store::write_record(home, record),
+            None => match super::plugin::store::read_record(home, namespace, name) {
+                Ok(_) => super::plugin::store::remove_record(home, namespace, name).map(|_| ()),
+                // Never written by this install (it failed before reaching
+                // this plugin, or this plugin failed itself): nothing to undo.
+                Err(_) => Ok(()),
+            },
+        };
+        if let Err(error) = result {
+            tracing::error!(
+                namespace,
+                name,
+                error = %error,
+                "failed to roll back a plugin record after a failed pack install",
+            );
+        }
+    }
+}
+
+/// The node and the owner a pack command acts for.
+pub(crate) async fn resolve_scope_owner(
+    scope: &GraphScopeArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
+    let (access, _) =
+        crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
+    let owner = super::config::binding::resolve_target_agent_did(
+        scope.agent_did.as_deref(),
+        if scope.agent_did.is_some() {
+            None
+        } else if scope.graphql.is_some() {
+            Some(ManifestAgentDidBindingArg::Live)
+        } else {
+            Some(ManifestAgentDidBindingArg::Home)
+        },
+        scope.home.as_deref(),
+        scope.graphql.as_deref(),
+        Some(&access),
+    )
+    .await?;
+    Ok((access, owner))
+}
+
+/// `gents pack remove`: deletes what the pack's install created, keeping
+/// documents it adopted, and forgets the install.
+pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
+    let (namespace, name) = split_namespace(&args.package);
+    let (access, owner) = resolve_scope_owner(&args.scope).await?;
+    let report = gents::pack::remove_pack(
+        &access,
+        &owner,
+        &format!("{namespace}/{name}"),
+        args.drift.policy(),
+    )
+    .await?;
+    if !report.plugins.is_empty() {
+        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        let pack_coordinate = format!("{namespace}/{name}");
+        for plugin in &report.plugins {
+            // A registry or local pack install may have replaced the name
+            // with its own plugin since; only a record this pack's own
+            // coordinate still owns is removed.
+            if super::plugin::store::owns_plugin_record(
+                &home,
+                namespace,
+                &plugin.name,
+                &pack_coordinate,
+                &plugin.digest,
+            ) {
+                super::plugin::store::remove_record(&home, namespace, &plugin.name)?;
+            }
+        }
+    }
+    crate::print_json(
+        &json!({ "pack": format!("{namespace}/{name}"), "owner": owner, "removed": report }),
+    )
+}
+
+pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
+    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
     let supported_outputs: &[crate::cli::output_format::OutputFormat] =
         if pack.manifest().metadata.kind == PackKind::Graph {
@@ -628,6 +811,8 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                         output: args.output,
                         force_rebind_concrete_did: false,
                         registry: args.registry.clone(),
+                        drift: args.drift,
+                        grant_authority: args.grant_authority,
                     },
                     false,
                 )
@@ -636,7 +821,59 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
                 .await
                 .context("pack install schemas")?;
-            let apply = gents::pack::install_pack_documents(&access, &desired).await?;
+            let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            let (plugins, plugin_rollback) = if pack.manifest().metadata.plugins.is_empty() {
+                (Vec::new(), Vec::new())
+            } else {
+                // A plugin runs on the host of the node that calls it; a
+                // remote node's host is not reachable from here.
+                anyhow::ensure!(
+                    args.scope.graphql.is_none(),
+                    "{} ships plugins, which install on the node's own host; run the install \
+                     there with --home",
+                    pack.manifest().name
+                );
+                let rollback = snapshot_pack_plugin_records(&plugin_home, pack.manifest());
+                let installed = install_pack_plugins(
+                    &plugin_home,
+                    pack.manifest(),
+                    pack.digest(),
+                    |path| pack.asset(path),
+                    args.grant_authority,
+                )
+                .inspect_err(|_| rollback_pack_plugin_records(&plugin_home, &rollback))?;
+                (installed, rollback)
+            };
+            let identity = gents::pack::PackIdentity::new(
+                pack.manifest(),
+                pack.digest(),
+                plugins
+                    .iter()
+                    .map(|plugin| gents::pack::InstalledPackPlugin {
+                        name: plugin.name.clone(),
+                        digest: plugin.digest.clone(),
+                    })
+                    .collect(),
+            );
+            // From here, a document-transaction failure must not leave the
+            // plugins installed above orphaned: the operator sees this pack
+            // install as one atomic step, so its filesystem side effect is
+            // undone along with the write that never landed.
+            let apply = match gents::pack::install_pack_documents(
+                &access,
+                &owner,
+                &identity,
+                &desired,
+                args.drift.policy(),
+            )
+            .await
+            {
+                Ok(apply) => apply,
+                Err(error) => {
+                    rollback_pack_plugin_records(&plugin_home, &plugin_rollback);
+                    return Err(error);
+                }
+            };
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "source": pack.label(),
@@ -683,17 +920,13 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             // a plugin that arrived bundled in a pack is just as runnable
             // by name (`gents plugin run <name>`) as one installed on its
             // own.
-            let mut installed_plugins = Vec::new();
-            for plugin in &pack.manifest().metadata.plugins {
-                let artifact_bytes = pack.asset(&plugin.artifact)?;
-                installed_plugins.push(super::plugin::install_from_pack(
-                    &home,
-                    &pack.manifest().metadata.namespace,
-                    &pack.manifest().version,
-                    plugin,
-                    artifact_bytes,
-                )?);
-            }
+            let installed_plugins = install_pack_plugins(
+                &home,
+                pack.manifest(),
+                pack.digest(),
+                |path| pack.asset(path),
+                args.grant_authority,
+            )?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),
@@ -830,7 +1063,18 @@ mod tests {
         let exclusive = cache_lock(root.parent().unwrap()).unwrap();
         assert!(exclusive.try_lock().is_err());
         drop(lease);
-        exclusive.try_lock().unwrap();
+        // A process another test forks inherits every open descriptor until it
+        // execs, so the shared lock can outlive `drop` for that window.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut backoff = std::time::Duration::from_millis(1);
+        while let Err(error) = exclusive.try_lock() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the exclusive lock stayed blocked after the lease was dropped: {error:?}"
+            );
+            std::thread::sleep(backoff);
+            backoff = (backoff * 2).min(std::time::Duration::from_millis(100));
+        }
     }
 
     #[test]
@@ -902,9 +1146,13 @@ mod tests {
         // An unroutable registry: if resolution incorrectly fell through to
         // it for a bundled pack, this fails fast instead of hanging on a
         // real network call or silently succeeding some other way.
-        let source = resolve_pack_source("mailbox", Some("http://127.0.0.1:1"))
-            .await
-            .expect("a bundled pack must resolve without touching the registry");
+        let source = resolve_pack_source(
+            "mailbox",
+            Some("http://127.0.0.1:1"),
+            tempfile::tempdir().unwrap().path(),
+        )
+        .await
+        .expect("a bundled pack must resolve without touching the registry");
         assert!(matches!(source, PackSource::Bundled(_)));
         assert_eq!(source.label(), "bundled");
     }
@@ -913,8 +1161,12 @@ mod tests {
     async fn resolution_falls_back_to_the_registry_and_reports_both_failures() {
         // `ResolvedPack`/`PackSource` are not `Debug`, so this checks the
         // `Err` case by hand rather than via `expect_err`.
-        let result =
-            resolve_pack_source("definitely_not_a_bundled_pack", Some("http://127.0.0.1:1")).await;
+        let result = resolve_pack_source(
+            "definitely_not_a_bundled_pack",
+            Some("http://127.0.0.1:1"),
+            tempfile::tempdir().unwrap().path(),
+        )
+        .await;
         let Err(error) = result else {
             panic!("neither bundled nor registry has this pack");
         };
@@ -949,5 +1201,92 @@ mod tests {
         ] {
             assert!(parse_inference_slot_bindings(&invalid).is_err());
         }
+    }
+
+    /// A `plugins`-kind manifest with one plugin, named after `pack_name`
+    /// and shipping under `plugin_name`.
+    fn plugin_manifest(
+        namespace: &str,
+        pack_name: &str,
+        plugin_name: &str,
+        version: &str,
+    ) -> PackManifest {
+        serde_json::from_value(json!({
+            "manifest_version": 1, "name": pack_name, "namespace": namespace, "version": version,
+            "description": "test plugin pack", "authors": [namespace], "tags": [], "kind": "plugins",
+            "assets": ["README.md", format!("plugins/{plugin_name}.afb")],
+            "plugins": [{
+                "name": plugin_name, "description": "test", "artifact": format!("plugins/{plugin_name}.afb"),
+                "language": "rust", "input_schema": {"type": "object"},
+            }],
+        }))
+        .unwrap()
+    }
+
+    /// #1721 item 1: a step after plugin install fails (here, standing in
+    /// for `install_pack_documents` failing) must leave the plugin store
+    /// exactly as it was before this install attempt, not orphan whatever
+    /// it just wrote.
+    #[test]
+    fn a_failure_after_plugin_install_rolls_back_to_exactly_the_previous_records() {
+        let home = tempfile::tempdir().unwrap();
+        let echo_v1 = super::super::plugin::testing::build_plugin_afb(
+            "echo",
+            b"fn main() { println!(\"{{}}\"); }",
+        );
+        let asset_v1 = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/echo.afb")
+                .then_some(echo_v1.as_slice())
+                .context("unexpected asset")
+        };
+
+        // A prior install this pack coordinate already owns.
+        let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
+        install_pack_plugins(home.path(), &v1, "sha256:v1", asset_v1, false).unwrap();
+        let before = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
+
+        // An update whose install fails after the plugin step must roll all
+        // the way back to `before`, exactly as `install()` does when
+        // `install_pack_documents` errors.
+        let echo_v2 = super::super::plugin::testing::build_plugin_afb(
+            "echo",
+            b"fn main() { println!(\"{{\\\"v\\\":2}}\"); }",
+        );
+        let asset_v2 = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/echo.afb")
+                .then_some(echo_v2.as_slice())
+                .context("unexpected asset")
+        };
+        let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
+        let rollback = snapshot_pack_plugin_records(home.path(), &v2);
+        install_pack_plugins(home.path(), &v2, "sha256:v2", asset_v2, false).unwrap();
+        let mid = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
+        assert_ne!(
+            mid, before,
+            "the reinstall must actually have changed the record"
+        );
+        rollback_pack_plugin_records(home.path(), &rollback);
+        assert_eq!(
+            super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap(),
+            before
+        );
+
+        // A pack installing a name for the first time leaves nothing behind
+        // when the same kind of failure happens: rollback removes it.
+        let new_plugin = super::super::plugin::testing::build_plugin_afb(
+            "brandnew",
+            b"fn main() { println!(\"{{}}\"); }",
+        );
+        let asset_new = |path: &str| -> Result<&[u8]> {
+            (path == "plugins/brandnew.afb")
+                .then_some(new_plugin.as_slice())
+                .context("unexpected asset")
+        };
+        let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
+        let rollback = snapshot_pack_plugin_records(home.path(), &first_time);
+        install_pack_plugins(home.path(), &first_time, "sha256:new", asset_new, false).unwrap();
+        assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_ok());
+        rollback_pack_plugin_records(home.path(), &rollback);
+        assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
     }
 }

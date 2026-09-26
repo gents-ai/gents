@@ -462,6 +462,34 @@ pub struct IntegrationTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub eth_tool_ids: Option<Vec<String>>,
+    /// Installed plugins offered to the model as tools, each named after its
+    /// plugin. Empty/absent = no plugin tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub plugins: Option<Vec<PluginToolRef>>,
+}
+
+/// One installed plugin offered to the model as a tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct PluginToolRef {
+    /// `namespace/name` of the installed plugin; the tool is called `name`.
+    pub plugin: String,
+    /// `sha256:<hex>` of the artifact to run. When the installed plugin is a
+    /// different artifact, the tool is unavailable until the pin is updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub digest: Option<String>,
+}
+
+impl PluginToolRef {
+    /// The name the model calls this tool by.
+    pub fn tool_name(&self) -> &str {
+        self.plugin
+            .split_once('/')
+            .map_or(self.plugin.as_str(), |(_, name)| name)
+    }
 }
 
 /// Language-server settings embedded in `IntegrationTools`.
@@ -776,6 +804,26 @@ impl Tools {
             );
         }
         if let Some(integrations) = &self.integrations {
+            let mut plugin_tool_names = std::collections::BTreeSet::new();
+            for plugin in integrations.plugins.iter().flatten() {
+                if let Err(error) = crate::plugin::store::parse_coordinate(&plugin.plugin) {
+                    errors.push(format!("integrations.plugins: {error}"));
+                } else if !plugin_tool_names.insert(plugin.tool_name()) {
+                    errors.push(format!(
+                        "integrations.plugins names two plugins called {:?}; a tool name must be unique",
+                        plugin.tool_name()
+                    ));
+                }
+                if let Some(digest) = &plugin.digest {
+                    let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+                    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                        errors.push(format!(
+                            "integrations.plugins: {:?} pins {digest:?}, which is not sha256:<64 hex>",
+                            plugin.plugin
+                        ));
+                    }
+                }
+            }
             names(
                 &mut errors,
                 "integrations.eth_tool_ids",

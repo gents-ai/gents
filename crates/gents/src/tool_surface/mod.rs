@@ -77,6 +77,7 @@ pub struct ToolSurface {
     pub(super) query_tools: Vec<QueryToolDecl>,
     pub(super) eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     pub(super) eth_calls: Vec<crate::eth::ResolvedEthCall>,
+    pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
     pub(super) enable_skills: bool,
     pub(super) self_config: SelfConfigToolConfig,
     pub(super) lsp: Option<crate::toolset::lsp::LspToolConfig>,
@@ -260,6 +261,11 @@ impl ToolSurface {
         }
         names.extend(self.eth_queries.iter().map(|query| query.tool_name()));
         names.extend(self.eth_calls.iter().map(|call| call.tool_name.clone()));
+        names.extend(
+            self.plugin_tools
+                .iter()
+                .map(|plugin| plugin.tool_name().to_string()),
+        );
         build::dedupe_strings(names)
     }
 
@@ -407,6 +413,16 @@ impl ToolSurface {
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
+        for plugin in &self.plugin_tools {
+            let tool = crate::plugin::tool::PluginTool::resolve(runtime.plugins.clone(), plugin)?;
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "plugin tool `{}` has the same name as another tool; rename one of them",
+                    tool.name()
+                );
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
         Ok(tools)
     }
 }
@@ -444,6 +460,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("write_tools", &self.write_tools)
             .field("query_tools", &self.query_tools)
             .field("eth_queries", &self.eth_queries)
+            .field("plugin_tools", &self.plugin_tools)
             .field("enable_skills", &self.enable_skills)
             .field("self_config", &self.self_config)
             .field(

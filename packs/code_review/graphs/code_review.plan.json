@@ -1,0 +1,194 @@
+{
+  "compiler_version": "graph-intent-v4",
+  "graph_id": "code-review",
+  "digest": "sha256:3f56f92ed645e0ceb1bf650784f3d9a6f31f7ecd56afcffabae906121a10b248",
+  "nodes": [
+    {
+      "node_id": "recon",
+      "capability_id": "review-recon",
+      "capability_revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      }
+    },
+    {
+      "node_id": "scan",
+      "capability_id": "review-scan",
+      "capability_revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      }
+    },
+    {
+      "node_id": "triage",
+      "capability_id": "review-triage",
+      "capability_revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      }
+    },
+    {
+      "node_id": "verify",
+      "capability_id": "review-verify",
+      "capability_revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": {
+        "node_id": "recon",
+        "port": "areas"
+      },
+      "to": {
+        "node_id": "scan",
+        "port": "area"
+      },
+      "source_collection": "CodeReviewArea",
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      },
+      "correlation_field": "run_id",
+      "delivery": null,
+      "concurrency": "parallel"
+    },
+    {
+      "from": {
+        "node_id": "scan",
+        "port": "scan_results"
+      },
+      "to": {
+        "node_id": "verify",
+        "port": "scan_results"
+      },
+      "source_collection": "CodeReviewScanResult",
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      },
+      "correlation_field": "run_id",
+      "delivery": {
+        "expected_count": {
+          "source_field": "expected_total"
+        }
+      },
+      "concurrency": "serial"
+    },
+    {
+      "from": {
+        "node_id": "verify",
+        "port": "summary"
+      },
+      "to": {
+        "node_id": "triage",
+        "port": "summary"
+      },
+      "source_collection": "CodeReviewVerificationSummary",
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      },
+      "correlation_field": "run_id",
+      "delivery": null,
+      "concurrency": "serial"
+    }
+  ],
+  "entries": [
+    {
+      "name": "review",
+      "collection": "CodeReviewJob",
+      "schema": "CodeReviewJob/v1",
+      "input_contract": "review-input/v1",
+      "to": {
+        "node_id": "recon",
+        "port": "job"
+      },
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      },
+      "correlation_field": "run_id"
+    }
+  ],
+  "results": [
+    {
+      "name": "findings",
+      "from": {
+        "node_id": "verify",
+        "port": "findings"
+      },
+      "collection": "CodeReviewFinding",
+      "schema": "CodeReviewFinding/v1",
+      "correlation_field": "run_id",
+      "cardinality": {
+        "kind": "at_most",
+        "count": 128
+      },
+      "terminal": true
+    },
+    {
+      "name": "report",
+      "from": {
+        "node_id": "triage",
+        "port": "report"
+      },
+      "collection": "CodeReviewTriageReport",
+      "schema": "CodeReviewTriageReport/v1",
+      "correlation_field": "run_id",
+      "cardinality": {
+        "kind": "exactly",
+        "count": 1
+      },
+      "terminal": true
+    }
+  ],
+  "capability_manifest": [
+    {
+      "capability_id": "review-recon",
+      "revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      }
+    },
+    {
+      "capability_id": "review-scan",
+      "revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      }
+    },
+    {
+      "capability_id": "review-triage",
+      "revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      }
+    },
+    {
+      "capability_id": "review-verify",
+      "revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      }
+    }
+  ],
+  "limits": {
+    "max_nodes": 8,
+    "max_edges": 16,
+    "max_depth": 8,
+    "max_fan_out": 16,
+    "max_total_invocations": 128,
+    "max_runtime_secs": 7200
+  }
+}

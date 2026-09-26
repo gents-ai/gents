@@ -59,6 +59,8 @@ structure SurfaceView where
   ethQueryMethodsKeys : List String
   ethCallToolsKind : String
   ethCallToolsKeys : List String
+  pluginToolsKind : String
+  pluginToolsKeys : List String
   deriving Repr
 
 structure Case where
@@ -239,7 +241,8 @@ def surface (file : FileCap) (bash : BashPolicy)
   , writeTools := write
   , queryTools := .all
   , ethQueryMethods := .none
-  , ethCallTools := .none }
+  , ethCallTools := .none
+  , pluginTools := .none }
 
 def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : SurfaceView :=
   { fileRank := s.file.rank
@@ -293,7 +296,9 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , ethQueryMethodsKind := scopeKind s.ethQueryMethods
   , ethQueryMethodsKeys := ethMethodKeys s.ethQueryMethods
   , ethCallToolsKind := scopeKind s.ethCallTools
-  , ethCallToolsKeys := toolScopeKeys s.ethCallTools }
+  , ethCallToolsKeys := toolScopeKeys s.ethCallTools
+  , pluginToolsKind := scopeKind s.pluginTools
+  , pluginToolsKeys := toolScopeKeys s.pluginTools }
 
 def probeWrite : String × String := ("wt", "coll")
 
@@ -459,6 +464,15 @@ def ceilingEthB : Surface :=
 def runtimeEthAll : Surface :=
   { wideOpen with ethQueryMethods := .all, ethCallTools := .all }
 
+def behaviorPluginsAX : Surface :=
+  { wideOpen with pluginTools := toolsOnly ["svc-a", "svc-x"] }
+
+def ceilingPluginsXY : Surface :=
+  { wideOpen with pluginTools := toolsOnly ["svc-x", "svc-y"] }
+
+def runtimePluginsAll : Surface :=
+  { wideOpen with pluginTools := .all }
+
 def behaviorGoalOnly : Surface :=
   { secureMinimal with goalTools := true, goalCreate := false }
 
@@ -506,6 +520,10 @@ def cases : List Case :=
       behaviorQueryA writeAllNoQuery wideOpen "svc-a" probeWrite
   , mkCase "eth_query_methods_intersect"
       behaviorEthA ceilingEthB runtimeEthAll "svc-a" probeWrite
+  , mkCase "plugin_tools_intersect"
+      behaviorPluginsAX ceilingPluginsXY runtimePluginsAll "svc-a" probeWrite
+  , mkCase "plugin_tools_absent_from_runtime_are_denied"
+      behaviorPluginsAX wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_tools_explicit"
       behaviorGoalOnly wideOpen wideOpen "svc-a" probeWrite
   , mkCase "goal_create_granted_when_all_layers_allow"

@@ -11,7 +11,8 @@ pub(crate) use catalog::{
 pub(crate) use install::{install_loaded_graph_package, prepare_loaded_graph_package_install};
 
 pub use catalog::{
-    graph_package_catalog, load_bundled_graph_package, load_resolved_graph_package,
+    check_graph_pack, compile_pack_graphs, graph_package_catalog, graph_plan_path,
+    load_bundled_graph_package, load_resolved_graph_package, verify_shipped_plan,
     GraphPackageCatalogEntry, GraphPackageManifest, LoadedGraphPackage, PackageCapabilityTemplate,
     PackageExternalDependency,
 };

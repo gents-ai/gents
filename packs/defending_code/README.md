@@ -120,7 +120,7 @@ execution boundary.
 
 ```bash
 GENTS_DEFENDING_ROOT=/path/to/repository \
-  gents pack run defending_code
+  gents pack scenario run defending_code
 ```
 
 From this repository, the Make target exposes the same controls:

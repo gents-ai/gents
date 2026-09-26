@@ -1,21 +1,18 @@
-//! `gents plugin`: manage Afterburner plugins independently of any pack.
+//! `gents plugin`: build, publish, install and run plugins.
 //!
-//! A plugin is a complete Afterburner `.afb` - first class, publishable
-//! and installable on its own, and also carried inside a pack under
-//! `plugins/` (see `crates/gents/src/pack.rs`'s own doc for that side).
-//! This module owns the standalone surface: compiling one from source
-//! ([`build`]), publishing and installing it on its own ([`publish`],
-//! [`install`]), finding what is installed ([`list`], [`remove`]), and
-//! running one to prove it actually works ([`run`]). Registry access is
-//! the exact client `gents pack` already uses
-//! ([`crate::commands::pack::registry::RegistryClient`]) - a plugin and a
-//! pack are both just bytes to the registry, so there is no second HTTP
-//! client here.
+//! A plugin is a compiled `.afb` that always travels inside a pack, under
+//! `plugins/` (see `crates/gents/src/pack.rs`). Publishing one on its own
+//! wraps it in a single-plugin `plugins` pack ([`publish`]); installing one
+//! by name fetches its pack and installs the plugins it carries
+//! ([`install`]). The rest works on what is installed locally: compiling
+//! from source ([`build`]), listing and removing ([`list`], [`remove`]), and
+//! running one to prove it works ([`run`]). Registry access is the client
+//! `gents pack` uses ([`crate::commands::pack::registry::RegistryClient`]).
 
 mod build;
 mod install;
 mod run;
-pub(crate) mod store;
+pub(crate) use gents::plugin::store;
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -45,13 +42,24 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
 /// from different namespaces may each carry a `format_check`, and
 /// recording both under one default namespace would have the second
 /// silently replace the first.
+///
+/// `pack_coordinate` (`{namespace}/{name}` of the pack this plugin ships
+/// in) is refused when the record already belongs to a different pack: see
+/// [`store::check_plugin_ownership`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_from_pack(
     home: &std::path::Path,
     pack_namespace: &str,
+    pack_coordinate: &str,
     pack_version: &str,
+    pack_digest: &str,
     plugin: &gents::pack::PackPlugin,
     artifact_bytes: &[u8],
+    instructions: Option<String>,
+    consent: bool,
 ) -> Result<store::InstalledPlugin> {
+    store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
+    let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
     use sha2::{Digest, Sha256};
     gents::plugin::PluginRunner::compile(artifact_bytes, plugin)
         .with_context(|| format!("admitting pack plugin {}", plugin.name))?;
@@ -64,6 +72,10 @@ pub(crate) fn install_from_pack(
         digest: format!("sha256:{digest_hex}"),
         language: plugin.language.clone(),
         declaration: plugin.clone(),
+        granted,
+        instructions,
+        owner_pack_coordinate: Some(pack_coordinate.to_owned()),
+        owner_pack_digest: Some(pack_digest.to_owned()),
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -75,21 +87,73 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
     let afb = afterburner_cloud::Afb::from_bytes(&bytes)
         .with_context(|| format!("{} is not a readable plugin .afb", args.file.display()))?;
+    let dir = tempfile::tempdir().context("staging the plugin's pack")?;
+    let (pack, header) = plugin_pack(dir.path(), &afb, &bytes)?;
 
-    let token = crate::commands::pack::registry::resolve_registry_token(args.token.as_deref())
-        .context("a registry token is required; pass --token or set GENTS_REGISTRY_TOKEN")?;
-    let client = crate::commands::pack::registry::RegistryClient::for_plugins(
-        crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref()),
-    );
-    let response = client.publish(&token, bytes).await?;
+    let registry = crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref());
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token_flag =
+        crate::commands::pack::registry::resolve_token_flag(args.token, args.token_stdin)?;
+    let token = crate::commands::pack::account::resolve_publish_token(
+        token_flag.as_deref(),
+        &registry,
+        &home,
+    )?;
+    let client = crate::commands::pack::registry::RegistryClient::new(registry);
+    let response = client.publish(&token, pack).await?;
 
     crate::print_json(&json!({
-        "namespace": afb.manifest.package.namespace,
-        "name": afb.manifest.package.name,
-        "version": afb.manifest.package.version,
-        "language": afb.manifest.package.language,
+        "pack": header.coordinate,
+        "version": header.version,
+        "digest": header.digest,
         "registry_response": response,
     }))
+}
+
+/// Packs one compiled plugin on its own: a `plugins` pack named after it,
+/// carrying the artifact under `plugins/` and a README from its description.
+fn plugin_pack(
+    dir: &std::path::Path,
+    afb: &afterburner_cloud::Afb,
+    bytes: &[u8],
+) -> Result<(Vec<u8>, gents::pack_archive::PackHeader)> {
+    let package = &afb.manifest.package;
+    anyhow::ensure!(
+        gents::pack::is_valid_pack_name(&package.name)
+            && gents::pack::is_valid_pack_name(&package.namespace),
+        "{}/{} cannot be a pack: pack names are snake_case; rename the plugin",
+        package.namespace,
+        package.name
+    );
+    let declaration = declaration_from_artifact(afb)?;
+    let artifact = declaration.artifact.clone();
+    let description = declaration.description.clone();
+    std::fs::create_dir_all(dir.join("plugins"))?;
+    std::fs::write(dir.join(&artifact), bytes)?;
+    std::fs::write(
+        dir.join("README.md"),
+        format!(
+            "# {}\n\n{description}\n\nInstall with `gents plugin install {}/{}`.\n",
+            package.name, package.namespace, package.name
+        ),
+    )?;
+    let manifest = json!({
+        "manifest_version": 1,
+        "name": package.name,
+        "namespace": package.namespace,
+        "version": package.version,
+        "description": description,
+        "authors": [package.namespace],
+        "tags": package.keywords,
+        "kind": "plugins",
+        "assets": ["README.md", artifact],
+        "plugins": [declaration],
+    });
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).context("encoding the plugin pack manifest")?,
+    )?;
+    gents::pack_archive::pack_dir(dir)
 }
 
 fn list(args: PluginListArgs) -> Result<()> {
@@ -117,6 +181,28 @@ fn remove(args: PluginRemoveArgs) -> Result<()> {
 /// carried the same defect (no `Cargo.toml`, which the Rust compile path
 /// shells out to `cargo build` and therefore requires), so all three were
 /// failing in the same way.
+/// Standalone artifacts have no enclosing pack declaration. Capture their own
+/// manifest and authority once at installation; pack installs retain theirs.
+pub(crate) fn declaration_from_artifact(
+    afb: &afterburner_cloud::Afb,
+) -> Result<gents::pack::PackPlugin> {
+    let package = &afb.manifest.package;
+    Ok(gents::pack::PackPlugin {
+        name: package.name.clone(),
+        description: package
+            .description
+            .clone()
+            .unwrap_or_else(|| format!("installed plugin {}/{}", package.namespace, package.name)),
+        artifact: format!("plugins/{}.afb", package.name),
+        source: None,
+        language: package.language.clone(),
+        // The AFB manifest has no model-facing input schema.
+        input_schema: serde_json::json!({"type": "object"}),
+        manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
+        instructions: None,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     /// Compiles a real Rust plugin through the same path `gents plugin
@@ -211,25 +297,29 @@ mod tests {
         testing::build_plugin_afb("noop", b"fn main() { println!(\"{{}}\"); }")
     }
 
-    /// A bare-hex digest, the exact form the registry actually advertises.
-    fn digest_of(bytes: &[u8]) -> String {
-        testing::digest_of(bytes)
-    }
-
     /// End-to-end round trip through this module's public surface, backed
-    /// by a local fake registry: install, list reflects it, run returns
-    /// the plugin's own output, remove takes it away again.
+    /// by a local fake registry serving the plugin's pack: install, list
+    /// reflects it, run returns the plugin's own output, remove takes it
+    /// away again.
     #[tokio::test]
     async fn install_list_run_remove_round_trip() {
-        let bytes = sample_plugin_afb();
-        let digest = digest_of(&bytes);
-
-        let downloads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let base_url = start_fake_registry(bytes, digest.clone(), downloads.clone()).await;
+        let afb_bytes = sample_plugin_afb();
+        let afb = afterburner_cloud::Afb::from_bytes(&afb_bytes).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (pack, header) = plugin_pack(dir.path(), &afb, &afb_bytes).unwrap();
+        let (base_url, _) = crate::commands::pack::registry::tests::serve_fake_pack(
+            "noop",
+            &header.version,
+            pack.clone(),
+            testing::digest_of(&pack),
+        )
+        .await;
         let home = tempfile::tempdir().unwrap();
+        let namespace = header.coordinate.split('/').next().unwrap().to_owned();
 
         install::install(PluginInstallArgs {
-            name: "gents/noop".to_owned(),
+            grant_authority: false,
+            name: format!("{namespace}/noop"),
             version: None,
             registry: Some(base_url),
             home: Some(home.path().to_owned()),
@@ -240,78 +330,20 @@ mod tests {
         let records = store::list_records(home.path()).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].name, "noop");
-        assert_eq!(records[0].digest, format!("sha256:{digest}"));
+        assert_eq!(
+            records[0].digest,
+            format!("sha256:{}", testing::digest_of(&afb_bytes))
+        );
 
         run::run(PluginRunArgs {
-            name: "gents/noop".to_owned(),
+            name: format!("{namespace}/noop"),
             input: None,
             home: Some(home.path().to_owned()),
         })
         .await
         .expect("running the just-installed plugin must succeed");
 
-        let removed = store::remove_record(home.path(), "gents", "noop").expect("remove");
-        assert_eq!(removed.digest, format!("sha256:{digest}"));
+        store::remove_record(home.path(), &namespace, "noop").expect("remove");
         assert!(store::list_records(home.path()).unwrap().is_empty());
-    }
-
-    async fn start_fake_registry(
-        bytes: Vec<u8>,
-        digest: String,
-        downloads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> String {
-        use axum::extract::{Path as AxumPath, State};
-        use axum::http::StatusCode;
-        use axum::response::{IntoResponse, Response};
-        use axum::routing::get;
-        use axum::{Json, Router};
-        use std::sync::atomic::Ordering;
-        use std::sync::Arc;
-
-        struct FakeState {
-            bytes: Vec<u8>,
-            digest: String,
-            downloads: Arc<std::sync::atomic::AtomicUsize>,
-        }
-
-        async fn package(AxumPath((_ns, name)): AxumPath<(String, String)>) -> Response {
-            if name == "noop" {
-                Json(json!({ "latest": "0.1.0" })).into_response()
-            } else {
-                StatusCode::NOT_FOUND.into_response()
-            }
-        }
-        async fn version(State(state): State<Arc<FakeState>>) -> Json<serde_json::Value> {
-            Json(json!({ "digest": state.digest }))
-        }
-        async fn download(
-            State(state): State<Arc<FakeState>>,
-            AxumPath(_): AxumPath<(String, String, String)>,
-        ) -> impl IntoResponse {
-            state.downloads.fetch_add(1, Ordering::SeqCst);
-            state.bytes.clone()
-        }
-
-        let state = Arc::new(FakeState {
-            bytes,
-            digest,
-            downloads,
-        });
-        let app = Router::new()
-            .route("/api/v1/packages/{ns}/{name}", get(package))
-            .route("/api/v1/packages/{ns}/{name}/{version}", get(version))
-            .route(
-                "/api/v1/packages/{ns}/{name}/{version}/download",
-                get(download),
-            )
-            .with_state(state);
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        format!("http://{addr}")
     }
 }

@@ -99,6 +99,8 @@ reqwest.workspace = true
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
 tempfile = "3"
+memmap2 = "0.9"
+kovan-map = "0.1.19"
 
 # The pack container (src/pack_archive.rs). A pack travels as a
 # gzip-compressed tar; `tar`/`flate2` build and read it.

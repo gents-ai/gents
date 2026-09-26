@@ -1567,6 +1567,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             module_path: "conformance::callback_lifecycle",
             function: "generated_callback_journals_match_runtime_owner",
         },
+        ConformanceConsumer::RustTest {
+            id: "conformance::callback_lifecycle::generated_retry_decisions_match_runtime_owner",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/callback_lifecycle.rs",
+            module_path: "conformance::callback_lifecycle",
+            function: "generated_retry_decisions_match_runtime_owner",
+        },
     ]
 }
 

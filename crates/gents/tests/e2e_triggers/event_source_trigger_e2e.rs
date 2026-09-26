@@ -39,7 +39,7 @@ use serde_json::Value;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
@@ -143,15 +143,17 @@ where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = None;
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
             if predicate(&snapshot) {
                 return snapshot;
             }
+            last = Some(snapshot);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for runtime snapshot for {agent_did}; last seen: {last:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -337,10 +339,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+        is_routed_ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -370,10 +369,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     .await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > initial_generation
-            && snapshot.last_reconcile_result == "applied"
+        is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
     assert!(

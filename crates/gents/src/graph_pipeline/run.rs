@@ -127,6 +127,9 @@ pub struct GraphRunView {
     pub completed_at: Option<String>,
     pub update_generation: i64,
     pub requests: Vec<GraphRunRequestView>,
+    /// Calls to the run's plugin nodes, which are not model requests.
+    #[serde(default)]
+    pub plugin_calls: Vec<GraphRunRequestView>,
     pub stages: Vec<GraphRunStageView>,
     pub groups: Vec<GraphRunGroupView>,
     pub results: Vec<GraphRunResultView>,
@@ -476,6 +479,7 @@ async fn load_graph_run_view_with(
     let correlation = required_string(&run, "correlation")?;
     let logical = logical_invocation::load(executor, correlation, &plan, owner_did).await?;
     let requests = logical.requests;
+    let plugin_calls = logical.plugin_calls;
     let outstanding_invocation_count = logical
         .invocations
         .iter()
@@ -506,6 +510,7 @@ async fn load_graph_run_view_with(
     for stage in &mut stages {
         for request in requests
             .iter()
+            .chain(&plugin_calls)
             .filter(|request| request.node_id.as_deref() == Some(stage.node_id.as_str()))
         {
             stage.total += 1;
@@ -688,6 +693,7 @@ async fn load_graph_run_view_with(
             .and_then(Value::as_i64)
             .unwrap_or_default(),
         requests,
+        plugin_calls,
         stages,
         groups,
         results,
@@ -1145,7 +1151,7 @@ fn terminal_projection(
         .filter(|_| view.active_request_count == 0)
     {
         Some(("failed", Some(error), None))
-    } else if !view.requests.is_empty()
+    } else if (!view.requests.is_empty() || !view.plugin_calls.is_empty())
         && view.active_request_count == 0
         && view.result_contract_satisfied
         && view.terminal_stages_completed
@@ -1415,6 +1421,7 @@ mod tests {
             deadline_at: Some("2026-08-25T02:00:00+00:00".to_owned()),
             completed_at: None,
             update_generation: 0,
+            plugin_calls: Vec::new(),
             requests: vec![GraphRunRequestView {
                 request_id: "request".to_owned(),
                 session_id: Some("session".to_owned()),

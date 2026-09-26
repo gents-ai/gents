@@ -46,8 +46,40 @@ pub struct Callback {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CallbackHandler {
-    BuiltIn { emitter: BuiltInCallback },
-    Module { module_id: String },
+    BuiltIn {
+        emitter: BuiltInCallback,
+    },
+    Module {
+        module_id: String,
+    },
+    /// An installed plugin reads the source document, and its JSON result
+    /// becomes the declared output documents.
+    Plugin {
+        /// `namespace/name` of the installed plugin.
+        plugin: String,
+        /// `sha256:<hex>` of the artifact to run; any other installed artifact
+        /// is refused.
+        digest: String,
+        /// Source field whose value is written to each output's correlation field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        correlation_field: Option<String>,
+        /// How many times a failed call may run in all; absent is once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        max_attempts: Option<u32>,
+        /// Where the result is written. Empty writes nothing.
+        #[serde(
+            default,
+            deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        #[cfg_attr(
+            feature = "typescript",
+            ts(as = "Option<Vec<crate::graph_pipeline::PortSpec>>", optional = nullable)
+        )]
+        outputs: Vec<crate::graph_pipeline::PortSpec>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,4 +198,13 @@ pub enum CallbackInvocationOrigin {
         binding_id: String,
         group_key: String,
     },
+}
+
+impl CallbackInvocationOrigin {
+    /// The binding that created this invocation.
+    pub fn binding_id(&self) -> &str {
+        match self {
+            Self::Event { binding_id, .. } | Self::EventGroup { binding_id, .. } => binding_id,
+        }
+    }
 }

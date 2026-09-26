@@ -11,13 +11,10 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
 pub(crate) use gents::pack_registry::{
-    download_verified_pack, fetch_pack, resolve_pack_coordinate, resolve_registry_url,
-    stage_and_persist, verify_digest, RegistryClient, RegistryPack,
+    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient, RegistryPack,
 };
 #[cfg(test)]
-use gents::pack_registry::{
-    verify_pack_coordinate, RegistryKind, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR,
-};
+use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
 #[cfg(test)]
 use serde_json::Value;
 
@@ -35,6 +32,33 @@ pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
+}
+
+/// Reads one line from standard input, trimming the trailing newline. Shared
+/// by `--token-stdin` and `--password-stdin`, so a token or password never
+/// shows up in `ps` or shell history.
+pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .with_context(|| format!("reading the {what} from standard input"))?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+}
+
+/// The `--token` value, read from standard input instead when `--token-stdin`
+/// was passed. One function so every command that accepts both flags agrees
+/// on how the token is obtained.
+pub(crate) fn resolve_token_flag(
+    token: Option<String>,
+    token_stdin: bool,
+) -> Result<Option<String>> {
+    if token_stdin {
+        Ok(Some(read_stdin_line("registry token")?))
+    } else {
+        Ok(token)
+    }
 }
 
 /// `gents pack fetch`: the artifact itself, verified, without installing
@@ -55,52 +79,102 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 
     let coordinate =
         resolve_pack_coordinate(&client, namespace, name, args.version.as_deref()).await?;
-    let bytes = download_verified_pack(&client, &coordinate).await?;
-
-    let out = args.out.unwrap_or_else(|| {
-        std::path::PathBuf::from(format!("{name}-{}.tar.gz", coordinate.version))
-    });
-    std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
+    // Streamed to a staging file beside the output, verified, then renamed:
+    // a pack of any size is never held in memory.
+    let out_dir = args
+        .out
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        );
+    let mut staged = tempfile::NamedTempFile::new_in(&out_dir)
+        .with_context(|| format!("staging the download in {}", out_dir.display()))?;
+    let computed = {
+        let mut writer = std::io::BufWriter::new(staged.as_file_mut());
+        let computed = client
+            .download_into(namespace, name, &coordinate.version, &mut writer)
+            .await?;
+        std::io::Write::flush(&mut writer).context("saving the download")?;
+        computed
+    };
+    verify_digest_hex(&computed, &coordinate.artifact_digest, &coordinate.version)?;
+    let header = gents::pack_archive::read_pack(
+        std::io::BufReader::new(std::fs::File::open(staged.path())?),
+        gents::pack_archive::Bounds::default(),
+        |_, _| Ok(()),
+    )
+    .with_context(|| format!("{namespace}/{name} from the registry is not a readable pack"))?
+    .header;
+    let size_bytes = staged.as_file().metadata()?.len();
+    let out = args
+        .out
+        .unwrap_or_else(|| std::path::PathBuf::from(header.file_name()));
+    staged
+        .persist(&out)
+        .map_err(|error| error.error)
+        .with_context(|| format!("writing {}", out.display()))?;
 
     crate::print_json(&serde_json::json!({
         "pack": name,
         "namespace": namespace,
         "version": coordinate.version,
-        "digest": coordinate.artifact_digest,
-        "size_bytes": bytes.len(),
+        "digest": header.digest,
+        "size_bytes": size_bytes,
         "out": out.display().to_string(),
     }))
 }
 
+/// The registry's advertised digest must be what the bytes hash to.
+fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
+    anyhow::ensure!(
+        computed == advertised,
+        "the registry advertised digest {advertised} for version {version} but the bytes hash to {computed}; nothing was saved"
+    );
+    Ok(())
+}
+
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
-    let results = client.search(args.query.as_deref().unwrap_or("")).await?;
+    let results = client
+        .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
+        .await?;
     crate::print_json(&results)
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
-    let token = resolve_registry_token(args.token.as_deref())
-        .context("a registry token is required; pass --token or set GENTS_REGISTRY_TOKEN")?;
+    let registry = resolve_registry_url(args.registry.as_deref());
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
+    let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
+    let client = RegistryClient::new(registry);
     let result = client.publish(&token, bytes).await?;
     crate::print_json(&result)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-    use axum::extract::{Path as AxumPath, State};
-    use axum::http::StatusCode;
+    use axum::extract::{Path as AxumPath, Query, State};
+    use axum::http::{HeaderMap, StatusCode};
     use axum::response::{IntoResponse, Response};
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::json;
+
+    /// The account and token every fake registry in this module accepts.
+    pub(crate) const FAKE_USERNAME: &str = "demo";
+    pub(crate) const FAKE_PASSWORD: &str = "demo-pass";
+    pub(crate) const FAKE_TOKEN: &str = "demo-token";
 
     // --- env var precedence: guarded so parallel tests don't race the process env ---
 
@@ -184,20 +258,58 @@ mod tests {
         );
     }
 
-    // --- a tiny fake registry, just the routes `gents pack` needs ---
-
-    struct FakeRegistryState {
-        bytes: Vec<u8>,
-        digest: String,
-        downloads: Arc<AtomicUsize>,
+    /// A write resolves its token from the flag, then the environment, then
+    /// the login `gents pack login` saved for that registry.
+    #[test]
+    fn a_saved_login_is_the_last_token_source() {
+        let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
+        let home = tempfile::tempdir().unwrap();
+        let registry = "https://registry.example";
+        let resolve = |explicit| {
+            super::super::account::resolve_publish_token(explicit, registry, home.path())
+        };
+        let error = resolve(None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("gents pack login"),
+            "{error:#}"
+        );
+        gents::pack_registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
+        assert_eq!(resolve(None).unwrap(), "gcpat_saved");
+        guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
+        assert_eq!(resolve(None).unwrap(), "gcpat_env");
+        assert_eq!(resolve(Some("gcpat_flag")).unwrap(), "gcpat_flag");
     }
 
-    /// Only "plain_pack" is known; anything else is a real 404, so the
+    // --- a tiny fake registry, just the routes `gents pack` needs ---
+
+    /// `(namespace, name, version, undo, bearer_token)` of a yank request.
+    pub(crate) type YankRequest = (String, String, String, bool, String);
+    /// `(namespace, name, new_owner, bearer_token)` of an owner transfer.
+    pub(crate) type OwnerTransferRequest = (String, String, String, String);
+
+    pub(crate) struct FakeRegistryState {
+        name: String,
+        latest: String,
+        bytes: Vec<u8>,
+        digest: String,
+        pub(crate) downloads: AtomicUsize,
+        /// `(namespace, name, version, undo, bearer_token)` from the last
+        /// yank request.
+        pub(crate) last_yank: Mutex<Option<YankRequest>>,
+        /// `(namespace, name, new_owner, bearer_token)` from the last owner
+        /// transfer.
+        pub(crate) last_owner_transfer: Mutex<Option<OwnerTransferRequest>>,
+    }
+
+    /// Only the one pack is known; anything else is a real 404, so an
     /// "unknown pack" test exercises a genuine not-found response instead
     /// of accidentally hitting the digest-mismatch path.
-    async fn fake_package(AxumPath((_ns, name)): AxumPath<(String, String)>) -> Response {
-        if name == "plain_pack" {
-            Json(json!({ "latest": "1.0.0" })).into_response()
+    async fn fake_package(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((_ns, name)): AxumPath<(String, String)>,
+    ) -> Response {
+        if name == state.name {
+            Json(json!({ "latest": state.latest })).into_response()
         } else {
             StatusCode::NOT_FOUND.into_response()
         }
@@ -224,31 +336,86 @@ mod tests {
             .unwrap()
     }
 
-    /// The two surfaces the registry actually serves, asserted by name.
-    ///
-    /// A client that asks the wrong one gets a correct 404 and an error
-    /// that says the registry has nothing there, which reads like a
-    /// missing package rather than a wrong route. That is what happened:
-    /// `gents pack install` asked the plugin surface for a pack. The route
-    /// segments are stated here, next to the fakes that must match them,
-    /// so swapping them fails a test instead of a customer's install.
-    #[test]
-    fn each_artifact_kind_addresses_its_own_registry_surface() {
-        assert_eq!(RegistryKind::Pack.path(), "packs");
-        assert_eq!(RegistryKind::Plugin.path(), "packages");
+    fn bearer_token(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get(axum::http::header::AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")
+            .map(str::to_owned)
     }
 
-    /// Starts a fake registry serving one version of one pack, and returns
-    /// its base URL plus the download-hit counter.
+    async fn fake_login(Json(body): Json<Value>) -> Response {
+        if body["username"].as_str() == Some(FAKE_USERNAME)
+            && body["password"].as_str() == Some(FAKE_PASSWORD)
+        {
+            Json(json!({ "token": FAKE_TOKEN })).into_response()
+        } else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+
+    async fn fake_me(headers: HeaderMap) -> Response {
+        if bearer_token(&headers).as_deref() == Some(FAKE_TOKEN) {
+            Json(json!({ "username": FAKE_USERNAME })).into_response()
+        } else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+
+    async fn fake_yank(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((ns, name, version)): AxumPath<(String, String, String)>,
+        Query(params): Query<BTreeMap<String, String>>,
+        headers: HeaderMap,
+    ) -> Response {
+        let Some(token) = bearer_token(&headers) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let undo = params.get("undo").map(String::as_str) == Some("true");
+        *state.last_yank.lock().unwrap() = Some((ns, name, version.clone(), undo, token));
+        Json(json!({ "version": version, "yanked": !undo })).into_response()
+    }
+
+    async fn fake_owner(
+        State(state): State<Arc<FakeRegistryState>>,
+        AxumPath((ns, name)): AxumPath<(String, String)>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Response {
+        let Some(token) = bearer_token(&headers) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        let new_owner = body["username"].as_str().unwrap_or_default().to_owned();
+        *state.last_owner_transfer.lock().unwrap() = Some((ns, name, new_owner.clone(), token));
+        Json(json!({ "owner": new_owner })).into_response()
+    }
+
+    /// Starts a fake registry serving `plain_pack@1.0.0`.
     async fn start_fake_registry(
         bytes: Vec<u8>,
         advertised_digest: String,
-    ) -> (String, Arc<AtomicUsize>) {
-        let downloads = Arc::new(AtomicUsize::new(0));
+    ) -> (String, Arc<FakeRegistryState>) {
+        serve_fake_pack("plain_pack", "1.0.0", bytes, advertised_digest).await
+    }
+
+    /// Starts a fake registry serving one version of one pack, plus the
+    /// account routes (`login`, `me`, `yank`, `owner`) every registry token
+    /// command needs; all accept [`FAKE_TOKEN`].
+    pub(crate) async fn serve_fake_pack(
+        name: &str,
+        latest: &str,
+        bytes: Vec<u8>,
+        advertised_digest: String,
+    ) -> (String, Arc<FakeRegistryState>) {
         let state = Arc::new(FakeRegistryState {
+            name: name.to_owned(),
+            latest: latest.to_owned(),
             bytes,
             digest: advertised_digest,
-            downloads: downloads.clone(),
+            downloads: AtomicUsize::new(0),
+            last_yank: Mutex::new(None),
+            last_owner_transfer: Mutex::new(None),
         });
         // `/packs/...`, the route the real registry serves a pack on.
         // These routes had been the plugin ones (`/packages/...`), which is
@@ -261,7 +428,11 @@ mod tests {
                 "/api/v1/packs/{ns}/{name}/{version}/download",
                 get(fake_download),
             )
-            .with_state(state);
+            .route("/api/v1/packs/{ns}/{name}/{version}/yank", post(fake_yank))
+            .route("/api/v1/packages/{ns}/{name}/owner", post(fake_owner))
+            .route("/api/v1/login", post(fake_login))
+            .route("/api/v1/me", get(fake_me))
+            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind fake registry");
@@ -269,11 +440,11 @@ mod tests {
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        (format!("http://{addr}"), downloads)
+        (format!("http://{addr}"), state)
     }
 
-    /// A tiny real `.tar.gz`, built the same way `gents pack build` does,
-    /// so these tests exercise the real container rather than a stand-in.
+    /// A tiny real `.pack`, built the same way `gents pack build` does, with
+    /// the digest of its bytes the registry advertises.
     fn sample_pack() -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("plain_pack");
@@ -295,7 +466,23 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        gents::pack_archive::pack_dir(&root).unwrap()
+        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let digest = {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        (bytes, digest)
+    }
+
+    /// How many packs the home's store holds.
+    fn stored_packs(home: &std::path::Path) -> usize {
+        std::fs::read_dir(home.join("packs/store/sha256"))
+            .map(|dir| {
+                dir.filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     #[test]
@@ -324,31 +511,28 @@ mod tests {
     #[tokio::test]
     async fn fetch_pack_downloads_verifies_and_caches() {
         let (bytes, digest) = sample_pack();
-        let (base_url, downloads) = start_fake_registry(bytes.clone(), digest.clone()).await;
+        let (base_url, state) = start_fake_registry(bytes.clone(), digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let first = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let first = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect("first fetch");
         assert_eq!(first.namespace, "gents");
         assert_eq!(first.name, "plain_pack");
         assert_eq!(first.version, "1.0.0");
-        assert_eq!(downloads.load(Ordering::SeqCst), 1);
-        assert!(home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{digest}.tar.gz"))
-            .is_file());
+        assert_eq!(state.downloads.load(Ordering::SeqCst), 1);
+        assert!(gents::pack_store::PackStore::new(home.path())
+            .contains(&first.digest)
+            .unwrap());
 
         // A second fetch of the same pack reads the cache: no second download.
-        let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect("second fetch (cached)");
         assert_eq!(second.digest, first.digest);
         assert_eq!(
-            downloads.load(Ordering::SeqCst),
+            state.downloads.load(Ordering::SeqCst),
             1,
             "second install must not refetch"
         );
@@ -358,55 +542,51 @@ mod tests {
     async fn a_digest_mismatch_is_refused_naming_both_digests() {
         let (bytes, _real_digest) = sample_pack();
         let wrong_digest = "0".repeat(64);
-        let (base_url, _downloads) = start_fake_registry(bytes, wrong_digest.clone()).await;
+        let (base_url, _state) = start_fake_registry(bytes, wrong_digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
+        let error = fetch_pack(&client, Some(home.path()), "gents", "plain_pack", None)
             .await
             .expect_err("mismatched digest must be refused");
         let message = format!("{error:#}");
         assert!(message.contains(&wrong_digest), "{message}");
         assert!(message.contains("refusing to install"), "{message}");
-        // Nothing was cached under the wrong name: a refusal is not a warning.
-        assert!(!home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{wrong_digest}.tar.gz"))
-            .exists());
+        // Nothing was stored: a refusal is not a warning.
+        assert_eq!(stored_packs(home.path()), 0);
     }
 
     #[tokio::test]
     async fn a_coordinate_mismatch_is_refused_before_the_pack_is_cached() {
         let (bytes, digest) = sample_pack();
-        let (base_url, _downloads) = start_fake_registry(bytes, digest.clone()).await;
+        let (base_url, _state) = start_fake_registry(bytes, digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "someone_else", "plain_pack")
-            .await
-            .expect_err("a manifest from another namespace must be refused");
+        let error = fetch_pack(
+            &client,
+            Some(home.path()),
+            "someone_else",
+            "plain_pack",
+            None,
+        )
+        .await
+        .expect_err("a manifest from another namespace must be refused");
         assert!(
             format!("{error:#}").contains("different identity"),
             "{error:#}"
         );
-        assert!(!home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{digest}.tar.gz"))
-            .exists());
+        assert_eq!(stored_packs(home.path()), 0);
     }
 
     #[tokio::test]
     async fn an_unknown_pack_is_a_clean_not_found_not_a_silent_success() {
         let (bytes, digest) = sample_pack();
-        let (base_url, _downloads) = start_fake_registry(bytes, digest).await;
+        let (base_url, _state) = start_fake_registry(bytes, digest).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
 
-        let error = fetch_pack(&client, Some(home.path()), "gents", "does_not_exist")
+        let error = fetch_pack(&client, Some(home.path()), "gents", "does_not_exist", None)
             .await
             .expect_err("unknown pack must be refused, not silently substituted");
         assert!(format!("{error:#}").contains("nothing at"), "{error:#}");

@@ -1432,6 +1432,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "WorkspaceBindingCases".to_string(),
         ));
     }
+    if !snapshot.callback_retry_cases.is_empty() {
+        emitted.insert((
+            "callback_retry_cases".to_string(),
+            "CallbackRetryCases".to_string(),
+        ));
+    }
     if !snapshot.callback_cases.is_empty() {
         emitted.insert(("callback_cases".to_string(), "CallbackCases".to_string()));
     }

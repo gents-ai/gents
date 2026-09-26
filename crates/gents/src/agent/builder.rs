@@ -56,6 +56,7 @@ pub struct GentsBuilder {
     /// tests) never veto on measured health, matching
     /// `BackendAdmissionConfig::measured_unhealthy`'s own default.
     backend_health: crate::backend_health::BackendHealthMap,
+    plugin_home: Option<std::path::PathBuf>,
 }
 
 impl GentsBuilder {
@@ -92,6 +93,12 @@ impl GentsBuilder {
 
     pub fn tool_ceiling(mut self, tool_ceiling: ToolCeiling) -> Self {
         self.tool_ceiling = tool_ceiling;
+        self
+    }
+
+    /// The gents home whose installed plugins this runtime's tools can call.
+    pub fn plugin_home(mut self, home: impl Into<std::path::PathBuf>) -> Self {
+        self.plugin_home = Some(home.into());
         self
     }
 
@@ -278,6 +285,9 @@ impl GentsBuilder {
             ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
+            plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
+                self.plugin_home,
+            )),
         })
     }
 }

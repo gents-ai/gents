@@ -317,33 +317,340 @@ pub(crate) struct GraphScopeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackShowArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
     pub(crate) package: String,
+    #[arg(long, help = "Home whose pack store holds local packs")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+/// What `gents pack new` and `init` start a pack from.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PackTemplate {
+    /// A documents pack: one behavior, context, tools and task.
+    Minimal,
+    /// The minimal pack plus a job schema, an event source and a trigger.
+    Automation,
+    /// A graph pack: one stage from a job entry to one result.
+    Graph,
+    /// A plugins pack with one plugin, ready to build.
+    PluginTool,
+    /// A pack of files with no configuration.
+    Assets,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PackKindArg {
+    Documents,
+    Graph,
+    Assets,
+    Plugins,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub(crate) struct PackScaffoldArgs {
+    #[arg(
+        long,
+        value_enum,
+        help = "Pack kind; picks the template when --template is absent"
+    )]
+    pub(crate) kind: Option<PackKindArg>,
+    #[arg(
+        long,
+        default_value = "gents",
+        help = "Registry namespace the pack publishes under"
+    )]
+    pub(crate) namespace: String,
+    #[arg(long, value_enum)]
+    pub(crate) template: Option<PackTemplate>,
+    #[arg(
+        long,
+        help = "Plugin language for the plugin-tool template; defaults to rust"
+    )]
+    pub(crate) language: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackNewArgs {
+    #[arg(help = "snake_case pack name; the pack is created in ./<name>")]
+    pub(crate) name: String,
+    #[command(flatten)]
+    pub(crate) options: PackScaffoldArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackAddArgs {
+    #[command(subcommand)]
+    pub(crate) command: PackAddCommand,
+    #[arg(
+        long,
+        global = true,
+        help = "Pack directory; defaults to the current directory"
+    )]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PackAddCommand {
+    /// A behavior with its prompt, context and tools, in an inference slot.
+    Behavior {
+        id: String,
+        #[arg(
+            long,
+            help = "Inference slot; defaults to one named after the behavior"
+        )]
+        slot: Option<String>,
+    },
+    /// A task with its prompt, run by an existing behavior.
+    Task {
+        id: String,
+        #[arg(long)]
+        behavior: String,
+    },
+    /// An event source and a trigger that runs a task when a document is created.
+    Trigger {
+        id: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long, help = "Collection whose new documents fire the trigger")]
+        on: String,
+    },
+    /// A graph; the pack becomes a graph pack.
+    Graph { graph_id: String },
+    /// A graph stage that runs a task, reading one collection and writing another.
+    Stage {
+        node: String,
+        #[arg(long)]
+        graph: String,
+        #[arg(
+            long,
+            required_unless_present = "plugin",
+            conflicts_with = "plugin",
+            help = "The Task an agent node runs"
+        )]
+        task: Option<String>,
+        #[arg(long, help = "The pack's own plugin a plugin node runs")]
+        plugin: Option<String>,
+        #[arg(long, help = "Collection the stage reads")]
+        input: String,
+        #[arg(long, help = "Collection the stage writes")]
+        output: String,
+        #[arg(
+            long,
+            help = "Upstream node.port; the first stage becomes the graph's entry"
+        )]
+        from: Option<String>,
+    },
+    /// A plugin from source, or from an already compiled plugin file.
+    Plugin {
+        name: String,
+        #[arg(long, help = "Source language; defaults to rust")]
+        language: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "language",
+            help = "A compiled plugin file to ship as is"
+        )]
+        prebuilt: Option<PathBuf>,
+    },
+    /// A skill whose instructions live in skills/<id>/SKILL.md.
+    Skill {
+        id: String,
+        #[arg(long, help = "An existing SKILL.md to copy")]
+        from: Option<PathBuf>,
+    },
+    /// A collection schema under schemas/.
+    Schema { collection: String },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub(crate) enum PackPart {
+    Behavior,
+    Task,
+    Trigger,
+    Graph,
+    Plugin,
+    Skill,
+    Schema,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackRemovePartArgs {
+    #[arg(value_enum)]
+    pub(crate) part: PackPart,
+    pub(crate) id: String,
+    #[arg(long, help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackFmtArgs {
+    #[arg(help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackDiffArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
+    pub(crate) a: String,
+    #[arg(help = "The pack to compare it with, named the same ways")]
+    pub(crate) b: String,
+    #[arg(long, help = "Home whose pack store holds local packs")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackTestArgs {
+    #[arg(help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Also run the pack's experiment.json scenario; needs a model endpoint"
+    )]
+    pub(crate) scenario: bool,
+}
+
+/// The ecosystem a plugin being imported comes from.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PackImportFrom {
+    /// Agent Plugins: `plugin.json`, `skills/`, `mcp.json`.
+    AgentPlugins,
+    /// Claude Code: `.claude-plugin/plugin.json`.
+    Claude,
+    /// Codex: `.codex-plugin/plugin.json`.
+    Codex,
+    /// Hermes Agent: `plugin.yaml`.
+    Hermes,
+    /// An MCP registry `server.json`.
+    Mcp,
+    /// A single Agent Skill: `SKILL.md`.
+    Skill,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackImportArgs {
+    #[arg(help = "The plugin: a directory or a git URL")]
+    pub(crate) source: String,
+    #[arg(long, value_enum, help = "Its ecosystem; detected when omitted")]
+    pub(crate) from: Option<PackImportFrom>,
+    #[arg(long, help = "Where to write the pack; defaults to ./<name>")]
+    pub(crate) out: Option<PathBuf>,
+    #[arg(long, help = "snake_case pack name; defaults to the plugin's own name")]
+    pub(crate) name: Option<String>,
+    #[arg(
+        long,
+        default_value = "gents",
+        help = "Registry namespace the pack publishes under"
+    )]
+    pub(crate) namespace: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackCheckArgs {
+    #[arg(help = "Pack directories to check; defaults to the current directory")]
+    pub(crate) dirs: Vec<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackGraphArgs {
+    #[arg(help = "Graph pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Replace the README's topology diagram instead of printing it"
+    )]
+    pub(crate) write_readme: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackVerifyArgs {
+    #[arg(help = "A .pack file, or sha256:<hex> for a pack in the home's store")]
+    pub(crate) target: String,
+    #[arg(long, help = "Home whose pack store to check")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Subcommand)]
 pub(crate) enum PackCommand {
     /// List all packs bundled in this binary.
     List,
-    /// Inspect a pack manifest and declared assets.
+    /// Inspect a pack: its manifest, digest and every file.
     Show(PackShowArgs),
+    /// Check a .pack file or a stored pack against its digest.
+    Verify(PackVerifyArgs),
+    /// Scaffold a new pack in ./<name> from a template.
+    New(PackNewArgs),
+    /// Scaffold a pack in the current directory, named after it.
+    Init(PackScaffoldArgs),
+    /// Convert a plugin from another ecosystem into a pack directory to review.
+    Import(PackImportArgs),
+    /// Add a part to a pack and record it in manifest.json.
+    Add(PackAddArgs),
+    /// Remove a part and every file it added.
+    RemovePart(PackRemovePartArgs),
+    /// Rewrite manifest.json and pack_config.json in canonical form.
+    Fmt(PackFmtArgs),
+    /// List the files and documents that differ between two packs.
+    Diff(PackDiffArgs),
+    /// Check and build a pack, then run every plugin's test cases.
+    Test(PackTestArgs),
+    /// Run every validation an install would on pack directories; writes nothing.
+    Check(PackCheckArgs),
+    /// Print a graph pack's topology diagram, or write it into its README.
+    Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
+    /// Remove what a pack install created, and its record.
+    Remove(PackRemoveArgs),
+    /// List installed packs with a newer version in the registry.
+    Outdated(PackOutdatedArgs),
+    /// Install the latest version of outdated packs.
+    Update(PackUpdateArgs),
     /// Remove superseded generated asset-cache versions without run history.
     Prune(PackPruneArgs),
+    /// Run, initialize or seed a pack's experiment.json scenario.
+    #[command(subcommand)]
+    Scenario(PackScenarioCommand),
+    /// Compile a pack's plugins and pack the whole pack into one `.pack`.
+    Build(PackBuildArgs),
+    /// Search the pack registry.
+    Search(PackSearchArgs),
+    /// Show a package's registry page: versions, digests and owner.
+    Info(PackInfoArgs),
+    /// Sign in to the registry and save the token in the gents home.
+    Login(PackLoginArgs),
+    /// Remove the saved token from this machine; does not revoke it on the registry.
+    Logout(PackAccountArgs),
+    /// Show who the saved registry login is.
+    Whoami(PackAccountArgs),
+    /// Yank a published version so new installs skip it, or restore it.
+    Yank(PackYankArgs),
+    /// Show a package's owner, or give it to another account.
+    Owner(PackOwnerArgs),
+    /// Publish a built `.pack` to the pack registry.
+    Publish(PackPublishArgs),
+    /// Download a pack's `.pack` from the registry without installing it.
+    Fetch(PackFetchArgs),
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PackScenarioCommand {
     /// Exercise a scenario in a dedicated home: apply, seed, await, report.
     Run(PackRunArgs),
     /// Initialize a dedicated scenario home.
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
-    /// Compile a pack's plugins and pack the whole pack into one `.tar.gz`.
-    Build(PackBuildArgs),
-    /// Search the pack registry.
-    Search(PackSearchArgs),
-    /// Publish a built `.tar.gz` to the pack registry.
-    Publish(PackPublishArgs),
-    /// Download a pack's `.tar.gz` from the registry without installing it.
-    Fetch(PackFetchArgs),
 }
 
 #[derive(clap::Args)]
@@ -354,7 +661,7 @@ pub(crate) struct PackFetchArgs {
     pub(crate) version: Option<String>,
     #[arg(
         long,
-        help = "Where to write the .tar.gz; defaults to <name>-<version>.tar.gz here"
+        help = "Where to write the .pack; defaults to <namespace>.<name>-<version>.pack here"
     )]
     pub(crate) out: Option<std::path::PathBuf>,
     #[arg(
@@ -366,20 +673,17 @@ pub(crate) struct PackFetchArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackBuildArgs {
-    #[arg(
-        required_unless_present = "all",
-        help = "Pack directory to compile and pack (its manifest.json and declared assets)"
-    )]
+    #[arg(help = "Pack directory to compile and pack; defaults to the current directory")]
     pub(crate) dir: Option<PathBuf>,
     #[arg(
         long,
         conflicts_with_all = ["dir", "out"],
-        help = "Build every pack under packs/ into a .tar.gz beside it, instead of one directory"
+        help = "Build every pack under packs/ into a .pack beside it, instead of one directory"
     )]
     pub(crate) all: bool,
     #[arg(
         long,
-        help = "Where to write the .tar.gz; defaults to <dir>/../<name>-<version>.tar.gz"
+        help = "Where to write the .pack; defaults to <dir>/../<namespace>.<name>-<version>.pack"
     )]
     pub(crate) out: Option<PathBuf>,
 }
@@ -388,6 +692,8 @@ pub(crate) struct PackBuildArgs {
 pub(crate) struct PackSearchArgs {
     #[arg(help = "Search terms; omit to list every published pack")]
     pub(crate) query: Option<String>,
+    #[arg(long, default_value_t = 1, help = "Result page, 50 packs each")]
+    pub(crate) page: u32,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
@@ -397,7 +703,7 @@ pub(crate) struct PackSearchArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackPublishArgs {
-    #[arg(help = "Path to the .tar.gz file to publish")]
+    #[arg(help = "Path to the .pack file to publish")]
     pub(crate) file: PathBuf,
     #[arg(
         long,
@@ -406,9 +712,172 @@ pub(crate) struct PackPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackLoginArgs {
+    #[arg(long, help = "Account name; the password is read from standard input")]
+    pub(crate) username: Option<String>,
+    #[arg(
+        long,
+        requires = "username",
+        help = "Read the password from standard input"
+    )]
+    pub(crate) password_stdin: bool,
+    #[arg(
+        long,
+        conflicts_with = "username",
+        help = "A token from your registry dashboard"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with_all = ["token", "username"],
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home to save the login in")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackAccountArgs {
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackInfoArgs {
+    #[arg(help = "The package, as name or namespace/name")]
+    pub(crate) package: String,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackOwnerArgs {
+    #[arg(help = "The package, as name or namespace/name")]
+    pub(crate) package: String,
+    #[arg(
+        long,
+        value_name = "USERNAME",
+        help = "Give the package to this account"
+    )]
+    pub(crate) transfer: Option<String>,
+    #[arg(
+        long,
+        requires = "transfer",
+        help = "Confirm the transfer; it cannot be undone"
+    )]
+    pub(crate) yes: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackYankArgs {
+    #[arg(help = "The version, as namespace/name@version")]
+    pub(crate) package: String,
+    #[arg(long, help = "Restore a yanked version")]
+    pub(crate) undo: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackOutdatedArgs {
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackUpdateArgs {
+    #[arg(help = "The installed pack to update; every outdated pack when omitted")]
+    pub(crate) package: Option<String>,
+    #[arg(
+        long,
+        requires = "package",
+        help = "JSON file containing agent_did and an optional inference_slots map, as for install"
+    )]
+    pub(crate) bindings: Option<PathBuf>,
+    #[arg(
+        long = "inference-slot",
+        value_name = "NAME=PROFILE_ID",
+        action = clap::ArgAction::Append,
+        requires = "package",
+        help = "Bind a declared inference slot to an existing principal-owned profile, as for install"
+    )]
+    pub(crate) inference_slots: Vec<String>,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
 }
 
 #[derive(clap::Args)]
@@ -420,6 +889,7 @@ pub(crate) struct PackPruneArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
     pub(crate) package: String,
     #[arg(
         long,
@@ -455,6 +925,44 @@ pub(crate) struct PackInstallArgs {
         help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
+    #[arg(
+        long,
+        help = "Allow the files, network or environment the pack's plugins ask for"
+    )]
+    pub(crate) grant_authority: bool,
+}
+
+/// What to do with pack documents someone edited since the pack wrote them.
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub(crate) struct PackDriftArgs {
+    #[arg(long, conflicts_with = "keep", help = "Replace edited pack documents")]
+    pub(crate) overwrite: bool,
+    #[arg(long, help = "Leave edited pack documents as they are")]
+    pub(crate) keep: bool,
+}
+
+impl PackDriftArgs {
+    pub(crate) fn policy(self) -> gents::pack::DriftPolicy {
+        if self.overwrite {
+            gents::pack::DriftPolicy::Overwrite
+        } else if self.keep {
+            gents::pack::DriftPolicy::Keep
+        } else {
+            gents::pack::DriftPolicy::Refuse
+        }
+    }
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackRemoveArgs {
+    #[arg(help = "The installed pack, as name or namespace/name")]
+    pub(crate) package: String,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
 }
 
 #[derive(clap::Args)]
@@ -619,9 +1127,17 @@ pub(crate) struct PluginPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(
+        long = "token-stdin",
+        conflicts_with = "token",
+        help = "Read the registry token from standard input, instead of --token"
+    )]
+    pub(crate) token_stdin: bool,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -637,6 +1153,11 @@ pub(crate) struct PluginInstallArgs {
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to install into; defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Allow the files, network or environment the plugin asks for"
+    )]
+    pub(crate) grant_authority: bool,
 }
 
 #[derive(clap::Args)]

@@ -21,11 +21,14 @@ pub fn load_pack_config(
         .context("pack has no configuration")?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
     let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
-    let config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
+    let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
         Ok(prompt)
     })?;
+    for capability in &mut config.graph_capabilities {
+        pin_pack_plugin(manifest, read_asset, capability)?;
+    }
     super::inference::validate_pack_inference_authoring(manifest, &config)?;
     Ok(config)
 }
@@ -110,6 +113,14 @@ pub fn decode_pack_config(
             }
         }
     }
+    for skill in &mut config.skills {
+        if let Some(instructions) = &mut skill.instructions {
+            if instructions.starts_with("./") {
+                *instructions =
+                    read_sidecar(crate::Collection::Skill, &skill.skill_id, instructions)?;
+            }
+        }
+    }
     for task in &mut config.tasks {
         if task.prompt_template.starts_with("./") {
             task.prompt_template = read_sidecar(
@@ -120,6 +131,51 @@ pub fn decode_pack_config(
         }
     }
     Ok(config)
+}
+
+/// A plugin node that names one of the pack's own plugins by `name` runs that
+/// artifact: the name is qualified with the pack's namespace, as installing the
+/// pack records it, and pinned to the artifact's digest. A plugin from outside
+/// the pack is named `namespace/name` and pinned by the author.
+fn pin_pack_plugin(
+    manifest: &PackManifest,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    capability: &mut crate::graph_pipeline::StageCapability,
+) -> Result<()> {
+    let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
+    else {
+        return Ok(());
+    };
+    if plugin.contains('/') {
+        return Ok(());
+    }
+    let declared = manifest
+        .metadata
+        .plugins
+        .iter()
+        .find(|declared| declared.name == *plugin)
+        .with_context(|| {
+            format!(
+                "graph capability {} runs plugin {plugin:?}, which this pack does not declare",
+                capability.capability_id
+            )
+        })?;
+    let bytes = read_asset(&declared.artifact)
+        .with_context(|| format!("reading plugin artifact {}", declared.artifact))?;
+    let pinned = format!(
+        "sha256:{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(&bytes)
+    );
+    if let Some(authored) = digest.as_deref() {
+        anyhow::ensure!(
+            authored == pinned,
+            "graph capability {} pins plugin {plugin:?} to {authored}, but the pack ships {pinned}",
+            capability.capability_id
+        );
+    }
+    *digest = Some(pinned);
+    *plugin = format!("{}/{}", manifest.metadata.namespace, plugin);
+    Ok(())
 }
 
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {

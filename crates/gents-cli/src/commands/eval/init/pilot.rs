@@ -179,9 +179,23 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         },
         &|_name| None,
     )?;
-    gents::pack::install_pack_documents(&ctx.access, &config)
-        .await
-        .context("installing the drafted definition pack into the home")?;
+    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
+        assets
+            .get(path)
+            .map(Vec::as_slice)
+            .with_context(|| format!("pack has no asset {path:?}"))
+    })?;
+    // Each revision of the drafted pack replaces the one before it.
+    let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
+    gents::pack::install_pack_documents(
+        &ctx.access,
+        &ctx.owner,
+        &identity,
+        &config,
+        gents::pack::DriftPolicy::Overwrite,
+    )
+    .await
+    .context("installing the drafted definition pack into the home")?;
     Ok(())
 }
 

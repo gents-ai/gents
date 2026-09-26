@@ -4600,7 +4600,9 @@ dependencies = [
  "jsonschema",
  "k256",
  "keyring",
+ "kovan-map",
  "libc",
+ "memmap2",
  "minijinja",
  "opentelemetry",
  "p2p",
@@ -4734,6 +4736,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rmcp",
  "schemars 1.2.1",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4749,6 +4752,7 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

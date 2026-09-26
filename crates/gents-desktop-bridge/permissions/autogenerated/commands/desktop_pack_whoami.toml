@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pack-whoami"
+description = "Enables the desktop_pack_whoami command without any pre-configured scope."
+commands.allow = ["desktop_pack_whoami"]
+
+[[permission]]
+identifier = "deny-desktop-pack-whoami"
+description = "Denies the desktop_pack_whoami command without any pre-configured scope."
+commands.deny = ["desktop_pack_whoami"]

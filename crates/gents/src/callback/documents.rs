@@ -27,8 +27,8 @@ use crate::workspace::{
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
-const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key lifecycle_state attempts action_plan action_journal error claimed_at created_at";
-const RESULT_FIELDS: &str = "result_id invocation_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
+const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
+const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -88,6 +88,10 @@ pub struct CallbackInvocationDoc {
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
+    /// The source document's correlation, when its event source names one:
+    /// how a graph run finds the invocations it caused.
+    #[serde(default)]
+    pub caused_by_correlation: Option<String>,
     pub lifecycle_state: String,
     #[serde(default)]
     pub attempts: Option<i64>,
@@ -147,6 +151,10 @@ where
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
+    /// The binding that produced this result, so event sources can select
+    /// one binding's results with a plain filter.
+    #[serde(default)]
+    pub binding_id: Option<String>,
     /// Principal whose runtime owns execution and recovery.
     pub owner_agent_did: String,
     #[serde(default)]
@@ -483,6 +491,36 @@ async fn list_recent_succeeded_missing_result(
     Ok(succeeded_missing_result(succeeded, &results))
 }
 
+/// Recently failed invocations, which a retry may pick up again. Bounded by
+/// the same window and page as the succeeded-without-result repair.
+pub async fn list_recent_failed(
+    node: &EmbeddedNode,
+    owner_agent_did: &str,
+) -> Result<Vec<CallbackInvocationDoc>> {
+    let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
+    let query = format!(
+        r#"{{
+            CallbackInvocation(
+                filter: {{
+                    owner_agent_did: {{ _eq: "{owner}" }},
+                    lifecycle_state: {{ _eq: "failed" }},
+                    created_at: {{ _ge: "{cutoff}" }}
+                }},
+                order: {{ created_at: DESC }},
+                limit: {limit}
+            ) {{ {INVOCATION_FIELDS} }}
+        }}"#,
+        owner = escape_graphql_string(owner_agent_did),
+        cutoff = escape_graphql_string(&cutoff),
+        limit = SUCCEEDED_REPAIR_LIMIT,
+    );
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
+            .await
+            .context("query recent failed CallbackInvocation")?;
+    rows(&response, "CallbackInvocation")
+}
+
 pub(crate) fn succeeded_repair_cutoff(now: chrono::DateTime<chrono::Utc>) -> String {
     let start = now
         - chrono::Duration::from_std(SUCCEEDED_REPAIR_WINDOW)
@@ -603,8 +641,11 @@ pub async fn create_pending_invocation(
         "invocation_id": invocation.invocation_id, "owner_agent_did": invocation.owner_agent_did,
         "callback_id": invocation.callback_id, "origin": invocation.origin,
         "input": callback_input_for_storage(&invocation.input),
-        "idempotency_key": invocation.idempotency_key, "lifecycle_state": "pending", "attempts": 0,
-        "action_plan": "", "action_journal": "[]", "error": "", "claimed_at": "", "created_at": now
+        "idempotency_key": invocation.idempotency_key,
+        "caused_by_correlation": invocation.caused_by_correlation,
+        "lifecycle_state": "pending", "attempts": 0,
+        "action_plan": null, "action_journal": "[]", "error": null, "claimed_at": null,
+        "created_at": now
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
@@ -641,11 +682,11 @@ pub async fn create_pending_invocation(
     }
 }
 
-pub async fn update_invocation(
-    node: &EmbeddedNode,
+/// The compare-and-set update of `invocation`, matched on `expected_state` when given.
+pub(super) fn update_invocation_mutation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
-) -> Result<bool> {
+) -> String {
     let state_filter = expected_state
         .map(|state| {
             format!(
@@ -655,10 +696,7 @@ pub async fn update_invocation(
         })
         .unwrap_or_default();
     let journal = invocation.action_journal.as_deref().unwrap_or("[]");
-    let plan = invocation.action_plan.as_deref().unwrap_or("");
-    let error = invocation.error.as_deref().unwrap_or("");
-    let claimed_at = invocation.claimed_at.as_deref().unwrap_or("");
-    let mutation = format!(
+    format!(
         r#"mutation {{
             update_CallbackInvocation(
                 filter: {{
@@ -669,10 +707,10 @@ pub async fn update_invocation(
                 input: {{
                     lifecycle_state: "{state}",
                     attempts: {attempts},
-                    action_plan: "{plan}",
+                    {plan}
                     action_journal: "{journal}",
-                    error: "{error}",
-                    claimed_at: "{claimed_at}"
+                    {error}
+                    {claimed_at}
                 }}
             ) {{ _docID }}
         }}"#,
@@ -680,13 +718,63 @@ pub async fn update_invocation(
         owner = escape_graphql_string(&invocation.owner_agent_did),
         state = escape_graphql_string(&invocation.lifecycle_state),
         attempts = invocation.attempts.unwrap_or(0),
-        plan = escape_graphql_string(plan),
+        plan = optional_graphql_string_field("action_plan", invocation.action_plan.as_deref()),
         journal = escape_graphql_string(journal),
-        error = escape_graphql_string(error),
-        claimed_at = escape_graphql_string(claimed_at),
-    );
+        error = optional_graphql_string_field("error", invocation.error.as_deref()),
+        claimed_at = optional_graphql_string_field("claimed_at", invocation.claimed_at.as_deref()),
+    )
+}
+
+/// `name: "value",` when `value` is present, `name: null,` when it is
+/// absent. An absent optional field is a genuine null, never `""`.
+fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
+        .unwrap_or_else(|| format!("{name}: null,"))
+}
+
+pub async fn update_invocation(
+    node: &EmbeddedNode,
+    invocation: &CallbackInvocationDoc,
+    expected_state: Option<&str>,
+) -> Result<bool> {
+    let mutation = update_invocation_mutation(invocation, expected_state);
     let response = committed_mutation(node, "callback.update_invocation", &mutation).await?;
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
+}
+
+/// The create mutation for `result`.
+pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
+    let now = result
+        .created_at
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    format!(
+        r#"mutation {{
+            create_CallbackResult(input: {{
+                result_id: "{result_id}",
+                invocation_id: "{invocation_id}",
+                {binding_id}
+                owner_agent_did: "{owner}",
+                {workspace}
+                {work_unit_id}
+                {correlation}
+                created_at: "{created_at}"
+            }}) {{ _docID }}
+        }}"#,
+        result_id = escape_graphql_string(&result.result_id),
+        invocation_id = escape_graphql_string(&result.invocation_id),
+        binding_id = optional_graphql_string_field("binding_id", result.binding_id.as_deref()),
+        owner = escape_graphql_string(&result.owner_agent_did),
+        workspace = optional_graphql_string_field("workspace_id", result.workspace_id.as_deref()),
+        work_unit_id =
+            optional_graphql_string_field("work_unit_id", result.work_unit_id.as_deref()),
+        correlation = optional_graphql_string_field(
+            "caused_by_correlation",
+            result.caused_by_correlation.as_deref()
+        ),
+        created_at = escape_graphql_string(&now),
+    )
 }
 
 pub async fn create_callback_result(
@@ -698,33 +786,7 @@ pub async fn create_callback_result(
     {
         return Ok(existing);
     }
-    let now = result
-        .created_at
-        .clone()
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let workspace = result.workspace_id.as_deref().unwrap_or("");
-    let work_unit_id = result.work_unit_id.as_deref().unwrap_or("");
-    let correlation = result.caused_by_correlation.as_deref().unwrap_or("");
-    let mutation = format!(
-        r#"mutation {{
-            create_CallbackResult(input: {{
-                result_id: "{result_id}",
-                invocation_id: "{invocation_id}",
-                owner_agent_did: "{owner}",
-                workspace_id: "{workspace}",
-                work_unit_id: "{work_unit_id}",
-                caused_by_correlation: "{correlation}",
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#,
-        result_id = escape_graphql_string(&result.result_id),
-        invocation_id = escape_graphql_string(&result.invocation_id),
-        owner = escape_graphql_string(&result.owner_agent_did),
-        workspace = escape_graphql_string(workspace),
-        work_unit_id = escape_graphql_string(work_unit_id),
-        correlation = escape_graphql_string(correlation),
-        created_at = escape_graphql_string(&now),
-    );
+    let mutation = create_callback_result_mutation(result);
     match committed_mutation(node, "callback.create_result", &mutation).await {
         Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_agent_did)
             .await?

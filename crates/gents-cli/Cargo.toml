@@ -81,6 +81,7 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
+semver = "1"
 tempfile = "3"
 wait-timeout = "0.2"
 # `gents eval init` holds a draft's check params to each check's schema.
@@ -109,6 +110,14 @@ afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git",
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+
+# `pack build` points stdout at stderr while the plugin compiler runs, so
+# stdout carries only the JSON report.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
 acp.workspace = true

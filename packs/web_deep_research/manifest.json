@@ -30,10 +30,11 @@
     "schemas/research_evidence.graphql",
     "schemas/research_claim_verdict.graphql",
     "schemas/research_draft.graphql",
-    "schemas/research_result.graphql"
+    "schemas/research_result.graphql",
+    "graphs/web_deep_research.plan.json"
   ],
   "dependencies": [],
-  "compiler_version": "graph-intent-v3",
+  "compiler_version": "graph-intent-v4",
   "external_dependencies": [
     {
       "service_id": "web-research-mcp",

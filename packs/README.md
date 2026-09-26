@@ -10,8 +10,9 @@ gents pack show code_review
 gents pack install code_review --home <initialized-home>
 gents graph run code_review --repo . --base origin/main --head HEAD
 gents pack install mailbox --home <initialized-home>
+gents pack remove mailbox --home <initialized-home>
 gents pack prune mailbox
-gents pack run pipeline --http-port 19191 --keep-home
+gents pack scenario run pipeline --http-port 19191 --keep-home
 ```
 
 ## What a pack is made of
@@ -50,6 +51,11 @@ other half of its coordinate (`acme/shipping_plugins`). It is optional and
 `gents` when absent, so a first-party pack does not repeat it. A pack's
 plugins install under the pack's namespace, so two packs from different
 namespaces may each carry a `format_check` without one replacing the other.
+Within one namespace, a plugin record is owned by the pack coordinate that
+installed it: installing a same-named plugin from a different pack is
+refused, naming both packs, and only that pack's own reinstall or update
+replaces its record. `gents pack remove` releases only what its own
+coordinate owns.
 
 `kind` is `documents`, `graph`, `assets`, or `plugins`. A `plugins` pack
 installs no documents of its own: it exists to ship capabilities. Its plugins
@@ -88,9 +94,11 @@ paths is wired yet. A plugin declares:
   run with a bound silently missing.
 - `input_schema`, which is what a model is shown.
 - `manifold`, what the plugin asks the sandbox to allow. Absent means it asks
-  for nothing, which is right for a pure transform. An operator's ceiling
-  narrows this at admission and can never widen it. A plugin may not listen
-  on a port: a pack's plugins are called, never served.
+  for nothing, which is right for a pure transform. At admission the grant
+  is narrowed to what the plugin declared and to gents' fixed ceiling, which
+  is sealed today: an admitted plugin gets no filesystem, network or
+  environment access, whatever it declares. A plugin may not listen on a
+  port: a pack's plugins are called, never served.
 
 The call ABI is deliberately narrow: canonical JSON arguments arrive on
 standard input, one JSON value is written to standard output, and standard
@@ -99,9 +107,12 @@ error is diagnostics.
 ## Building and publishing
 
 ```sh
-gents pack build packs/shipping_plugins           # compile the plugins, write one .tar.gz
-gents pack publish shipping_plugins-0.1.0.tar.gz  # push it to the registry
-gents pack install acme/shipping_plugins          # from the registry, anywhere
+gents pack build packs/shipping_plugins                # compile the plugins, write one .pack
+gents pack verify acme.shipping_plugins-0.1.0.pack     # check it against its digest
+gents pack publish acme.shipping_plugins-0.1.0.pack    # push it to the registry
+gents pack install acme/shipping_plugins               # from the registry, anywhere
+gents pack install ./acme.shipping_plugins-0.1.0.pack  # or from the file
+gents pack install sha256:<hex>                        # or from this home's store
 ```
 
 A plugin is also managed on its own, without a pack around it:
@@ -115,20 +126,28 @@ gents plugin run acme/format_check --input '{"path":"src"}'
 gents plugin remove acme/format_check
 ```
 
-Installing a pack installs its plugins into the same store `gents plugin
-install` uses, so a plugin that arrived inside a pack is runnable by name
-exactly like one installed alone.
+Installing a pack of any kind installs the plugins it declares into the same
+store `gents plugin install` uses, so a plugin that arrived inside a pack is
+runnable by name exactly like one installed alone. `documents` and `graph`
+packs install their plugins the same way `assets` and `plugins` packs do,
+before writing their own documents or graph. If that later write fails, the
+plugin records this install just wrote are restored to what they were
+before it, so the pack install is all-or-nothing from the operator's view.
 
-A built pack is a single gzip-compressed tar: a plain container any archive
-tool can read, holding `manifest.json` and every asset the manifest declares,
-including each plugin's compiled `.afb`. The registry at
-`https://packs.gents.xyz` serves both packs and plugins, so a plugin
-published on its own uses the same `.afb` a pack carries internally, and a
-pack that ships plugins is one artifact rather than an archive plus a pile of
-modules.
+A built pack is one `.pack` file: a gzip-compressed tar any archive tool can
+list. Its first entry, `pack.json`, states the format version, the pack digest,
+coordinate, version and kind; then come `manifest.json` and every asset the
+manifest declares, including each plugin's compiled `.afb`, in the order the
+digest is computed over. A pack is named by its digest, `sha256:<hex>`, and a
+home keeps the packs it has seen under `packs/store/sha256/`. A path is local
+only when written as one (`./dir`, `../dir`, `/abs`, or a `.pack` file); a
+bare name always means the bundled or registry pack. The registry serves
+packs only: `gents plugin publish` wraps a plugin in a single-plugin pack, so
+a pack that ships plugins is one artifact rather than an archive plus a pile
+of modules.
 
-The default registry is `https://packs.gents.xyz`, overridable per command and
-by `GENTS_REGISTRY`.
+The default registry is `https://registry.dev.gents.xyz`, overridable per
+command with `--registry` and by `GENTS_REGISTRY`.
 
 A pack installed from a registry is the same pack as the one compiled into a
 binary: the digest is over the declared contents, never over the container, so
@@ -163,7 +182,7 @@ identity checks. Review plugin declarations and host authority before
 installing untrusted content. External dependency commands are documentation,
 never automatically executed.
 
-`pack run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
+`pack scenario run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
 normalized source directory with a snake_case leaf name can be used while
 authoring; bundled names are materialized into the local pack cache when no
 source directory is selected. Run artifacts are under the resolved pack's
@@ -176,7 +195,7 @@ scenario runs. `experiment.json` may configure scenario-specific graph model
 bindings, but cannot declare another dependency list.
 
 The bundled scenario asset cache is separate from the runtime home selected
-with `pack run --home`: it lives under the default Gents home's `packs/` tree.
+with `pack scenario run --home`: it lives under the default Gents home's `packs/` tree.
 The distribution digest covers all declared assets, including documentation;
 the graph execution digest covers only the graph's referenced inputs. Both use
 the existing graph asset hashing routine. Filesystem cache names use the hex
@@ -225,24 +244,27 @@ and backends referenced by slot bindings are never stamped.
 
 A README must explain purpose, installation, bindings/prerequisites, tool and
 workspace authority, inputs/outputs, completion/failure semantics, validation,
-and operational history. Graphs must include a Mermaid diagram. Refresh and
-check generated topology sections with:
+and operational history. Graphs must include a Mermaid diagram. Refresh a
+graph pack's generated topology section, and check a pack the way an install
+would, with:
 
 ```sh
-node scripts/check_packs.mjs --write-diagrams
-node scripts/check_packs.mjs
+gents pack graph packs/<name> --write-readme
+gents pack check packs/<name>
 ```
 
-For compiled graphs the diagram reflects capability edges. For document-driven
-scenarios it reflects declared trigger edges; document writes and callbacks
-must additionally be explained in prose. A trigger diagram is not proof of
-runtime completion behavior.
+`gents pack check` reports missing and undeclared files, configuration and
+graph errors, event-source filters the schemas reject, and a stale README
+diagram, each by name, and writes nothing. The diagram reflects compiled
+capability edges; document writes and callbacks must additionally be explained
+in prose. A diagram is not proof of runtime completion behavior.
 
 Keep concise run summaries, reviewed outputs and issue links. Never bundle
 `runs/`, node homes, credentials, build caches or raw logs. Package embedding
 uses declared assets, not recursive discovery of an operator's workspace.
-Source resolution is separate from installation; GitHub and registry sources
-are future work, not implemented download features.
+`gents pack install <name>` resolves a pack compiled into the binary first and
+falls back to the registry. A graph pack installs only from the binary today,
+and there is no GitHub source.
 
 ## Worked examples
 

@@ -18,8 +18,9 @@ use crate::workspace::{
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    strip_secret_fields, succeeded_missing_result, succeeded_repair_cutoff,
-    validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
+    create_callback_result_mutation, strip_secret_fields, succeeded_missing_result,
+    succeeded_repair_cutoff, update_invocation_mutation, validate_callback_binding,
+    CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
     CallbackResultInvocationRow,
 };
 use super::run::{
@@ -140,6 +141,7 @@ fn non_owner_does_not_claim_invocation_or_workspace_request() {
             source_doc_id: "doc-1".into(),
             source_version: Some("created".into()),
         },
+        caused_by_correlation: None,
         idempotency_key: "bind-1:doc-1:created".into(),
         lifecycle_state: LIFECYCLE_PENDING.into(),
         attempts: Some(0),
@@ -200,6 +202,7 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
             source_doc_id: id.into(),
             source_version: Some("created".into()),
         },
+        caused_by_correlation: None,
         idempotency_key: format!("bind-1:{id}:created"),
         lifecycle_state: LIFECYCLE_SUCCEEDED.into(),
         attempts: Some(1),
@@ -266,6 +269,7 @@ fn recovery_reuses_stored_action_plan() {
             source_doc_id: "doc-1".into(),
             source_version: Some("created".into()),
         },
+        caused_by_correlation: None,
         idempotency_key: "bind-1:doc-1:created".into(),
         lifecycle_state: LIFECYCLE_RUNNING.into(),
         attempts: Some(1),
@@ -332,6 +336,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
             source_doc_id: "doc-1".into(),
             source_version: Some("created".into()),
         },
+        caused_by_correlation: None,
         idempotency_key: "bind-1:doc-1:created".into(),
         lifecycle_state: LIFECYCLE_RUNNING.into(),
         attempts: Some(1),
@@ -1061,4 +1066,156 @@ fn canonical_action_plan_sorts_object_keys() {
     assert!(abi < actions, "{canonical}");
     let parsed = parse_action_plan_json(&canonical).unwrap();
     assert_eq!(parsed, plan);
+}
+
+/// An absent optional field renders as a GraphQL `null`, never as `""`: an
+/// empty string is a real (if odd) value, while a genuinely unset field must
+/// stay unset so a later query can tell the two apart.
+#[test]
+fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let result = CallbackResultDoc {
+        result_id: "res-1".to_owned(),
+        invocation_id: "inv-1".to_owned(),
+        binding_id: None,
+        owner_agent_did: "did:key:zWriter".to_owned(),
+        workspace_id: None,
+        work_unit_id: None,
+        caused_by_correlation: None,
+        created_at: Some("2024-01-01T00:00:00Z".to_owned()),
+    };
+    let mutation = create_callback_result_mutation(&result);
+    assert!(mutation.contains("binding_id: null,"), "{mutation}");
+    assert!(mutation.contains("workspace_id: null,"), "{mutation}");
+    assert!(mutation.contains("work_unit_id: null,"), "{mutation}");
+    assert!(
+        mutation.contains("caused_by_correlation: null,"),
+        "{mutation}"
+    );
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let present = CallbackResultDoc {
+        binding_id: Some("bind-1".to_owned()),
+        workspace_id: Some("ws-1".to_owned()),
+        work_unit_id: Some("unit-1".to_owned()),
+        caused_by_correlation: Some("corr-1".to_owned()),
+        ..result
+    };
+    let mutation = create_callback_result_mutation(&present);
+    assert!(mutation.contains(r#"binding_id: "bind-1","#), "{mutation}");
+    assert!(mutation.contains(r#"workspace_id: "ws-1","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"work_unit_id: "unit-1","#),
+        "{mutation}"
+    );
+    assert!(
+        mutation.contains(r#"caused_by_correlation: "corr-1","#),
+        "{mutation}"
+    );
+}
+
+/// Same rule for `CallbackInvocation`'s update: `action_plan`, `error` and
+/// `claimed_at` are nullable, and clearing them must write `null`.
+#[test]
+fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
+    let origin = crate::document_config::CallbackInvocationOrigin::Event {
+        binding_id: "bind-1".into(),
+        source_collection: "WorkUnit".into(),
+        source_doc_id: "doc-1".into(),
+        source_version: Some("created".into()),
+    };
+    let invocation = CallbackInvocationDoc {
+        invocation_id: "inv-1".into(),
+        owner_agent_did: "did:key:zWriter".into(),
+        callback_id: "cb-1".into(),
+        input: json!({}),
+        origin: origin.clone(),
+        caused_by_correlation: None,
+        idempotency_key: "key-1".into(),
+        lifecycle_state: LIFECYCLE_PENDING.into(),
+        attempts: Some(1),
+        action_plan: None,
+        action_journal: None,
+        error: None,
+        claimed_at: None,
+        created_at: None,
+    };
+    let mutation = update_invocation_mutation(&invocation, None);
+    assert!(mutation.contains("action_plan: null,"), "{mutation}");
+    assert!(mutation.contains("error: null,"), "{mutation}");
+    assert!(mutation.contains("claimed_at: null,"), "{mutation}");
+    assert!(!mutation.contains(r#""""#), "{mutation}");
+
+    let failed = CallbackInvocationDoc {
+        origin,
+        lifecycle_state: LIFECYCLE_FAILED.into(),
+        attempts: Some(2),
+        action_plan: Some("[]".into()),
+        action_journal: Some("[]".into()),
+        error: Some("boom".into()),
+        claimed_at: Some("2024-01-01T00:00:00Z".into()),
+        ..invocation
+    };
+    let mutation = update_invocation_mutation(&failed, Some("running"));
+    assert!(mutation.contains(r#"action_plan: "[]","#), "{mutation}");
+    assert!(mutation.contains(r#"error: "boom","#), "{mutation}");
+    assert!(
+        mutation.contains(r#"claimed_at: "2024-01-01T00:00:00Z","#),
+        "{mutation}"
+    );
+}
+
+/// Workspace packs select one binding's results with
+/// `{ binding_id: { _eq: ... } }`, so the stored result must carry it.
+#[tokio::test]
+async fn callback_results_are_selectable_by_their_binding() {
+    let node = test_node().await;
+    for (invocation_id, binding_id) in [
+        ("inv-a", "maintenance-execute-workspace"),
+        ("inv-b", "other"),
+    ] {
+        let stored = super::documents::create_callback_result(
+            node.as_ref(),
+            &super::documents::CallbackResultDoc {
+                result_id: format!("res-{invocation_id}"),
+                invocation_id: invocation_id.to_owned(),
+                binding_id: Some(binding_id.to_owned()),
+                owner_agent_did: "did:key:zWriter".to_owned(),
+                workspace_id: None,
+                work_unit_id: None,
+                caused_by_correlation: None,
+                created_at: None,
+            },
+        )
+        .await
+        .expect("result stored");
+        assert_eq!(stored.binding_id.as_deref(), Some(binding_id));
+    }
+
+    let response = node
+        .execute(
+            r#"{ CallbackResult(filter: { binding_id: { _eq: "maintenance-execute-workspace" } }) { invocation_id } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_value(response.data.expect("data")["CallbackResult"].clone())
+            .expect("rows");
+    assert_eq!(rows, vec![json!({"invocation_id": "inv-a"})]);
+}
+
+#[test]
+fn every_invocation_origin_names_its_binding() {
+    use crate::document_config::CallbackInvocationOrigin;
+    let event = CallbackInvocationOrigin::Event {
+        binding_id: "one".to_owned(),
+        source_collection: "WorkUnit".to_owned(),
+        source_doc_id: "doc".to_owned(),
+        source_version: None,
+    };
+    let group = CallbackInvocationOrigin::EventGroup {
+        binding_id: "two".to_owned(),
+        group_key: "key".to_owned(),
+    };
+    assert_eq!(event.binding_id(), "one");
+    assert_eq!(group.binding_id(), "two");
 }

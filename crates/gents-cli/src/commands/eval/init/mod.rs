@@ -429,9 +429,18 @@ async fn install_author(
             .await?;
     let bound =
         gents::pack::bind_pack_install_config(&pack.manifest, &config, &inference.bindings)?;
-    gents::pack::install_pack_documents(access, &bound)
-        .await
-        .context("installing the eval_author pack")
+    // Re-installing the author pack replaces what an earlier run installed.
+    let identity = gents::pack::PackIdentity::new(&pack.manifest, &pack.digest, Vec::new());
+    gents::pack::install_pack_documents(
+        access,
+        owner,
+        &identity,
+        &bound,
+        gents::pack::DriftPolicy::Overwrite,
+    )
+    .await
+    .map(|report| report.applied)
+    .context("installing the eval_author pack")
 }
 
 #[cfg(test)]

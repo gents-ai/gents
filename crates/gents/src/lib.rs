@@ -65,6 +65,7 @@ pub mod p2p_observability;
 pub mod pack;
 pub mod pack_archive;
 pub mod pack_registry;
+pub mod pack_store;
 pub mod plugin;
 pub mod provider_http;
 pub(crate) mod provider_input;

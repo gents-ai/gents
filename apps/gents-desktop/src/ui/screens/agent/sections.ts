@@ -2,6 +2,7 @@ import {
   Bot,
   Plug,
   ListChecks,
+  Package,
   Play,
   Radio,
   Sparkles,
@@ -26,5 +27,6 @@ export const SECTIONS = [
   { group: "Automation", id: "event-sources", label: "Event sources", icon: Radio },
   { group: "Tools", id: "tools", label: "Tools", icon: Wrench },
   { group: "Tools", id: "tool-services", label: "Remote Tools", icon: Plug },
+  { group: "Packs", id: "packs", label: "Packs", icon: Package },
 ] as const;
 export type SectionId = (typeof SECTIONS)[number]["id"];

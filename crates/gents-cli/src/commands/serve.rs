@@ -788,6 +788,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             mcp_pool: McpPool::new(),
             local_hostname: Some(local_hostname),
             tool_ceiling,
+            plugin_home: Some(home_dir.clone()),
             backend_health: Some(backend_health.clone()),
             process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
             runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {

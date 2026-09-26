@@ -224,6 +224,7 @@ inductive ResolveError where
   | missingBackend | disabledBackend | foreignBackend
   | missingTask | disabledTask | foreignTask
   | missingCapability | callerNotAllowed
+  | missingPlugin | pluginDigestMismatch
   deriving DecidableEq, Repr
 
 /-- Shared reference lookup checks existence and ownership together. Required

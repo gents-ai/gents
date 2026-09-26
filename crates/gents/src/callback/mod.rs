@@ -16,6 +16,7 @@ use crate::UpdateSubscriptionSource;
 
 mod claim;
 mod documents;
+pub(crate) mod plugin;
 mod run;
 mod scan;
 mod wasm;
@@ -24,6 +25,8 @@ mod wasm;
 mod tests;
 
 pub use documents::reject_secret_bearing_callback_fields;
+#[cfg(test)]
+pub(crate) use documents::{create_callback_result, CallbackResultDoc};
 pub(crate) use documents::{
     flush_workspace_docs, load_isolated_workspace, load_repository_placement,
     load_workspace_placement,
@@ -41,6 +44,7 @@ pub(super) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
     agent_did: String,
     ceiling: Option<PathBuf>,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
     desired_collections: HashSet<String>,
@@ -56,12 +60,19 @@ pub async fn run_callback_engine(
     node: Arc<EmbeddedNode>,
     agent_did: String,
     ceiling: Option<PathBuf>,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut engine = CallbackEngine::new(node, agent_did.clone(), ceiling.clone(), cancel.clone());
+    engine.plugins = plugins;
     engine.reconcile_bindings().await;
-    if let Err(error) =
-        recover_local_invocations(engine.node.as_ref(), &agent_did, ceiling.as_deref()).await
+    if let Err(error) = recover_local_invocations(
+        engine.node.as_ref(),
+        &agent_did,
+        ceiling.as_deref(),
+        &engine.plugins,
+    )
+    .await
     {
         tracing::warn!(%error, "callback recovery sweep failed at startup");
     }
@@ -85,6 +96,7 @@ pub async fn run_callback_engine(
                         engine.node.as_ref(),
                         &engine.agent_did,
                         engine.ceiling.as_deref(),
+                        &engine.plugins,
                     )
                     .await
                     {
@@ -118,6 +130,7 @@ pub async fn run_callback_engine(
                 engine.node.as_ref(),
                 &engine.agent_did,
                 engine.ceiling.as_deref(),
+                &engine.plugins,
             )
             .await
             {

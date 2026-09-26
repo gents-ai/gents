@@ -1,5 +1,153 @@
 use super::*;
 
+use events::{
+    Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
+};
+
+/// A directly controllable update stream, so a test can publish an exact
+/// update message (including a `@branchable` collection's own collection-
+/// level update, which carries an empty document id) independent of
+/// whatever DefraDB would actually publish for a given write.
+#[derive(Clone)]
+struct FakeUpdateSubscriptionSource(Arc<ChannelBus>);
+
+impl FakeUpdateSubscriptionSource {
+    fn new() -> Self {
+        Self(Arc::new(ChannelBus::new()))
+    }
+
+    fn publish_update(&self, collection_id: impl Into<String>, doc_id: impl Into<String>) {
+        let collection_id = collection_id.into();
+        let doc_id = doc_id.into();
+        let block = format!("{collection_id}:{doc_id}").into_bytes();
+        let cid = defra_core::block::generate_cid_from_bytes(&block)
+            .expect("synthetic update block bytes must produce a CID");
+        self.0.publish(Message::update(Update::new(
+            doc_id,
+            cid,
+            collection_id,
+            block,
+            false,
+            true,
+        )));
+    }
+}
+
+impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
+    fn subscribe_updates(&self) -> Subscription {
+        self.0.subscribe(&[EventName::Update])
+    }
+
+    fn subscribe_document_changes(&self) -> DocumentChangeSubscription {
+        self.0.subscribe_document_changes()
+    }
+}
+
+/// #1721 item 8: `next_fire` skips an update whose `doc_id` is empty (the
+/// second, collection-level update a `@branchable` collection publishes per
+/// write). Driven through a controlled fake stream rather than a real write,
+/// so the assertion is about that skip specifically, not about whatever else
+/// might also happen to make a collection-level event harmless.
+#[tokio::test]
+async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    node.add_schema("type BranchableProbe { value: String }")
+        .await
+        .unwrap();
+
+    let task = ResolvedTask {
+        task_id: "task-branchable".to_string(),
+        ..resolved_task("go")
+    };
+    let trigger = resolved_event_trigger("trigger-branchable", "BranchableProbe", task);
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-branchable".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let subs = Arc::new(FakeUpdateSubscriptionSource::new());
+    let mut source = EventSource::with_subscription_source(
+        subs.clone(),
+        rx,
+        node.clone(),
+        CancellationToken::new(),
+    );
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let collection_id = node
+        .get_collection("BranchableProbe")
+        .unwrap()
+        .expect("schema registered")
+        .collection_id;
+
+    subs.publish_update(collection_id.clone(), "");
+    let skipped = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        skipped.is_err(),
+        "a collection-level update with an empty doc id must not fire: {:?}",
+        skipped.ok().flatten().map(|intent| intent.event_vars)
+    );
+    // Without the skip the empty id would still fire nothing (no document has
+    // it), but it would be loaded and recorded as a seen document.
+    assert!(!source.has_seen("BranchableProbe", ""));
+
+    let response = node
+        .execute(r#"mutation { add_BranchableProbe(input: {value: "x"}) { _docID } }"#)
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let doc_id = response.data.unwrap()["add_BranchableProbe"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    subs.publish_update(collection_id, doc_id);
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for the real document update")
+        .expect("next_fire returned None for a real document update");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-branchable"));
+}
+
+/// #1592: an event source on a real `@branchable` runtime collection fires
+/// with the created document's id. DefraDB publishes the document-level
+/// update alongside the collection-level one, and only the former delivers.
+#[tokio::test]
+async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_document() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let trigger = resolved_event_trigger(
+        "receipt-trigger",
+        "WorkspaceReceipt",
+        resolved_task("{{ event.source_doc_id }}"),
+    );
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("receipt-trigger".to_string(), trigger)]));
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let response = node
+        .execute(
+            r#"mutation { add_WorkspaceReceipt(input: {
+                receipt_id: "receipt-1", workspace_id: "ws-1", kind: "writer"
+            }) { _docID } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let doc_id = response.data.unwrap()["add_WorkspaceReceipt"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let intent = tokio::time::timeout(Duration::from_secs(5), source.next_fire())
+        .await
+        .expect("a WorkspaceReceipt write must reach the event source")
+        .expect("the receipt must deliver");
+    assert_eq!(intent.trigger_id.as_deref(), Some("receipt-trigger"));
+    assert_eq!(intent.event_vars["source_doc_id"], doc_id);
+    assert!(!source.has_seen("WorkspaceReceipt", ""));
+}
+
 #[derive(Default)]
 struct SubscriptionObserver(std::sync::Mutex<Vec<(u64, String, Result<(), String>)>>);
 
@@ -436,6 +584,73 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
 }
 
+/// The workspace packs chain stages off `CallbackResult`, a `@branchable`
+/// collection, selecting one binding's results (gents#1592). A result
+/// written by the callback owner fires once, with its real document.
+#[tokio::test]
+async fn a_callback_result_fires_its_bindings_event_source_once() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let task = ResolvedTask {
+        task_id: "task-after-callback".to_string(),
+        ..resolved_task("continue after the callback")
+    };
+    let trigger = resolved_event_trigger_with_filter(
+        "trigger-after-callback",
+        "CallbackResult",
+        task,
+        r#"{ binding_id: { _eq: "maintenance-execute-workspace" } }"#,
+    );
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-after-callback".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let node_for_write = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for (invocation_id, binding_id) in [
+            ("inv-other", "another-binding"),
+            ("inv-wanted", "maintenance-execute-workspace"),
+        ] {
+            crate::callback::create_callback_result(
+                node_for_write.as_ref(),
+                &crate::callback::CallbackResultDoc {
+                    result_id: format!("res-{invocation_id}"),
+                    invocation_id: invocation_id.to_string(),
+                    binding_id: Some(binding_id.to_string()),
+                    owner_agent_did: "did:key:zWriter".to_string(),
+                    workspace_id: None,
+                    work_unit_id: None,
+                    caused_by_correlation: None,
+                    created_at: None,
+                },
+            )
+            .await
+            .expect("CallbackResult written");
+        }
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for CallbackResult")
+        .expect("next_fire returned None");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-after-callback"));
+    let doc_vars = intent.doc_vars.as_ref().expect("hydrated result");
+    assert_eq!(doc_vars["invocation_id"].as_str(), Some("inv-wanted"));
+
+    let extra = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        extra.is_err(),
+        "fired more than once: {:?}",
+        extra.ok().flatten().map(|intent| intent.event_vars)
+    );
+}
+
 #[tokio::test]
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
@@ -625,11 +840,21 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.deferrals = crate::trigger_engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
 
     // Startup sees the row, but must not consume it while its declared
     // correlation is absent. A producer may populate that field in a
     // follow-up mutation.
     source.reconcile_subscriptions(snapshot.as_ref()).await;
+    // The rescan defers the row; a deferral past the threshold is reported,
+    // not silent (#1592).
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), source.next_fire())
+            .await
+            .is_err(),
+        "a row without its correlation value must not fire"
+    );
+    assert_eq!(source.deferrals.stuck(), 1);
     let mutation = format!(
         r#"mutation {{
             update_DeferredCorrelationMember(
@@ -648,6 +873,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
         .expect("follow-up correlation update must deliver the created document");
     assert_eq!(intent.correlation.as_deref(), Some("run-late"));
     assert_eq!(intent.event_vars["source_doc_id"], doc_id);
+    assert_eq!(source.deferrals.pending(), 0);
 }
 
 #[tokio::test]
@@ -2005,6 +2231,25 @@ async fn event_source_reconcile_excludes_invalid_source_collection_identifiers()
         "only the grammar-valid, non-reserved collection may enter the \
          desired set; identifier-invalid names must be excluded",
     );
+}
+
+/// `source_collection` comes straight off a stored `EventSource` document and
+/// is spliced into an introspection query; a hostile value must be refused
+/// rather than escape the `name: "..."` string position it fills.
+#[test]
+fn source_fields_query_refuses_a_hostile_collection_name() {
+    for hostile in [
+        r#"Job") { fields { name } } __schema { types { name } } x: __type(name: "Job"#,
+        "Job\" } } # ",
+        "__Type",
+        "Job Other",
+    ] {
+        crate::trigger_engine::event_source::source_fields_query(hostile)
+            .expect_err(&format!("{hostile:?} must be refused"));
+    }
+    let query =
+        crate::trigger_engine::event_source::source_fields_query("Job").expect("a plain name");
+    assert!(query.contains(r#"__type(name: "Job")"#), "{query}");
 }
 
 #[path = "event_source/resumed_goal.rs"]

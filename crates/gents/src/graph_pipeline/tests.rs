@@ -36,7 +36,9 @@ fn capability(
         workspace_authority: None,
         capability_id: id.to_owned(),
         revision: "v1".to_owned(),
-        task_id: behavior.to_owned(),
+        target: crate::graph_pipeline::StageTarget::Task {
+            task_id: behavior.to_owned(),
+        },
         input_ports: inputs,
         output_ports: outputs,
         allowed_callers: vec!["did:key:composer".to_owned()],
@@ -145,8 +147,8 @@ fn compiles_typed_linear_graph_and_resolves_existing_tasks() {
 
     assert_eq!(plan.compiler_version, COMPILER_VERSION);
     assert!(plan.digest.starts_with("sha256:"));
-    assert_eq!(plan.nodes[0].task_id, "extract-behavior");
-    assert_eq!(plan.nodes[1].task_id, "review-behavior");
+    assert_eq!(plan.nodes[0].target.task_id(), Some("extract-behavior"));
+    assert_eq!(plan.nodes[1].target.task_id(), Some("review-behavior"));
     assert_eq!(plan.edges[0].source_collection, "ExperimentFinding");
     assert_eq!(plan.edges[0].correlation_field, "graph_run_id");
     assert_eq!(plan.entries[0].correlation_field, "graph_run_id");
@@ -207,7 +209,9 @@ fn plan_digest_verification_rejects_semantic_tampering() {
     let mut plan = compile(&linear_intent(), &catalog()).unwrap();
     assert!(verify_graph_plan_digest(&plan));
 
-    plan.nodes[0].task_id = "attacker-selected-task".to_owned();
+    plan.nodes[0].target = StageTarget::Task {
+        task_id: "attacker-selected-task".to_owned(),
+    };
     assert!(!verify_graph_plan_digest(&plan));
 }
 
@@ -539,4 +543,59 @@ fn intent_schema_rejects_unknown_fields() {
         "write_directly_to_defradb": true
     });
     assert!(serde_json::from_value::<GraphIntent>(raw).is_err());
+}
+
+fn with_plugin_extract(digest: Option<&str>) -> Vec<StageCapability> {
+    let mut capabilities = catalog();
+    capabilities[0].target = StageTarget::Plugin {
+        plugin: "team/extract".to_owned(),
+        digest: digest.map(str::to_owned),
+        max_attempts: None,
+    };
+    capabilities
+}
+
+#[test]
+fn a_plugin_node_chains_into_an_agent_node_and_carries_its_outputs() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let plan = compile(&linear_intent(), &with_plugin_extract(Some(&digest))).unwrap();
+    let extract = &plan.nodes[0];
+    assert_eq!(
+        extract.target,
+        StageTarget::Plugin {
+            plugin: "team/extract".to_owned(),
+            digest: Some(digest),
+            max_attempts: None,
+        }
+    );
+    assert_eq!(extract.output_ports, catalog()[0].output_ports);
+    assert_eq!(plan.nodes[1].target.task_id(), Some("review-behavior"));
+    assert!(plan.nodes[1].output_ports.is_empty());
+    assert_eq!(plan.entries[0].target, extract.target);
+    assert_eq!(plan.edges[0].target.task_id(), Some("review-behavior"));
+    assert!(verify_graph_plan_digest(&plan));
+}
+
+#[test]
+fn different_plugin_bytes_are_a_different_plan() {
+    let one = compile(
+        &linear_intent(),
+        &with_plugin_extract(Some(&format!("sha256:{}", "a".repeat(64)))),
+    )
+    .unwrap();
+    let other = compile(
+        &linear_intent(),
+        &with_plugin_extract(Some(&format!("sha256:{}", "b".repeat(64)))),
+    )
+    .unwrap();
+    assert_ne!(one.digest, other.digest);
+}
+
+#[test]
+fn an_unpinned_plugin_node_does_not_compile() {
+    let error = compile(&linear_intent(), &with_plugin_extract(None)).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::UnpinnedPlugin),
+        "{error:?}"
+    );
 }

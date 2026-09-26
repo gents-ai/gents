@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod cross_deployment_cancel_mirror;
+pub(crate) mod deferred_delivery;
 pub(crate) mod event_delivery;
 pub(crate) mod event_source;
 pub(crate) mod goal_source;

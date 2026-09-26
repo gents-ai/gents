@@ -227,9 +227,12 @@ pub fn bind_pack_install_config(
 /// or the retained inference documents selected by the slot map.
 pub async fn install_pack_documents(
     access: &ConfigAccess,
+    owner: &str,
+    pack: &super::PackIdentity,
     config: &PackConfig,
-) -> Result<crate::config_client::DesiredStateApplyCounts> {
-    super::provenance::apply_pack_documents(access, config).await
+    policy: super::DriftPolicy,
+) -> Result<super::InstallReport> {
+    super::provenance::apply_pack_documents(access, owner, pack, config, policy).await
 }
 
 pub(super) fn validate_pack_inference_authoring(

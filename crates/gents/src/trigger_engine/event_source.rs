@@ -151,6 +151,9 @@ struct DeliveryBuild {
     intents: Vec<FireIntent>,
     correlation_pending: bool,
     settled_trigger_ids: Vec<String>,
+    /// `(trigger_id, correlation_field)` of each delivery deferred because
+    /// the source document has not set its correlation field yet.
+    deferred: Vec<(String, String)>,
 }
 
 pub struct EventSource {
@@ -174,6 +177,7 @@ pub struct EventSource {
     // correlation-incomplete sibling. This prevents a ready sibling from
     // firing again when a follow-up update supplies the missing correlation.
     partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
+    pub(super) deferrals: super::deferred_delivery::DeferralWatch,
     pending_intents: Mutex<VecDeque<FireIntent>>,
     group_timers: Arc<Mutex<HashMap<GroupTrackingKey, GroupTimer>>>,
     group_due_cursor: usize,
@@ -224,35 +228,53 @@ impl SourceSchemaCache {
         if let Some(fields) = guard.get(collection) {
             return Ok(fields.clone());
         }
-        let query = format!(
-            r#"query {{
-                __type(name: "{name}") {{
-                    fields {{ name }}
-                }}
-            }}"#,
-            name = collection,
-        );
-        let response = crate::graphql::graphql_with_transaction_retry(node, &query, "introspect")
-            .await
-            .with_context(|| format!("introspect {collection}"))?;
-        let Some(fields_arr) = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("__type"))
-            .and_then(|t| t.get("fields"))
-            .and_then(serde_json::Value::as_array)
-        else {
-            anyhow::bail!("introspection returned no fields for {}", collection);
-        };
-        let fields: Vec<String> = fields_arr
-            .iter()
-            .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
-            .filter(|name| !name.starts_with('_'))
-            .filter(|name| !is_defradb_aggregate_field(name))
-            .collect();
+        let response = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &source_fields_query(collection)?,
+            "introspect",
+        )
+        .await
+        .with_context(|| format!("introspect {collection}"))?;
+        let fields = source_fields_from(response.data.as_ref(), collection)?;
         guard.insert(collection.to_string(), fields.clone());
         Ok(fields)
     }
+}
+
+/// The introspection query for a collection's own fields. `collection` names
+/// a live document collection, not an arbitrary string, so it is validated
+/// before being spliced in and escaped as the string literal it fills.
+pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
+    crate::graphql::validate_collection_identifier(collection)?;
+    Ok(format!(
+        r#"query {{
+            __type(name: "{}") {{
+                fields {{ name }}
+            }}
+        }}"#,
+        crate::graphql::escape_graphql_string(collection)
+    ))
+}
+
+/// A collection's own fields from [`source_fields_query`]'s data: no system
+/// fields and no aggregates.
+pub(crate) fn source_fields_from(
+    data: Option<&serde_json::Value>,
+    collection: &str,
+) -> anyhow::Result<Vec<String>> {
+    let Some(fields) = data
+        .and_then(|d| d.get("__type"))
+        .and_then(|t| t.get("fields"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        anyhow::bail!("introspection returned no fields for {}", collection);
+    };
+    Ok(fields
+        .iter()
+        .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .filter(|name| !name.starts_with('_'))
+        .filter(|name| !is_defradb_aggregate_field(name))
+        .collect())
 }
 
 fn is_defradb_aggregate_field(name: &str) -> bool {
@@ -303,6 +325,7 @@ impl EventSource {
             collection_id_to_name: HashMap::new(),
             seen_docs: HashMap::new(),
             partially_seen_triggers: HashMap::new(),
+            deferrals: Default::default(),
             pending_intents: Mutex::new(VecDeque::new()),
             group_timers: Arc::new(Mutex::new(HashMap::new())),
             group_due_cursor: 0,
@@ -595,6 +618,20 @@ impl EventSource {
                     .map(str::to_owned)
             })
             .collect();
+        // Documents of a graph run already underway on a trigger's own
+        // revision are live work, never history, even when they predate this
+        // engine noticing the trigger.
+        let live = match snapshot.principal.as_ref() {
+            Some(principal) => {
+                crate::graph_pipeline::live_run_correlations(
+                    self.node.as_ref(),
+                    &principal.agent_did,
+                    trigger_ids.iter().map(String::as_str),
+                )
+                .await?
+            }
+            None => HashMap::new(),
+        };
         let mut deferred_by_doc: HashMap<String, HashSet<String>> = HashMap::new();
         for ((filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
@@ -624,17 +661,24 @@ impl EventSource {
                 .into_iter()
                 .flatten()
             {
-                let ready = row
+                let correlation = row
                     .get(&field)
                     .and_then(serde_json::Value::as_str)
                     .map(str::trim)
-                    .is_some_and(|value| !value.is_empty());
-                if !ready {
+                    .filter(|value| !value.is_empty());
+                let pending: Vec<&String> = match correlation {
+                    None => correlated_trigger_ids.iter().collect(),
+                    Some(correlation) => correlated_trigger_ids
+                        .iter()
+                        .filter(|id| crate::graph_pipeline::is_live_for(&live, id, correlation))
+                        .collect(),
+                };
+                if !pending.is_empty() {
                     if let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) {
                         deferred_by_doc
                             .entry(doc_id.to_string())
                             .or_default()
-                            .extend(correlated_trigger_ids.iter().cloned());
+                            .extend(pending.into_iter().cloned());
                     }
                 }
             }
@@ -734,7 +778,7 @@ impl EventSource {
             .collect())
     }
 
-    fn has_seen(&self, collection: &str, doc_id: &str) -> bool {
+    pub(super) fn has_seen(&self, collection: &str, doc_id: &str) -> bool {
         self.seen_docs
             .get(collection)
             .is_some_and(|docs| docs.contains(doc_id))
@@ -788,8 +832,16 @@ impl EventSource {
         build: &DeliveryBuild,
     ) {
         if build.correlation_pending {
+            for trigger_id in &build.settled_trigger_ids {
+                self.deferrals.settled(collection, doc_id, trigger_id);
+            }
+            for (trigger_id, field) in &build.deferred {
+                self.deferrals
+                    .deferred(collection, doc_id, trigger_id, field);
+            }
             self.mark_triggers_seen(collection, doc_id, build.settled_trigger_ids.clone());
         } else {
+            self.deferrals.settled_document(collection, doc_id);
             self.mark_seen(collection, doc_id);
         }
     }
@@ -1576,6 +1628,7 @@ impl EventSource {
             intents: Vec::with_capacity(candidates.len()),
             correlation_pending: false,
             settled_trigger_ids: Vec::with_capacity(candidates.len()),
+            deferred: Vec::new(),
         };
         for trigger in candidates {
             if self.has_seen_trigger(collection_name, source_doc_id, &trigger.trigger_id) {
@@ -1636,6 +1689,9 @@ impl EventSource {
                     Some(value) => Some(value.to_string()),
                     None => {
                         build.correlation_pending = true;
+                        build
+                            .deferred
+                            .push((trigger.trigger_id.clone(), field.to_owned()));
                         tracing::debug!(
                             trigger_id = %trigger.trigger_id,
                             %source_doc_id,
@@ -1908,6 +1964,12 @@ impl TriggerSource for EventSource {
                     continue;
                 };
 
+                // A `@branchable` collection publishes a second, collection-level
+                // update per write with an empty doc id. The document-level update
+                // of the same write carries the document; this one names none.
+                if update.doc_id.is_empty() {
+                    continue;
+                }
                 let collection_id = update.collection_id.clone();
                 let doc_id = update.doc_id.clone();
                 let Some(collection_name) = self.resolve_collection_name(&collection_id).await

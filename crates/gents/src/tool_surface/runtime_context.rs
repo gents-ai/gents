@@ -17,6 +17,7 @@ pub struct ToolRuntimeContext {
     pub(super) local_subnet: Option<String>,
     pub(super) agent_did: String,
     pub(super) identity: Option<Arc<dyn AgentIdentity>>,
+    pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
 impl ToolRuntimeContext {
@@ -56,6 +57,7 @@ impl ToolRuntimeContext {
             local_subnet,
             agent_did: agent_did.into(),
             identity,
+            plugins: Arc::default(),
         }
     }
 
@@ -73,7 +75,14 @@ impl ToolRuntimeContext {
             local_subnet: None,
             agent_did: agent_did.into(),
             identity: None,
+            plugins: Arc::default(),
         }
+    }
+
+    /// Where this runtime's plugin tools find installed plugins.
+    pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     pub fn node(&self) -> &Arc<EmbeddedNode> {

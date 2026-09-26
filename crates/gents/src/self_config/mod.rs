@@ -1366,7 +1366,7 @@ impl PackInstaller {
                 let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
                 let base_url = crate::pack_registry::resolve_registry_url(None);
                 let client = crate::pack_registry::RegistryClient::new(base_url.clone());
-                let pack = crate::pack_registry::fetch_pack(&client, None, namespace, name)
+                let pack = crate::pack_registry::fetch_pack(&client, None, namespace, name, None)
                     .await
                     .map_err(|registry_error| {
                         anyhow!(

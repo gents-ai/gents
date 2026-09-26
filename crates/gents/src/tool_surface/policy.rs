@@ -219,6 +219,7 @@ pub struct ToolPolicySurface {
     pub query_tools: EndpointScope<(String, String), BTreeSet<String>>,
     pub eth_query_methods: EndpointScope<String, ()>,
     pub eth_call_tools: EndpointScope<String, ()>,
+    pub plugin_tools: EndpointScope<String, ()>,
 }
 
 impl ToolPolicySurface {
@@ -250,6 +251,7 @@ impl ToolPolicySurface {
             query_tools: EndpointScope::none(),
             eth_query_methods: EndpointScope::none(),
             eth_call_tools: EndpointScope::none(),
+            plugin_tools: EndpointScope::none(),
         }
     }
 
@@ -293,6 +295,7 @@ impl ToolPolicySurface {
             query_tools: EndpointScope::all(),
             eth_query_methods: EndpointScope::all(),
             eth_call_tools: EndpointScope::all(),
+            plugin_tools: EndpointScope::all(),
         }
     }
 
@@ -423,6 +426,16 @@ impl ToolPolicySurface {
             query_tools: query_scope_from_decls(&selection.query_tools),
             eth_query_methods: eth_query_scope_from_resolved(&selection.eth_queries),
             eth_call_tools: eth_call_scope_from_resolved(&selection.eth_calls),
+            plugin_tools: if selection.plugin_tools.is_empty() {
+                EndpointScope::none()
+            } else {
+                EndpointScope::<String, ()>::only_units(
+                    selection
+                        .plugin_tools
+                        .iter()
+                        .map(|plugin| plugin.tool_name().to_string()),
+                )
+            },
         }
     }
 
@@ -478,6 +491,9 @@ impl ToolPolicySurface {
             eth_call_tools: self
                 .eth_call_tools
                 .meet_with(&other.eth_call_tools, |(), ()| ()),
+            plugin_tools: self
+                .plugin_tools
+                .meet_with(&other.plugin_tools, |(), ()| ()),
         }
     }
 

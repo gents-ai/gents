@@ -234,6 +234,7 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             &view.eth_call_tools_kind,
             &view.eth_call_tools_keys,
         ),
+        plugin_tools: unit_scope_from_strings(&view.plugin_tools_kind, &view.plugin_tools_keys),
     }
 }
 
@@ -313,6 +314,8 @@ fn view_from_surface(
         eth_query_methods_keys: surface.eth_query_methods.keys(),
         eth_call_tools_kind: surface.eth_call_tools.kind().to_string(),
         eth_call_tools_keys: surface.eth_call_tools.keys(),
+        plugin_tools_kind: surface.plugin_tools.kind().to_string(),
+        plugin_tools_keys: surface.plugin_tools.keys(),
     }
 }
 

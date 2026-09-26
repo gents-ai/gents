@@ -398,7 +398,8 @@ async fn run_agent_owned(
         agent.local_subnet.clone(),
         agent.agent_did().to_string(),
         Some(agent.principal_arc().identity.clone()),
-    );
+    )
+    .with_plugins(agent.plugins().clone());
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
 
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
@@ -672,6 +673,7 @@ async fn run_agent_owned(
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
     crate::workspace::install_process_operator_tool_root(callback_ceiling.clone());
+    let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
     let callback_startup_barrier = startup_barrier.clone();
     let callback_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
@@ -683,6 +685,7 @@ async fn run_agent_owned(
             callback_node,
             callback_agent_did,
             callback_ceiling,
+            callback_plugins,
             callback_cancel,
         )
         .await

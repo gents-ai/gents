@@ -73,6 +73,8 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) eth_query_methods_keys: Vec<String>,
     pub(crate) eth_call_tools_kind: String,
     pub(crate) eth_call_tools_keys: Vec<String>,
+    pub(crate) plugin_tools_kind: String,
+    pub(crate) plugin_tools_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

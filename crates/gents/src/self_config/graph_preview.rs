@@ -163,7 +163,9 @@ mod tests {
             agent_did: owner.to_owned(),
             capability_id: "score".to_owned(),
             revision: "v1".to_owned(),
-            task_id: "existing-score-task".to_owned(),
+            target: crate::graph_pipeline::StageTarget::Task {
+                task_id: "existing-score-task".to_owned(),
+            },
             input_ports: vec![PortSpec {
                 name: "input".to_owned(),
                 collection: "SessionInput".to_owned(),

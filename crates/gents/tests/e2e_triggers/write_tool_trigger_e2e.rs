@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
@@ -109,14 +109,6 @@ where
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
-    snapshot.process_state == "ready"
-        && snapshot.reconcile_phase == "idle"
-        && snapshot.active_generation > generation
-        && snapshot.router_generation == snapshot.active_generation
-        && snapshot.last_reconcile_error.is_empty()
 }
 
 #[test]

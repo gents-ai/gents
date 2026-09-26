@@ -1,5 +1,5 @@
-//! Non-interactive pack runs: `gents pack run <pack>`, `gents pack init`,
-//! and `gents pack seed` against an already-serving node.
+//! Non-interactive pack runs: `gents pack scenario run <pack>`, `gents pack scenario init`,
+//! and `gents pack scenario seed` against an already-serving node.
 //!
 //! A pack is a self-contained desired-state root (its own `schemas/` plus the
 //! config documents) with an `experiment.json` describing how to drive it.
@@ -8,7 +8,7 @@
 //! pack applies *after* the runtime is ready, so its backend is unprobed for up
 //! to one probe interval while the server already reports `serving`; and a seed
 //! written before the event source observes its collection is dropped in
-//! silence, because triggers are created/first-seen only. `pack seed` waits
+//! silence, because triggers are created/first-seen only. `pack scenario seed` waits
 //! for `/healthz` and an enabled event-backed Trigger, then confirms a correlated
 //! AgentRequest actually fired.
 use std::collections::{BTreeMap, BTreeSet};
@@ -3609,7 +3609,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         Ok(())
     } else {
         bail!(
-            "pack run did not meet expectations: {}",
+            "pack scenario run did not meet expectations: {}",
             failures.join("; ")
         )
     }

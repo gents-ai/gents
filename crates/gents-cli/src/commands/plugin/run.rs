@@ -68,7 +68,8 @@ fn run_plugin(
     let afb =
         afterburner_cloud::Afb::from_bytes(bytes).context("this is not a readable plugin .afb")?;
     let coordinate = format!("{}/{}", record.namespace, record.name);
-    let runner = PluginRunner::compile(bytes, &record.declaration)
+    // Declared authority, narrowed to what the operator granted at install.
+    let runner = PluginRunner::compile_within(bytes, &record.declaration, &record.ceiling())
         .with_context(|| format!("admitting plugin {coordinate}"))?;
     // The default budget for *this* artifact, not the generic one: a
     // plugin that has to boot an interpreter needs a memory ceiling its
@@ -108,6 +109,7 @@ fn run_plugin(
             "{coordinate} did not return a single JSON value: {}",
             outcome.diagnostics
         ),
+        PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", outcome.diagnostics),
     }
 }
 
@@ -129,10 +131,14 @@ mod tests {
             version: "0.1.0".to_owned(),
             digest: format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
             language: "rust".to_owned(),
-            declaration: store::declaration_from_artifact(
+            granted: None,
+            instructions: None,
+            declaration: crate::commands::plugin::declaration_from_artifact(
                 &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
             )
             .unwrap(),
+            owner_pack_coordinate: None,
+            owner_pack_digest: None,
         }
     }
 
@@ -165,8 +171,18 @@ mod tests {
         });
         // No declared authority: never replace this with artifact capabilities.
         declaration.manifold = None;
-        super::super::install_from_pack(home.path(), "team", "1.0.0", &declaration, &bytes)
-            .unwrap();
+        super::super::install_from_pack(
+            home.path(),
+            "team",
+            "team/echo",
+            "1.0.0",
+            "sha256:test-pack-digest",
+            &declaration,
+            &bytes,
+            None,
+            false,
+        )
+        .unwrap();
         let record = store::read_record(home.path(), "team", "echo").unwrap();
         assert_eq!(record.declaration, declaration);
         let runner = PluginRunner::compile(&bytes, &record.declaration).unwrap();
@@ -185,9 +201,13 @@ mod tests {
         assert!(super::super::install_from_pack(
             empty_home.path(),
             "team",
+            "team/echo",
             "1.0.0",
+            "sha256:test-pack-digest",
             &invalid.declaration,
-            &bytes
+            &bytes,
+            None,
+            false
         )
         .is_err());
         assert!(store::list_records(empty_home.path()).unwrap().is_empty());
@@ -224,5 +244,61 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
+    }
+
+    /// A plugin that asks for access is refused without consent, and the
+    /// grant is recorded with it; the same request later needs none.
+    #[test]
+    fn requested_authority_needs_consent_and_is_recorded() {
+        let bytes = build_echo_plugin();
+        let mut declaration = sample_record(&bytes).declaration;
+        declaration.manifold = Some(serde_json::json!({
+            "fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None",
+            "crypto": false, "child_process": false
+        }));
+        let home = tempfile::tempdir().unwrap();
+        let error = super::super::install_from_pack(
+            home.path(),
+            "team",
+            "team/echo",
+            "1.0.0",
+            "sha256:test-pack-digest",
+            &declaration,
+            &bytes,
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("--grant-authority"),
+            "{error:#}"
+        );
+        assert!(store::list_records(home.path()).unwrap().is_empty());
+
+        let record = super::super::install_from_pack(
+            home.path(),
+            "team",
+            "team/echo",
+            "1.0.0",
+            "sha256:test-pack-digest",
+            &declaration,
+            &bytes,
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(record.granted.is_some());
+        super::super::install_from_pack(
+            home.path(),
+            "team",
+            "team/echo",
+            "1.0.1",
+            "sha256:test-pack-digest-2",
+            &declaration,
+            &bytes,
+            None,
+            false,
+        )
+        .expect("the recorded grant covers the same request");
     }
 }

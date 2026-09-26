@@ -18,10 +18,9 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 fn default_home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".gents")
+    // Without a user home directory or GENTS_HOME, the working directory's
+    // `.gents` is the only home left to use.
+    gents::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
 }
 
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {

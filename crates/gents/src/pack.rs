@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod inference;
+mod installation;
 pub mod interpolate;
 mod loader;
 mod provenance;
@@ -12,9 +13,13 @@ pub use inference::{
     bind_pack_install_config, inspect_pack_inference_bindings, install_pack_documents,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
+pub use installation::{
+    list_installed_packs, remove_pack, DriftPolicy, InstallReport, InstalledPack,
+    InstalledPackPlugin, PackIdentity,
+};
 pub use loader::{decode_pack_config, load_pack_config};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
-pub use provenance::{pack_origin_from_tags, pack_origin_tag};
+pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;
@@ -146,6 +151,27 @@ pub struct PackPlugin {
     /// nothing, which is the right default for a pure transform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifold: Option<serde_json::Value>,
+    /// Markdown a model reads to use the plugin as a tool:
+    /// `plugins/<name>/TOOL.md`. Absent, the description is all it gets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+/// Largest `TOOL.md` a plugin may ship: a model reads it on every turn the
+/// tool is offered.
+pub const MAX_TOOL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
+
+/// A plugin's `TOOL.md` as text, refused when it is not UTF-8 or too long to
+/// hand a model.
+pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String> {
+    anyhow::ensure!(
+        bytes.len() <= MAX_TOOL_INSTRUCTIONS_BYTES,
+        "plugin {plugin:?}'s TOOL.md is {} bytes; the limit is {} KiB",
+        bytes.len(),
+        MAX_TOOL_INSTRUCTIONS_BYTES / 1024
+    );
+    String::from_utf8(bytes.to_vec())
+        .with_context(|| format!("plugin {plugin:?}'s TOOL.md is not UTF-8 text"))
 }
 
 /// Where a plugin's compiled artifact must live inside a pack, by
@@ -171,9 +197,9 @@ pub const PLUGIN_ARTIFACT_PREFIX: &str = "plugins/";
 /// fully bounded, while a hand-built Ruby-source `.afb` is not - so a
 /// language name alone cannot answer it.
 ///
-/// vertexia: kept in sync by hand with afterburner's own list; the ceiling
-/// is a shared, lightweight language-id crate both sides could depend on if
-/// this ever drifts.
+/// Kept in sync by hand with afterburner's own list; the ceiling is a
+/// shared, lightweight language-id crate both sides could depend on if this
+/// ever drifts.
 pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
     "js",
     "javascript",
@@ -238,6 +264,14 @@ impl PackPlugin {
             anyhow::ensure!(
                 is_distributable_asset_path(source),
                 "unsafe plugin source path: {source:?}"
+            );
+        }
+        if let Some(instructions) = &self.instructions {
+            anyhow::ensure!(
+                *instructions == format!("{PLUGIN_ARTIFACT_PREFIX}{}/TOOL.md", self.name),
+                "plugin {:?} instructions must be plugins/{}/TOOL.md, got {instructions:?}",
+                self.name,
+                self.name
             );
         }
         anyhow::ensure!(
@@ -440,6 +474,13 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             plugin.name,
             plugin.artifact
         );
+        if let Some(instructions) = &plugin.instructions {
+            anyhow::ensure!(
+                unique.contains(instructions),
+                "pack declares the plugin {:?} but not its instructions {instructions:?} as an asset",
+                plugin.name
+            );
+        }
     }
     anyhow::ensure!(
         manifest.metadata.kind != PackKind::Plugins || !manifest.metadata.plugins.is_empty(),
@@ -554,17 +595,41 @@ pub fn digest_declared_assets<'a>(
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
 ) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
+    let mut digest = PackDigester::default();
     for path in declared_paths(manifest) {
         let bytes =
             asset(&path).with_context(|| format!("pack references missing asset {path:?}"))?;
-        hasher.update((path.len() as u64).to_be_bytes());
-        hasher.update(path.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
+        digest.begin_entry(&path, bytes.len() as u64);
+        digest.update(bytes);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(digest.finish())
+}
+
+/// The pack digest, computed incrementally: each declared path in
+/// [`declared_paths`] order, as its length, its bytes, its content length and
+/// its content. The one definition every reader and writer of a pack uses,
+/// so a pack streamed through a `.pack` file and one compiled into the binary
+/// cannot hash differently.
+#[derive(Default)]
+pub struct PackDigester(sha2::Sha256);
+
+impl PackDigester {
+    /// Starts an entry whose content is `len` bytes, fed through [`Self::update`].
+    pub fn begin_entry(&mut self, path: &str, len: u64) {
+        use sha2::Digest;
+        self.0.update((path.len() as u64).to_be_bytes());
+        self.0.update(path.as_bytes());
+        self.0.update(len.to_be_bytes());
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        sha2::Digest::update(&mut self.0, bytes);
+    }
+
+    /// The digest as `sha256:{hex}`.
+    pub fn finish(self) -> String {
+        format!("sha256:{:x}", sha2::Digest::finalize(self.0))
+    }
 }
 
 pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
@@ -647,6 +712,7 @@ mod tests {
             language: "rust".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             manifold: None,
+            instructions: None,
         }
     }
 

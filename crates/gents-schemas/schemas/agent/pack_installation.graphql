@@ -1,0 +1,12 @@
+# One per installed pack and owner: what the install created, so an upgrade
+# can tell an edited document from its own and removal deletes only its own.
+type PackInstallation @index(fields: ["agent_did", "coordinate"], unique: true) {
+    agent_did: String @index @immutable
+    coordinate: String @index @immutable
+    version: String
+    digest: String @index
+    documents: JSON
+    plugins: JSON
+    history: JSON
+    installed_at: String
+}

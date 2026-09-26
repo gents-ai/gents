@@ -33,12 +33,22 @@ def callbackInvocationJson (inv : CallbackInvocation) : String :=
     ++ ",\"state\":" ++ jsonString inv.state.toDefraDB
     ++ ",\"journal\":" ++ jsonArray (inv.journal.map (fun e =>
       "{\"index\":" ++ toString e.index ++ ",\"state\":" ++ jsonString e.state.toDefraDB ++ "}"))
-    ++ ",\"result_emitted\":" ++ boolString inv.resultEmitted ++ "}"
+    ++ ",\"result_emitted\":" ++ boolString inv.resultEmitted
+    ++ ",\"attempts\":" ++ toString inv.attempts ++ "}"
 
 def callbackTransitionCasesJson : String :=
   jsonArray (Callback.Conformance.transitionCases.map fun c =>
     "{\"name\":" ++ jsonString c.name ++ ",\"pre\":" ++ callbackInvocationJson c.pre
       ++ ",\"post\":" ++ callbackInvocationJson c.post ++ "}")
+
+def callbackRetryCasesJson : String :=
+  jsonArray (Callback.Conformance.retryCases.map fun c =>
+    "{\"name\":" ++ jsonString c.name
+      ++ ",\"state\":" ++ jsonString c.state.toDefraDB
+      ++ ",\"journal\":" ++ jsonStringArray (c.journal.map ActionJournalState.toDefraDB)
+      ++ ",\"attempts\":" ++ toString c.attempts
+      ++ ",\"max_attempts\":" ++ toString c.maxAttempts
+      ++ ",\"allowed\":" ++ boolString c.allowed ++ "}")
 
 def callbackTransitionCaseCount : Nat := Callback.Conformance.transitionCases.length
 

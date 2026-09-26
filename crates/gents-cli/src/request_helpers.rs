@@ -963,10 +963,38 @@ pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 
+tokio::task_local! {
+    /// Set while a command runs for an embedding caller (the desktop): its
+    /// report is kept here instead of printed.
+    static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
+}
+
 pub(crate) fn print_json(value: &Value) -> Result<()> {
+    if CAPTURED_REPORT
+        .try_with(|report| *report.borrow_mut() = Some(value.clone()))
+        .is_ok()
+    {
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(value)?);
     io::stdout().flush()?;
     Ok(())
+}
+
+/// Runs `command` and returns the report it would have printed; the last
+/// one when it prints several.
+pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    CAPTURED_REPORT
+        .scope(std::cell::RefCell::new(None), async move {
+            command.await?;
+            CAPTURED_REPORT
+                .with(|report| report.borrow_mut().take())
+                .ok_or_else(|| anyhow::anyhow!("the command produced no report"))
+        })
+        .await
 }
 
 pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration> {

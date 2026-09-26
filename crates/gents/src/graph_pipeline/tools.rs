@@ -139,7 +139,9 @@ mod tests {
             workspace_authority: None,
             capability_id: "worker".to_owned(),
             revision: "v1".to_owned(),
-            task_id: "existing-worker-task".to_owned(),
+            target: crate::graph_pipeline::StageTarget::Task {
+                task_id: "existing-worker-task".to_owned(),
+            },
             input_ports: vec![
                 PortSpec {
                     name: "input".to_owned(),
@@ -177,7 +179,9 @@ mod tests {
             workspace_authority: None,
             capability_id: "reviewer".to_owned(),
             revision: "v1".to_owned(),
-            task_id: "existing-reviewer-task".to_owned(),
+            target: crate::graph_pipeline::StageTarget::Task {
+                task_id: "existing-reviewer-task".to_owned(),
+            },
             input_ports: vec![PortSpec {
                 name: "input".to_owned(),
                 collection: "PipelineIntermediate".to_owned(),

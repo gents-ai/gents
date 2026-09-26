@@ -106,11 +106,99 @@ pub(crate) fn load_archive_graph_package_with_environment(
 ) -> Result<LoadedGraphPackage> {
     load_package_from_assets(
         archive.manifest().clone(),
-        archive.digest()?,
+        archive.digest().to_owned(),
         options,
         &|path| Ok(archive.asset(path)?.to_vec()),
         environment,
     )
+}
+
+/// Where a graph's compiled plan travels inside its pack: the graph id in the
+/// snake_case every pack file name uses.
+pub fn graph_plan_path(graph_id: &str) -> String {
+    format!("graphs/{}.plan.json", graph_id.replace('-', "_"))
+}
+
+/// Compiles every graph a pack declares from its files, for the placeholder
+/// owner `agent_did`. A plan names no owner, so the result is the plan any
+/// install of these files compiles; `gents pack build` ships it and install
+/// recompiles to verify it.
+pub fn compile_pack_graphs(
+    manifest: &crate::pack::PackManifest,
+    asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    agent_did: &str,
+) -> Result<Vec<crate::graph_pipeline::GraphPlan>> {
+    let options = PackInstallOptions {
+        agent_did: agent_did.to_owned(),
+    };
+    let config = crate::pack::load_pack_config(manifest, &options, asset, &|_| None)?;
+    anyhow::ensure!(
+        !config.graph_intents.is_empty(),
+        "a graph pack declares at least one graph"
+    );
+    config
+        .graph_intents
+        .iter()
+        .map(|intent| {
+            crate::graph_pipeline::compile_graph(
+                intent,
+                &config.graph_capabilities,
+                agent_did,
+                &crate::graph_pipeline::CompilerPolicy::default(),
+            )
+            .with_context(|| format!("graph {} does not compile", intent.graph_id))
+        })
+        .collect()
+}
+
+/// Loads a graph pack as an install would and compiles every graph it
+/// declares for the placeholder owner `agent_did`, writing nothing. Returns
+/// the plans; a shipped plan that differs from its recompilation is refused.
+pub fn check_graph_pack(
+    archive: &crate::pack_archive::PackArchive,
+    agent_did: &str,
+) -> Result<Vec<crate::graph_pipeline::GraphPlan>> {
+    let options = PackInstallOptions {
+        agent_did: agent_did.to_owned(),
+    };
+    load_archive_graph_package_with_environment(archive, &options, &|_| None)?;
+    let plans = compile_pack_graphs(
+        archive.manifest(),
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        agent_did,
+    )?;
+    for plan in &plans {
+        verify_shipped_plan(plan, &|path| archive.asset(path).ok().map(<[u8]>::to_vec))?;
+    }
+    Ok(plans)
+}
+
+/// Refuses a pack whose shipped plan for `compiled`'s graph differs from what
+/// this build compiles: it was built by another compiler, or edited after
+/// build. A pack that ships no plan is compiled at install, as always.
+pub fn verify_shipped_plan(
+    compiled: &crate::graph_pipeline::GraphPlan,
+    asset: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<()> {
+    let Some(bytes) = asset(&graph_plan_path(&compiled.graph_id)) else {
+        return Ok(());
+    };
+    let shipped: crate::graph_pipeline::GraphPlan =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "the shipped plan for graph {} is not a plan",
+                compiled.graph_id
+            )
+        })?;
+    anyhow::ensure!(
+        shipped.digest == compiled.digest,
+        "graph {} was built into this pack by compiler {} and compiles differently here ({}); \
+         rebuild the pack with gents pack build",
+        compiled.graph_id,
+        shipped.compiler_version,
+        compiled.compiler_version
+    );
+    Ok(())
 }
 
 fn load_package_from_assets(
@@ -159,17 +247,19 @@ fn load_package_from_assets(
             capability.agent_did == options.agent_did,
             "foreign graph capability owner"
         );
+        // A plugin node's artifact was matched and pinned when the config loaded.
+        let Some(task_id) = capability.target.task_id() else {
+            continue;
+        };
         anyhow::ensure!(
             config
                 .tasks
                 .iter()
-                .filter(|task| task.agent_did == capability.agent_did
-                    && task.task_id == capability.task_id)
+                .filter(|task| task.agent_did == capability.agent_did && task.task_id == task_id)
                 .count()
                 == 1,
-            "graph capability {} must reference exactly one owned task {}",
+            "graph capability {} must reference exactly one owned task {task_id}",
             capability.capability_id,
-            capability.task_id
         );
     }
     Ok(LoadedGraphPackage {
@@ -292,7 +382,8 @@ mod tests {
             .tasks
             .iter()
             .filter(|task| {
-                task.agent_did == capability.agent_did && task.task_id == capability.task_id
+                task.agent_did == capability.agent_did
+                    && Some(task.task_id.as_str()) == capability.target.task_id()
             })
             .collect::<Vec<_>>();
         assert_eq!(rows.len(), 1);

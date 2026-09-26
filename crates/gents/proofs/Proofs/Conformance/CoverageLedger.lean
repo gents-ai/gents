@@ -1737,6 +1737,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::callback_lifecycle::generated_callback_journals_match_runtime_owner"
       "Generated journal-prefix observations exercise the actual journal owner. Invocation-state legality, denied execution and result-emission ordering need the callback executor consumer; the removed Rust predicate copy did not establish them.")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "callback_retry_cases"
+      "CallbackRetryCases"
+      "conformance::callback_lifecycle::generated_retry_decisions_match_runtime_owner")
+      "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"
       "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases"

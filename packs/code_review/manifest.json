@@ -31,10 +31,11 @@
     "tasks/review_recon_task/prompt.md",
     "tasks/review_scan_task/prompt.md",
     "tasks/review_triage_task/prompt.md",
-    "tasks/review_verify_task/prompt.md"
+    "tasks/review_verify_task/prompt.md",
+    "graphs/code_review.plan.json"
   ],
   "dependencies": [],
-  "compiler_version": "graph-intent-v3",
+  "compiler_version": "graph-intent-v4",
   "schemas": [
     "schemas/review_job.graphql",
     "schemas/evidence_manifest.graphql",

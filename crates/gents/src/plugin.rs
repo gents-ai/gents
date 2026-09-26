@@ -71,7 +71,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use afterburner::afb_run::{run_afb_bytes, AfbRunOutcome, AfbRunRequest};
-use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, Manifold, NetAccess};
+use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, NetAccess};
 use anyhow::{Context, Result};
 
 use crate::pack::PackPlugin;
@@ -188,6 +188,10 @@ pub enum PluginVerdict {
     /// parseable, more than one value, or truncated past the output
     /// bound).
     BadOutput,
+    /// The plugin exited with a non-zero code. Its stdout is not taken as
+    /// a result even when it parses: the exit code is the plugin's own
+    /// statement that the call failed.
+    Failed,
 }
 
 /// What came back from one plugin call.
@@ -447,6 +451,13 @@ fn outcome_from_exit(
     let diagnostics_base = String::from_utf8_lossy(stderr).into_owned();
     if code != 0 {
         notes.push(format!("plugin exited with code {code}"));
+        return PluginOutcome {
+            verdict: PluginVerdict::Failed,
+            output: serde_json::Value::Null,
+            diagnostics: append_notes(diagnostics_base, &notes),
+            fuel_used: output.fuel_used,
+            wall_ms,
+        };
     }
 
     if output.stdout.len() > MAX_STDOUT_BYTES {
@@ -612,5 +623,26 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
     }
 }
 
+pub mod authority;
+
+/// The attempts a plugin call gets in all when its caller configured
+/// `max_attempts`: absent, or zero, is one.
+pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {
+    max_attempts.unwrap_or(1).max(1)
+}
+
+/// How long a failed plugin call waits before its next attempt: one second,
+/// doubling per attempt, at most a minute.
+pub fn retry_backoff(attempts: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << attempts.saturating_sub(1).min(6))
+        .min(std::time::Duration::from_secs(60))
+}
+pub mod executor;
+pub mod store;
+pub mod tool;
+
+/// A plugin's authority: files, network, environment and the rest.
+pub use afterburner_core::manifold::Manifold;
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -5,6 +5,7 @@
 //! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;
+mod live;
 mod run;
 mod runtime;
 mod tools;
@@ -14,6 +15,7 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
+pub(crate) use live::{is_live_for, live_run_correlations};
 #[cfg(test)]
 pub(crate) use run::derive_graph_workspace;
 pub(crate) use run::{
@@ -49,11 +51,14 @@ pub use types::{
     DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
     GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedPackageArtifact,
     PlannedResult, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
-    ResultContract, StageCapability, WorkspaceAuthority, COMPILER_VERSION,
+    ResultContract, StageCapability, StageTarget, WorkspaceAuthority, COMPILER_VERSION,
 };
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod plugin_node_tests;
 
 #[cfg(test)]
 mod logical_invocation_contract_tests;

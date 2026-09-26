@@ -39,6 +39,7 @@ pub struct BehaviorToolConfig {
     query_tools: Vec<QueryToolDecl>,
     eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     eth_calls: Vec<crate::eth::ResolvedEthCall>,
+    plugin_tools: Vec<crate::document_config::PluginToolRef>,
     self_config: super::SelfConfigToolConfig,
     behavior_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -82,6 +83,7 @@ impl BehaviorToolConfig {
             query_tools: Vec::new(),
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
             ceiling_policy: ToolPolicySurface::ceiling_with_host_modes(
@@ -230,6 +232,7 @@ impl BehaviorToolConfig {
             lsp_config,
             eth_queries,
             eth_calls,
+            plugin_tools,
         } = selection;
         let file_tools =
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
@@ -365,6 +368,14 @@ impl BehaviorToolConfig {
             query_tools: static_policy.query_decls_for_runtime(&query_tools),
             eth_queries,
             eth_calls,
+            plugin_tools: plugin_tools
+                .into_iter()
+                .filter(|plugin| {
+                    static_policy
+                        .plugin_tools
+                        .permits(&plugin.tool_name().to_string())
+                })
+                .collect(),
             // `behavior_name` is the behavior_id on the document path
             // (agent.rs `behavior_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
@@ -554,6 +565,16 @@ impl BehaviorToolConfig {
                     .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
                     .collect()
             },
+            plugin_tools: self
+                .plugin_tools
+                .iter()
+                .filter(|plugin| {
+                    effective_policy
+                        .plugin_tools
+                        .permits(&plugin.tool_name().to_string())
+                })
+                .cloned()
+                .collect(),
             enable_skills: effective_policy.skills,
             self_config: super::SelfConfigToolConfig {
                 enabled: effective_policy.include_self_config(),

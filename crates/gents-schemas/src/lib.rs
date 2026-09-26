@@ -30,6 +30,8 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
+pub const PACK_INSTALLATION_NAME: &str = "PackInstallation";
+pub const PACK_INSTALLATION: &str = include_str!("../schemas/agent/pack_installation.graphql");
 pub const GOAL_CREATION_CLAIM_NAME: &str = "GoalCreationClaim";
 pub const GOAL_CREATION_CLAIM: &str = include_str!("../schemas/agent/goal_creation_claim.graphql");
 pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
@@ -219,6 +221,7 @@ pub const ALL: &[&str] = &[
     EVAL_TRIAL,
     EVAL_VERDICT,
     OPTIMIZATION_JOB,
+    PACK_INSTALLATION,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -288,6 +291,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVAL_TRIAL_NAME,
     EVAL_VERDICT_NAME,
     OPTIMIZATION_JOB_NAME,
+    PACK_INSTALLATION_NAME,
 ];
 
 /// Agent-domain collections the desktop bulk-syncs after pairing.

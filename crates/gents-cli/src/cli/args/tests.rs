@@ -586,9 +586,16 @@ fn pack_catalog_and_install_parse() {
     assert!(Cli::try_parse_from(["gents", "graph", "install", "code_review"]).is_err());
     assert!(Cli::try_parse_from(["gents", "demo"]).is_err());
     assert!(Cli::try_parse_from(["gents", "demo", "run", "pipeline"]).is_err());
-    assert!(
-        Cli::try_parse_from(["gents", "pack", "seed", "pipeline", "--home", "/tmp/node"]).is_err()
-    );
+    assert!(Cli::try_parse_from([
+        "gents",
+        "pack",
+        "scenario",
+        "seed",
+        "pipeline",
+        "--home",
+        "/tmp/node"
+    ])
+    .is_err());
 
     match parse_pack(&[
         "install",
@@ -699,6 +706,7 @@ fn parse_pack(argv: &[&str]) -> PackCommand {
 #[test]
 fn pack_seed_parses_pack_port_and_page() {
     let args = parse_pack(&[
+        "scenario",
         "seed",
         "packs/pipeline",
         "--http-port",
@@ -711,7 +719,7 @@ fn pack_seed_parses_pack_port_and_page() {
         "review-1",
     ]);
     match args {
-        PackCommand::Seed(seed) => {
+        PackCommand::Scenario(PackScenarioCommand::Seed(seed)) => {
             assert_eq!(seed.pack, "packs/pipeline");
             assert_eq!(seed.http_port, 19191);
             assert_eq!(seed.page_port, Some(19190));
@@ -724,9 +732,15 @@ fn pack_seed_parses_pack_port_and_page() {
 
 #[test]
 fn pack_init_parses_pack_and_home() {
-    let args = parse_pack(&["init", "packs/pipeline", "--home", "/tmp/review-home"]);
+    let args = parse_pack(&[
+        "scenario",
+        "init",
+        "packs/pipeline",
+        "--home",
+        "/tmp/review-home",
+    ]);
     match args {
-        PackCommand::Init(init) => {
+        PackCommand::Scenario(PackScenarioCommand::Init(init)) => {
             assert_eq!(init.pack, "packs/pipeline");
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);
@@ -773,10 +787,34 @@ fn pack_build_parses_dir_out_and_all() {
         }
         _ => panic!("expected pack build --all"),
     }
-    // Neither a directory nor --all is a usage error, not a silent no-op.
-    assert!(Cli::try_parse_from(["gents", "pack", "build"]).is_err());
+    // Neither a directory nor --all builds the current directory.
+    match parse_pack(&["build"]) {
+        PackCommand::Build(args) => assert!(args.dir.is_none() && !args.all),
+        _ => panic!("expected pack build"),
+    }
     // --all and an explicit directory are mutually exclusive.
     assert!(Cli::try_parse_from(["gents", "pack", "build", "packs/mailbox", "--all"]).is_err());
+}
+
+#[test]
+fn pack_update_carries_install_bindings_for_a_named_pack() {
+    match parse_pack(&[
+        "update",
+        "acme/mailbox",
+        "--inference-slot",
+        "triage=profile-1",
+    ]) {
+        PackCommand::Update(args) => {
+            assert_eq!(args.package.as_deref(), Some("acme/mailbox"));
+            assert_eq!(args.inference_slots, ["triage=profile-1"]);
+        }
+        _ => panic!("expected pack update"),
+    }
+    // One set of bindings cannot apply to every outdated pack at once.
+    assert!(
+        Cli::try_parse_from(["gents", "pack", "update", "--inference-slot", "triage=p"]).is_err()
+    );
+    assert!(Cli::try_parse_from(["gents", "pack", "update", "--bindings", "b.json"]).is_err());
 }
 
 #[test]
@@ -805,6 +843,77 @@ fn pack_search_and_publish_parse() {
         }
         _ => panic!("expected pack publish"),
     }
+}
+
+/// `--token` and `--token-stdin` name the same value two ways; passing both
+/// is a usage error everywhere a registry token is accepted.
+#[test]
+fn token_and_token_stdin_conflict_on_every_command_that_accepts_both() {
+    for argv in [
+        ["pack", "login", "--token", "x", "--token-stdin"].as_slice(),
+        [
+            "pack",
+            "publish",
+            "/tmp/p.tar.gz",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "pack",
+            "yank",
+            "acme/widget@1.0.0",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "pack",
+            "owner",
+            "acme/widget",
+            "--transfer",
+            "bob",
+            "--yes",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+        [
+            "plugin",
+            "publish",
+            "/tmp/p.afb",
+            "--token",
+            "x",
+            "--token-stdin",
+        ]
+        .as_slice(),
+    ] {
+        let mut full = vec!["gents"];
+        full.extend_from_slice(argv);
+        assert!(
+            Cli::try_parse_from(&full).is_err(),
+            "{argv:?} should refuse --token with --token-stdin"
+        );
+    }
+}
+
+/// `--transfer` parses with or without `--yes`; the runtime refuses an
+/// unconfirmed transfer (see `commands::pack::account::tests`), but `--yes`
+/// alone names nothing to confirm, which clap catches at parse time.
+#[test]
+fn owner_yes_requires_a_transfer_to_confirm() {
+    assert!(matches!(
+        parse_pack(&["owner", "acme/widget", "--transfer", "bob", "--yes"]),
+        PackCommand::Owner(args) if args.transfer.as_deref() == Some("bob") && args.yes
+    ));
+    assert!(matches!(
+        parse_pack(&["owner", "acme/widget", "--transfer", "bob"]),
+        PackCommand::Owner(args) if args.transfer.as_deref() == Some("bob") && !args.yes
+    ));
+    assert!(Cli::try_parse_from(["gents", "pack", "owner", "acme/widget", "--yes"]).is_err());
 }
 
 #[test]

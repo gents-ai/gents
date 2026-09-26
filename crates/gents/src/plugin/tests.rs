@@ -56,7 +56,7 @@ fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
 
 /// Packs a one-plugin pack around a compiled `.afb`, so `PluginRunner`
 /// is exercised exactly as an installed pack ships it.
-fn build_plugin_pack(
+pub(crate) fn build_plugin_pack(
     pack_name: &str,
     wat_source: &str,
     manifold: Option<serde_json::Value>,
@@ -107,7 +107,7 @@ fn build_plugin_pack(
 /// Reads fd 0 in one shot and writes exactly what it read to fd 1:
 /// the identity plugin, and the vehicle for every "does the ABI carry
 /// arguments through" test below.
-const ECHO_WAT: &str = r#"
+pub(crate) const ECHO_WAT: &str = r#"
       (module
         (import "wasi_snapshot_preview1" "fd_read"
           (func $fd_read (param i32 i32 i32 i32) (result i32)))
@@ -198,6 +198,45 @@ fn non_json_stdout_is_bad_output() {
     assert_eq!(outcome.output, serde_json::Value::Null);
     assert!(
         outcome.diagnostics.contains("not a single JSON value"),
+        "diagnostics: {}",
+        outcome.diagnostics
+    );
+}
+
+/// A non-zero exit is a failure even when stdout is valid JSON: the exit
+/// code is the plugin's own verdict on the call.
+#[test]
+fn a_non_zero_exit_is_a_failure_even_with_json_stdout() {
+    let wat_source = r#"
+          (module
+            (import "wasi_snapshot_preview1" "fd_write"
+              (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (import "wasi_snapshot_preview1" "proc_exit"
+              (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "{}")
+            (func (export "_start")
+              i32.const 16  i32.const 0  i32.store
+              i32.const 20  i32.const 2  i32.store
+              i32.const 1
+              i32.const 16
+              i32.const 1
+              i32.const 24
+              call $fd_write
+              drop
+              i32.const 3
+              call $proc_exit))
+        "#;
+    let (plugin, afb) = build_plugin_pack("failing_pack", wat_source, None);
+    let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
+
+    let outcome = runner
+        .call(&serde_json::json!({}), &PluginBudget::default())
+        .expect("call succeeds at the VM level");
+    assert_eq!(outcome.verdict, PluginVerdict::Failed);
+    assert_eq!(outcome.output, serde_json::Value::Null);
+    assert!(
+        outcome.diagnostics.contains("exited with code 3"),
         "diagnostics: {}",
         outcome.diagnostics
     );
@@ -388,6 +427,7 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         language: language.to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
+        instructions: None,
     }
 }
 
@@ -482,6 +522,7 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         language: "rust".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
+        instructions: None,
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
@@ -600,4 +641,46 @@ fn narrow_manifold_always_forces_listen_to_none() {
         ListenAccess::None,
         "a plugin is called, never a server, whatever either side asked for"
     );
+}
+
+pub(crate) mod executor;
+
+#[test]
+fn a_plugin_call_gets_one_attempt_unless_configured() {
+    assert_eq!(crate::plugin::attempts_allowed(None), 1);
+    assert_eq!(crate::plugin::attempts_allowed(Some(0)), 1);
+    assert_eq!(crate::plugin::attempts_allowed(Some(4)), 4);
+}
+
+#[test]
+fn retry_backoff_doubles_and_is_capped() {
+    use std::time::Duration;
+    assert_eq!(crate::plugin::retry_backoff(0), Duration::from_secs(1));
+    assert_eq!(crate::plugin::retry_backoff(1), Duration::from_secs(1));
+    assert_eq!(crate::plugin::retry_backoff(2), Duration::from_secs(2));
+    assert_eq!(crate::plugin::retry_backoff(4), Duration::from_secs(8));
+    assert_eq!(crate::plugin::retry_backoff(40), Duration::from_secs(60));
+}
+
+#[test]
+fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
+    let mut plugin: PackPlugin = serde_json::from_value(serde_json::json!({
+        "name": "lint", "description": "Lints", "artifact": "plugins/lint.afb",
+        "language": "rust", "input_schema": {"type": "object"},
+        "instructions": "plugins/lint/TOOL.md",
+    }))
+    .unwrap();
+    plugin.validate().unwrap();
+    plugin.instructions = Some("plugins/other/TOOL.md".into());
+    assert!(plugin.validate().is_err(), "another plugin's instructions");
+    plugin.instructions = Some("plugins/lint/README.md".into());
+    assert!(plugin.validate().is_err(), "not a TOOL.md");
+
+    assert_eq!(
+        crate::pack::tool_instructions("lint", b"# lint\nUse it.").unwrap(),
+        "# lint\nUse it."
+    );
+    assert!(crate::pack::tool_instructions("lint", &[0xff, 0xfe]).is_err());
+    let oversized = vec![b'a'; crate::pack::MAX_TOOL_INSTRUCTIONS_BYTES + 1];
+    assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }
