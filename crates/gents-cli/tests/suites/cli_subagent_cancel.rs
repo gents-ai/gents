@@ -379,7 +379,7 @@ async fn create_local_processing_request(
         .unwrap_or_default();
     let mutation = format!(
         r#"mutation {{
-            create_AgentRequest(input: {{
+            create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
                 behavior_id: "{behavior_id}",

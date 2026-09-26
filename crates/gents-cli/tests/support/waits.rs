@@ -213,10 +213,7 @@ pub async fn wait_for_request(
         let query = format!(
             r#"{{
                 AgentRequest(
-                    filter: {{
-                        agent_did: {{ _eq: "{}" }},
-                        content: {{ _eq: "{}" }}
-                    }},
+                    filter: {{ {} }},
                     order: {{ created_at: DESC }},
                     limit: 1
                 ) {{
@@ -225,8 +222,11 @@ pub async fn wait_for_request(
                     behavior_id
                 }}
             }}"#,
-            escape_graphql_string(agent_did),
-            escape_graphql_string(content),
+            gents::session::public_request_filter(&format!(
+                r#"agent_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
+                escape_graphql_string(agent_did),
+                escape_graphql_string(content),
+            )),
         );
         let response = graphql_query(graphql, &query).await?;
         if let Ok(row) = first_graphql_row(&response, "AgentRequest") {

@@ -345,10 +345,7 @@ async fn wait_for_runtime_agent_request(
             &format!(
                 r#"{{
                     AgentRequest(
-                        filter: {{
-                            agent_did: {{ _eq: "{}" }},
-                            content: {{ _eq: "{}" }}
-                        }},
+                        filter: {{ {} }},
                         order: {{ created_at: DESC }},
                         limit: 1
                     ) {{
@@ -358,8 +355,11 @@ async fn wait_for_runtime_agent_request(
                         content
                     }}
                 }}"#,
-                escape_graphql_string(agent_did),
-                escape_graphql_string(content),
+                gents::session::public_request_filter(&format!(
+                    r#"agent_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
+                    escape_graphql_string(agent_did),
+                    escape_graphql_string(content),
+                )),
             ),
         )
         .await

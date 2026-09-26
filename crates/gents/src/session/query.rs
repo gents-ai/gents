@@ -86,6 +86,21 @@ pub fn session_scope_filter(
     )
 }
 
+/// Add the public request purpose (`RequestPurpose::PUBLIC`) to an
+/// AgentRequest filter. Message, tool, and session queries keep their own
+/// vocabulary.
+pub fn public_request_filter(scope: &str) -> String {
+    let purpose = format!(
+        r#"purpose: {{ _eq: "{}" }}"#,
+        gents_protocol::request_admission::RequestPurpose::PUBLIC.as_str()
+    );
+    if scope.is_empty() {
+        purpose
+    } else {
+        format!("{scope}, {purpose}")
+    }
+}
+
 /// Load the exact durable session document under its logical label.
 /// Duplicate rows for one label are a data error, never a silent pick.
 pub(super) async fn load_agent_session_row(
@@ -191,6 +206,16 @@ mod session_decoder_tests {
         assert_ne!(absent, selected);
         let quoted = session_scope_filter("owner\"", "session", None);
         assert!(quoted.contains(r#"owner\""#));
+    }
+
+    #[test]
+    fn public_request_filter_preserves_exact_session_scope() {
+        let scoped = session_scope_filter("owner\"", "session", Some("requester"));
+        let request = public_request_filter(&scoped);
+        assert!(request.contains(&scoped));
+        assert!(request.contains(r#"purpose: { _eq: "normal" }"#));
+        assert!(!scoped.contains("purpose"));
+        assert_eq!(public_request_filter(""), r#"purpose: { _eq: "normal" }"#);
     }
 
     #[test]

@@ -1002,10 +1002,13 @@ pub(super) fn subagent_cancel_not_found_result(subagent_id: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn child_requests_query(parent_doc_id: &str) -> String {
-    format!(
-        r#"{{ children: AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: "{}"}}}},
-        order: {{created_at: ASC}}) {{ {CHILD_REQUEST_FIELDS} }} }}"#,
+    let scope = gents::session::public_request_filter(&format!(
+        r#"caused_by_parent_request_doc_id: {{_eq: "{}"}}"#,
         escape_graphql_string(parent_doc_id)
+    ));
+    format!(
+        r#"{{ children: AgentRequest(filter: {{ {scope} }},
+        order: {{created_at: ASC}}) {{ {CHILD_REQUEST_FIELDS} }} }}"#,
     )
 }
 
@@ -2426,6 +2429,7 @@ mod tests {
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{escaped_parent}"
+                    purpose: "normal"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
@@ -2501,6 +2505,7 @@ mod tests {
             r#"mutation {{
                 child: create_AgentRequest(input: {{
                     request_id: "{escaped_child}"
+                    purpose: "normal"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     behavior_id: "test-child"
@@ -2521,6 +2526,7 @@ mod tests {
                 }}) {{ _docID }}
                 forged: create_AgentRequest(input: {{
                     request_id: "forged-logical-child"
+                    purpose: "normal"
                     agent_did: "did:test:grok-shim"
                     session_id: "forged-child-session"
                     caused_by_parent_request_id: "{escaped_parent}"
@@ -2535,6 +2541,7 @@ mod tests {
                 }}) {{ _docID }}
                 control: create_AgentRequest(input: {{
                     request_id: "valid-background-control"
+                    purpose: "normal"
                     agent_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
                     caused_by_parent_request_id: "{escaped_parent}"

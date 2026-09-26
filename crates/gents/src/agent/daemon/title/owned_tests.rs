@@ -5,10 +5,11 @@ use std::time::Duration;
 use defra_node::EmbeddedNode;
 use futures::{stream, StreamExt};
 use gents_protocol::message::ReasoningContent;
-use gents_protocol::output::live::reconstruct_audit_prefix;
-use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::extent::inspect_open_source;
+use gents_protocol::output::live::reconstruct_dense_prefix;
+use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{
-    OutputOutcome, OutputSource, OutputWriter, SourceClose, StreamPayload,
+    OutputOutcome, OutputSource, OutputWriter, PayloadRef, SourceClose, StreamPayload,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -215,6 +216,7 @@ impl TitleFixture {
         TitleTask {
             node: self.node.clone(),
             behavior: self.behavior.clone(),
+            provider_family: None,
             model: Arc::new(provider),
             verifier: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
@@ -523,7 +525,31 @@ async fn assert_title_audit(
                 segment: &row.segment,
             })
             .collect::<Vec<_>>();
-        let prefix = reconstruct_audit_prefix(
+        let extent = inspect_open_source(&observed, &fixture.title.doc_id, &output_source, &writer)
+            .expect("complete title source extent");
+        let SourceClose::Closed {
+            segments,
+            stream_bytes,
+            ..
+        } = closed[0]
+        else {
+            panic!("title source was not closed");
+        };
+        assert_eq!(
+            *segments, extent.segments,
+            "title close truncated raw segments"
+        );
+        assert_eq!(
+            *stream_bytes, extent.stream_bytes,
+            "title close truncated raw bytes"
+        );
+        let close_doc_id = source_rows
+            .iter()
+            .find(|row| row.segment.close.is_some())
+            .expect("title close row")
+            .doc_id
+            .clone();
+        let prefix = reconstruct_dense_prefix(
             &observed,
             &fixture.title.doc_id,
             &output_source,
@@ -531,6 +557,20 @@ async fn assert_title_audit(
             None,
         )
         .unwrap();
+        assert_eq!(prefix.streams, extent.streams);
+        for (stream, expected_stream) in extent.streams.iter().enumerate() {
+            let sealed = reconstruct_stream(
+                &observed,
+                &[],
+                &[],
+                &PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: u32::try_from(stream).unwrap(),
+                },
+            )
+            .expect("sealed title stream");
+            assert_eq!(&sealed, expected_stream);
+        }
         assert_eq!(
             prefix.streams.len(),
             expected.len() + usize::from(complete_text)
@@ -593,7 +633,7 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
                         segment: &row.segment,
                     })
                     .collect::<Vec<_>>();
-                reconstruct_audit_prefix(&observed, &fixture.title.doc_id, &source, &writer, None)
+                reconstruct_dense_prefix(&observed, &fixture.title.doc_id, &source, &writer, None)
                     .is_ok_and(|prefix| prefix.streams.len() >= fields)
             });
         if all_received {
@@ -673,6 +713,112 @@ async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
             Some(gents_protocol::output::TerminalOutput::NoMessage)
         )
     );
+}
+
+#[tokio::test]
+async fn crashed_title_recovers_committed_reasoning_without_publication() {
+    let (fields, outcome) = modeled_title_fields("title_expired_unlatched_recovery_no_message");
+    let model = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| matches!(case, LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
+        .expect("modeled title recovery");
+    let LeanCanonicalExecutionCase::ModelExecution {
+        expected_observations,
+        ..
+    } = model
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        expected_observations.last().unwrap().request_state,
+        "failed"
+    );
+    assert_eq!(outcome, OutputOutcome::Partial);
+    let fixture = TitleFixture::new().await;
+    let provider = TitleProvider::new(provider_events(&fields, false), true);
+    let entered = provider.entered.clone();
+    let (_shutdown, rx) = tokio::sync::watch::channel(false);
+    let task = fixture.task(provider, true);
+    let title = fixture.title.clone();
+    let running = tokio::spawn(async move { task.run(title, rx).await });
+    entered.notified().await;
+    wait_for_title_streams(&fixture, 1, fields.len()).await;
+    let (before, before_messages) = fixture.output_rows().await;
+    assert_eq!(before_messages, 0);
+    assert!(before.iter().all(|row| row.segment.close.is_none()));
+    let before_ids = before
+        .iter()
+        .map(|row| row.doc_id.clone())
+        .collect::<Vec<_>>();
+
+    running.abort();
+    assert!(running
+        .await
+        .expect_err("title task must abort")
+        .is_cancelled());
+    let (aborted, aborted_messages) = fixture.output_rows().await;
+    assert_eq!(aborted_messages, 0);
+    assert_eq!(aborted.len(), before.len());
+    assert!(aborted.iter().all(|row| row.segment.close.is_none()));
+    let physical = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
+    let owner = crate::graphql::escape_graphql_string(fixture.identity.did());
+    let response = ConfigAccess::Local(fixture.node.clone())
+        .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, agent_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
+        .await
+        .expect("read title lease owner");
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .expect("title lease rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["lifecycle_state"], "processing");
+    let generation = crate::graphql::escape_graphql_string(
+        rows[0]["execution_generation"]
+            .as_str()
+            .expect("title execution generation"),
+    );
+    let past = crate::graphql::escape_graphql_string(
+        &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+    );
+    let expired = ConfigAccess::Local(fixture.node.clone())
+        .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, agent_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
+        .await
+        .expect("expire exact title generation");
+    assert_eq!(
+        expired["data"]["update_AgentRequest"][0]["_docID"],
+        fixture.title.doc_id
+    );
+
+    let first = crate::RequestLifecycle::recover_all(fixture.node.as_ref(), fixture.identity.did())
+        .await
+        .expect("recover crashed title");
+    assert_eq!(first.requests_recovered, 1);
+    assert_title_audit(&fixture, &fields, outcome, 1, false).await;
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Failed,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+    assert_eq!(fixture.session_message_count().await, 0);
+    let (after, _) = fixture.output_rows().await;
+    assert_eq!(
+        after.len(),
+        before_ids.len() + 1,
+        "recovery adds one exact closure"
+    );
+    assert!(before_ids
+        .iter()
+        .all(|id| after.iter().any(|row| &row.doc_id == id)));
+
+    let replay =
+        crate::RequestLifecycle::recover_all(fixture.node.as_ref(), fixture.identity.did())
+            .await
+            .expect("repeat title recovery");
+    assert_eq!(replay.requests_recovered, 0);
+    assert_title_audit(&fixture, &fields, outcome, 1, false).await;
+    assert_eq!(fixture.output_rows().await.0.len(), after.len());
 }
 
 #[tokio::test]

@@ -1068,7 +1068,7 @@ mod tests {
         id: &str,
         session: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
         ensure_no_errors(&response, "seed projection request").unwrap();
         let physical = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":response.data}),

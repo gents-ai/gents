@@ -98,19 +98,28 @@ pub(crate) struct RequestSubmitOptions {
     pub(crate) retry_key: Option<String>,
 }
 
+/// An exact `_docID` read carries no `order`: DefraDB plans an ordered read as
+/// an index scan and applies `limit` before the `_docID` filter, so later rows
+/// in the collection would hide the request.
 pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -> String {
-    let filter = match physical {
-        Some(id) => format!("_docID:{{_eq:\"{}\"}}", escape_graphql_string(id)),
-        None => format!(
-            "request_id:{{_eq:\"{}\"}}",
-            escape_graphql_string(request_id)
+    let (filter, order) = match physical {
+        Some(id) => (
+            format!("_docID:{{_eq:\"{}\"}}", escape_graphql_string(id)),
+            "",
+        ),
+        None => (
+            format!(
+                "request_id:{{_eq:\"{}\"}}",
+                escape_graphql_string(request_id)
+            ),
+            "order: { created_at: DESC },",
         ),
     };
     format!(
         r#"{{
             AgentRequest(
                 filter: {{ {filter} }},
-                order: {{ created_at: DESC }},
+                {order}
                 limit: 2
             ) {{
                 _docID agent_did requester_did behavior_id session_id
@@ -1270,7 +1279,7 @@ mod tests {
         .await
         .unwrap();
         let receipt = json!({
-            "_docID":"physical-receipt", "request_id":create.request_id, "agent_did":create.agent_did,
+            "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "agent_did":create.agent_did,
             "requester_did":create.requester_did, "behavior_id":create.behavior_id, "session_id":create.session_id,
             "content":create.content, "input":create.input, "execution_origin":create.execution_origin,
             "created_at":create.created_at, "retry_parent_request":create.retry_parent_request,

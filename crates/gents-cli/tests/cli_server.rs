@@ -664,7 +664,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             escape_graphql_string(&default_behavior_id),
         ),
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         format!(
             r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "self-budget-ce", agent_did: "{}", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#,
@@ -787,7 +787,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let foreign_readiness_snapshot = escape_graphql_string(&foreign_readiness_snapshot);
     for mutation in [
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "foreign-metrics-req", agent_did: "did:test:foreign-cli", behavior_id: "foreign-behavior", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "foreign-metrics-req", agent_did: "did:test:foreign-cli", behavior_id: "foreign-behavior", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }}) {{ _docID }} }}"#
         ),
         format!(
             r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", agent_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
@@ -2019,7 +2019,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let request_response = graphql_query(
         &graphql,
         &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did_literal}", session_id: "trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "trace-req", agent_did: "{agent_did_literal}", session_id: "trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
     )
     .await
@@ -2419,7 +2419,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     for mutation in [
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", lifecycle_state: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", lifecycle_state: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", status: "completed" }) { _docID } }"#.to_string(),
     ] {

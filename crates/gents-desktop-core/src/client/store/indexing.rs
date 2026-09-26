@@ -5,7 +5,7 @@ use super::{ClientStore, ClientStoreRows};
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
         rows.requests.retain(|row| {
-            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+            gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
         });
         sort_rows_with_sources(
             &mut rows.sessions,

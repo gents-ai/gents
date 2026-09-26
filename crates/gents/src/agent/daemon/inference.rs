@@ -495,9 +495,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let item = match tokio::select! {
                                 biased;
                                 _ = shutdown.changed() => {
-                                    processor
-                                        .persist_received_partial_turn("persist shutdown assistant turn")
-                                        .await?;
+                                    // No output write here: embedded writes issued during
+                                    // runtime teardown can stall shutdown. Recovery closes
+                                    // the request; received bytes since the last flush are
+                                    // not retained on shutdown.
                                     drop(stream);
                                     return Err(anyhow!("shutdown requested during inference stream"));
                                 }

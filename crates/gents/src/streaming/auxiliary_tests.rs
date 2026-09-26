@@ -7,7 +7,7 @@ use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservatio
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
 use gents_protocol::output::live::{
-    project_live, reconstruct_audit_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
+    project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
@@ -743,7 +743,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             })
             .collect::<Vec<_>>();
         let audit =
-            reconstruct_audit_prefix(&observed, &request.doc_id, &source, &output_writer, None)
+            reconstruct_dense_prefix(&observed, &request.doc_id, &source, &output_writer, None)
                 .unwrap();
         let LeanReasoningAuditResult::Ok { streams } = &case.expected.audit else {
             panic!("{}: unsupported modeled audit result", case.name);

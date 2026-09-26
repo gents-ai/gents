@@ -24,6 +24,7 @@ const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. R
 struct TitleTask<M: rig::completion::CompletionModel> {
     node: Arc<EmbeddedNode>,
     behavior: Arc<crate::config::ResolvedBehavior>,
+    provider_family: Option<String>,
     model: Arc<M>,
     verifier: crate::request_admission::AgentRequestAdmissionVerifier,
     capture_factory: Option<crate::rendered_request::RenderedRequestCaptureFactory>,
@@ -43,6 +44,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         TitleTask {
             node: Arc::clone(&self.node),
             behavior: Arc::clone(&self.behavior),
+            provider_family: self.provider_family.clone(),
             model: Arc::clone(&self.model),
             verifier: self.request_admission.clone(),
             capture_factory: self.rendered_request_capture_factory.clone(),
@@ -231,6 +233,7 @@ impl<M: rig::completion::CompletionModel + 'static> TitleTask<M> {
             &request,
             commit_cid,
             self.behavior.model_name.clone(),
+            self.provider_family.clone(),
         );
         let mut capture_scope = crate::rendered_request::scope_from_factory(
             capture_context,

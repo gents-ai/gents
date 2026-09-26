@@ -687,6 +687,50 @@ pub fn scope_filter(
 mod tests {
     use super::*;
 
+    /// A runtime still on the pre-reasoning-audit collections is refused as a
+    /// whole: the fresh-home release has no compatibility reads.
+    #[tokio::test]
+    async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
+        async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
+            let node =
+                std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+            for sdl in schemas {
+                node.add_schema(sdl).await.unwrap();
+            }
+            node
+        }
+        let current = gents_protocol::schemas::ALL
+            .iter()
+            .map(|sdl| (*sdl).to_owned())
+            .collect::<Vec<_>>();
+        let previous = current
+            .iter()
+            .map(|sdl| {
+                if *sdl == gents_protocol::schemas::AGENT_REQUEST {
+                    sdl.replace("    purpose: String @index @immutable\n", "")
+                } else {
+                    sdl.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(previous, current, "fixture must revert the purpose field");
+
+        let local = read_client_replicated_schema(node_with(&current).await)
+            .await
+            .unwrap();
+        let same = read_client_replicated_schema(node_with(&current).await)
+            .await
+            .unwrap();
+        assert!(compare_client_replicated_schema(&local, Some(&same)).is_ok());
+
+        let old = read_client_replicated_schema(node_with(&previous).await)
+            .await
+            .unwrap();
+        let skew = compare_client_replicated_schema(&local, Some(&old))
+            .expect_err("an old runtime schema must not enroll or sync");
+        assert!(format!("{skew:?}").contains("AgentRequest"), "{skew:?}");
+    }
+
     #[test]
     fn agent_config_includes_behavior_excludes_principal() {
         let t = resolve_template("agent-config").unwrap();
@@ -733,14 +777,16 @@ mod tests {
             Ok(())
         );
 
-        let mut skewed = local.clone();
-        skewed.insert("AgentSession".into(), identity("bafy-other-release"));
-        assert_eq!(
-            compare_client_replicated_schema(&local, Some(&skewed))
-                .unwrap_err()
-                .collections,
-            vec!["AgentSession".to_string()]
-        );
+        for name in CLIENT_COLLECTIONS {
+            let mut skewed = local.clone();
+            skewed.insert((*name).into(), identity("bafy-other-release"));
+            assert_eq!(
+                compare_client_replicated_schema(&local, Some(&skewed))
+                    .unwrap_err()
+                    .collections,
+                vec![(*name).to_string()]
+            );
+        }
 
         let mut missing = local.clone();
         missing.remove("Task");

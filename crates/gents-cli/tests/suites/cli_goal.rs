@@ -279,12 +279,15 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
         &graphql,
         &format!(
             r#"{{
-        AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }}) {{
+        AgentRequest(filter: {{ {} }}) {{
             _docID request_id session_id agent_did caused_by_trigger_kind
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }}
     }}"#,
-            escape_graphql_string(predecessor)
+            gents::session::public_request_filter(&format!(
+                r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
+                escape_graphql_string(predecessor)
+            ))
         ),
     )
     .await?;

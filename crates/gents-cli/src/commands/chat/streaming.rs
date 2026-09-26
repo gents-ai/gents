@@ -59,6 +59,9 @@ struct ChatToolProgressMarker {
     completed_at: Option<String>,
 }
 
+/// The exact `_docID` request read carries no `order`: DefraDB plans an
+/// ordered read as an index scan and applies `limit` before the `_docID`
+/// filter, so later rows in the collection would hide this request.
 pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
     let request_doc_id = &request.request_doc_id;
     let scope = gents::session::session_scope_filter(
@@ -70,7 +73,6 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
         r#"{{
             AgentRequest(
                 filter: {{ {scope}, _docID: {{ _eq: "{request_doc_id}" }} }},
-                order: {{ created_at: DESC }},
                 limit: 2
             ) {{
                 _docID agent_did requester_did session_id

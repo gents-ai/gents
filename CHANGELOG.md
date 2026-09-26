@@ -27,6 +27,12 @@ source consistency checks, not a separate runtime compatibility version.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
+- Reasoning retention, reasoning replay and detached title requests require a
+  fresh home. Output segments keep typed reasoning, signatures and encrypted
+  reasoning; `AgentRequest` (`purpose`) and `ProviderContextReduction`
+  (`replay_associations_json`) have new collection baselines, and a desktop or
+  runtime on the previous collections is refused as schema skew. Update desktop
+  and paired runtimes together. Existing stores are not migrated (#1603).
 
 ### Added
 
@@ -57,6 +63,19 @@ source consistency checks, not a separate runtime compatibility version.
   or restarted parent was waiting on becomes background work whose completion
   is delivered to the session. Steering a subagent with `interrupt` no longer
   cancels that subagent's own subagents (#1624).
+- The model gets its own reasoning back across turns, requests and restarts.
+  Each provider request replays the longest run of completed, accepted turns
+  whose Claude thinking or Responses encrypted reasoning still matches the
+  accepted request that produced it (same issuer and route, same system, tools
+  and earlier messages), decided from the durable request captures. Compaction,
+  repaired input, a tool or system change and a provider switch end the run
+  instead of sending reasoning the provider would reject; an interrupted turn
+  replays none. A signature or decryption rejection strips all reasoning and
+  retries once (#1603, #1693).
+- Received reasoning, signatures and auxiliary provider output are kept for
+  audit even when a turn fails, is interrupted or hits its request deadline,
+  and conversation titles run as detached title requests with their own audit
+  (#1603).
 - Plain `gents init` enables the Engineer's self-config tools and graph tools,
   as the desktop first run does. The tool ceiling set at init still bounds what
   they can change. `--setup-steward` now only seeds the Engineer identity, the

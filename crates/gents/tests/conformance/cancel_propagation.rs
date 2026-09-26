@@ -358,7 +358,7 @@ async fn cancel_ack_observer_reports_pending_stuck_and_acked_outcomes() {
         db.node.as_ref(),
         &format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "ack-acked-child", agent_did: "{local_did}",
+                request_id: "ack-acked-child", purpose: "normal", agent_did: "{local_did}",
                 behavior_id: "{behavior_id}", session_id: "ack-acked-child-session",
                 retry_parent_request: "", retry_root_request: "ack-acked-child",
                 superseded_by_request: "", content: "child work",

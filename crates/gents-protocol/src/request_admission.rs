@@ -27,6 +27,17 @@ impl RequestPurpose {
             Self::TitleAudit => "title-audit",
         }
     }
+
+    /// The one purpose user-facing request readers present. Detached title
+    /// requests are runtime work: explicit lookups, recovery, accounting and
+    /// physical hydration still see them.
+    pub const PUBLIC: Self = Self::Normal;
+
+    /// Whether a request belongs in user-facing request projections. A row
+    /// with no decodable purpose is not public.
+    pub fn is_public(purpose: Option<Self>) -> bool {
+        purpose == Some(Self::PUBLIC)
+    }
 }
 
 impl TryFrom<&str> for RequestPurpose {

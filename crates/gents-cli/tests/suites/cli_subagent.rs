@@ -598,7 +598,7 @@ async fn seed_request_in_state(
         graphql,
         &format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "{behavior_id}",

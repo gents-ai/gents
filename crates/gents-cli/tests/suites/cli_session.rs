@@ -65,7 +65,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         ),
         format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     agent_did: "{}",
                     behavior_id: "{}",
@@ -81,7 +81,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         ),
         format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     agent_did: "{}",
                     behavior_id: "{}",

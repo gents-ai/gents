@@ -55,7 +55,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{
+                r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request}", agent_did: "{agent_did}",
                     requester_did: "{agent_did}", behavior_id: "{behavior_id}",
                     session_id: "{session}", content: "earlier turn",
@@ -99,7 +99,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{
+                r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request}", agent_did: "{agent_did}",
                     requester_did: "{agent_did}",
                     behavior_id: "{behavior_id}", session_id: "{session}",
@@ -247,7 +247,7 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{
+                r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "{request}", agent_did: "{agent}", requester_did: "{agent}",
                 behavior_id: "{behavior}",
                 session_id: "{session}", content: "shared", lifecycle_state: "completed",

@@ -1926,7 +1926,7 @@ mod tests {
         ensure_session_document(&service.config, "stalled-history")
             .await
             .unwrap();
-        let seeded = service.config.node.execute(r#"mutation {create_AgentRequest(input:{
+        let seeded = service.config.node.execute(r#"mutation {create_AgentRequest(input:{purpose: "normal", 
             request_id:"stalled-request", session_id:"stalled-history", agent_did:"did:test:grok-shim",
             requester_did:"did:test:grok-shim", content:"Original prompt", lifecycle_state:"completed",
             created_at:"2026-09-01T12:00:00Z"
@@ -2005,7 +2005,7 @@ mod tests {
             .await
             .unwrap();
         let node = &service.config.node;
-        let result = node.execute(r#"mutation { create_AgentRequest(input: {
+        let result = node.execute(r#"mutation { create_AgentRequest(input: {purpose: "normal", 
             request_id: "resume-request", session_id: "resume-history", agent_did: "did:test:grok-shim",
             requester_did: "did:test:grok-shim", content: "Original human prompt",
             lifecycle_state: "completed", created_at: "2026-09-01T12:00:00Z"
@@ -2185,7 +2185,7 @@ mod tests {
                 .config
                 .node
                 .execute(&format!(
-                    r#"mutation {{ create_AgentRequest(input: {{
+                    r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "{id}", session_id: "{session}", agent_did: "did:test:grok-shim",
                 requester_did: "{requester}", content: "{content}", lifecycle_state: "completed",
                 caused_by_parent_request_id: {parent}, created_at: "2026-09-0{day}T12:00:00Z"
@@ -2462,7 +2462,7 @@ mod tests {
         let baseline_output = baseline["outputTokens"].as_u64().unwrap();
         let baseline_cached = baseline["cachedReadTokens"].as_u64().unwrap();
         let baseline_calls = baseline["modelCalls"].as_u64().unwrap();
-        let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+        let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", 
             request_id: "foreign-usage", session_id: "{}", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
         }}) {{_docID}} }}"#, escape_graphql_string(child_session))).await;
         ensure_no_errors(&foreign, "foreign usage fixture").unwrap();
