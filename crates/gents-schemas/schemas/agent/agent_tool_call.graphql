@@ -1,4 +1,4 @@
-# Tool-call lifecycle document (#1571). Carries execution state. The
+# Tool-call lifecycle document. Carries execution state. The
 # model's arguments are output of the provider turn and the tool's output is
 # its own stream, canonically stored as AgentOutputSegment and referenced from
 # AgentMessage blocks by this document's _docID. Retired: args, result,

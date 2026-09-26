@@ -14,6 +14,9 @@ structure Boundary where
 def boundaryRequestDeadPreclaimOnlyId : String :=
   "boundary.request.dead-preclaim-only"
 
+def boundaryRequestRecoverySweepReachableId : String :=
+  "boundary.request.recovery-sweep-reachable"
+
 def boundaryToolCallPermanentWithoutRetryEvidenceId : String :=
   "boundary.tool-call.permanent-without-retry-evidence"
 
@@ -85,7 +88,15 @@ def boundaries : List Boundary :=
     , domain := "RequestLifecycle"
     , subject := "dead terminal state"
     , statement :=
-        "In the request machine dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed. No recovery sweep writes dead for claimed or processing work."
+        "In the request machine dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed. Corrupt-generation revocation is the one exception: it terminalizes expired claimed or processing work as dead, published as recoveryReachable under boundary.request.recovery-sweep-reachable."
+    }
+  , { id := boundaryRequestRecoverySweepReachableId
+    , domain := "RequestLifecycle"
+    , subject := "recovery-sweep reachable request edges"
+    , statement :=
+        "claimed->dead and processing->dead are taken by no single RequestContext.Action, but corrupt-generation revocation (CanonicalOutput.Execution.revokeCorrupt with outcome dead, run by request recovery for an expired generation whose canonical output is corrupt) terminalizes claimed or processing work as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs. Expired owned generations otherwise terminalize failed or interrupted through CanonicalOutput.Execution recovery; no durable response row repairs claimed work to completed."
+    , acceptedFollowUp :=
+        some "Compose the Request machine with Proofs/Recovery so these edges are proven in one model instead of cited across two."
     }
   , { id := boundaryToolCallPermanentWithoutRetryEvidenceId
     , domain := "ToolExecution"

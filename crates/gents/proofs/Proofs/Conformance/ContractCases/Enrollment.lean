@@ -236,16 +236,18 @@ private def titleRequestAdmissionCase (name : String) (request : AgentRequestSem
   , branchFieldsExact, pendingDeadlineAbsent, request, admission
   , runtimeEvidence := evidence, sessionBehavior
   , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
-      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent)
+      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
+      false CausalHop.defaultMaxRequestHop)
   , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
       request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
-      sessionBehavior []
+      false CausalHop.defaultMaxRequestHop sessionBehavior []
       (fun _ => false) (fun _ => false))
   , expectedDisposition := titlePendingDisposition observationAvailable ({} : Enrollment.State)
       request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+      CausalHop.defaultMaxRequestHop
   , expectedPendingState := (titlePendingStep? observationAvailable ({} : Enrollment.State)
       request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
-      titlePendingContext).map (·.state) }
+      CausalHop.defaultMaxRequestHop titlePendingContext).map (·.state) }
 
 def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
   let signed := signTitleAdmission titleRequest

@@ -46,6 +46,11 @@ structure SessionMessageRecoveryRow where
   cause : SessionMessageRecoveryCause
   deriving Repr
 
+/-- Follows the existing `toolCallRecoverySweep` pattern: the row carries the
+cause observed by the recovering owner (the row's own deadline passed, or the
+caused request reached a durable terminal), and staleness is only the running
+session-message shape. Recovery never invents a cause; a row with neither
+observation is not submitted to this sweep. -/
 def sessionMessageRecoveryStale (row : SessionMessageRecoveryRow) : Prop :=
   row.call.state = .running ∧ isSessionMessageCall row.call
 

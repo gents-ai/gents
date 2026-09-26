@@ -78,8 +78,11 @@ theorem hopAlong_without_root (start : Nat) (causes : List Cause)
       simp only [hopAlong, nextHop, ih _ h_rest, sends, List.filter_cons]
       simp
 
-/-- Every admitted chain is bounded: a request admitted at the end of a chain
-of causes from a root has at most `maxHop` sends behind it. -/
+/-- Every admitted chain is bounded per target: `maxHop` is the
+`max_request_hop` configured on the principal that admits the final request.
+Each target checks only its own bound, so a request it admits has at most that
+many sends behind it, whatever bounds the chain's earlier targets used. There
+is no global constant; `defaultMaxRequestHop` only fills an unset field. -/
 theorem admitted_chain_sends_le_max (maxHop : Nat) (causes : List Cause)
     (h_rooted : Cause.root ∉ causes)
     (h_admit : admitHop maxHop (hopAlong 0 causes) = true) :
@@ -87,7 +90,8 @@ theorem admitted_chain_sends_le_max (maxHop : Nat) (causes : List Cause)
   rw [hopAlong_without_root 0 causes h_rooted] at h_admit
   simpa [admitHop] using h_admit
 
-/-- A message loop is cut: the send that would exceed the bound is refused. -/
+/-- A message loop is cut: the send that would exceed the admitting target's
+bound is refused by that target. -/
 theorem send_beyond_max_is_refused (maxHop : Nat) (causes : List Cause)
     (h_rooted : Cause.root ∉ causes)
     (h_sends : sends causes = maxHop + 1) :

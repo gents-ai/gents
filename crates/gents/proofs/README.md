@@ -645,7 +645,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
-| `Proofs/Background/` | Background tool rows (native processes and `create_session`/`send_message` rows): admission budget, terminal CAS and notification delivery, completion continuation (independent of Goal presence), canonical output paging, process control (session-message rows refuse `wait_process`) and the foreground interrupt scope, which never cascades |
+| `Proofs/Background/` | Background tool rows (native processes and `create_session`/`send_message` rows): admission budget, terminal CAS and notification delivery, completion continuation (independent of Goal presence), canonical output paging, process control and the foreground interrupt scope, which never cascades |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including session-message rows and the startup restart-disposition classifier (#937), and the startup sweep ordering contract |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
@@ -842,8 +842,11 @@ Operational meaning:
 - `processing` is actively executing
 - `dead` is persisted by the request machine only for stale pre-claim TTL
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
-  deadline expiry are terminal `failed`. No recovery sweep writes `dead` for
-  claimed or processing work
+  deadline expiry are terminal `failed`. Corrupt-generation revocation is the
+  one exception: it terminalizes an expired `claimed`/`processing` request with
+  corrupt canonical output as `dead` (`CanonicalOutput.Execution.revokeCorrupt`),
+  published in the contract as `recoveryReachable` under
+  `boundary.request.recovery-sweep-reachable`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
@@ -1179,7 +1182,7 @@ started, and there is no foreground wait on another session.
 | Result | Caused request's terminal output, delivered by the completion observer | Process exit through the host owner |
 | Restart | **Leave running** under every resolvable parent unless its own deadline expired | **Interrupt** or settle as `processLost`, with one notification and coalesced wake |
 | Caller interrupt/terminal | Untouched | Untouched |
-| Wait | Refused (`waitAdmissible`, no `foreground` transition) | `wait_process` |
+| Wait | Refused (no `foreground` transition) | `wait_process` |
 
 Model → conformance → Rust bindings:
 
@@ -1210,7 +1213,7 @@ Model → conformance → Rust bindings:
   state, ordinary user-role transcript append, canonical
   `background_completion:<session>` coalesced wake, and FIFO claim
   (`claimed_continuation_sees_terminal_notification`). Goal presence is not an
-  input: Goals and background wakes are independent (#1624), so every status,
+  input: Goals and background wakes are independent, so every status,
   including paused and complete, keeps the wake and failed-wake redrive. Seven
   generated `completion_continuation_owner` cases pin that outcome.
 - **Wake coalescing** — `Proofs/Session/*` queue model

@@ -11,6 +11,7 @@ open Conformance.Contracts (requestStates requestActions requestSamples processS
 inductive LifecycleTransitionClassification where
   | legal
   | illegal
+  | recoveryReachable
   deriving DecidableEq, Repr
 
 namespace LifecycleTransitionClassification
@@ -18,6 +19,7 @@ namespace LifecycleTransitionClassification
 def toContract : LifecycleTransitionClassification → String
   | .legal => "legal"
   | .illegal => "illegal"
+  | .recoveryReachable => "recoveryReachable"
 
 end LifecycleTransitionClassification
 
@@ -51,26 +53,47 @@ def requestTransitionAction? (source target : String) : Option String :=
     source
     target
 
-/-- A request edge is legal exactly when some `RequestContext.Action` takes it.
-No recovery sweep terminalizes claimed or processing work as dead. -/
+/-- Request edges that no single `RequestContext.Action` takes, but that
+recovery legitimately performs on persisted rows.
+
+`claimed -> dead` and `processing -> dead` are corrupt-generation revocation:
+an expired generation whose canonical output is corrupt is revoked with
+outcome `dead` (`CanonicalOutput.Execution.revokeCorrupt`, `policyRevoke`).
+The request machine alone does not model it, so
+publishing these as `illegal` made the emitted contract assert that Rust has no
+writer for edges the product actually performs. -/
+def requestRecoverySweepReachable : RequestState → RequestState → Bool
+  | .claimed, .dead => true
+  | .processing, .dead => true
+  | _, _ => false
+
 def requestTransitionClassification
+    (source target : RequestState)
     (action : Option String) : LifecycleTransitionClassification :=
   match action with
   | some _ => .legal
-  | none => .illegal
+  | none =>
+      if requestRecoverySweepReachable source target then
+        .recoveryReachable
+      else
+        .illegal
 
 def requestTransitionCase (source target : RequestState) : LifecycleTransitionCase :=
   let sourceName := source.toDefraDB
   let targetName := target.toDefraDB
   let action := requestTransitionAction? sourceName targetName
-  let classification := requestTransitionClassification action
+  let classification := requestTransitionClassification source target action
   { name := lifecycleTransitionCaseName "Request" sourceName targetName
   , domain := "Request"
   , fromState := sourceName
   , toState := targetName
   , classification := classification.toContract
   , action := action
-  , boundary := none
+  , boundary :=
+      match classification with
+      | .recoveryReachable =>
+          some Conformance.Contracts.boundaryRequestRecoverySweepReachableId
+      | _ => none
   }
 
 def requestTransitionCases : List LifecycleTransitionCase :=

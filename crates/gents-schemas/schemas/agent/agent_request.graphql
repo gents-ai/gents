@@ -90,7 +90,8 @@ type AgentRequest @branchable {
     valid_until: String @immutable      # RFC3339; null = no TTL
     # Session-message lineage. Filled only on a request materialized by
     # create_session/send_message (the parent tool call) or a request-only
-    # control continuation; null on roots. subagent_depth is the causal hop:
+    # control continuation; null on roots. subagent_depth is the causal hop
+    # (null means hop 0, a root):
     # a tool-caused request is parent + 1, continuations copy it, and admission
     # refuses depth > AgentPrincipal.max_request_hop. A Peer request's
     # requester_did is the originating agent that receives the reply.

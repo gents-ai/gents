@@ -95,14 +95,4 @@ theorem wait_boundary_never_cancels
     (observeBoundary state boundary).cancellationRequested = false := by
   rfl
 
-/-- `wait_process` accepts only process rows. A `create_session` or
-`send_message` row is refused: the started session's result arrives only as a
-completion notification appended to the calling session, never as a blocking
-wait. Jack's 0.20 decision removes the foreground subagent wait because a wait
-couples the caller's turn to another agent's lifetime, which is exactly the
-privileged parent position the runtime no longer encodes. -/
-def waitAdmissible (sessionMessage : Bool) : Bool := !sessionMessage
-
-theorem session_message_rows_refuse_wait : waitAdmissible true = false := rfl
-
 end Background.ProcessControl

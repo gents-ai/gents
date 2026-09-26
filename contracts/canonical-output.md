@@ -149,7 +149,7 @@ tool-document IDs, and must retain the distinction between the initial native
 result and the later ordinary notification.
 
 The notification and continuation queue have one publication transaction. Goal
-presence never suppresses the wake (#1624): the notification's `request_doc_id`
+presence never suppresses the wake: the notification's `request_doc_id`
 names its coalesced wake request;
 Goal-owned input-only delivery remains parent-bound. This is publication
 membership, not the payload's provenance: references still resolve the exact
