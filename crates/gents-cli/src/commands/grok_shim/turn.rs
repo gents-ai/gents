@@ -14,13 +14,12 @@
 //! a result the pager cannot decode hides the real failure.
 //!
 //! `session/cancel` parses the audited notification shape (sessionId plus
-//! `_meta.cancelSubagents` / `_meta.cancelTrigger` / `_meta.rewindIfNoOutput`
-//! / `_meta.rewindIfPristine` / `_meta.promptId`), is a notification (never
-//! responded to), and interrupts the pending request through
-//! [`gents::interrupt_request`]. `cancelSubagents=true` also interrupts
-//! runtime child `AgentRequest` rows linked by `caused_by_parent_request_id`;
-//! static `Task` configuration rows are never queried or mutated as runtime
-//! state.
+//! `_meta.cancelTrigger` / `_meta.rewindIfNoOutput` / `_meta.rewindIfPristine`
+//! / `_meta.promptId`), is a notification (never responded to), and
+//! interrupts the pending request through [`gents::interrupt_request`]. A
+//! session interrupt stops only that session's request: sessions it caused
+//! keep running, so `_meta.cancelSubagents` is not read. Static `Task`
+//! configuration rows are never queried or mutated as runtime state.
 //!
 //! Ordering contract: the returned Gents request id is registered on the
 //! pending entry *before* the first fallible outbound send, so a send failure
@@ -142,7 +141,6 @@ pub(super) struct PromptRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CancelNotification {
     pub session_id: String,
-    pub cancel_subagents: bool,
     pub cancel_trigger: Option<String>,
     pub rewind_if_no_output: bool,
     pub rewind_if_pristine: bool,
@@ -156,7 +154,6 @@ impl CancelNotification {
     #[cfg(test)]
     pub(super) fn meta(&self) -> Value {
         let mut meta = json!({
-            "cancelSubagents": self.cancel_subagents,
             "rewindIfNoOutput": self.rewind_if_no_output,
             "rewindIfPristine": self.rewind_if_pristine,
         });
@@ -1386,7 +1383,6 @@ impl TurnManager {
     pub(super) async fn handle_cancel(&self, notification: CancelNotification) -> Result<()> {
         tracing::info!(
             session_id = %notification.session_id,
-            cancel_subagents = notification.cancel_subagents,
             prompt_id = notification.prompt_id.as_deref().unwrap_or(""),
             "Grok shim received session/cancel"
         );
@@ -1420,9 +1416,6 @@ impl TurnManager {
                 .await;
             if let Some(request) = request {
                 self.interrupt_submitted(&request).await;
-                if notification.cancel_subagents {
-                    self.interrupt_child_requests(&request).await;
-                }
             }
         }
         let autonomous_target = match target_prompt_id.as_deref() {
@@ -1485,9 +1478,6 @@ impl TurnManager {
                     return Ok(());
                 }
                 self.interrupt_submitted(&row).await;
-                if notification.cancel_subagents {
-                    self.interrupt_child_requests(&row).await;
-                }
             }
         }
         Ok(())
@@ -1637,62 +1627,6 @@ impl TurnManager {
         .await
         {
             tracing::warn!(%error,request_id=%request.request_id,"Grok shim failed to interrupt submitted request");
-        }
-    }
-
-    async fn interrupt_child_requests(&self, parent: &gents_protocol::row::AgentRequestRow) {
-        let result: Result<()> = async {
-            let mut query = gents::DescendantQuery::direct(&parent.request_id);
-            query.limit = gents::MAX_DESCENDANT_PAGE_LIMIT;
-            loop {
-                let page = gents::resolve_descendant_graph(
-                    gents::DescendantGraphAccess::Local(&self.node),
-                    &query,
-                )
-                .await?;
-                for child in page.edges.into_iter().filter(|edge| edge.controllable()) {
-                    anyhow::ensure!(
-                        Some(child.immediate_parent_request_doc_id.as_str())
-                            == parent.doc_id.as_deref()
-                            && Some(child.immediate_parent_agent_did.as_str())
-                                == parent.agent_did.as_deref()
-                            && child.immediate_parent_requester_did == parent.requester_did
-                            && Some(child.immediate_parent_session_id.as_str())
-                                == parent.session_id.as_deref(),
-                        "subagent cancellation crossed pinned parent scope"
-                    );
-                    let row = self
-                        .load_projection_request(
-                            child
-                                .principal_did
-                                .as_deref()
-                                .context("child principal missing")?,
-                            child
-                                .child_session_id
-                                .as_deref()
-                                .context("child session missing")?,
-                            child.child_requester_did.as_deref(),
-                            &child.child_request_id,
-                            Some(
-                                child
-                                    .child_request_doc_id
-                                    .as_deref()
-                                    .context("child physical request missing")?,
-                            ),
-                        )
-                        .await?;
-                    self.interrupt_submitted(&row).await;
-                }
-                if !page.has_more {
-                    break;
-                }
-                query.after = page.next_cursor;
-            }
-            Ok(())
-        }
-        .await;
-        if let Err(error) = result {
-            tracing::warn!(%error,parent_request_id=%parent.request_id,"Grok shim subagent cancellation failed");
         }
     }
 
@@ -2021,7 +1955,7 @@ impl TurnManager {
         cursor: &tokio::sync::Mutex<RequestCursor>,
         update_timing: &mut RequestUpdateTiming,
         include_notifications: bool,
-        descendant_depth: usize,
+        child_depth: usize,
     ) -> Result<()> {
         self.stream_projection_updates_mode(
             session_id,
@@ -2032,7 +1966,7 @@ impl TurnManager {
             cursor,
             update_timing,
             include_notifications,
-            descendant_depth,
+            child_depth,
             false,
         )
         .await
@@ -2051,14 +1985,14 @@ impl TurnManager {
         cursor: &tokio::sync::Mutex<RequestCursor>,
         update_timing: &mut RequestUpdateTiming,
         include_notifications: bool,
-        descendant_depth: usize,
+        child_depth: usize,
         activity_only: bool,
     ) -> Result<()> {
         // An old prompt ID on parent activity makes the stock pager adopt
         // that old turn as a viewer. Activity has no conversation ownership.
         let prompt_id = if activity_only { None } else { prompt_id };
         let request = self
-            .pinned_projection_request(cursor, session_id, request_id, descendant_depth == 0)
+            .pinned_projection_request(cursor, session_id, request_id, child_depth == 0)
             .await?;
         let batch = {
             let mut cursor = cursor.lock().await;
@@ -2069,7 +2003,7 @@ impl TurnManager {
         let mut deferred_notifications = false;
         let mut child_finishes = Vec::new();
         for event in batch.events {
-            let event = if descendant_depth > 0 {
+            let event = if child_depth > 0 {
                 cursor.lock().await.child_output_event(event)
             } else {
                 event
@@ -2109,11 +2043,10 @@ impl TurnManager {
         let deferred_children = self
             .stream_readable_child_updates(
                 session_id,
-                request_id,
                 sender,
                 projections,
                 cursor,
-                descendant_depth,
+                child_depth,
             )
             .await?;
         for event in child_finishes {
@@ -2205,156 +2138,114 @@ impl TurnManager {
     async fn stream_readable_child_updates(
         &self,
         parent_session_id: &str,
-        parent_request_id: &str,
         sender: &PromptSender,
         projections: &ProjectionEngine,
         parent_cursor: &Mutex<RequestCursor>,
         depth: usize,
     ) -> Result<BTreeSet<String>> {
         let mut deferred = BTreeSet::new();
-        if depth >= gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH as usize {
-            return Ok(deferred);
-        }
         let parent = parent_cursor
             .lock()
             .await
             .request
             .clone()
             .context("parent projection identity missing")?;
-        let mut query = gents::DescendantQuery::direct(parent_request_id);
-        query.limit = gents::MAX_DESCENDANT_PAGE_LIMIT;
-        loop {
-            let page = gents::resolve_descendant_graph(
-                gents::DescendantGraphAccess::Local(&self.node),
-                &query,
-            )
-            .await?;
-            for child in page.edges.into_iter().filter(|edge| edge.readable()) {
-                anyhow::ensure!(
-                    Some(child.immediate_parent_request_doc_id.as_str())
-                        == parent.doc_id.as_deref()
-                        && Some(child.immediate_parent_agent_did.as_str())
-                            == parent.agent_did.as_deref()
-                        && child.immediate_parent_requester_did == parent.requester_did
-                        && child.immediate_parent_session_id == parent_session_id,
-                    "descendant graph crossed pinned parent scope"
-                );
-                let Some(session_id) = child.child_session_id.as_deref() else {
+        // A session is caused by the request that caused its first request,
+        // and that request is older, so this recursion follows a tree.
+        for child in super::projection::caused_sessions::caused_by_request(&self.node, &parent)
+            .await?
+        {
+            let session_id = child.scope.session_id.as_str();
+            if session_id == parent_session_id
+                || !parent_cursor
+                    .lock()
+                    .await
+                    .subagent_spawn_was_delivered(session_id)
+            {
+                continue;
+            }
+            for row in self.readable_child_session_requests(&child.scope).await? {
+                let request_id = row.request_id.clone();
+                let started_at = row
+                    .created_at
+                    .as_deref()
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.timestamp_millis())
+                    .unwrap_or(0);
+                let progress = self
+                    .observed
+                    .lock()
+                    .await
+                    .entry((session_id.to_owned(), request_id.clone()))
+                    .or_insert_with(|| {
+                        Arc::new(Mutex::new(ObservedRequest::new(
+                            request_id.clone(),
+                            started_at,
+                            true,
+                        )))
+                    })
+                    .clone();
+                // Ownership contention must defer the parent's finish too:
+                // another sender may still be flushing the child's tail.
+                let Ok(mut progress) = progress.try_lock() else {
+                    deferred.insert(session_id.to_owned());
                     continue;
                 };
-                if session_id == parent_session_id
-                    || !parent_cursor
-                        .lock()
-                        .await
-                        .subagent_spawn_was_delivered(session_id)
                 {
-                    continue;
-                }
-                for row in self.readable_child_session_requests(&child).await? {
-                    let request_id = row.request_id.clone();
-                    let started_at = row
-                        .created_at
-                        .as_deref()
-                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                        .map(|value| value.timestamp_millis())
-                        .unwrap_or(0);
-                    let progress = self
-                        .observed
-                        .lock()
-                        .await
-                        .entry((session_id.to_owned(), request_id.clone()))
-                        .or_insert_with(|| {
-                            Arc::new(Mutex::new(ObservedRequest::new(
-                                request_id.clone(),
-                                started_at,
-                                true,
-                            )))
-                        })
-                        .clone();
-                    // Ownership contention must defer the parent's finish too:
-                    // another sender may still be flushing the child's tail.
-                    let Ok(mut progress) = progress.try_lock() else {
-                        deferred.insert(session_id.to_owned());
-                        continue;
-                    };
-                    {
-                        let mut cursor = progress.cursor.lock().await;
-                        if let Some(pinned) = &cursor.request {
-                            anyhow::ensure!(
-                                pinned.doc_id == row.doc_id
-                                    && pinned.agent_did == row.agent_did
-                                    && pinned.requester_did == row.requester_did,
-                                "child projection cannot rebind physical request"
-                            );
-                        } else {
-                            cursor.request = Some(row);
-                        }
+                    let mut cursor = progress.cursor.lock().await;
+                    if let Some(pinned) = &cursor.request {
+                        anyhow::ensure!(
+                            pinned.doc_id == row.doc_id
+                                && pinned.agent_did == row.agent_did
+                                && pinned.requester_did == row.requester_did,
+                            "child projection cannot rebind physical request"
+                        );
+                    } else {
+                        cursor.request = Some(row);
                     }
-                    let projected = progress
-                        .cursor
-                        .lock()
-                        .await
-                        .request
-                        .clone()
-                        .expect("verified child identity pinned");
-                    let terminal = self.request_stop_reason(&projected).await?;
-                    if terminal.is_none() {
-                        deferred.insert(session_id.to_owned());
-                    }
-                    let ObservedRequest { cursor, timing, .. } = &mut *progress;
-                    Box::pin(self.stream_projection_updates(
-                        session_id,
-                        &request_id,
-                        None,
-                        sender,
-                        projections,
-                        cursor,
-                        timing,
-                        terminal.is_some() || matches!(sender, PromptSender::Replay { .. }),
-                        depth + 1,
-                    ))
-                    .await?;
                 }
+                let projected = progress
+                    .cursor
+                    .lock()
+                    .await
+                    .request
+                    .clone()
+                    .expect("verified child identity pinned");
+                let terminal = self.request_stop_reason(&projected).await?;
+                if terminal.is_none() {
+                    deferred.insert(session_id.to_owned());
+                }
+                let ObservedRequest { cursor, timing, .. } = &mut *progress;
+                Box::pin(self.stream_projection_updates(
+                    session_id,
+                    &request_id,
+                    None,
+                    sender,
+                    projections,
+                    cursor,
+                    timing,
+                    terminal.is_some() || matches!(sender, PromptSender::Replay { .. }),
+                    depth + 1,
+                ))
+                .await?;
             }
-            if !page.has_more {
-                break;
-            }
-            query.after = page.next_cursor;
         }
         Ok(deferred)
     }
 
-    /// A canonical edge authorizes its child session, but not foreign
+    /// A caused session's scope authorizes its requests, but not foreign
     /// principal rows sharing that label. Followups must preserve the exact
-    /// child agent/requester identity, including absent requester identity.
+    /// agent/requester identity, including absent requester identity.
     async fn readable_child_session_requests(
         &self,
-        child: &gents::DescendantEdge,
+        child: &crate::caused_sessions::SessionScope,
     ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
-        let session = child
-            .child_session_id
-            .as_deref()
-            .context("child session missing")?;
-        let agent = child
-            .principal_did
-            .as_deref()
-            .context("child principal missing")?;
-        let physical = child
-            .child_request_doc_id
-            .as_deref()
-            .context("child physical request missing")?;
-        self.load_projection_request(
-            agent,
-            session,
-            child.child_requester_did.as_deref(),
-            &child.child_request_id,
-            Some(physical),
-        )
-        .await?;
+        let session = child.session_id.as_str();
+        let agent = child.agent_did.as_str();
         let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
             agent,
             session,
-            child.child_requester_did.as_deref(),
+            child.requester_did.as_deref(),
         ));
         let mut seen = HashSet::new();
         let mut requests = Vec::new();
@@ -2383,7 +2274,7 @@ impl TurnManager {
                 anyhow::ensure!(
                     row.agent_did.as_deref() == Some(agent)
                         && row.session_id.as_deref() == Some(session)
-                        && row.requester_did == child.child_requester_did
+                        && row.requester_did == child.requester_did
                         && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
                         && seen.insert(row.request_id.clone()),
                     "child session query crossed scope or has ambiguous request labels"
@@ -2705,10 +2596,6 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
         .context("session/cancel requires sessionId")?
         .to_string();
     let meta = params.get("_meta");
-    let cancel_subagents = meta
-        .and_then(|meta| meta.get("cancelSubagents"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let cancel_trigger = meta
         .and_then(|meta| meta.get("cancelTrigger"))
         .and_then(Value::as_str)
@@ -2731,7 +2618,6 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
         .map(ToOwned::to_owned);
     Ok(CancelNotification {
         session_id,
-        cancel_subagents,
         cancel_trigger,
         rewind_if_no_output,
         rewind_if_pristine,
@@ -2861,7 +2747,6 @@ mod tests {
         let params = json!({
             "sessionId": "session-1",
             "_meta": {
-                "cancelSubagents": true,
                 "cancelTrigger": "user",
                 "rewindIfNoOutput": true,
                 "rewindIfPristine": true,
@@ -2870,13 +2755,11 @@ mod tests {
         });
         let notification = parse_cancel_notification(&params).unwrap();
         assert_eq!(notification.session_id, "session-1");
-        assert!(notification.cancel_subagents);
         assert_eq!(notification.cancel_trigger.as_deref(), Some("user"));
         assert!(notification.rewind_if_no_output);
         assert!(notification.rewind_if_pristine);
         assert_eq!(notification.prompt_id.as_deref(), Some("prompt-1"));
         let meta = notification.meta();
-        assert_eq!(meta["cancelSubagents"], json!(true));
         assert_eq!(meta["cancelTrigger"], json!("user"));
         assert_eq!(meta["rewindIfNoOutput"], json!(true));
         assert_eq!(meta["rewindIfPristine"], json!(true));
@@ -2885,9 +2768,8 @@ mod tests {
 
     #[test]
     fn parse_cancel_notification_omits_absent_optional_keys() {
-        let params = json!({"sessionId": "session-1", "_meta": {"cancelSubagents": false}});
+        let params = json!({"sessionId": "session-1", "_meta": {}});
         let notification = parse_cancel_notification(&params).unwrap();
-        assert!(!notification.cancel_subagents);
         assert_eq!(notification.cancel_trigger, None);
         assert!(!notification.rewind_if_no_output);
         assert!(!notification.rewind_if_pristine);
@@ -3670,7 +3552,6 @@ mod tests {
         tool_name: &str,
         lifecycle_state: &str,
         result: &str,
-        child_request_id: Option<&str>,
     ) -> String {
         crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
             node.as_ref(),
@@ -3684,7 +3565,6 @@ mod tests {
                 "completed" | "failed" | "cancelled" | "timedOut"
             )
             .then_some(result),
-            child_request_id,
             None,
             None,
             None,
@@ -3692,7 +3572,7 @@ mod tests {
         .await
     }
 
-    /// Seed one runtime child `AgentRequest` row linked to the parent
+    /// Seed the first `AgentRequest` of a session caused by the parent
     /// request, the durable shape the subagent projection observes.
     async fn seed_child_request(
         node: &Arc<EmbeddedNode>,
@@ -3805,10 +3685,9 @@ mod tests {
             &node,
             selected,
             "call-1",
-            "spawn_subagent",
+            "create_session",
             "running",
             "",
-            Some("child"),
         )
         .await;
         let child = seed_child_request(&node, selected, &tool, "child", "processing").await;
@@ -4285,7 +4164,6 @@ mod tests {
             "bash",
             "running",
             "",
-            None,
         )
         .await;
         let mut after = String::new();
@@ -4440,10 +4318,9 @@ mod tests {
             &node,
             &parent,
             "call-1",
-            "spawn_subagent",
+            "create_session",
             "running",
             "",
-            Some("pane-child"),
         )
         .await;
         let child = seed_child_request(&node, &parent, &tool, "pane-child", "processing").await;
@@ -4459,7 +4336,8 @@ mod tests {
                 let requester_field = requester
                     .map(|did| format!("\"{}\"", escape_graphql_string(did)))
                     .unwrap_or_else(|| "null".into());
-                let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{request_id:"{id}", purpose:"normal", session_id:"session-1-child", agent_did:"{agent_did}", requester_did:{requester_field}, behavior_id:"{behavior}", lifecycle_state:"processing"}}) {{_docID}} }}"#)).await;
+                let created_at = chrono::Utc::now().to_rfc3339();
+                let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{request_id:"{id}", purpose:"normal", session_id:"session-1-child", agent_did:"{agent_did}", requester_did:{requester_field}, behavior_id:"{behavior}", lifecycle_state:"processing", created_at:"{created_at}"}}) {{_docID}} }}"#)).await;
                 ensure_no_errors(&response, "seed child followup").unwrap();
                 let doc = gents_protocol::graphql::extract_mutation_doc_id(
                     &json!({"data":response.data}),
@@ -4689,7 +4567,6 @@ mod tests {
             "bash",
             "running",
             "",
-            None,
         )
         .await;
         seed_assistant_message(&node, &root_receipt, 1, "Root response.").await;
@@ -4952,7 +4829,6 @@ mod tests {
                 "read_file",
                 "running",
                 "",
-                Some("child-1"),
             )
             .await;
             let child = seed_child_request(
@@ -5174,7 +5050,6 @@ mod tests {
                 "read_file",
                 "running",
                 "",
-                None,
             )
             .await;
         });

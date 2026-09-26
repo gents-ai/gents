@@ -27,13 +27,12 @@
 //! - `session/prompt` / `session/cancel` — dispatched to the sibling
 //!   [`super::turn::TurnManager`], which owns the connection-scoped pending
 //!   prompt, deferred response, and interrupt lifecycle.
-//! - `x.ai/subagent/get` / `x.ai/subagent/list_running` /
-//!   `x.ai/subagent/cancel` — inspect/control only runtime descendants of
-//!   sessions registered on this connection, using the runtime's canonical
-//!   authorization and the stock shell's extension DTOs.
-//!   Any other `x.ai/subagent/*` method is
-//!   unrouted and answers the typed method-not-found (`-32601`) like every
-//!   other unknown method, never the sibling leaf's generic error.
+//! - `x.ai/subagent/get` / `x.ai/subagent/list_running` — inspect only the
+//!   sessions caused by sessions registered on this connection, using the
+//!   stock shell's extension DTOs. Any other `x.ai/subagent/*` method,
+//!   including `x.ai/subagent/cancel`, is unrouted and answers the typed
+//!   method-not-found (`-32601`): a caused session is stopped through its
+//!   own request interrupt or the task kill of the call that caused it.
 //!
 //! Shaped stubs return JSON-RPC method-not-found (`-32601`) with an explicit
 //! owned-transition explanation, never a fabricated success:
@@ -66,9 +65,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
 
-use super::projection::subagents::{
-    SUBAGENT_CANCEL_METHOD, SUBAGENT_GET_METHOD, SUBAGENT_LIST_RUNNING_METHOD,
-};
+use super::projection::caused_sessions::{SUBAGENT_GET_METHOD, SUBAGENT_LIST_RUNNING_METHOD};
 use super::projection::{
     effective_context_window_tokens, stamp_update_meta, AsyncCommit, ProjectionEngine,
     UpdateTimestamps, SESSION_UPDATE_METHOD,
@@ -726,12 +723,9 @@ impl AcpService {
             INTERJECT_METHOD | COMPACT_CONVERSATION_METHOD => {
                 Err(shaped_stub_error(&request.method, &request.params))
             }
-            // Only the three exact known subagent ext methods reach the
-            // sibling leaf. Any other `x.ai/subagent/*` method falls
-            // through to the typed `ShapedMethodNotFound` arm below so it
-            // answers the exact `-32601`, never the sibling leaf's generic
-            // (type-only-classified, hence `-32603`) anyhow error.
-            SUBAGENT_GET_METHOD | SUBAGENT_LIST_RUNNING_METHOD | SUBAGENT_CANCEL_METHOD => {
+            // Any other `x.ai/subagent/*` method falls through to the typed
+            // `ShapedMethodNotFound` arm so it answers the exact `-32601`.
+            SUBAGENT_GET_METHOD | SUBAGENT_LIST_RUNNING_METHOD => {
                 self.handle_subagent_ext_request(request.method.as_str(), request)
                     .await
             }
@@ -1329,14 +1323,11 @@ impl AcpService {
         })
     }
 
-    /// Route one of the three exact known `x.ai/subagent/*` ext requests to
-    /// the sibling subagents leaf, which owns the audited not-found result
-    /// shapes. The leaf is pure: it never queries `Task` rows and never
-    /// fabricates child documents.
-    ///
-    /// Enforce the connection's session boundary before any descendant read.
-    /// Stock get/cancel requests carry only subagentId, whereas list_running
-    /// requires sessionId. An optional explicit session is validated equally.
+    /// Route a known `x.ai/subagent/*` inspection request to the caused
+    /// sessions leaf. The connection's session boundary is enforced before
+    /// any read: stock get requests carry only subagentId, whereas
+    /// list_running requires sessionId; an optional explicit session is
+    /// validated equally.
     async fn handle_subagent_ext_request(
         &self,
         method: &str,
@@ -1349,7 +1340,7 @@ impl AcpService {
         } else {
             None
         };
-        if method != SUBAGENT_LIST_RUNNING_METHOD {
+        if method == SUBAGENT_GET_METHOD {
             let id = request.params.get("subagentId");
             match id {
                 None | Some(Value::Null) => {
@@ -1368,26 +1359,6 @@ impl AcpService {
                 _ => {}
             }
         }
-        for (key, valid) in [
-            (
-                "block",
-                request
-                    .params
-                    .get("block")
-                    .is_none_or(|v| v.is_null() || v.is_boolean()),
-            ),
-            (
-                "timeoutMs",
-                request
-                    .params
-                    .get("timeoutMs")
-                    .is_none_or(|v| v.is_null() || v.as_u64().is_some()),
-            ),
-        ] {
-            if !valid {
-                return Err(invalid_params(&format!("invalid subagent {key}")));
-            }
-        }
         let sessions = {
             let known = self.sessions.lock().await;
             match session_id {
@@ -1402,7 +1373,7 @@ impl AcpService {
                 None => known.keys().cloned().collect(),
             }
         };
-        let result = super::projection::subagents::control::handle(
+        let result = super::projection::caused_sessions::handle(
             self.config.node.clone(),
             &self.config.agent_did,
             &sessions,
@@ -2340,9 +2311,8 @@ mod tests {
         let child_prompt = "run child process";
         let unlinked_prompt = "run unlinked process";
         let child_args = serde_json::json!({
-            "name": "__BEHAVIOR__",
-            "prompt": child_prompt,
-            "await_mode": "background"
+            "agent": "__BEHAVIOR__",
+            "prompt": child_prompt
         });
         let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |behavior_id| {
             vec![
@@ -2353,7 +2323,7 @@ mod tests {
                             parent_prompt,
                             vec![StreamChunk::tool_call(
                                 "spawn-child-meta",
-                                "spawn_subagent",
+                                "create_session",
                                 child_args.to_string().replace("__BEHAVIOR__", behavior_id),
                             )],
                         ),
@@ -2730,7 +2700,7 @@ mod tests {
             Ok(child) => child,
             Err(_) => {
                 let diagnostic = node
-                    .execute(r#"{ AgentToolCall(filter: {tool_name: {_eq: "spawn_subagent"}}) {_docID request_id request_doc_id tool_call_id lifecycle_state tool_failure_class child_request_id spawn_target_did spawn_behavior_id await_mode} }"#)
+                    .execute(r#"{ AgentToolCall(filter: {tool_name: {_eq: "create_session"}}) {_docID request_id request_doc_id tool_call_id lifecycle_state tool_failure_class await_mode} }"#)
                     .await;
                 let presentation = diagnostic
                     .data
@@ -2767,10 +2737,10 @@ mod tests {
                         "parent request scope unavailable".into()
                     }
                 } else {
-                    "spawn bridge unavailable".into()
+                    "create_session call unavailable".into()
                 };
                 panic!(
-                    "child request timeout; durable spawn observations: data={:?} errors={:?}; canonical presentation={presentation}",
+                    "child request timeout; durable create_session observations: data={:?} errors={:?}; canonical presentation={presentation}",
                     diagnostic.data, diagnostic.errors,
                 );
             }
@@ -4636,18 +4606,15 @@ mod tests {
             ("x.ai/subagent/list_running", json!({})),
             ("x.ai/subagent/list_running", json!({ "sessionId": 7 })),
             ("x.ai/subagent/list_running", json!({ "sessionId": "  " })),
-            ("x.ai/subagent/cancel", json!({})),
-            ("x.ai/subagent/cancel", json!({ "sessionId": 7 })),
-            ("x.ai/subagent/cancel", json!({ "sessionId": "  " })),
-            // malformed subagent params: cancel with a valid sessionId but
-            // a missing/non-string/blank subagentId
-            ("x.ai/subagent/cancel", json!({ "sessionId": "s-table" })),
+            // malformed subagent params: get with a valid sessionId but a
+            // missing/non-string/blank subagentId
+            ("x.ai/subagent/get", json!({ "sessionId": "s-table" })),
             (
-                "x.ai/subagent/cancel",
+                "x.ai/subagent/get",
                 json!({ "sessionId": "s-table", "subagentId": 7 }),
             ),
             (
-                "x.ai/subagent/cancel",
+                "x.ai/subagent/get",
                 json!({ "sessionId": "s-table", "subagentId": "  " }),
             ),
         ];
@@ -4682,9 +4649,13 @@ mod tests {
             ("terminal/wait_for_exit", json!({})),
             ("terminal/create", json!({})),
             ("some/unknown/method", json!({})),
-            // An unknown subagent ext method is unrouted, not a sibling-leaf
-            // generic error: it answers the exact method-not-found code.
+            // Other subagent ext methods are unrouted: a caused session is
+            // stopped through its own request, never a subagent cancel.
             ("x.ai/subagent/invent", json!({ "sessionId": "s-table" })),
+            (
+                "x.ai/subagent/cancel",
+                json!({ "sessionId": "s-table", "subagentId": "child-1" }),
+            ),
         ] {
             let dispatch = service
                 .handle_acp_payload(&request_payload(method, params))
@@ -4696,9 +4667,8 @@ mod tests {
             );
         }
 
-        // Well-formed subagent requests retain the exact current stub
-        // results: the shaped not-found snapshots, the empty running list,
-        // and the cancel not-found outcome echoing the requested id.
+        // Well-formed subagent requests with no caused session answer the
+        // null snapshot and the empty running list.
         let get = service
             .handle_acp_payload(&request_payload(
                 "x.ai/subagent/get",
@@ -4717,40 +4687,18 @@ mod tests {
         let list = parse_response(list.response.as_deref().expect("response line"));
         assert_eq!(list["result"], json!({ "result": {"subagents": []} }));
 
-        let cancel = service
+        // Stock get DTOs omit sessionId; their reach is limited to sessions
+        // registered on this connection, never an arbitrary ID.
+        let dispatch = service
             .handle_acp_payload(&request_payload(
-                "x.ai/subagent/cancel",
-                json!({ "sessionId": "s-table", "subagentId": "child-1" }),
+                SUBAGENT_GET_METHOD,
+                json!({"subagentId": "unknown-child"}),
             ))
             .await;
-        let cancel = parse_response(cancel.response.as_deref().expect("response line"));
-        assert_eq!(
-            cancel["result"]["result"],
-            json!({
-                "subagentId": "child-1",
-                "cancelled": false,
-                "outcome": { "kind": "not_found" },
-            })
-        );
-
-        // Stock get/cancel DTOs omit sessionId; their reach is limited to
-        // sessions registered on this connection, never an arbitrary ID.
-        for method in [SUBAGENT_GET_METHOD, SUBAGENT_CANCEL_METHOD] {
-            let dispatch = service
-                .handle_acp_payload(&request_payload(
-                    method,
-                    json!({"subagentId": "unknown-child"}),
-                ))
-                .await;
-            let response = parse_response(dispatch.response.as_deref().unwrap());
-            assert!(response.get("error").is_none(), "{response}");
-            assert!(response["result"].get("result").is_some());
-        }
-        for method in [
-            SUBAGENT_GET_METHOD,
-            SUBAGENT_LIST_RUNNING_METHOD,
-            SUBAGENT_CANCEL_METHOD,
-        ] {
+        let response = parse_response(dispatch.response.as_deref().unwrap());
+        assert!(response.get("error").is_none(), "{response}");
+        assert!(response["result"].get("result").is_some());
+        for method in [SUBAGENT_GET_METHOD, SUBAGENT_LIST_RUNNING_METHOD] {
             let dispatch = service
                 .handle_acp_payload(&request_payload(
                     method,

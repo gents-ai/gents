@@ -64,10 +64,7 @@ pub(super) async fn configure_runtime_behavior(
             if subagents_enabled {
                 tools.subagents = Some(SubagentTools {
                     target_ids: vec![target_id.clone()],
-                    spawn_enabled: Some(true),
-                    steering_enabled: Some(true),
-                    background_enabled: Some(true),
-                    ..Default::default()
+                    enabled: Some(true),
                 });
             }
             let context = AgentContext {
@@ -346,7 +343,6 @@ pub(super) async fn seed_canonical_tool_call(
     lifecycle_state: &str,
     arguments: &str,
     result: Option<&str>,
-    child_request_id: Option<&str>,
     spawned_by_tool_call_doc_id: Option<&str>,
     message_sequence: Option<u32>,
     created_at: Option<&str>,
@@ -396,9 +392,6 @@ pub(super) async fn seed_canonical_tool_call(
         .as_deref()
         .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let child = child_request_id
-        .map(|id| format!("\"{}\"", gents::graphql::escape_graphql_string(id)))
-        .unwrap_or_else(|| "null".into());
     let spawned_by = spawned_by_tool_call_doc_id
         .map(|id| format!("\"{}\"", gents::graphql::escape_graphql_string(id)))
         .unwrap_or_else(|| "null".into());
@@ -406,7 +399,7 @@ pub(super) async fn seed_canonical_tool_call(
         tool_call_key: "{}:{}", request_id: "{}", request_doc_id: "{}",
         agent_did: "{}", requester_did: {requester}, session_id: "{}",
         tool_call_id: "{}", tool_name: "{}", message_sequence: {sequence},
-        lifecycle_state: "{}", child_request_id: {child}, spawned_by_tool_call_doc_id: {spawned_by}, started_at: "{}"
+        lifecycle_state: "{}", spawned_by_tool_call_doc_id: {spawned_by}, started_at: "{}"
     }}) {{_docID}} }}"#,
         gents::graphql::escape_graphql_string(request_doc_id),
         gents::graphql::escape_graphql_string(tool_call_id),
