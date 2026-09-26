@@ -964,8 +964,11 @@ async fn assert_runtime_recovery_preserves_registered_worker(test_name: &str, pa
     turn.runtime.shutdown().await;
 }
 
+/// A registry holding no record of the surviving process, as after a restart
+/// without durable records, cannot prove ownership: the orphan settles as lost
+/// ahead of its deadline and terminal parent, and is never reported stopped.
 #[tokio::test]
-async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
+async fn periodic_recovery_without_process_record_settles_orphan_lost() {
     let turn = boot_background_turn(
         "r6-background-periodic-deadline-precedence",
         vec![StreamChunk::tool_call(
@@ -1001,8 +1004,8 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
     .await
     .unwrap();
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("timedOut"));
-    assert_eq!(row.cancel_cause.as_deref(), Some("deadline"));
+    assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(row.cancel_cause, None);
     turn.runtime.shutdown().await;
 }
 
@@ -1048,7 +1051,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     assert!(
         matches!(
             before.lifecycle_state.as_deref(),
-            Some("running" | "cancelled")
+            Some("running" | "failed")
         ),
         "valid orphan must be running or already daemon-reconciled: {before:?}"
     );
@@ -1062,16 +1065,18 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         .await
         .unwrap();
     let recovered = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    // The fresh registry holds no record of the worker's process, so the
+    // orphan settles as lost rather than as a stop.
     assert_eq!(
         recovered.lifecycle_state.as_deref(),
-        Some("cancelled"),
+        Some("failed"),
         "manual sweep report={report:?}; valid row={recovered:?}"
     );
     assert!(
         report.tool_calls_terminalized <= 1,
         "only one well-formed orphan can be due to this sweep: {report:?}"
     );
-    if before.lifecycle_state.as_deref() == Some("cancelled") {
+    if before.lifecycle_state.as_deref() == Some("failed") {
         assert_eq!(
             report.tool_calls_terminalized, 0,
             "daemon-reconciled row cannot be terminalized twice"

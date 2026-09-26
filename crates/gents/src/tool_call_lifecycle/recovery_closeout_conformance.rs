@@ -1076,7 +1076,7 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
     let left = cases
         .iter()
-        .find(|case| case.name == "registered_background_tool_left_to_worker")
+        .find(|case| case.name == "registered_background_tool_left_to_worker_deferred")
         .unwrap();
     let deleted = cases
         .iter()

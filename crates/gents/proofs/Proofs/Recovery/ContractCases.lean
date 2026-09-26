@@ -170,7 +170,7 @@ def recoverySweepCases : List RecoverySweepCase :=
       "orphaned_background_tool_still_running_deferred"
       false false true false false false (process := .stillRunning)
   , orphanedBackgroundRecoveryCase
-      "registered_background_tool_left_to_worker"
+      "registered_background_tool_left_to_worker_deferred"
       false false true false false true
   , orphanedBackgroundRecoveryCase
       "registered_background_tool_task_deleted_to_cancelled"
