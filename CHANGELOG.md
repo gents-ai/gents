@@ -109,6 +109,15 @@ source consistency checks, not a separate runtime compatibility version.
   `password` or `Authorization`) behind "Command hidden" or "Hidden because it
   looks like it contains a credential"; the stored transcript was never
   redacted (#1620).
+- Publishing a datastore tool surface now refuses an output obligation whose
+  `expected_count_field` names a field whose type cannot carry a number or a
+  numeric string at all — a boolean, a list, a relation, or a field the target
+  collection does not have — instead of accepting it and leaving the request to
+  fail at run time. A configuration that names such a field stops applying. The
+  check runs in the shared desired-state publication owner, so it covers
+  `gents config apply`, the self-config tool and pack installs. An accepted type
+  is not a promise that the count arrives: a `DateTime` field takes the string
+  but rejects every all-digit value (#1735).
 
 ### Fixed
 
@@ -158,12 +167,6 @@ source consistency checks, not a separate runtime compatibility version.
   referenced documents exist, not by whether every behavior's inference
   selection is valid; runnability is still decided separately and an invalid
   behavior stays unavailable (#1756).
-- Publishing a datastore tool surface now refuses an output obligation whose
-  `expected_count_field` names a field the target collection cannot hold a count
-  in (or has no such field at all), instead of accepting it and failing every
-  request at completion. The check runs in the shared desired-state publication
-  owner, so it covers `gents config apply`, the self-config tool and pack
-  installs (#1735).
 - Collection introspection now names a non-nillable field `Int!` instead of
   reporting the bare `NON_NULL` wrapper kind, so `defra_query` discovery and the
   new obligation check both read the field's actual type (#1735).

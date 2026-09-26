@@ -334,8 +334,14 @@ type CountFieldSchemas = BTreeMap<String, Option<BTreeMap<String, String>>>;
 /// of each completed write, not from the stored document, so whether a count it
 /// can parse could ever reach `expected_count_field` follows from that field's
 /// GraphQL type as `defra_query::schema` reports it;
-/// [`crate::defra_write::can_hold_canonical_count`] owns that question. A field
-/// it refuses would fail the obligation only at completion, after the work ran.
+/// [`crate::defra_write::can_hold_canonical_count`] owns that question.
+/// Refusing at publication precedes the runtime failure, which differs by
+/// refused class: a `Boolean` or list field still resolves a write-tool
+/// argument schema, so the tool registers, a write completes, and the
+/// obligation fails only at completion, after the work ran; a relation-typed or
+/// absent field resolves none, so `BoundedWriteTool` is not well formed,
+/// `ToolSurface::build_tools` refuses to register it, and no write completes at
+/// all.
 /// The target collection's schema is observable here, inside the publishing
 /// transaction; the structural owner
 /// (`WriteToolDecl::output_obligation_is_well_formed`) has no schema access.
