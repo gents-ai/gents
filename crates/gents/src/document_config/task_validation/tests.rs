@@ -83,7 +83,7 @@ fn task_hook_admission_matches_existing_lean_guards() {
 }
 
 #[test]
-fn task_templates_that_cannot_render_are_refused_at_configure_time() {
+fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
     let task = |field: &str, template: &str| {
         let mut value = json!({"agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
             "prompt_template":"{{ doc.name }}"});
@@ -95,13 +95,15 @@ fn task_templates_that_cannot_render_are_refused_at_configure_time() {
             "{{ doc.correlation | toyaml }}",
             "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
             "{{ now() }}",
+            "{% if doc.urgent %}{{ now() }}{% endif %}",
         ] {
             let error = task(field, template)
                 .validate()
                 .expect_err(&format!("accepted {field}={template}"));
             let message = format!("{error:#}");
             assert!(
-                message.contains(field) && message.contains("cannot render"),
+                message.contains(field)
+                    && message.contains("names an unknown filter, test or function"),
                 "{message}"
             );
         }

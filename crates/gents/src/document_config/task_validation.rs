@@ -56,8 +56,12 @@ impl Task {
         {
             let references = parse_template_for_validation(template)
                 .with_context(|| format!("task {} {field} failed to parse", self.task_id))?;
-            check_template_vocabulary(template)
-                .with_context(|| format!("task {} {field} cannot render", self.task_id))?;
+            check_template_vocabulary(template).with_context(|| {
+                format!(
+                    "task {} {field} names an unknown filter, test or function",
+                    self.task_id
+                )
+            })?;
             for reference in references {
                 if matches!(reference.root(), Some("node" | "ctx")) {
                     let path = reference.path.join(".");
