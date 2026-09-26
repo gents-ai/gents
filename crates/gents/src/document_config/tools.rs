@@ -351,7 +351,7 @@ pub struct RemoteServiceTools {
     pub max_wait_timeout_secs: Option<i64>,
 }
 
-/// Child-agent targets and lifecycle controls.
+/// Session-message targets: the allowlist create_session/send_message address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -364,29 +364,13 @@ pub struct SubagentTools {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub target_ids: Vec<String>,
+    /// Exposes create_session/send_message over the allowlisted targets. Every
+    /// started session is a background tool row; there is no foreground wait,
+    /// workspace inheritance, cascade or cross-principal switch. A target on
+    /// another principal is admitted there as a Peer request under its ACP.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub spawn_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub steering_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub background_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// Absent uses foreground; explicit values are foreground or background.
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub default_await_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub allow_cross_principal: Option<bool>,
-    /// Time for a peer to claim a remote spawn, not its execution lifetime.
-    /// Current default 60s. `wait_subagent` has no timer of its own: it
-    /// returns when the child finishes or the caller's request deadline passes.
-    /// Child execution lifetime remains owned by its request/inference settings.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub cross_principal_spawn_timeout_secs: Option<i64>,
+    pub enabled: Option<bool>,
 }
 
 /// Agent runtime capabilities independent of host access or external integrations.

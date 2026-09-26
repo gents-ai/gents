@@ -86,8 +86,6 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub runtime_source_kind: Option<String>,
     #[serde(default)]
-    pub runtime_bridge_author_did: Option<String>,
-    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -311,13 +309,6 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub request_doc_id: Option<String>,
     pub tool_call_key: String,
-    /// Present only for remotely addressed calls; immutable admission input,
-    /// not the transcript payload or a general-purpose args fallback.
-    #[serde(default)]
-    pub delegated_input: Option<crate::output::DelegatedToolInput>,
-    /// Exact parent workspace capability for remote child attenuation.
-    #[serde(default)]
-    pub delegated_workspace: Option<crate::output::DelegatedWorkspace>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -334,23 +325,12 @@ pub struct AgentToolCallRow {
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
-    #[serde(default)]
-    pub child_request_id: Option<String>,
     /// Physical accepted meta-call that created a separate native background
     /// execution. Not a provider call ID; absent for directly requested tools.
     #[serde(default)]
     pub spawned_by_tool_call_doc_id: Option<String>,
-    /// Immutable remote subagent principal selected at accepted publication.
-    #[serde(default)]
-    pub spawn_target_did: Option<String>,
-    /// Immutable behavior selected from the target alias in the same accepted
-    /// publication. Never reconstructed from provider argument bytes.
-    #[serde(default)]
-    pub spawn_behavior_id: Option<String>,
     #[serde(default)]
     pub await_mode: Option<String>,
-    #[serde(default)]
-    pub cancel_policy: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
     #[serde(default)]
@@ -381,14 +361,6 @@ pub struct AgentToolCallRow {
     pub policy_network: Option<String>,
     #[serde(default)]
     pub cancel_cause: Option<String>,
-    /// Existing tool-owner handoff evidence. A cancellation intent is not proof
-    /// that an external process or remote child has stopped.
-    #[serde(default)]
-    pub cancel_cascade_intent_at: Option<String>,
-    #[serde(default)]
-    pub cancel_pending_remote_ack: Option<bool>,
-    #[serde(default)]
-    pub stuck_since: Option<String>,
     #[serde(default)]
     pub completion_notification_delivered_at: Option<String>,
     #[serde(default)]

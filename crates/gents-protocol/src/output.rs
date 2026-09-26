@@ -340,40 +340,6 @@ pub struct PayloadRef {
     pub stream: u32,
 }
 
-/// Argument-only admission input for a remotely delegated tool call. Stored
-/// immutably on the existing addressed AgentToolCall, never on local calls.
-/// The accepting coordinator verifies exact bytes against `source` and commits
-/// this value with the accepted header and pending call row. The host trusts
-/// the existing authenticated coordinator/ACP route; it does not fetch parent
-/// output to verify this projection. `source` is provenance, not read authority.
-/// This one-time copy preserves document-level disclosure boundaries when a
-/// source segment also contains other calls, text, or private reasoning.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DelegatedToolInput {
-    pub source: PayloadRef,
-    /// Exact emitted JSON argument text; no normalization or reconstructed JSON.
-    pub arguments: String,
-    /// Immutable depth of the coordinator request that accepted this remote
-    /// spawn. The host derives the child depth as `parent_subagent_depth + 1`
-    /// without receiving the private parent request document.
-    pub parent_subagent_depth: u32,
-}
-
-/// Authenticated parent workspace capability copied into an accepted remote
-/// subagent tool row. The receiver may only materialize a child with the same
-/// identity/owner/seal and no greater authority. This is provenance under the
-/// existing document ACP, not a workspace grant.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DelegatedWorkspace {
-    pub workspace_id: String,
-    pub workspace_owner_agent_did: String,
-    pub workspace_authority: String,
-    #[serde(default)]
-    pub workspace_seal_hash: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
@@ -447,8 +413,7 @@ pub enum TerminalOutput {
 /// dispatched. The assistant turn is durable, with its sequence allocated,
 /// before a tool can run or a
 /// background completion can append (#945) — the guarantee in-flight upserts
-/// used to provide. Local dispatch and recovery read arguments through the block;
-/// a remote host consumes the addressed call's immutable [`DelegatedToolInput`].
+/// used to provide. Dispatch and recovery read arguments through the block.
 /// Partial turns may publish diagnostic headers, but any
 /// retained tool-call blocks name terminal, nondispatchable lifecycle rows.
 /// Pending intent is not execution permission: the existing tool owner checks

@@ -84,8 +84,8 @@ pub enum SessionTitleSource {
     User,
 }
 
-/// These origins can coexist: a graph stage invokes a task, and a subagent can
-/// be spawned within that work. References record actual creation facts; they
+/// These origins can coexist: a graph stage invokes a task, and that work can
+/// start another session with `create_session`. References record actual creation facts; they
 /// neither select configuration nor confer graph membership or authorization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,7 +99,9 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub graph_run_id: Option<String>,
-    /// Exact causal request document for a spawned session, not its logical label.
+    /// Exact causal request document for a session started by `create_session`,
+    /// copied from its first request's `caused_by_parent_request_doc_id`. It is
+    /// provenance only: no hierarchy, cascade or authority follows from it.
     /// Further tool-call/trigger lineage remains on the existing request owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
