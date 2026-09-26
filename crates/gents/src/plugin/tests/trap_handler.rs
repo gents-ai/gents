@@ -98,7 +98,6 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         );
 
         echo_once(&echo, 2);
-        println!("{CHILD_ENV}: survived");
         return;
     }
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -129,7 +128,8 @@ fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains(&format!("{CHILD_ENV}: survived")) && stdout.contains("1 passed"),
+        stdout.contains(&format!("test {TEST_NAME} ... ok"))
+            && stdout.contains("test result: ok. 1 passed"),
         "the child did not run the test to the end: {stdout}"
     );
 }
