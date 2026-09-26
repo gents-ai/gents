@@ -275,6 +275,7 @@ async fn generated_linked_restart_dispositions_use_canonical_admission_owner() {
                 delegated_workspace: None,
                 await_mode,
             }),
+            tool_name: None,
         })
         .await
         .unwrap();

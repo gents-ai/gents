@@ -209,11 +209,14 @@ pub(crate) struct BackgroundToolArgs {
     pub args: serde_json::Value,
 }
 
-// Bounded-wait defaults for wait_process, aligned with other agent
-// frameworks (codex wait_agent defaults to 30s; grok-build caps blocking
-// waits at 10 minutes). A wait that times out reports the process as still
-// running without cancelling it (#985).
+/// `wait_process` wait when neither the call nor the handle's Tools group
+/// (`wait_timeout_secs`) sets one; codex `wait_agent` also defaults to 30s. A
+/// wait that times out reports the process as still running without
+/// cancelling it (#985).
 pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
+/// Ceiling on any `wait_process` wait, configured or requested. A longer
+/// block holds the caller's turn; the completion notification is the
+/// mechanism for long work (grok-build caps blocking waits at 10 minutes).
 pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -221,16 +224,6 @@ pub(crate) struct WaitToolArgs {
     pub tool_call_id: String,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
-}
-
-impl WaitToolArgs {
-    pub(crate) fn validated_wait_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(
-            self.timeout_secs
-                .unwrap_or(DEFAULT_WAIT_PROCESS_TIMEOUT_SECS)
-                .clamp(1, MAX_WAIT_PROCESS_TIMEOUT_SECS),
-        )
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -434,6 +427,8 @@ impl ChildEdge {
     }
 }
 
+/// Time a peer has to claim a cross-principal spawn when
+/// `subagents.cross_principal_spawn_timeout_secs` is unset.
 pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize)]
@@ -1742,7 +1737,6 @@ async fn load_subagent_tool_selection(
 ) -> Result<SubagentToolSelection> {
     use crate::collection::Collection;
     use crate::config_client::{read_desired_state_document_in_txn as read, ConfigAccess};
-    use crate::document_config::{AgentBehavior, AgentContext, Tools};
     let owner = agent_did.to_owned();
     let behavior_id = behavior_id.to_owned();
     ConfigAccess::transact_local(
@@ -1753,31 +1747,12 @@ async fn load_subagent_tool_selection(
             let owner = owner.clone();
             let behavior_id = behavior_id.clone();
             Box::pin(async move {
-                let behavior: AgentBehavior = serde_json::from_value(
-                    read(txn, Collection::AgentBehavior, &owner, &behavior_id)
+                let Some(tools) =
+                    crate::document_config::load_behavior_tools_in_txn(txn, &owner, &behavior_id)
                         .await?
-                        .ok_or_else(|| {
-                            anyhow!("AgentBehavior {behavior_id} not found for {owner}")
-                        })?,
-                )?;
-                let Some(context_id) = behavior.context_id else {
+                else {
                     return Ok(SubagentToolSelection::default());
                 };
-                let context: AgentContext = serde_json::from_value(
-                    read(txn, Collection::AgentContext, &owner, &context_id)
-                        .await?
-                        .ok_or_else(|| {
-                            anyhow!("AgentContext {context_id} not found for {owner}")
-                        })?,
-                )?;
-                let Some(tools_id) = context.tools_id.as_deref() else {
-                    return Ok(SubagentToolSelection::default());
-                };
-                let tools: Tools = serde_json::from_value(
-                    read(txn, Collection::Tools, &owner, tools_id)
-                        .await?
-                        .ok_or_else(|| anyhow!("Tools {tools_id} not found for {owner}"))?,
-                )?;
                 let resolved = crate::tool_surface::SubagentToolConfig::from_document(&tools)?;
                 let group = tools.subagents.as_ref();
 
@@ -2471,30 +2446,6 @@ mod tests {
             &owner.agent_did,
             owner.requester_did.as_deref(),
         ));
-    }
-
-    #[test]
-    fn wait_process_timeout_defaults_and_clamps() {
-        let args = |timeout_secs| WaitToolArgs {
-            tool_call_id: "call".to_string(),
-            timeout_secs,
-        };
-        assert_eq!(
-            args(None).validated_wait_timeout(),
-            std::time::Duration::from_secs(DEFAULT_WAIT_PROCESS_TIMEOUT_SECS)
-        );
-        assert_eq!(
-            args(Some(0)).validated_wait_timeout(),
-            std::time::Duration::from_secs(1)
-        );
-        assert_eq!(
-            args(Some(5)).validated_wait_timeout(),
-            std::time::Duration::from_secs(5)
-        );
-        assert_eq!(
-            args(Some(999_999)).validated_wait_timeout(),
-            std::time::Duration::from_secs(MAX_WAIT_PROCESS_TIMEOUT_SECS)
-        );
     }
 
     // This is the observed projection boundary shared by live bridge failure

@@ -322,6 +322,9 @@ struct SelectedToolIdentity {
 pub(crate) struct SpawnedBackgroundToolAdmission {
     pub(crate) tool_name: String,
     pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+    /// `(service_id, tool_name)` of a remote target. Written at creation, so
+    /// later observers resolve the service's configured wait policy.
+    pub(crate) selected_tool_identity: Option<(String, String)>,
 }
 
 impl ToolCallLifecycle {
@@ -666,6 +669,49 @@ impl ToolCallLifecycle {
 
     pub(crate) fn tool_name(&self) -> &str {
         &self.tool_name
+    }
+
+    /// Budget for this call's interrupted-call diagnostic tail: the owning
+    /// behavior's current `max_output_chars` for this tool, resolved from
+    /// configuration so it holds after a restart.
+    pub(crate) async fn output_budget(&self) -> usize {
+        let behavior_id = match &self.request_doc_id {
+            Some(doc_id) => {
+                match crate::request_binding::load_agent_request_by_doc_id(&self.node, doc_id).await
+                {
+                    Ok(request) => request.map(|request| request.behavior_id),
+                    Err(error) => {
+                        tracing::warn!(
+                            request_doc_id = %doc_id,
+                            tool_call_id = %self.tool_call_id,
+                            error = %format!("{error:#}"),
+                            "output budget uses the default: owning request did not load"
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        match behavior_id {
+            Some(behavior_id) => {
+                crate::tool_surface::configured_output_budget(
+                    &self.node,
+                    &self.agent_did,
+                    &behavior_id,
+                    &self.tool_name,
+                )
+                .await
+            }
+            None => crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+        }
+    }
+
+    /// MCP service a remote call was dispatched to, when recorded.
+    pub(crate) fn selected_service_id(&self) -> Option<&str> {
+        self.selected_tool_identity
+            .as_ref()
+            .map(|selected| selected.service_id.as_str())
     }
 
     pub(crate) fn tool_call_id(&self) -> &str {

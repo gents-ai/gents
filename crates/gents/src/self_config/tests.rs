@@ -197,6 +197,11 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "bash",
     );
     assert_fields(
+        &shapes["host"]["cli"][0],
+        canonical_struct_fields::<CliTool>().unwrap(),
+        "cli[]",
+    );
+    assert_fields(
         &shapes["remote"],
         canonical_struct_fields::<RemoteTools>().unwrap(),
         "remote",

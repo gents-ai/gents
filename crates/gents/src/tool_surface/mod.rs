@@ -2,16 +2,19 @@ mod behavior_config;
 mod build;
 mod explain;
 mod modes;
+mod output_budget;
 mod policy;
 mod root_admission;
 mod runtime_context;
 mod selection;
+mod timeouts;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use build::measured_mcp_services_for_access;
 pub(crate) use build::{measured_available_mcp_service_ids, resolve_effective_tool_root};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub(crate) use output_budget::configured_output_budget;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
@@ -27,6 +30,7 @@ pub use root_admission::{
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};
+pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -48,6 +52,8 @@ use crate::toolset::{
 #[cfg(feature = "agent-memory")]
 use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 
+/// Timeout of a `--cli-tool` host registration. A document overrides it per
+/// tool with `host.cli[].timeout_secs`, within the host foreground maximum.
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]

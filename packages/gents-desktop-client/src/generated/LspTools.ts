@@ -10,15 +10,12 @@ export type LspTools = {
  */
 config?: string | null,
 /**
- * Default action timeout, including indexing retries; current default 20s.
+ * Action timeout, including indexing retries, when a call omits
+ * `timeout`. Unset uses 20s. Clamped to the maximum below.
  */
 timeout_secs?: number | null,
 /**
- * Maximum model-requested action timeout; current maximum 300s.
+ * Longest action timeout a call can request; calls ask for at least 5s.
+ * Unset uses 300s; larger values are clamped to 300s.
  */
-max_timeout_secs?: number | null,
-/**
- * Lower-level LSP request timeout; current default 30s. Action deadlines
- * can shorten it. Idle and per-server warmup limits remain in config.
- */
-rpc_timeout_secs?: number | null, };
+max_timeout_secs?: number | null, };

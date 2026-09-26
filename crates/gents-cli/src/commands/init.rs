@@ -1014,7 +1014,7 @@ fn tools_for_package(
                         ToolPackageArg::Readonly => FileToolMode::ReadOnly,
                         _ => FileToolMode::ReadWrite,
                     },
-                    timeout_secs: None,
+                    ..Default::default()
                 }),
                 bash: Some(BashTools {
                     mode: match tool_package {
@@ -1064,14 +1064,12 @@ fn tools_for_package(
             enable_memory: Some(enable_memory),
             enable_session_history_tool: None,
             enable_context_budget: Some(true),
-            timeout_secs: None,
         }),
         datastore: Some(DatastoreTools {
             enable_defra_query: Some(enable_defra_query),
             defra_query_collections: (!defra_query_collections.is_empty())
                 .then_some(defra_query_collections),
             datastore_tool_surface_ids: None,
-            timeout_secs: None,
         }),
         integrations: None,
         self_config: None,

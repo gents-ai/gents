@@ -16,18 +16,28 @@ export const TOOL_LIMIT_DEFAULTS = {
   maxLspTimeout: 300,
 } as const;
 
+/** `host.files` limits: row label, server-side ceiling (`Tools::validate`)
+ * and unset default. */
+export const FILE_LIMITS = {
+  max_read_chars: { label: "File read byte limit", max: 1_000_000, fallback: "32000" },
+  max_list_entries: { label: "File listing entry limit", max: 5_000, fallback: "200" },
+  max_matches: { label: "File search match limit", max: 5_000, fallback: "200" },
+} as const;
+
 /* a note that belongs to the group, set in the row's own padding */
 function Note({ children }: { children: ReactNode }) {
   return <p className="px-5 py-3 text-sm text-muted-foreground">{children}</p>;
 }
 
-function SecondsRow({
+/** A positive whole number, optionally bounded (`max`), empty for unset. */
+function WholeNumberRow({
   id,
   label,
   value,
   onChange,
   onInvalid,
   placeholder,
+  max,
 }: {
   id: string;
   label: string;
@@ -35,6 +45,7 @@ function SecondsRow({
   onChange: (value: number | null) => void;
   onInvalid: (id: string, label: string | null) => void;
   placeholder: string;
+  max?: number;
 }) {
   const canonical = value == null ? "" : String(value);
   const [raw, setRaw] = useState(canonical);
@@ -55,8 +66,17 @@ function SecondsRow({
         setRaw(text);
         const valid =
           text === "" ||
-          (/^[1-9]\d*$/.test(text) && Number.isSafeInteger(Number(text)));
-        onInvalid(id, valid ? null : label);
+          (/^[1-9]\d*$/.test(text) &&
+            Number.isSafeInteger(Number(text)) &&
+            (max === undefined || Number(text) <= max));
+        onInvalid(
+          id,
+          valid
+            ? null
+            : max === undefined
+              ? label
+              : `${label} (at most ${max.toLocaleString("en-US")})`,
+        );
         if (valid) onChange(text === "" ? null : Number(text));
       }}
     />
@@ -167,13 +187,26 @@ export function ToolGroupControls({
     onValidChange: (value: number | null) => void,
     placeholder: string,
   ) => (
-    <SecondsRow
+    <WholeNumberRow
       id={id}
       label={label}
       value={value}
       placeholder={placeholder}
       onInvalid={onInvalid}
       onChange={onValidChange}
+    />
+  );
+  const fileLimit = (field: keyof typeof FILE_LIMITS) => (
+    <WholeNumberRow
+      id={`tools-files-${field.replace(/_/g, "-")}`}
+      label={FILE_LIMITS[field].label}
+      value={groups.host?.files?.[field]}
+      placeholder={FILE_LIMITS[field].fallback}
+      max={FILE_LIMITS[field].max}
+      onInvalid={onInvalid}
+      onChange={(value) =>
+        update("host", { files: { ...groups.host?.files, [field]: value } })
+      }
     />
   );
   return (
@@ -203,23 +236,16 @@ export function ToolGroupControls({
             })
           }
         />
-        {seconds(
-          "tools-files-timeout",
-          "File operation timeout seconds",
-          groups.host?.files?.timeout_secs,
-          (timeout_secs) =>
-            update("host", {
-              files: { ...groups.host?.files, timeout_secs },
-            }),
-          "Request deadline",
-        )}
+        {fileLimit("max_read_chars")}
+        {fileLimit("max_list_entries")}
+        {fileLimit("max_matches")}
         {seconds(
           "tools-bash-timeout",
           "Bash timeout seconds",
           groups.host?.bash?.timeout_secs,
           (timeout_secs) =>
             update("host", { bash: { ...groups.host?.bash, timeout_secs } }),
-          String(TOOL_LIMIT_DEFAULTS.bashTimeout),
+          `Host default (${TOOL_LIMIT_DEFAULTS.bashTimeout})`,
         )}
         {seconds(
           "tools-bash-max-timeout",
@@ -227,7 +253,7 @@ export function ToolGroupControls({
           groups.host?.bash?.max_timeout_secs,
           (max_timeout_secs) =>
             update("host", { bash: { ...groups.host?.bash, max_timeout_secs } }),
-          "Bash timeout",
+          "Bash timeout, else host maximum",
         )}
         {seconds(
           "tools-bash-background-timeout",
@@ -267,20 +293,6 @@ export function ToolGroupControls({
           (cross_principal_spawn_timeout_secs) =>
             update("subagents", { cross_principal_spawn_timeout_secs }),
           "60",
-        )}
-        {seconds(
-          "tools-subagent-wait-timeout",
-          "Background wait seconds",
-          groups.subagents?.wait_timeout_secs,
-          (wait_timeout_secs) => update("subagents", { wait_timeout_secs }),
-          String(TOOL_LIMIT_DEFAULTS.waitTimeout),
-        )}
-        {seconds(
-          "tools-subagent-max-wait-timeout",
-          "Maximum background wait seconds",
-          groups.subagents?.max_wait_timeout_secs,
-          (max_wait_timeout_secs) => update("subagents", { max_wait_timeout_secs }),
-          String(TOOL_LIMIT_DEFAULTS.maxWaitTimeout),
         )}
       </Group>
       <Group title="Runtime tools">
@@ -665,16 +677,6 @@ export function ToolGroupControls({
                   lsp: { ...groups.integrations?.lsp, max_timeout_secs },
                 }),
               String(TOOL_LIMIT_DEFAULTS.maxLspTimeout),
-            )}
-            {seconds(
-              "tools-lsp-rpc-timeout",
-              "Language server RPC timeout seconds",
-              groups.integrations.lsp.rpc_timeout_secs,
-              (rpc_timeout_secs) =>
-                update("integrations", {
-                  lsp: { ...groups.integrations?.lsp, rpc_timeout_secs },
-                }),
-              "30",
             )}
           </>
         )}

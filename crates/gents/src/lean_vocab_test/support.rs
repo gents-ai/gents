@@ -54,6 +54,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) repeated_tool_failure_cases: Vec<serde_json::Value>,
+    /// `Conformance.ToolTimeouts`: host-ceiling resolution of Tools timeouts.
+    pub(crate) tool_timeout_cases: serde_json::Value,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
@@ -196,6 +198,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) terminal_diagnostic_presentation_cases: Vec<LeanTerminalDiagnosticPresentationCase>,
+    pub(crate) terminal_diagnostic_replay_cases: Vec<LeanTerminalDiagnosticReplayCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
@@ -1745,6 +1748,11 @@ pub(crate) fn lean_canonical_payload_presentation_cases() -> &'static [LeanPaylo
 pub(crate) fn lean_terminal_diagnostic_presentation_cases(
 ) -> &'static [LeanTerminalDiagnosticPresentationCase] {
     &lean_contract_snapshot().terminal_diagnostic_presentation_cases
+}
+
+pub(crate) fn lean_terminal_diagnostic_replay_cases() -> &'static [LeanTerminalDiagnosticReplayCase]
+{
+    &lean_contract_snapshot().terminal_diagnostic_replay_cases
 }
 
 pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {

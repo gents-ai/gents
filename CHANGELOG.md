@@ -8,15 +8,53 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Breaking
 
+- Tools document timeouts now take effect, and the ones that could not are
+  gone (#1768). `host.bash` `timeout_secs` and `max_timeout_secs` set the
+  foreground default and maximum, clamped to the host's
+  `--command-timeout-secs` / `--command-timeout-max-secs`.
+  `host.cli[].timeout_secs` replaces the CLI registration's timeout, clamped
+  the same way. `background_timeout_secs` on `host.bash` and each remote
+  service sets a `spawn_process` lifetime (at most 36,000s).
+  `wait_timeout_secs` and `max_wait_timeout_secs` there set `wait_process`
+  waits on that kind of handle (at most 600s). `integrations.lsp`
+  `timeout_secs` and `max_timeout_secs` set LSP action timeouts (at most
+  300s). Values above a ceiling are clamped, not rejected. Removed, and now
+  rejected: `host.files.timeout_secs`, `built_ins.timeout_secs`,
+  `datastore.timeout_secs`, `self_config.timeout_secs`,
+  `subagents.wait_timeout_secs`, `subagents.max_wait_timeout_secs` and
+  `integrations.lsp.rpc_timeout_secs`. Delete them from stored Tools
+  documents before upgrading.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
+
+### Added
+
+- Tools documents can set file tool limits: `host.files.max_read_chars`
+  (default 32,000 bytes, allowed 1 to 1,000,000) for `read_file`, and
+  `host.files.max_list_entries` and `host.files.max_matches` (default 200,
+  allowed 1 to 5,000) for `list_files`, `glob` and `grep`. Each is both the
+  per-call default and the most a call can request. The desktop Tools editor
+  shows them (#1764).
 
 ### Changed
 
 - `write_file` no longer replaces an existing file blindly: pass the
   `content_hash` from your latest read (rejected if the file changed since) or
   `overwrite: true`. Creating new files is unchanged (#1605).
+- A configured `max_output_chars` now also bounds what an interrupted
+  command's diagnostic shows and how much a background command's completion
+  notice summarizes (at most 4,000 bytes) (#1770). The value is read from the
+  behavior's current Tools document when the output is presented, including
+  after a restart; a behavior that no longer resolves uses the default.
+- `list_files`, `glob` and `grep` return a truncated result when their output
+  would exceed the filesystem runner's response budget (1.5 MiB), instead of
+  failing the call. Glob and grep patterns longer than 4,096 bytes are refused
+  with an error instead of crashing the runner (#1764).
+- The subagent tree view shows three levels below its root when no depth is
+  requested, the delegation depth limit, instead of eight. Explicit depths
+  and the desktop cascade-cancel preview use the descendant walk's 32-level
+  bound, matching what cancellation reaches (#1764).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
@@ -132,9 +170,7 @@ every runtime you pair with to 0.19.0 together.
 - Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
   and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
-  Background completion notices and interrupted-call diagnostics keep their
-  fixed budgets for now (#1770). Runtimes older than 0.19.0 reject documents
-  that set them.
+  Runtimes older than 0.19.0 reject documents that set them.
 
 ### Changed
 

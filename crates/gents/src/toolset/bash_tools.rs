@@ -36,7 +36,11 @@ fn validate_read_only_bash_input(
     })
 }
 
-fn timeout_secs_schema(default_timeout: Duration, max_timeout: Duration) -> serde_json::Value {
+fn timeout_secs_schema(
+    default_timeout: Duration,
+    max_timeout: Duration,
+    background_lifetime: Duration,
+) -> serde_json::Value {
     let max_secs = max_timeout.as_secs().max(default_timeout.as_secs());
     serde_json::json!({
         "type": "integer",
@@ -44,10 +48,10 @@ fn timeout_secs_schema(default_timeout: Duration, max_timeout: Duration) -> serd
         "minimum": 1,
         "maximum": max_secs,
         "description": format!(
-            "Timeout in seconds; omit for the default ({}s). Explicit values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) instead get a {}s lifetime budget.",
+            "Timeout in seconds; omit for the default ({}s). Explicit values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) instead get a {}s lifetime.",
             default_timeout.as_secs(),
             max_secs,
-            BACKGROUND_COMMAND_TIMEOUT_SECS,
+            background_lifetime.as_secs(),
         )
     })
 }
@@ -58,6 +62,7 @@ pub(super) struct ReadOnlyBashTool {
     default_timeout: Duration,
     max_timeout: Duration,
     max_output_chars: usize,
+    background_lifetime: Duration,
     policy: CommandExecutionPolicy,
 }
 
@@ -73,6 +78,7 @@ impl ReadOnlyBashTool {
             default_timeout,
             max_timeout: default_timeout,
             max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
             policy: CommandExecutionPolicy::read_only(allowlist),
         }
     }
@@ -89,8 +95,15 @@ impl ReadOnlyBashTool {
             default_timeout,
             max_timeout: max_timeout.max(default_timeout),
             max_output_chars,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
             policy,
         }
+    }
+
+    /// Lifetime advertised for `spawn_process` runs of this tool.
+    pub(super) fn with_background_lifetime(mut self, lifetime: Duration) -> Self {
+        self.background_lifetime = lifetime;
+        self
     }
 }
 
@@ -100,6 +113,7 @@ pub(super) struct UnrestrictedBashTool {
     default_timeout: Duration,
     max_timeout: Duration,
     max_output_chars: usize,
+    background_lifetime: Duration,
     policy: CommandExecutionPolicy,
 }
 
@@ -111,6 +125,7 @@ impl UnrestrictedBashTool {
             default_timeout,
             max_timeout: default_timeout,
             max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
             policy: CommandExecutionPolicy::write_capable(),
         }
     }
@@ -127,8 +142,15 @@ impl UnrestrictedBashTool {
             default_timeout,
             max_timeout: max_timeout.max(default_timeout),
             max_output_chars,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
             policy,
         }
+    }
+
+    /// Lifetime advertised for `spawn_process` runs of this tool.
+    pub(super) fn with_background_lifetime(mut self, lifetime: Duration) -> Self {
+        self.background_lifetime = lifetime;
+        self
     }
 }
 
@@ -163,7 +185,11 @@ impl Tool for ReadOnlyBashTool {
                         "default": ".",
                         "description": "Working directory under the allowed root. Omit for the active workspace/root."
                     },
-                    "timeout_secs": timeout_secs_schema(self.default_timeout, self.max_timeout),
+                    "timeout_secs": timeout_secs_schema(
+                        self.default_timeout,
+                        self.max_timeout,
+                        self.background_lifetime,
+                    ),
                     "raw_json": {
                         "type": "boolean",
                         "default": false,
@@ -245,7 +271,11 @@ impl Tool for UnrestrictedBashTool {
                         "default": ".",
                         "description": "Working directory under the configured writable root. Omit for the active workspace/root."
                     },
-                    "timeout_secs": timeout_secs_schema(self.default_timeout, self.max_timeout),
+                    "timeout_secs": timeout_secs_schema(
+                        self.default_timeout,
+                        self.max_timeout,
+                        self.background_lifetime,
+                    ),
                     "raw_json": {
                         "type": "boolean",
                         "default": false,

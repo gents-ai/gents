@@ -6,6 +6,7 @@ use crate::lean_vocab_test::{
     lean_goal_continuation_materialization_cases, lean_goal_create_cases, lean_goal_decision_cases,
     lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
     lean_task_goal_recovery_cases, lean_terminal_diagnostic_presentation_cases,
+    lean_terminal_diagnostic_replay_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
@@ -995,6 +996,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "TerminalDiagnosticPresentationCases".to_string(),
         ));
     }
+    if !lean_terminal_diagnostic_replay_cases().is_empty() {
+        emitted.insert((
+            "terminal_diagnostic_replay_cases".to_string(),
+            "TerminalDiagnosticReplayCases".to_string(),
+        ));
+    }
     if !lean_compaction_reducer_cases().is_empty() {
         emitted.insert((
             "compaction_reducer_cases".to_string(),
@@ -1512,6 +1519,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "callback_transition_cases".into(),
         "CallbackTransitionCases".into(),
     ));
+    assert!(["foreground", "cli", "background", "wait", "lsp"]
+        .iter()
+        .all(|family| snapshot.tool_timeout_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())));
+    emitted.insert(("tool_timeout_cases".into(), "ToolTimeoutCases".into()));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

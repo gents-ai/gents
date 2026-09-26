@@ -18,7 +18,11 @@ import {
 import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
-import { TOOL_LIMIT_DEFAULTS, ToolGroupControls } from "./ToolGroupControls";
+import {
+  FILE_LIMITS,
+  TOOL_LIMIT_DEFAULTS,
+  ToolGroupControls,
+} from "./ToolGroupControls";
 import { RowMenu } from "./RowMenu";
 import { useCallback, useState } from "react";
 
@@ -119,7 +123,7 @@ export function ToolsEditor({
         "display_name" in advanced
       )
         throw new Error("IDs and display name are edited in their dedicated fields");
-      const positiveSeconds = (label: string, value: unknown) => {
+      const positiveWholeNumber = (label: string, value: unknown) => {
         if (
           value != null &&
           (typeof value !== "number" || !Number.isInteger(value) || value < 1)
@@ -138,7 +142,6 @@ export function ToolsEditor({
         if (effectiveMaximum < effective)
           throw new Error(`${label} maximum must be at least its default`);
       };
-      positiveSeconds("File timeout", advanced.host?.files?.timeout_secs);
       for (const [label, value] of [
         ["Bash timeout", advanced.host?.bash?.timeout_secs],
         ["Maximum bash timeout", advanced.host?.bash?.max_timeout_secs],
@@ -149,16 +152,19 @@ export function ToolsEditor({
           "Subagent spawn timeout",
           advanced.subagents?.cross_principal_spawn_timeout_secs,
         ],
-        ["Subagent wait timeout", advanced.subagents?.wait_timeout_secs],
-        ["Maximum subagent wait timeout", advanced.subagents?.max_wait_timeout_secs],
         ["Language server timeout", advanced.integrations?.lsp?.timeout_secs],
         [
           "Maximum language server timeout",
           advanced.integrations?.lsp?.max_timeout_secs,
         ],
-        ["Language server RPC timeout", advanced.integrations?.lsp?.rpc_timeout_secs],
       ] as const)
-        positiveSeconds(label, value);
+        positiveWholeNumber(label, value);
+      for (const [field, { label, max }] of Object.entries(FILE_LIMITS)) {
+        const value = advanced.host?.files?.[field as keyof typeof FILE_LIMITS];
+        positiveWholeNumber(label, value);
+        if (typeof value === "number" && value > max)
+          throw new Error(`${label} must be at most ${max.toLocaleString("en-US")}`);
+      }
       boundedSeconds(
         "Bash timeout",
         advanced.host?.bash?.timeout_secs,
@@ -169,13 +175,6 @@ export function ToolsEditor({
         "Bash wait timeout",
         advanced.host?.bash?.wait_timeout_secs,
         advanced.host?.bash?.max_wait_timeout_secs,
-        TOOL_LIMIT_DEFAULTS.waitTimeout,
-        TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
-      );
-      boundedSeconds(
-        "Subagent wait timeout",
-        advanced.subagents?.wait_timeout_secs,
-        advanced.subagents?.max_wait_timeout_secs,
         TOOL_LIMIT_DEFAULTS.waitTimeout,
         TOOL_LIMIT_DEFAULTS.maxWaitTimeout,
       );
@@ -236,7 +235,7 @@ export function ToolsEditor({
           ["Remote wait timeout", service.wait_timeout_secs],
           ["Maximum remote wait timeout", service.max_wait_timeout_secs],
         ] as const)
-          positiveSeconds(label, value);
+          positiveWholeNumber(label, value);
         boundedSeconds(
           "Remote wait timeout",
           service.wait_timeout_secs,

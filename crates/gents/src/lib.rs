@@ -410,7 +410,8 @@ pub use tool_surface::{
 };
 pub use toolset::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
+    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
+    ToolSetBuilder,
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::goal_source::GoalSource;

@@ -360,6 +360,7 @@ impl CanonicalBackgroundFixture {
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                     tool_name: "fixture".to_owned(),
                     deadline_at: deadline,
+                    selected_tool_identity: None,
                 },
                 "background work started",
             )

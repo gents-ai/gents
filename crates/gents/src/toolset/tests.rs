@@ -257,11 +257,13 @@ fn native_tool_backgroundable_capability_is_explicit() {
 fn background_tool_names_are_gated_by_allowlist() {
     let disabled = BackgroundToolConfig {
         allowlist: Vec::new(),
+        timeouts: Default::default(),
     };
     assert!(background_tool_names(&disabled).is_empty());
 
     let enabled = BackgroundToolConfig {
         allowlist: vec!["bash".to_string()],
+        timeouts: Default::default(),
     };
     assert_eq!(
         background_tool_names(&enabled),
@@ -534,7 +536,7 @@ async fn read_file_returns_compact_numbered_contents() {
             path: "notes.txt".to_string(),
             start_line: Some(2),
             end_line: Some(3),
-            max_chars: DEFAULT_MAX_FILE_CHARS,
+            max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: false,
         },
     )
@@ -565,7 +567,7 @@ async fn read_file_reports_truncation_in_compact_metadata() {
             path: "notes.txt".to_string(),
             start_line: None,
             end_line: None,
-            max_chars: 12,
+            max_chars: Some(12),
             raw_json: false,
         },
     )
@@ -599,7 +601,7 @@ async fn read_file_rejects_paths_outside_root() {
             path: "../outside.txt".to_string(),
             start_line: None,
             end_line: None,
-            max_chars: DEFAULT_MAX_FILE_CHARS,
+            max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: false,
         },
     )
@@ -799,7 +801,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
         ListFilesArgs {
             path: Some(".".to_string()),
             recursive: true,
-            max_entries: 100,
+            max_entries: Some(100),
             raw_json: true,
         },
     )
@@ -837,7 +839,7 @@ async fn list_files_skips_permission_denied_subtrees() {
         ListFilesArgs {
             path: Some(".".to_string()),
             recursive: true,
-            max_entries: 100,
+            max_entries: Some(100),
             raw_json: true,
         },
     )
@@ -869,7 +871,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
         ListFilesArgs {
             path: Some(".".to_string()),
             recursive: true,
-            max_entries: 100,
+            max_entries: Some(100),
             raw_json: false,
         },
     )
@@ -901,7 +903,7 @@ async fn glob_returns_compact_matches() {
         GlobArgs {
             pattern: "**/*.rs".to_string(),
             path: Some(".".to_string()),
-            max_matches: 100,
+            max_matches: Some(100),
             raw_json: false,
         },
     )
@@ -935,7 +937,7 @@ async fn grep_returns_compact_line_numbered_matches() {
             pattern: "println".to_string(),
             path: Some(".".to_string()),
             case_sensitive: true,
-            max_matches: 100,
+            max_matches: Some(100),
             raw_json: false,
         },
     )
@@ -966,7 +968,7 @@ async fn compact_list_output_is_smaller_than_representative_pretty_json() {
         ListFilesArgs {
             path: Some(".".to_string()),
             recursive: true,
-            max_entries: 100,
+            max_entries: Some(100),
             raw_json: false,
         },
     )
@@ -2098,7 +2100,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
             path: "notes.txt".to_string(),
             start_line: None,
             end_line: None,
-            max_chars: DEFAULT_MAX_FILE_CHARS,
+            max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: true,
         },
     )
@@ -2176,7 +2178,7 @@ async fn read_file_reports_raw_content_hash() {
             path: "config.json".to_string(),
             start_line: None,
             end_line: None,
-            max_chars: DEFAULT_MAX_FILE_CHARS,
+            max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: true,
         },
     )

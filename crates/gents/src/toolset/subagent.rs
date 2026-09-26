@@ -523,7 +523,7 @@ impl Tool for WaitProcessTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Wait up to timeout_secs for a background process in this session to reach a terminal state, including a handle returned on an earlier turn. A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s, maximum {MAX_WAIT_PROCESS_TIMEOUT_SECS}s."
+                "Wait up to timeout_secs for a background process in this session to reach a terminal state, including a handle returned on an earlier turn. A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s unless configured for that process; never more than {MAX_WAIT_PROCESS_TIMEOUT_SECS}s, or less if configured."
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -534,7 +534,6 @@ impl Tool for WaitProcessTool {
                     },
                     "timeout_secs": {
                         "type": "integer",
-                        "default": DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
                         "minimum": 1,
                         "maximum": MAX_WAIT_PROCESS_TIMEOUT_SECS,
                         "description": "How long to wait before returning a still-running snapshot; the process is never cancelled by a wait timeout."

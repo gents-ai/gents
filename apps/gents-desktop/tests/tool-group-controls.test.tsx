@@ -35,7 +35,7 @@ describe("canonical tool selections", () => {
     const user = userEvent.setup();
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
     const timeout = screen.getByRole("textbox", {
-      name: "File operation timeout seconds",
+      name: "Bash timeout seconds",
     });
     await user.type(screen.getByRole("textbox", { name: "Display name" }), " edited");
     for (const invalid of ["0", "-1", "1.5", "abc", "9007199254740992"]) {
@@ -47,17 +47,62 @@ describe("canonical tool selections", () => {
     }
     fireEvent.change(timeout, { target: { value: "15" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.timeout_secs).toBe(
+    expect(api.saveToolsConfig.mock.calls[0][0].document.host.bash.timeout_secs).toBe(
       15,
     );
+  });
+
+  it("persists file tool limits", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "File read byte limit" }), {
+      target: { value: "5000" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "File search match limit" }), {
+      target: { value: "50" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const files = api.saveToolsConfig.mock.calls[0][0].document.host.files;
+    expect(files.max_read_chars).toBe(5000);
+    expect(files.max_matches).toBe(50);
+  });
+
+  it("rejects file tool limits above their server ceilings before saving", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const matches = screen.getByRole("textbox", { name: "File search match limit" });
+    fireEvent.change(matches, { target: { value: "5001" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("at most 5,000");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    fireEvent.change(matches, { target: { value: "5000" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig.mock.calls[0][0].document.host.files.max_matches).toBe(
+      5000,
+    );
+  });
+
+  it("names the row when canonical JSON sets a file limit above its ceiling", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Canonical JSON" }), {
+      target: { value: JSON.stringify({ host: { files: { max_matches: 6000 } } }) },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "File search match limit must be at most 5,000",
+    );
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });
 
   it("cancels invalid guided limits without changing canonical settings", async () => {
     const { api, shell } = harness();
     const user = userEvent.setup();
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
-    const field = () =>
-      screen.getByRole("textbox", { name: "File operation timeout seconds" });
+    const field = () => screen.getByRole("textbox", { name: "Bash timeout seconds" });
     const original = (field() as HTMLInputElement).value;
     fireEvent.change(field(), { target: { value: "nope" } });
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -238,11 +283,18 @@ describe("canonical tool selections", () => {
     render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
     const editor = screen.getByRole("textbox", { name: "Canonical JSON" });
     const advanced = JSON.parse((editor as HTMLTextAreaElement).value);
-    advanced.subagents = { wait_timeout_secs: 60, max_wait_timeout_secs: 30 };
+    advanced.host = {
+      ...advanced.host,
+      bash: {
+        ...advanced.host?.bash,
+        wait_timeout_secs: 60,
+        max_wait_timeout_secs: 30,
+      },
+    };
     fireEvent.change(editor, { target: { value: JSON.stringify(advanced) } });
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Subagent wait timeout maximum",
+      "Bash wait timeout maximum",
     );
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
   });
@@ -254,7 +306,6 @@ describe("canonical tool selections", () => {
       { host: { bash: { max_wait_timeout_secs: 5 } } },
       "Bash wait timeout",
     ],
-    ["subagent wait", { subagents: { max_wait_timeout_secs: 5 } }, "Subagent wait"],
     [
       "language server",
       { integrations: { lsp: { max_timeout_secs: 5 } } },

@@ -2300,3 +2300,25 @@ fn pending_visibility_holds_missing_reference_but_not_invalid_inference() {
         view.pending_visibility_details()
     );
 }
+
+#[test]
+fn stored_document_with_a_removed_field_names_its_collection_and_id() {
+    let error = super::load::decode_record::<crate::document_config::Tools>(
+        "Tools",
+        "coding",
+        serde_json::json!({
+            "tools_id": "coding", "agent_did": "did:key:example",
+            "built_ins": {"timeout_secs": 30}
+        }),
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.starts_with("decoding Tools \"coding\""),
+        "{message}"
+    );
+    assert!(
+        message.contains("unknown field `timeout_secs`"),
+        "{message}"
+    );
+}

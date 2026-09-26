@@ -8,6 +8,9 @@ use crate::descendant_graph::{
     DescendantMaterializationState, DescendantScope,
 };
 
+// Page sizes and read budgets below are protocol bounds of the agent-facing
+// list/read tools, not per-behavior settings: every page reports where to
+// resume, so a smaller or larger page changes cost, never what can be read.
 const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 50;
 const MAX_TRANSCRIPT_LIMIT: u32 = 100;

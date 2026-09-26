@@ -4,6 +4,7 @@ import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.RepeatedToolFailure
+import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
@@ -168,6 +169,8 @@ def snapshotJson : String :=
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"terminal_diagnostic_presentation_cases\":"
       ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
+    ++ "\"terminal_diagnostic_replay_cases\":"
+      ++ Conformance.TerminalDiagnosticReplayContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"
@@ -402,6 +405,8 @@ def snapshotJson : String :=
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"repeated_tool_failure_cases\":"
       ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
+    ++ "\"tool_timeout_cases\":"
+      ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
