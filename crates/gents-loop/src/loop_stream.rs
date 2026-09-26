@@ -68,8 +68,8 @@ pub use one_shot::{
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{
-    narrow_tagged_history, provider_view_tagged, replay_compaction_prefix_bound,
-    sanitize_tagged_history,
+    assemble_provider_request, provider_view_tagged, replay_compaction_prefix_bound,
+    sanitize_tagged_history, select_tagged_assistant_blocks,
 };
 // Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
 // agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
@@ -354,7 +354,6 @@ where
                                         &mut new_messages,
                                         tools.as_slice(),
                                         &config,
-                                        &mut replay,
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
@@ -470,7 +469,7 @@ where
                 };
                 if let Some(receiver) = audit_receiver.as_ref() {
                     while let Some(observation) =
-                        crate::provider_audit::try_recv_one(receiver).await
+                        crate::provider_audit::try_recv_one(receiver)
                     {
                         if !saw_stream_item {
                             ensure_rendered_request_was_captured(turn_index, attempt)?;
@@ -556,7 +555,6 @@ where
                                         &mut new_messages,
                                         tools.as_slice(),
                                         &config,
-                                        &mut replay,
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
@@ -920,7 +918,6 @@ where
                             "documentless Claude thinking cannot continue to another provider turn"),
                     )))
                 })?;
-                request_assembly::resolve_replay_evidence(&mut replay, std::slice::from_ref(tag)).await?;
                 replay.required.push(tag.clone());
             }
 
@@ -1134,6 +1131,8 @@ where
                             new_messages.push(TaggedMessage {
                                 message: assistant_message,
                                 source: accepted_source.clone(),
+                                physical_header: None,
+                                block_indices: Vec::new(),
                             });
                         }
                         let reminder = Message::user(
@@ -1246,17 +1245,11 @@ pub async fn build_request<M: CompletionModel>(
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let chat_history: Vec<rig::completion::Message> = config
-        .preamble
-        .as_ref()
-        .map(|preamble| rig::completion::Message::system(preamble.clone()))
-        .into_iter()
-        .chain(history.iter().map(rig_compat::to_rig_message))
-        .chain(prior.iter().map(rig_compat::to_rig_message))
-        .collect();
+    let mut chat_history = assemble_rig_chat_history(config, &prompt, history, prior);
+    let rig_prompt = chat_history.pop().expect("assembled prompt is last");
 
     let mut builder = model
-        .completion_request(rig_compat::to_rig_message(&prompt))
+        .completion_request(rig_prompt)
         .messages(chat_history)
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
@@ -1274,4 +1267,45 @@ pub async fn build_request<M: CompletionModel>(
     }
 
     Ok(builder.build())
+}
+
+fn assemble_rig_chat_history(
+    config: &LoopConfig,
+    prompt: &Message,
+    history: &[Message],
+    prior: &[Message],
+) -> Vec<rig::completion::Message> {
+    config
+        .preamble
+        .as_ref()
+        .map(|preamble| rig::completion::Message::system(preamble.clone()))
+        .into_iter()
+        .chain(history.iter().map(rig_compat::to_rig_message))
+        .chain(prior.iter().map(rig_compat::to_rig_message))
+        .chain(std::iter::once(rig_compat::to_rig_message(prompt)))
+        .collect()
+}
+
+fn replace_core_chat_history(
+    request: &mut CompletionRequest,
+    config: &LoopConfig,
+    history: &[TaggedMessage],
+    new_messages: &[TaggedMessage],
+) {
+    let prompt = &new_messages
+        .last()
+        .expect("new messages retain a prompt")
+        .message;
+    let prior = new_messages[..new_messages.len() - 1]
+        .iter()
+        .map(|row| row.message.clone())
+        .collect::<Vec<_>>();
+    let history = history
+        .iter()
+        .map(|row| row.message.clone())
+        .collect::<Vec<_>>();
+    request.chat_history = rig::one_or_many::OneOrMany::many(assemble_rig_chat_history(
+        config, prompt, &history, &prior,
+    ))
+    .expect("assembled prompt makes chat history nonempty");
 }

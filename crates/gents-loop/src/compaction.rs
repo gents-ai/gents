@@ -988,14 +988,7 @@ pub fn provider_view_with_sources(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
 ) -> (Vec<history::SourcedMessage>, FileActivity) {
-    let sourced = messages
-        .into_iter()
-        .enumerate()
-        .map(|(source_index, message)| history::SourcedMessage {
-            source_index,
-            message,
-        })
-        .collect();
+    let sourced = history::source_messages(messages);
     let (stripped, activity) = history::strip_tool_results_sourced(sourced);
     let sanitized = sanitize_sourced(profile, stripped);
     (sanitized, activity)
@@ -1007,14 +1000,7 @@ pub fn sanitize_history_with_sources(
     profile: ProviderInputProfile,
     messages: Vec<Message>,
 ) -> Vec<history::SourcedMessage> {
-    let sourced = messages
-        .into_iter()
-        .enumerate()
-        .map(|(source_index, message)| history::SourcedMessage {
-            source_index,
-            message,
-        })
-        .collect();
+    let sourced = history::source_messages(messages);
     sanitize_sourced(profile, sourced)
 }
 

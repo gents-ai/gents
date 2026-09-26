@@ -703,6 +703,7 @@ mod tests {
         BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls)),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),

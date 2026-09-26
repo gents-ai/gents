@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::claude_messages_body::{ReplayTag, ResolvedReplayEvidence};
+use crate::claude_messages_body::{ReplayIssuer, ReplayTag, ReplayWire, ResolvedReplayEvidence};
 
 /// One native row and its independently established canonical provider source.
 /// The tag follows this row through provider-view projection by the projection's
@@ -9,6 +9,10 @@ use crate::claude_messages_body::{ReplayTag, ResolvedReplayEvidence};
 pub struct TaggedMessage {
     pub message: Message,
     pub source: Option<ReplayTag>,
+    /// Canonical physical header, carried independently of native content.
+    pub physical_header: Option<String>,
+    /// Original physical assistant block positions after provider-view shaping.
+    pub block_indices: Vec<usize>,
 }
 
 impl TaggedMessage {
@@ -16,6 +20,8 @@ impl TaggedMessage {
         Self {
             message,
             source: None,
+            physical_header: None,
+            block_indices: Vec::new(),
         }
     }
 }
@@ -47,15 +53,14 @@ pub type ReplayEvidenceResolver = Arc<
 pub struct LoopReplayInput {
     /// Present only for a persisted request with a real canonical owner.
     pub request_doc_id: Option<String>,
-    /// Required-current coordinates are independent of the surviving rows.
+    /// Exact built-client route, absent when endpoint identity is unproven.
+    pub issuer: Option<ReplayIssuer>,
+    /// Wire selected by the running loop's actual provider profile.
+    pub wire: Option<ReplayWire>,
+    /// The pending tool round's sources, which a reduction must not
+    /// summarize. Replay selection does not read them.
     pub required: Vec<ReplayTag>,
-    /// Cached canonical owner results; do not turn this into a map because
-    /// duplicate physical matches must remain observable as ambiguity.
-    pub evidence: Vec<ReplayEvidenceRow>,
     pub resolve: Option<ReplayEvidenceResolver>,
-    /// Coordinates already queried, including those with zero physical
-    /// matches. This prevents a later retry from silently changing evidence.
-    pub resolved: Vec<ReplayTag>,
 }
 
 /// `(turn_index, attempt, request, assembly_trace)`.

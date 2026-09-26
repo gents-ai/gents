@@ -372,6 +372,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
                     behavior_id: "general".into(),
                     session_id: "dispatch-session".into(),
                     model_name: "scripted".into(),
+                    provider_family: None,
                 },
                 Arc::new(|_| Box::pin(async { Ok(()) })),
             );

@@ -71,11 +71,15 @@ pub async fn run_openai_oneshot_with_tools(
         crate::startup_readiness::StartupReadinessOptions::default().build_timeout,
     )
     .await?;
+    let provider_family = Some(client.provider_family().to_owned());
+    let replay_issuer = client.replay_issuer()?;
 
     crate::llm::backend_client::with_backend_client!(client, |client| {
         run_oneshot_with_completion_client(
             node,
             behavior,
+            provider_family,
+            replay_issuer,
             prompt,
             prompt_builder,
             &output_obligations,
@@ -91,6 +95,8 @@ pub async fn run_openai_oneshot_with_tools(
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
     behavior: &ResolvedBehavior,
+    provider_family: Option<String>,
+    replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
@@ -118,15 +124,17 @@ where
     // Pinned by `oneshot_completes_without_backend_admission_reconciliation`
     // in `tests/misc/oneshot_admission_exemption.rs`.
     let model = client.completion_model(&behavior.model_name);
-    let config = loop_config(
+    let mut config = loop_config(
         behavior,
         prompt_builder.preamble().to_owned(),
         tools.len(),
         crate::rendered_request::CaptureScopeKind::OneShot,
     );
+    config.replay.issuer = replay_issuer;
     run_oneshot_owned(
         node,
         behavior,
+        provider_family,
         &prompt_builder,
         model,
         prompt,
@@ -170,6 +178,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
     behavior: &ResolvedBehavior,
+    provider_family: Option<String>,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
     prompt: &str,
@@ -234,6 +243,8 @@ where
         request.clone(),
         request_commit_cid.clone(),
         gents_protocol::rendered_request::CaptureScopeKind::OneShot,
+        config.replay.issuer.clone(),
+        config.provider_input_counter.profile(),
     );
     let output_obligation_gate =
         match crate::agent::output_obligation::OutputObligationGate::for_request(
@@ -263,6 +274,7 @@ where
             behavior_id: behavior.behavior_id.clone(),
             session_id: request.session_id.clone(),
             model_name: behavior.model_name.clone(),
+            provider_family,
         },
         Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
     );

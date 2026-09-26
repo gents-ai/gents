@@ -179,6 +179,8 @@ fn presented_trace_rows_preserve_sequence_and_render_native_messages() {
     let message = Message::assistant("done");
     let presented = present_trace_message(SequencedMessage {
         provider_source: None,
+        canonical_header_doc_id: None,
+        block_indices: Vec::new(),
         sequence: 7,
         message: message.clone(),
     });

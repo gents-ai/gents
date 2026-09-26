@@ -575,6 +575,7 @@ where
             lifecycle.request(),
             "",
             "test-model".into(),
+            None,
         );
         crate::rendered_request::scope::test_scope(
             context,

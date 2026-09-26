@@ -162,6 +162,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
             run_oneshot_owned(
                 node.clone(),
                 &behavior,
+                None,
                 &prompt,
                 PartialThenEmptyProvider(observations.clone()),
                 "exercise explicit renewal during silence",
@@ -399,6 +400,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         let result = run_oneshot_owned(
             node.clone(),
             &behavior,
+            None,
             &prompt,
             OutputObligationProvider {
                 calls: calls.clone(),

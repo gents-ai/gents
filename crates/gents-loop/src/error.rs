@@ -244,6 +244,24 @@ pub(crate) fn provider_message_is_fail_closed_tool_use(message: &str) -> bool {
     message.contains("fail-closed: ") && message.contains("tool_use")
 }
 
+/// A provider rejected replayed reasoning. Anthropic reports a thinking block
+/// whose `signature` no longer binds its prefix or cannot be verified as
+/// "Invalid `signature` in `thinking` block", and a tool-loop assistant turn
+/// sent without its thinking as "Expected `thinking` or `redacted_thinking`";
+/// OpenAI-style Responses providers report undecryptable `encrypted_content`.
+/// Resending the same body fails the same way, so this is never resampled.
+pub(crate) fn provider_message_is_reasoning_rejection(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("expected `thinking`")
+        || lower.contains("must start with a thinking block")
+        || (lower.contains("signature") && lower.contains("thinking") && lower.contains("invalid"))
+        || (lower.contains("redacted_thinking") && lower.contains("invalid"))
+        || lower.contains("invalid_encrypted_content")
+        || (lower.contains("encrypted")
+            && (lower.contains("could not be decrypted")
+                || lower.contains("could not be verified")))
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod tests;

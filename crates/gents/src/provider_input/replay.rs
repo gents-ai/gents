@@ -3,26 +3,7 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents_loop::claude_messages_body::reasoning_witness;
 use gents_loop::loop_stream::{LoopReplayInput, TaggedMessage};
-
-/// The accepted Claude assistant rows whose signed reasoning must survive a
-/// subsequent tool continuation. This is evaluated on canonical native input,
-/// before any provider-view projection can drop a tool call.
-pub(crate) fn requires_claude_tool_continuation(
-    message: &gents_protocol::message::Message,
-) -> bool {
-    let gents_protocol::message::Message::Assistant { content, .. } = message else {
-        return false;
-    };
-    !reasoning_witness(content).is_empty()
-        && content.iter().any(|block| {
-            matches!(
-                block,
-                gents_protocol::message::AssistantContent::ToolCall(_)
-            )
-        })
-}
 
 /// Resolve live and restored continuation evidence through physical canonical
 /// facts. The configured backend and opaque signature bytes confer no origin.
@@ -31,9 +12,13 @@ pub(crate) fn owned_replay_input(
     request: crate::watcher::AgentRequest,
     request_commit_cid: String,
     expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+    issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+    profile: super::ProviderInputProfile,
 ) -> LoopReplayInput {
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
+        issuer,
+        wire: profile.replay_wire(),
         resolve: Some(Arc::new(move |tags| {
             let node = node.clone();
             let request = request.clone();
@@ -48,7 +33,7 @@ pub(crate) fn owned_replay_input(
                     &request_commit_cid,
                 )
                 .await?;
-                let resolved = crate::session::resolve_current_replay_tags(
+                let resolved = crate::session::resolve_canonical_replay_tags(
                     &node,
                     crate::session::CanonicalReplayScope {
                         agent_did: &request.agent_did,
@@ -80,30 +65,18 @@ pub(crate) fn owned_replay_input(
     }
 }
 
-/// Seed requirements before any lossy provider transform. Equal message bytes
-/// and provider-assigned IDs never participate in the association.
+/// Attach each canonical row's physical provenance before any lossy provider
+/// transform. Equal message bytes and provider-assigned IDs never participate
+/// in the association.
 pub(crate) fn tag_canonical_history(
     rows: &[crate::session::SequencedMessage],
-    replay: &mut LoopReplayInput,
-    profile: super::ProviderInputProfile,
 ) -> Vec<TaggedMessage> {
     rows.iter()
-        .map(|row| {
-            let source = row.provider_source.clone().filter(|tag| {
-                replay.request_doc_id.as_deref() == Some(tag.request_doc_id.as_str())
-            });
-            if let Some(tag) = &source {
-                if profile == super::ProviderInputProfile::ClaudeMessages
-                    && requires_claude_tool_continuation(&row.message)
-                    && !replay.required.contains(tag)
-                {
-                    replay.required.push(tag.clone());
-                }
-            }
-            TaggedMessage {
-                message: row.message.clone(),
-                source,
-            }
+        .map(|row| TaggedMessage {
+            message: row.message.clone(),
+            source: row.provider_source.clone(),
+            physical_header: row.canonical_header_doc_id.clone(),
+            block_indices: row.block_indices.clone(),
         })
         .collect()
 }
@@ -158,6 +131,8 @@ mod tests {
         }
         crate::session::SequencedMessage {
             provider_source: Some(tag),
+            canonical_header_doc_id: Some(format!("header-{sequence}")),
+            block_indices: (0..content.len()).collect(),
             sequence,
             message: Message::Assistant {
                 id: Some("same-provider-message-id".to_string()),
@@ -167,75 +142,35 @@ mod tests {
     }
 
     #[test]
-    fn current_coordinates_survive_equal_provider_ids_and_old_request_is_historical() {
+    fn every_physical_source_survives_equal_provider_ids_across_requests() {
+        let old = provider_tag("older-request", 1);
         let first = provider_tag("current-request", 1);
         let second = provider_tag("current-request", 2);
-        let old = provider_tag("older-request", 1);
         let rows = [
-            assistant_row(3, old, true, true),
+            assistant_row(3, old.clone(), true, true),
             assistant_row(4, first.clone(), true, true),
-            assistant_row(5, second.clone(), true, true),
+            assistant_row(5, second.clone(), true, false),
         ];
-        let mut replay = LoopReplayInput {
-            request_doc_id: Some("current-request".to_string()),
-            ..LoopReplayInput::default()
-        };
 
-        let tagged = tag_canonical_history(
-            &rows,
-            &mut replay,
-            super::super::ProviderInputProfile::ClaudeMessages,
+        let tagged = tag_canonical_history(&rows);
+
+        assert_eq!(
+            tagged
+                .iter()
+                .map(|row| row.source.clone())
+                .collect::<Vec<_>>(),
+            [Some(old), Some(first.clone()), Some(second)]
         );
-
-        assert_eq!(tagged.len(), 3);
-        assert_eq!(tagged[0].source, None);
-        assert_eq!(tagged[1].source, Some(first.clone()));
-        assert_eq!(tagged[2].source, Some(second.clone()));
-        assert_eq!(tagged[0].message, rows[0].message);
-        assert_eq!(tagged[1].message, rows[1].message);
-        assert_eq!(tagged[2].message, rows[2].message);
-        assert_eq!(replay.required, vec![first, second]);
-    }
-
-    #[test]
-    fn only_claude_reasoning_with_a_tool_continuation_seeds_required() {
-        let tag = provider_tag("current-request", 1);
-        let tool_turn = assistant_row(1, tag.clone(), true, true);
-        let reasoning_final = assistant_row(2, provider_tag("current-request", 2), true, false);
-        let mut replay = LoopReplayInput {
-            request_doc_id: Some("current-request".to_string()),
-            ..LoopReplayInput::default()
-        };
-        let tagged = tag_canonical_history(
-            &[tool_turn.clone(), reasoning_final],
-            &mut replay,
-            super::super::ProviderInputProfile::ClaudeMessages,
-        );
-        assert_eq!(replay.required, vec![tag.clone()]);
-        assert_eq!(tagged[0].source, Some(tag));
-        assert_eq!(tagged[1].source, Some(provider_tag("current-request", 2)));
-        // The requirement is seeded from canonical rows, before the owned
-        // projection may strip or group an orphan tool call.
-        let _projected = gents_loop::loop_stream::provider_view_tagged(
+        for (tagged, row) in tagged.iter().zip(&rows) {
+            assert_eq!(tagged.message, row.message);
+            assert_eq!(tagged.physical_header, row.canonical_header_doc_id);
+            assert_eq!(tagged.block_indices, row.block_indices);
+        }
+        let projected = gents_loop::loop_stream::provider_view_tagged(
             super::super::ProviderInputProfile::ClaudeMessages,
             tagged,
         )
         .expect("canonical rows can be projected");
-        assert_eq!(replay.required, vec![provider_tag("current-request", 1)]);
-
-        let mut non_claude_replay = LoopReplayInput {
-            request_doc_id: Some("current-request".to_string()),
-            ..LoopReplayInput::default()
-        };
-        let non_claude = tag_canonical_history(
-            &[tool_turn],
-            &mut non_claude_replay,
-            super::super::ProviderInputProfile::OpenAiChatCompletions,
-        );
-        assert!(non_claude_replay.required.is_empty());
-        assert_eq!(
-            non_claude[0].source,
-            Some(provider_tag("current-request", 1))
-        );
+        assert_eq!(projected[1].source, Some(first));
     }
 }

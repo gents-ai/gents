@@ -87,9 +87,11 @@ enum CaptureDecision {
         /// reconcile and send — this says where the bytes went, not where they
         /// were meant to go. `None` when the URI carries no authority.
         ///
-        /// Deliberately not the full URI: the path is already implied by
-        /// `source`, and query strings on some providers carry credentials.
+        /// Deliberately not the full URI: proxies can prepend distinct paths,
+        /// and query strings on some providers carry credentials.
         provider_endpoint: Option<String>,
+        provider_route_path_sha256: Option<String>,
+        destination_fingerprint: [u8; 32],
     },
     /// A completion body inside a request that armed nothing. Refuse.
     Refuse {
@@ -98,17 +100,59 @@ enum CaptureDecision {
     },
 }
 
-/// Scheme and authority only — never the path or query. The path is implied by
-/// `RenderedRequestSource`, and some providers put credentials in the query.
+/// Scheme and host authority only — never userinfo, path, or query.
 fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option<String> {
     let authority = authority?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     Some(match scheme {
         Some(scheme) => format!("{scheme}://{authority}"),
         None => authority.to_string(),
     })
 }
 
-fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
+fn provider_route_path_sha256(path: &str, has_query: bool) -> Option<String> {
+    (!has_query).then(|| format!("{:x}", Sha256::digest(path.as_bytes())))
+}
+
+/// Uses the same non-secret destination identity as durable capture. A query
+/// can select a different proxy route, so an unrecorded query cannot authorize
+/// reasoning replay on the strength of its path alone.
+pub fn replay_issuer_for_destination(
+    family: &str,
+    destination: &rig::http_client::Uri,
+) -> Option<crate::claude_messages_body::ReplayIssuer> {
+    replay_issuer_from_capture(
+        family,
+        &provider_endpoint_of(
+            destination.scheme_str(),
+            destination.authority().map(|authority| authority.as_str()),
+        )?,
+        &provider_route_path_sha256(destination.path(), destination.query().is_some())?,
+    )
+}
+
+pub fn replay_issuer_from_capture(
+    family: &str,
+    endpoint: &str,
+    path_sha256: &str,
+) -> Option<crate::claude_messages_body::ReplayIssuer> {
+    if family.is_empty() || endpoint.is_empty() || path_sha256.is_empty() {
+        return None;
+    }
+    Some(crate::claude_messages_body::ReplayIssuer {
+        family: family.to_owned(),
+        endpoint: serde_json::json!([endpoint, path_sha256]).to_string(),
+    })
+}
+
+fn decide(
+    path: &str,
+    provider_endpoint: Option<String>,
+    provider_route_path_sha256: Option<String>,
+    destination_fingerprint: [u8; 32],
+) -> CaptureDecision {
     let Some(source) = RenderedRequestSource::for_request_path(path) else {
         return CaptureDecision::Forward;
     };
@@ -126,6 +170,8 @@ fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
             source,
             durable_body_fingerprint: None,
             provider_endpoint,
+            provider_route_path_sha256,
+            destination_fingerprint,
         },
         CaptureClaim::Resend {
             pending,
@@ -136,6 +182,8 @@ fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
             source,
             durable_body_fingerprint,
             provider_endpoint,
+            provider_route_path_sha256,
+            destination_fingerprint,
         },
         CaptureClaim::Unexplained => CaptureDecision::Refuse {
             scope,
@@ -146,7 +194,15 @@ fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
 
 /// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
-    let (scope, pending, source, durable_body_fingerprint, provider_endpoint) = match decision {
+    let (
+        scope,
+        pending,
+        source,
+        durable_body_fingerprint,
+        provider_endpoint,
+        provider_route_path_sha256,
+        destination_fingerprint,
+    ) = match decision {
         CaptureDecision::Forward => return Ok(()),
         CaptureDecision::Refuse { scope, path } => {
             tracing::error!(
@@ -166,12 +222,16 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             source,
             durable_body_fingerprint,
             provider_endpoint,
+            provider_route_path_sha256,
+            destination_fingerprint,
         } => (
             scope,
             pending,
             source,
             durable_body_fingerprint,
             provider_endpoint,
+            provider_route_path_sha256,
+            destination_fingerprint,
         ),
     };
 
@@ -182,6 +242,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
         RenderedRequestSource::ClaudeCliSubscription => [2],
     });
     hasher.update(body.as_ref());
+    hasher.update(destination_fingerprint);
     let body_fingerprint: [u8; 32] = hasher.finalize().into();
     if durable_body_fingerprint == Some(body_fingerprint) {
         tracing::debug!(
@@ -202,6 +263,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
         *pending,
         source,
         provider_endpoint,
+        provider_route_path_sha256,
         body.as_ref(),
     )
     .await
@@ -264,6 +326,14 @@ where
                 parts.uri.scheme_str(),
                 parts.uri.authority().map(|authority| authority.as_str()),
             ),
+            provider_route_path_sha256(
+                parts.uri.path(),
+                parts
+                    .uri
+                    .path_and_query()
+                    .is_some_and(|value| value.query().is_some()),
+            ),
+            Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         async move {
             capture_or_refuse(decision, &body).await?;
@@ -304,6 +374,14 @@ where
                 parts.uri.scheme_str(),
                 parts.uri.authority().map(|authority| authority.as_str()),
             ),
+            provider_route_path_sha256(
+                parts.uri.path(),
+                parts
+                    .uri
+                    .path_and_query()
+                    .is_some_and(|value| value.query().is_some()),
+            ),
+            Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         let activity = match &decision {
             CaptureDecision::Capture { pending, .. } => Some(pending.activity.clone()),
@@ -454,6 +532,7 @@ mod tests {
             behavior_id: "behavior".to_string(),
             session_id: "session".to_string(),
             model_name: "configured-model".to_string(),
+            provider_family: Some("OpenAiCompatible".into()),
         }
     }
 
@@ -489,6 +568,47 @@ mod tests {
             .expect("request")
     }
 
+    #[test]
+    fn route_evidence_excludes_userinfo_and_query_routed_destinations() {
+        assert_eq!(
+            provider_endpoint_of(Some("https"), Some("user:secret@example.test:8443")),
+            Some("https://example.test:8443".into())
+        );
+        assert_ne!(
+            provider_route_path_sha256("/proxy/a/v1/responses", false),
+            provider_route_path_sha256("/proxy/b/v1/responses", false)
+        );
+        assert!(provider_route_path_sha256("/v1/responses", true).is_none());
+    }
+
+    #[test]
+    fn replay_issuer_binds_family_authority_and_full_path_without_query_guessing() {
+        let route = |uri: &str| {
+            replay_issuer_for_destination("openai_compatible", &uri.parse().expect("URI"))
+        };
+        let base = route("https://example.test/proxy/a/v1/responses").expect("route");
+        assert_ne!(
+            base,
+            route("https://example.test/proxy/b/v1/responses").unwrap()
+        );
+        assert_ne!(
+            base,
+            route("https://other.test/proxy/a/v1/responses").unwrap()
+        );
+        assert_ne!(
+            base,
+            replay_issuer_for_destination(
+                "grok_oauth",
+                &"https://example.test/proxy/a/v1/responses"
+                    .parse()
+                    .expect("URI")
+            )
+            .unwrap()
+        );
+        assert!(route("https://example.test/proxy/a/v1/responses?tenant=other").is_none());
+        assert!(!base.endpoint.contains("proxy/a"));
+    }
+
     #[tokio::test]
     async fn captures_the_body_the_inner_client_receives() {
         let inner = CountingInner::default();
@@ -521,6 +641,25 @@ mod tests {
         assert_eq!(rendered.attempt, 1);
         assert_eq!(rendered.capture_scope, "inference.1");
         assert_eq!(rendered.source, RenderedRequestSource::OpenAiResponses);
+        let manifest = crate::rendered_request::ProvenanceManifest::parse(
+            &rendered.provenance_json.to_string(),
+        )
+        .expect("captured manifest");
+        let crate::rendered_request::ParsedProvenance::Manifest(manifest) = manifest else {
+            panic!("capture must have a supported manifest");
+        };
+        assert_eq!(
+            manifest.provider_family.as_deref(),
+            Some("OpenAiCompatible")
+        );
+        assert_eq!(
+            manifest.provider_endpoint.as_deref(),
+            Some("https://example.test")
+        );
+        assert_eq!(
+            manifest.provider_route_path_sha256,
+            provider_route_path_sha256("/v1/responses", false)
+        );
         // The Codex rewrite is visible in the row because the row *is* the
         // rewritten body.
         assert_eq!(rendered.request_json["instructions"], "hoisted");
@@ -540,6 +679,74 @@ mod tests {
             rendered.request_json,
             "the captured payload and the forwarded payload must be the same bytes"
         );
+    }
+
+    #[tokio::test]
+    async fn compaction_capture_uses_its_separately_built_client_family() {
+        let client = RenderedRequestCapturingHttpClient::new(CountingInner::default());
+        let (sink, seen) = recording_sink();
+        let mut scope = test_scope(context(), sink);
+        Arc::get_mut(&mut scope)
+            .unwrap()
+            .set_compaction_provider_family("XaiGrokOAuth".into());
+
+        scope_request(scope, async {
+            for kind in [
+                CaptureScopeKind::Compaction,
+                CaptureScopeKind::CompactionFallback,
+            ] {
+                arm(kind, 0, 0, trace()).expect("armed");
+                HttpClientExt::send_streaming(
+                    &client,
+                    responses_request(json!({"model":"summary","input":[]})),
+                )
+                .await
+                .expect("send");
+            }
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), 2);
+        for rendered in seen.iter() {
+            let manifest = crate::rendered_request::ProvenanceManifest::parse(
+                &rendered.provenance_json.to_string(),
+            )
+            .expect("captured manifest");
+            let crate::rendered_request::ParsedProvenance::Manifest(manifest) = manifest else {
+                panic!("capture must have a supported manifest");
+            };
+            assert_eq!(manifest.provider_family.as_deref(), Some("XaiGrokOAuth"));
+            assert_eq!(rendered.source, RenderedRequestSource::OpenAiResponses);
+        }
+    }
+
+    #[tokio::test]
+    async fn compaction_without_built_client_family_does_not_inherit_main_family() {
+        let client = RenderedRequestCapturingHttpClient::new(CountingInner::default());
+        let (sink, seen) = recording_sink();
+        let scope = test_scope(context(), sink);
+
+        scope_request(scope, async {
+            arm(CaptureScopeKind::Compaction, 0, 0, trace()).expect("armed");
+            HttpClientExt::send_streaming(
+                &client,
+                responses_request(json!({"model":"summary","input":[]})),
+            )
+            .await
+            .expect("send");
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        let manifest = crate::rendered_request::ProvenanceManifest::parse(
+            &seen[0].provenance_json.to_string(),
+        )
+        .expect("captured manifest");
+        let crate::rendered_request::ParsedProvenance::Manifest(manifest) = manifest else {
+            panic!("capture must have a supported manifest");
+        };
+        assert_eq!(manifest.provider_family, None);
     }
 
     /// The fail-closed property. A sink error must terminate the send with the
@@ -739,6 +946,36 @@ mod tests {
         .await;
 
         assert_eq!(seen.lock().expect("seen").len(), 2);
+        assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn an_identical_body_to_a_changed_destination_cannot_reuse_capture() {
+        let inner = CountingInner::default();
+        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+        let (sink, seen) = recording_sink();
+        let scope = test_scope(context(), sink);
+
+        scope_request(scope, async {
+            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
+            let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
+            HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+                .await
+                .expect("first send");
+            let changed = Request::builder()
+                .method("POST")
+                .uri("https://example.test/proxy/v1/responses")
+                .body(Bytes::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap();
+            HttpClientExt::send_streaming(&client, changed)
+                .await
+                .expect("recording sink accepts changed test destination");
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].provenance_json, seen[1].provenance_json);
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 

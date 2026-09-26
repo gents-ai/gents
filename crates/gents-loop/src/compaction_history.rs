@@ -16,15 +16,21 @@ use crate::provider_input::ProviderInputProfile;
 #[derive(Debug)]
 pub struct SourcedMessage {
     pub source_index: usize,
+    /// Positions in the original assistant row, carried through shaping.
+    pub block_indices: Vec<usize>,
     pub message: Message,
 }
 
-fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
+pub(crate) fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
     messages
         .into_iter()
         .enumerate()
         .map(|(source_index, message)| SourcedMessage {
             source_index,
+            block_indices: match &message {
+                Message::Assistant { content, .. } => (0..content.len()).collect(),
+                _ => Vec::new(),
+            },
             message,
         })
         .collect()
@@ -48,6 +54,7 @@ pub fn strip_tool_results_sourced(
 
     for SourcedMessage {
         source_index,
+        block_indices,
         message,
     } in messages
     {
@@ -73,6 +80,7 @@ pub fn strip_tool_results_sourced(
 
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::Assistant { id, content },
                 });
             }
@@ -89,12 +97,14 @@ pub fn strip_tool_results_sourced(
 
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::User { content: items },
                 });
             }
             Message::System { content } => {
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::System { content },
                 });
             }
@@ -155,6 +165,7 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
     for (index, sourced) in messages.into_iter().enumerate() {
         let SourcedMessage {
             source_index,
+            block_indices,
             message,
         } = sourced;
         match message {
@@ -167,25 +178,37 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
                 // first occurrence of each key and drop the rest.
                 let mut announced: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
+                let mut kept_indices = Vec::new();
                 let kept: Vec<AssistantContent> = content
                     .into_iter()
-                    .filter(|item| match item {
-                        AssistantContent::ToolCall(tool_call) => {
-                            let key = tool_call_key(tool_call);
-                            resolved.contains(&key) && announced.insert(key)
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        let keep = match &item {
+                            AssistantContent::ToolCall(tool_call) => {
+                                let key = tool_call_key(tool_call);
+                                resolved.contains(&key) && announced.insert(key)
+                            }
+                            _ => true,
+                        };
+                        if keep {
+                            kept_indices.extend(block_indices.get(index).copied());
+                            Some(item)
+                        } else {
+                            None
                         }
-                        _ => true,
                     })
                     .collect();
                 if !kept.is_empty() {
                     kept_messages.push(SourcedMessage {
                         source_index,
+                        block_indices: kept_indices,
                         message: Message::Assistant { id, content: kept },
                     });
                 }
             }
             other => kept_messages.push(SourcedMessage {
                 source_index,
+                block_indices,
                 message: other,
             }),
         }
@@ -204,6 +227,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     let mut kept_messages = Vec::with_capacity(messages.len());
     for SourcedMessage {
         source_index,
+        block_indices,
         message,
     } in messages
     {
@@ -217,6 +241,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 }
                 kept_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::Assistant { id, content },
                 });
             }
@@ -239,6 +264,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 if !kept.is_empty() {
                     kept_messages.push(SourcedMessage {
                         source_index,
+                        block_indices,
                         message: Message::User { content: kept },
                     });
                 }
@@ -247,6 +273,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 pending_calls.clear();
                 kept_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: other,
                 });
             }
@@ -290,22 +317,26 @@ pub fn normalize_assistant_content_order_sourced(
         .map(|sourced| {
             let SourcedMessage {
                 source_index,
+                block_indices,
                 message,
             } = sourced;
+            let mut block_indices = block_indices;
             let message = match message {
                 Message::Assistant { id, content } => {
                     let mut text = Vec::new();
                     let mut middle = Vec::new();
                     let mut calls = Vec::new();
-                    for item in content.into_iter() {
+                    for (index, item) in content.into_iter().enumerate() {
+                        let position = block_indices.get(index).copied();
                         match item {
-                            AssistantContent::Text(_) => text.push(item),
-                            AssistantContent::ToolCall(_) => calls.push(item),
-                            other => middle.push(other),
+                            item @ AssistantContent::Text(_) => text.push((position, item)),
+                            item @ AssistantContent::ToolCall(_) => calls.push((position, item)),
+                            other => middle.push((position, other)),
                         }
                     }
-                    let ordered: Vec<AssistantContent> =
-                        text.into_iter().chain(middle).chain(calls).collect();
+                    let ordered: Vec<_> = text.into_iter().chain(middle).chain(calls).collect();
+                    block_indices = ordered.iter().filter_map(|(index, _)| *index).collect();
+                    let ordered = ordered.into_iter().map(|(_, item)| item).collect();
                     Message::Assistant {
                         id,
                         content: ordered,
@@ -315,6 +346,7 @@ pub fn normalize_assistant_content_order_sourced(
             };
             SourcedMessage {
                 source_index,
+                block_indices,
                 message,
             }
         })

@@ -505,11 +505,15 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
             TaggedMessage {
                 message: identical.clone(),
                 source: Some(first.clone()),
+                physical_header: None,
+                block_indices: Vec::new(),
             },
             TaggedMessage::unassociated(Message::user("between")),
             TaggedMessage {
                 message: identical,
                 source: Some(second.clone()),
+                physical_header: None,
+                block_indices: Vec::new(),
             },
         ],
     )
