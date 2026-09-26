@@ -47,6 +47,11 @@ pub struct PreparedGraphPackageInstall {
     pub plan: GraphPlan,
     pub desired_state: DesiredStateApplyPlan,
     pub schema_digests: Vec<RequiredSchemaDigest>,
+    /// The graph's active revision digest as observed while preparing this
+    /// install, read outside any transaction. Re-checked inside the commit
+    /// transaction so a concurrent activation between prepare and commit is
+    /// refused rather than silently accepted (#1651).
+    expected_active_revision_digest: Option<String>,
 }
 
 fn selected_intent<'a>(
@@ -182,26 +187,42 @@ fn digest_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// The query for a graph's active revision digest; read by preparation and
+/// re-read inside the commit transaction through [`active_revision_digest`].
+fn active_revision_digest_query(owner: &str, graph_id: &str) -> String {
+    format!(
+        r#"{{ GraphDefinition(filter: {{ agent_did: {{ _eq: "{}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
+        crate::graphql::escape_graphql_string(owner),
+        crate::graphql::escape_graphql_string(graph_id)
+    )
+}
+
+fn active_revision_digest(response: &Value) -> Result<Option<String>> {
+    let definitions = response_rows(response, "GraphDefinition");
+    anyhow::ensure!(
+        definitions.len() <= 1,
+        "package graph definition is ambiguous within owner"
+    );
+    Ok(definitions
+        .first()
+        .and_then(|row| row["active_revision_digest"].as_str())
+        .filter(|digest| !digest.is_empty())
+        .map(str::to_owned))
+}
+
 async fn active_revision_plan(
     access: &ConfigAccess,
     owner: &str,
     graph_id: &str,
 ) -> Result<Option<GraphPlan>> {
     let escaped_owner = crate::graphql::escape_graphql_string(owner);
-    let response = access.execute(&format!(r#"{{ GraphDefinition(filter: {{ agent_did: {{ _eq: "{escaped_owner}" }}, graph_id: {{ _eq: "{}" }} }}, limit: 2) {{ active_revision_digest }} }}"#,
-        crate::graphql::escape_graphql_string(graph_id))).await?;
-    let definitions = response_rows(&response, "GraphDefinition");
-    anyhow::ensure!(
-        definitions.len() <= 1,
-        "package graph definition is ambiguous within owner"
-    );
-    let Some(digest) = definitions
-        .first()
-        .and_then(|row| row["active_revision_digest"].as_str())
-        .filter(|digest| !digest.is_empty())
-    else {
+    let response = access
+        .execute(&active_revision_digest_query(owner, graph_id))
+        .await?;
+    let Some(digest) = active_revision_digest(&response)? else {
         return Ok(None);
     };
+    let digest = digest.as_str();
     let response = access.execute(&format!(r#"{{ GraphRevision(filter: {{ owner_did: {{ _eq: "{escaped_owner}" }}, graph_id: {{ _eq: "{}" }}, digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json }} }}"#,
         crate::graphql::escape_graphql_string(graph_id), crate::graphql::escape_graphql_string(digest))).await?;
     let revisions = response_rows(&response, "GraphRevision");
@@ -413,6 +434,7 @@ async fn prepare_package(
         plan,
         desired_state,
         schema_digests,
+        expected_active_revision_digest: active.map(|active| active.digest),
     })
 }
 
@@ -482,13 +504,46 @@ pub(crate) async fn install_loaded_graph_package(
         "package install requires graph owner authority"
     );
     let prepared = prepare_package(access, package, options, graph_id).await?;
+    commit_prepared_graph_package_install(access, &options.agent_did, package, &prepared).await
+}
+
+/// Publishes package schemas and writes the desired state and graph
+/// revision `prepared` describes, in one transaction. Refuses with
+/// [`crate::config_client::StaleExpectation`] when the graph's active
+/// revision digest changed since `prepared` observed it outside that
+/// transaction, so a concurrent activation cannot slip between the check
+/// and the write (#1651). Split out from [`install_loaded_graph_package`]
+/// so a caller (and this module's own tests) can interleave a concurrent
+/// change between preparing and committing an install.
+async fn commit_prepared_graph_package_install(
+    access: &ConfigAccess,
+    owner: &str,
+    package: &LoadedGraphPackage,
+    prepared: &PreparedGraphPackageInstall,
+) -> Result<GraphPackageInstallReceipt> {
     ensure_package_schemas(access, package).await?;
     let desired = &prepared.desired_state;
-    let owner = options.agent_did.as_str();
     let plan = &prepared.plan;
+    let graph_id = &plan.graph_id;
+    let expected_active_revision_digest = &prepared.expected_active_revision_digest;
     access
         .transact("graph_package.install", |txn| {
             Box::pin(async move {
+                let live_active_revision_digest = active_revision_digest(
+                    &txn.execute(&active_revision_digest_query(owner, graph_id))
+                        .await?,
+                )?;
+                if live_active_revision_digest != *expected_active_revision_digest {
+                    return Err(anyhow::Error::new(crate::config_client::StaleExpectation {
+                        drifted: vec![crate::config_client::DriftedDocument {
+                            collection: Collection::GraphDefinition,
+                            owner: owner.to_owned(),
+                            id: graph_id.clone(),
+                            expected: expected_active_revision_digest.clone(),
+                            found: live_active_revision_digest,
+                        }],
+                    }));
+                }
                 let effective =
                     crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
                 crate::config_client::validate_desired_state_plan(txn, &effective).await?;
@@ -508,7 +563,7 @@ pub(crate) async fn install_loaded_graph_package(
         predecessor_revision_digest: package.predecessor_revision_digest.clone(),
         artifacts_complete: true,
         desired_documents: prepared.desired_state.documents().len(),
-        schema_digests: prepared.schema_digests,
+        schema_digests: prepared.schema_digests.clone(),
     })
 }
 

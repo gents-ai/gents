@@ -413,3 +413,87 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             .is_none()
     );
 }
+
+/// #1651: the graph's active revision digest is read outside the write
+/// transaction while preparing an install, to compute the new revision's
+/// predecessor pointer. If another install activates a different revision
+/// after that read but before this one commits, committing the stale
+/// preparation must refuse rather than silently writing a revision whose
+/// predecessor no longer reflects the graph's true history.
+#[tokio::test]
+async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
+    let (node, access, options) = fixture().await;
+    let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+        .await
+        .unwrap();
+    activate_graph_revision(
+        &node,
+        None,
+        &options.agent_did,
+        &first.graph_id,
+        &first.revision_digest,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Prepare a successor install: it observes `first` as the active revision.
+    let mut successor = load_test_graph_package("code_review", &options);
+    successor.manifest.version.push_str("-successor");
+    successor.package_digest = digest_bytes(b"successor distribution");
+    let prepared = prepare_package(&access, &successor, &options, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.expected_active_revision_digest.as_deref(),
+        Some(first.revision_digest.as_str())
+    );
+
+    // Edit the document between the check and the install: another install
+    // activates a different revision of the same graph.
+    let mut concurrent = load_test_graph_package("code_review", &options);
+    concurrent.manifest.version.push_str("-concurrent");
+    concurrent.package_digest = digest_bytes(b"concurrent distribution");
+    let concurrent_receipt =
+        install_loaded_graph_package(&access, &options.agent_did, &concurrent, &options, None)
+            .await
+            .unwrap();
+    activate_graph_revision(
+        &node,
+        None,
+        &options.agent_did,
+        &concurrent_receipt.graph_id,
+        &concurrent_receipt.revision_digest,
+        Some(&first.revision_digest),
+    )
+    .await
+    .unwrap();
+
+    let error =
+        commit_prepared_graph_package_install(&access, &options.agent_did, &successor, &prepared)
+            .await
+            .unwrap_err();
+    let stale = crate::config_client::stale_expectation(&error).expect("StaleExpectation");
+    assert_eq!(stale.drifted.len(), 1);
+    assert_eq!(stale.drifted[0].collection, Collection::GraphDefinition);
+    assert_eq!(
+        stale.drifted[0].expected.as_deref(),
+        Some(first.revision_digest.as_str())
+    );
+    assert_eq!(
+        stale.drifted[0].found.as_deref(),
+        Some(concurrent_receipt.revision_digest.as_str())
+    );
+
+    // The stale install wrote nothing: only the concurrent revision exists.
+    let response = node.execute("{ GraphRevision { digest } }").await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let digests: BTreeSet<String> = response.data.unwrap()["GraphRevision"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["digest"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(!digests.contains(&prepared.plan.digest));
+    assert!(digests.contains(&concurrent_receipt.revision_digest));
+}
