@@ -1721,15 +1721,27 @@ def caseCoverage : List CoverageEntry :=
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
-      "PromptAssemblyClaudeNarrowingCases"
-      "conformance::prompt_assembly::generated_claude_narrowing_cases_bind_native_evidence_and_replay"
-      "Checks supplied origin and exact reasoning witnesses through native narrowing and the strict replay codec. It does not establish the canonical closing-segment/capture join, checkpoint restoration, complete selected-row collection, or provider prefix acceptance (#1693).")
+      "PromptAssemblyReasoningSuffixCases"
+      "conformance::prompt_assembly::generated_reasoning_suffix_cases_bind_native_selection"
+      "Binds native two-phase selection (provenance suffix, stage assembly, turn location and capture-derived admissible suffix) over the model's row cases and every step of the replay scenarios (compaction, repair, strip-and-retry, tool and issuer changes, interruption, restart, Claude signatures and redaction, Responses ciphertext). Native flattening of real provider bodies is bound by gents-loop replay_frontier tests, not by these cases.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayShapeCases"
+      "conformance::prompt_assembly::generated_replay_shape_cases_bind_source_index_projection"
+      "Binds original-index block shaping and misaligned-sidecar rejection. Complete compaction-history carriage is exercised through native request assembly tests.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayPrefixCases"
+      "conformance::prompt_assembly::generated_replay_prefix_cases_bind_acceptance_checks"
+      "Binds the two capture checks and their agreement with leading-reasoning removal on flat items. Provider acceptance itself is an external premise documented on ReplayFrontier.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyClaudeCheckpointCases"
       "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
-      "Models source-tagged selected assistant occurrences, exact reduction split and required-reasoning survival. A native consumer remains to bind durable aligned coordinate sidecars, canonical resolution, and one prepared provider payload; this model does not prove tag issuance, complete request assembly, or provider prefix acceptance (#1693).")
+      "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"

@@ -1,5 +1,6 @@
 import Proofs.Transcript.State
 import Proofs.CanonicalOutput.Message
+import Proofs.PromptAssembly.ReplayFrontier
 
 /-!
 # Claude content-block map (Track B / B2)
@@ -561,11 +562,9 @@ theorem replayBlocks_mapM_equiv
 
 The caller supplies the result of the canonical closing-segment → provider-turn
 → rendered-request join. This owner does not derive issuer from a signature,
-model name, or Rig's history/prompt carrier. `expectedReasoning` is the exact
-wire-relevant reasoning projection of the current canonical continuation:
-ordered parts, bytes, signatures, and block positions, but not the native
-reasoning-block ID (which Claude does not replay). It must come from the same
-trusted owner as `origin`.
+model name, wire format, or Rig's history/prompt carrier. `ReasoningWitness`
+is the exact canonical native reasoning projection: ordered parts, bytes,
+signatures, and original block positions, but not the provider's display ID.
 Restoring that evidence from a durable checkpoint is a native binding
 obligation, not established by this pure model. Provenance and exact blocks
 also do not prove provider acceptance if earlier system, tool, or message
@@ -574,33 +573,15 @@ prefixes change; provider capability/prefix policy is outside this owner
 assistant rows in one ongoing tool-use turn; this owner does not prove upstream
 row selection was complete. It imposes no universal thinking-first rule. -/
 
-inductive ReplayUsage where
-  | historical
-  | requiredCurrent
-  deriving DecidableEq, Repr
-
 inductive ReplayOrigin where
   | claudeSubscription
+  | acceptedProvider
   | foreign
   | missing
   | ambiguous
   deriving DecidableEq, Repr
 
 abbrev ReasoningWitness := List (Nat × List (CanonicalOutput.ReasoningPart (List UInt8)))
-
-structure ReplayInput where
-  usage : ReplayUsage
-  origin : ReplayOrigin
-  expectedReasoning : Option ReasoningWitness
-  blocks : List (CanonicalOutput.MessageBlock (List UInt8))
-  deriving Repr
-
-def stripHistoricalReasoning :
-    List (CanonicalOutput.MessageBlock (List UInt8)) →
-    List (CanonicalOutput.MessageBlock (List UInt8))
-  | [] => []
-  | .reasoning .. :: rest => stripHistoricalReasoning rest
-  | block :: rest => block :: stripHistoricalReasoning rest
 
 def reasoningProjectionFrom (index : Nat) :
     List (CanonicalOutput.MessageBlock (List UInt8)) → ReasoningWitness
@@ -612,31 +593,6 @@ def reasoningProjectionFrom (index : Nat) :
 def reasoningProjection (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
     ReasoningWitness :=
   reasoningProjectionFrom 0 blocks
-
-/-- Historical reasoning is never sent to a different Claude continuation.
-Required current reasoning is replayed only with a unique Claude provenance
-join and exact wire-relevant reasoning witness. Existing `replayBlocks` supplies
-strict signature, redaction, unsupported-kind and order checks. -/
-def narrowReplay (input : ReplayInput) : Except MapError (List ReplayBlock) :=
-  match input.usage with
-  | .historical => replayBlocks (stripHistoricalReasoning input.blocks)
-  | .requiredCurrent =>
-      match input.origin with
-      | .missing => .error .missingContinuationOrigin
-      | .foreign => .error .foreignContinuationOrigin
-      | .ambiguous => .error .ambiguousContinuationOrigin
-      | .claudeSubscription =>
-          match input.expectedReasoning with
-          | none => .error .missingReasoningWitness
-          | some expected =>
-              if reasoningProjection input.blocks == expected then
-                replayBlocks input.blocks
-              else
-                .error .alteredReasoning
-
-def narrowReplayRows (inputs : List ReplayInput) :
-    Except MapError (List (List ReplayBlock)) :=
-  inputs.mapM narrowReplay
 
 /-! ## Source-preserving reduction and restored continuation
 
@@ -660,13 +616,129 @@ def providerReplayTag (tag : ReplayTag) : Bool :=
 
 structure TaggedReplayRow where
   source : Option ReplayTag
+  /-- Physical accepted header, not a provider message ID or a logical request ID. -/
+  physicalHeader : Option String := none
+  /-- Canonical block indices carried through every durable projection rewrite.
+  Missing entries are unknown provenance, not freshly enumerated indices. -/
+  blockIndices : List Nat := []
   blocks : List (CanonicalOutput.MessageBlock (List UInt8))
-  deriving Repr
+  deriving DecidableEq, Repr
+
+structure ReplayIssuer where
+  family : String
+  endpoint : String
+  deriving DecidableEq, Repr
+
+inductive ReplayWire where
+  | claudeMessages
+  | responses
+  deriving DecidableEq, Repr
+
+/-- One selected provider-input item: the context item (system, tools, model
+and route, without non-prefix request parameters or cache hints; reasoning is
+bound to the model that produced it), then each
+message's header and content blocks, with reasoning blocks as reasoning items.
+Native derives these from the canonical JSON of the actual built request or the
+accepted transport capture, never from a second serializer. -/
+abbrev ReplayFlatItem := ReplayFrontier.FlatItem (List UInt8) (List UInt8)
 
 structure ResolvedReplayEvidence where
   origin : ReplayOrigin
   reasoning : ReasoningWitness
+  issuer : ReplayIssuer
+  wire : ReplayWire
+  physicalHeader : String
+  /-- True only for a completed, published physical provider turn. Partial
+  received bytes remain audit data and are not replayable under this rule. -/
+  complete : Bool
+  /-- The flattened accepted request that produced this turn; `none` when the
+  capture is missing or undecodable, which makes the turn non-replayable. -/
+  captured : Option (List ReplayFlatItem)
   deriving Repr
+
+/-- Each candidate is one native reasoning block in its physical source row.
+`complete` and `issuer` below are premises supplied by the accepted header,
+closing segment and rendered-request join. The model cannot infer them from
+signatures, native bytes or a provider display name. -/
+structure ReasoningCandidate where
+  source : Option ReplayTag
+  physicalHeader : Option String
+  blockIndex : Option Nat
+  indicesComplete : Bool
+  parts : List (CanonicalOutput.ReasoningPart (List UInt8))
+  deriving Repr
+
+def strictlyIncreasingIndices (indices : List Nat) : Bool :=
+  decide (List.Pairwise (· < ·) indices)
+
+def replayRowIndicesValid (row : TaggedReplayRow) : Bool :=
+  row.blockIndices.length == row.blocks.length &&
+    strictlyIncreasingIndices row.blockIndices
+
+def reasoningCandidatesFrom (source : Option ReplayTag)
+    (physicalHeader : Option String) (indicesComplete : Bool) :
+    List Nat → List (CanonicalOutput.MessageBlock (List UInt8)) →
+      List ReasoningCandidate
+  | _, [] => []
+  | indices, .reasoning _ parts :: rest =>
+      { source, physicalHeader, blockIndex := indices.head?,
+        indicesComplete,
+        parts } ::
+        reasoningCandidatesFrom source physicalHeader indicesComplete indices.tail rest
+  | indices, _ :: rest =>
+      reasoningCandidatesFrom source physicalHeader indicesComplete indices.tail rest
+
+def reasoningCandidates (rows : List TaggedReplayRow) : List ReasoningCandidate :=
+  rows.flatMap fun row => reasoningCandidatesFrom row.source row.physicalHeader
+    (replayRowIndicesValid row) row.blockIndices row.blocks
+
+def originalReasoningWitness (row : TaggedReplayRow) : ReasoningWitness :=
+  (reasoningCandidates [row]).filterMap fun candidate =>
+    candidate.blockIndex.map fun index => (index, candidate.parts)
+
+/-- Replayability is endpoint-family specific. This validates native payload
+shape only; acceptance and source closure remain external provenance premises. -/
+def replayableReasoning (wire : ReplayWire)
+    (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) : Bool :=
+  if parts.isEmpty then false
+  else match wire with
+    | .claudeMessages => (parts.mapM replayPart).isOk
+    | .responses =>
+        parts.any (fun part => match part with
+          | .encrypted bytes => !bytes.isEmpty
+          | _ => false) &&
+        parts.all (fun part => match part with
+          | .encrypted bytes => !bytes.isEmpty
+          | .summary _ => true
+          | _ => false)
+
+def validReasoningCandidate (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidate : ReasoningCandidate) : Bool :=
+  match candidate.source, candidate.physicalHeader with
+  | some tag, some header =>
+      if !providerReplayTag tag then false
+      else match resolve tag with
+        | [evidence] =>
+            evidence.origin == .acceptedProvider &&
+            evidence.issuer == issuer && evidence.wire == wire &&
+            evidence.physicalHeader == header &&
+            evidence.complete &&
+            candidate.indicesComplete &&
+            candidate.blockIndex.any (fun index =>
+              (index, candidate.parts) ∈ evidence.reasoning) &&
+            replayableReasoning wire candidate.parts
+        | _ => false
+  | _, _ => false
+
+def validForReplayProjection (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidates : List ReasoningCandidate) (candidate : ReasoningCandidate) : Bool :=
+  validReasoningCandidate issuer wire resolve candidate &&
+    ((candidates.filter fun other =>
+      other.source == candidate.source &&
+      other.physicalHeader == candidate.physicalHeader &&
+      other.blockIndex == candidate.blockIndex).length == 1)
 
 /-- Selection is the same order-preserving filter used by the source owner.
 The independently supplied `required` set is never computed from this list. -/
@@ -686,6 +758,73 @@ def repairReplayBlock (repair : List UInt8 → List UInt8) :
 def repairReplayRows (repair : List UInt8 → List UInt8)
     (rows : List TaggedReplayRow) : List TaggedReplayRow :=
   rows.map fun row => { row with blocks := row.blocks.map (repairReplayBlock repair) }
+
+/-- Source shaping filters whole native blocks with their original canonical
+indices. The sidecar is admitted before shaping; neither retained blocks nor
+their reasoning witnesses are reindexed by the shaped provider position. -/
+def selectIndexedReplayBlocks (keep : Nat →
+    CanonicalOutput.MessageBlock (List UInt8) → Bool) :
+    List Nat → List (CanonicalOutput.MessageBlock (List UInt8)) →
+      List Nat × List (CanonicalOutput.MessageBlock (List UInt8))
+  | index :: indices, block :: blocks =>
+      let (selectedIndices, selectedBlocks) :=
+        selectIndexedReplayBlocks keep indices blocks
+      if keep index block then
+        (index :: selectedIndices, block :: selectedBlocks)
+      else (selectedIndices, selectedBlocks)
+  | _, _ => ([], [])
+
+def selectReplayBlocks (keep : Nat →
+    CanonicalOutput.MessageBlock (List UInt8) → Bool)
+    (row : TaggedReplayRow) : Except MapError TaggedReplayRow :=
+  if replayRowIndicesValid row then
+    let (blockIndices, blocks) :=
+      selectIndexedReplayBlocks keep row.blockIndices row.blocks
+    .ok { row with blockIndices, blocks }
+  else .error .invalidReplayAssociation
+
+theorem selectIndexedReplayBlocks_indices_sublist
+    (keep : Nat → CanonicalOutput.MessageBlock (List UInt8) → Bool)
+    (indices : List Nat) (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    List.Sublist (selectIndexedReplayBlocks keep indices blocks).1 indices := by
+  induction indices generalizing blocks with
+  | nil => simp [selectIndexedReplayBlocks]
+  | cons index rest ih =>
+      cases blocks with
+      | nil => simp [selectIndexedReplayBlocks]
+      | cons block remaining =>
+          by_cases h : keep index block
+          · simp [selectIndexedReplayBlocks, h, ih]
+          · simp [selectIndexedReplayBlocks, h, ih]
+
+theorem selectIndexedReplayBlocks_blocks_sublist
+    (keep : Nat → CanonicalOutput.MessageBlock (List UInt8) → Bool)
+    (indices : List Nat) (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    List.Sublist (selectIndexedReplayBlocks keep indices blocks).2 blocks := by
+  induction blocks generalizing indices with
+  | nil => simp [selectIndexedReplayBlocks]
+  | cons block rest ih =>
+      cases indices with
+      | nil => simp [selectIndexedReplayBlocks]
+      | cons index remaining =>
+          by_cases h : keep index block
+          · simp [selectIndexedReplayBlocks, h, ih]
+          · simp [selectIndexedReplayBlocks, h, ih]
+
+theorem selectReplayBlocks_keeps_physical_coordinates
+    (keep : Nat → CanonicalOutput.MessageBlock (List UInt8) → Bool)
+    (row selected : TaggedReplayRow)
+    (h : selectReplayBlocks keep row = .ok selected) :
+    selected.source = row.source ∧
+      selected.physicalHeader = row.physicalHeader ∧
+      List.Sublist selected.blockIndices row.blockIndices ∧
+      List.Sublist selected.blocks row.blocks := by
+  unfold selectReplayBlocks at h
+  split at h <;> try contradiction
+  cases h
+  exact ⟨rfl, rfl,
+    selectIndexedReplayBlocks_indices_sublist keep row.blockIndices row.blocks,
+    selectIndexedReplayBlocks_blocks_sublist keep row.blockIndices row.blocks⟩
 
 theorem selectReplayRows_sublist (keep : TaggedReplayRow → Bool)
     (rows : List TaggedReplayRow) :
@@ -724,9 +863,9 @@ structure ReplayCheckpoint where
   retained : List TaggedReplayRow
   deriving Repr
 
-/-- Exact `take`/`drop` split. Every required current reasoning coordinate must
-survive exactly once in the retained suffix; reducing it to the summary is not
-implicit retirement. Historical rows have no capture requirement. -/
+/-- Exact `take`/`drop` split and source-association validation. `required`
+names the pending tool round, which a reduction must not summarize; it is not
+a replay selector. -/
 def prepareReplayCheckpoint (required : List ReplayTag)
     (rows : List TaggedReplayRow) (split : Nat) : Except MapError ReplayCheckpoint :=
   if split > rows.length then .error .invalidReplaySplit
@@ -757,301 +896,408 @@ theorem preparedReplayCheckpoint_exact_split (required : List ReplayTag)
   cases h
   exact ⟨rfl, rfl⟩
 
-def narrowResolvedReplay (tag : ReplayTag)
+
+def stripFirstReasoningBlocks (count : Nat) (indices : List Nat) :
+    List (CanonicalOutput.MessageBlock (List UInt8)) →
+    Nat × List Nat × List (CanonicalOutput.MessageBlock (List UInt8))
+  | [] => (count, [], [])
+  | block :: rest =>
+      let next := match block with
+        | .reasoning .. => if count > 0 then count - 1 else count
+        | _ => count
+      let (remaining, keptIndices, kept) :=
+        stripFirstReasoningBlocks next indices.tail rest
+      let keepIndex := match indices.head? with
+        | some index => index :: keptIndices
+        | none => keptIndices
+      match block with
+      | .reasoning .. =>
+          if count > 0 then (remaining, keptIndices, kept)
+          else (remaining, keepIndex, block :: kept)
+      | _ => (remaining, keepIndex, block :: kept)
+
+theorem stripFirstReasoningBlocks_exact_candidates
+    (source : Option ReplayTag) (header : Option String) (complete : Bool)
+    (count : Nat) (indices : List Nat)
     (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
-    (resolve : ReplayTag → List ResolvedReplayEvidence) :
-    Except MapError (List ReplayBlock) :=
-  match resolve tag with
-  | [] => .error .missingContinuationOrigin
-  | [evidence] =>
-      narrowReplay (ReplayInput.mk .requiredCurrent evidence.origin
-        (some evidence.reasoning) blocks)
-  | _ => .error .ambiguousContinuationOrigin
-
-/-- Restore checks the carried association again, then calls the existing
-strict replay owner once per row. Resolution is queried only for required
-current coordinates. A historical row strips reasoning even if its old capture
-is absent or foreign. The returned ordered payload is the one input for
-estimation, capture and send at the native adapter; this assistant-only model
-does not establish complete request assembly or equality of separately
-parameterized serializers. -/
-def restoreAndNarrowReplay (checkpoint : ReplayCheckpoint)
-    (resolve : ReplayTag → List ResolvedReplayEvidence) :
-    Except MapError (List (List ReplayBlock)) :=
-  let rows := checkpoint.prefixRows ++ checkpoint.retained
-  match prepareReplayCheckpoint checkpoint.required rows checkpoint.prefixRows.length with
-  | .error error => .error error
-  | .ok checked =>
-      checked.retained.mapM fun row =>
-        match row.source with
-        | some tag =>
-            if tag ∈ checkpoint.required then
-              narrowResolvedReplay tag row.blocks resolve
-            else
-              narrowReplay (ReplayInput.mk .historical .missing none row.blocks)
-        | none =>
-            narrowReplay (ReplayInput.mk .historical .missing none row.blocks)
-
-theorem required_replay_not_silently_removed (required : List ReplayTag)
-    (rows : List TaggedReplayRow) (split : Nat) (checkpoint : ReplayCheckpoint)
-    (h : prepareReplayCheckpoint required rows split = .ok checkpoint)
-    (tag : ReplayTag) (htag : tag ∈ required) :
-    replayTagCount tag checkpoint.prefixRows = 0 ∧
-      replayTagCount tag checkpoint.retained = 1 := by
-  unfold prepareReplayCheckpoint at h
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  split at h <;> try contradiction
-  rename_i _ _ _ hprefix hsuffix
-  cases h
-  constructor
-  · by_contra hnonzero
-    apply hprefix
-    simp only [List.any_eq_true]
-    exact ⟨tag, htag, by simp [hnonzero]⟩
-  · by_contra hnotone
-    apply hsuffix
-    simp only [List.any_eq_true]
-    exact ⟨tag, htag, by simp [hnotone]⟩
-
-theorem restored_success_retains_each_required_once
-    (checkpoint : ReplayCheckpoint)
-    (resolve : ReplayTag → List ResolvedReplayEvidence)
-    (replay : List (List ReplayBlock))
-    (h : restoreAndNarrowReplay checkpoint resolve = .ok replay)
-    (tag : ReplayTag) (htag : tag ∈ checkpoint.required) :
-    replayTagCount tag checkpoint.prefixRows = 0 ∧
-      replayTagCount tag checkpoint.retained = 1 := by
-  unfold restoreAndNarrowReplay at h
-  cases hprepared : prepareReplayCheckpoint checkpoint.required
-      (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length with
-  | error error => simp [hprepared] at h
-  | ok checked =>
-      have hcounts := required_replay_not_silently_removed checkpoint.required
-        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
-        checked hprepared tag htag
-      have hsplit := preparedReplayCheckpoint_exact_split checkpoint.required
-        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
-        checked hprepared
-      simpa [hsplit.1, hsplit.2] using hcounts
-
-def isThinkingReplay : ReplayBlock → Bool
-  | .signedThinking .. | .redactedThinking .. => true
-  | .text .. | .toolUse .. => false
-
-theorem historical_success_has_no_thinking
-    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
-    (replay : List ReplayBlock)
-    (hsuccess : replayBlocks (stripHistoricalReasoning blocks) = .ok replay) :
-    replay.all (fun block => !isThinkingReplay block) = true := by
-  induction blocks generalizing replay with
+    (hlen : indices.length = blocks.length) :
+    let result := stripFirstReasoningBlocks count indices blocks
+    reasoningCandidatesFrom source header complete result.2.1 result.2.2 =
+      (reasoningCandidatesFrom source header complete indices blocks).drop count := by
+  induction blocks generalizing count indices with
   | nil =>
-      simp [stripHistoricalReasoning, replayBlocks] at hsuccess
-      subst replay
-      rfl
+      cases indices with
+      | nil => simp [stripFirstReasoningBlocks, reasoningCandidatesFrom]
+      | cons _ _ => simp at hlen
   | cons block rest ih =>
-      cases block with
-      | reasoning _ _ =>
-          simp [stripHistoricalReasoning] at hsuccess
-          exact ih replay hsuccess
-      | text payload =>
-          by_cases hempty : payload.isEmpty
-          · cases htail : replayBlocks (stripHistoricalReasoning rest) with
-            | error error =>
-                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
-                  htail] at hsuccess
-            | ok tail =>
-                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
-                  htail] at hsuccess
-                cases hsuccess
-                exact ih replay htail
-          · cases htail : replayBlocks (stripHistoricalReasoning rest) with
-            | error error =>
-                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
-                  htail] at hsuccess
-            | ok tail =>
-                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
-                  htail] at hsuccess
-                cases hsuccess
-                simpa [isThinkingReplay] using ih tail htail
-      | toolCall docId id callId name arguments signature additionalParams =>
-          cases htail : replayBlocks (stripHistoricalReasoning rest) with
-          | error error =>
-              simp [stripHistoricalReasoning, replayBlocks, replayBlock, htail] at hsuccess
-          | ok tail =>
-              simp [stripHistoricalReasoning, replayBlocks, replayBlock, htail] at hsuccess
-              cases hsuccess
-              simpa [isThinkingReplay] using ih tail htail
-      | toolResult docId id callId parts =>
-          simp [stripHistoricalReasoning, replayBlocks, replayBlock] at hsuccess
-      | media media =>
-          simp [stripHistoricalReasoning, replayBlocks, replayBlock] at hsuccess
+      cases indices with
+      | nil => simp at hlen
+      | cons index tail =>
+          have htail : tail.length = rest.length := by simpa using hlen
+          cases block <;> cases count <;>
+            simp [stripFirstReasoningBlocks, reasoningCandidatesFrom,
+              ih _ _ htail]
 
-theorem historical_narrow_success_has_no_thinking
-    (input : ReplayInput) (replay : List ReplayBlock)
-    (husage : input.usage = .historical)
-    (hsuccess : narrowReplay input = .ok replay) :
-    replay.all (fun block => !isThinkingReplay block) = true := by
-  simp [narrowReplay, husage] at hsuccess
-  exact historical_success_has_no_thinking input.blocks replay hsuccess
+theorem stripFirstReasoningBlocks_remaining
+    (source : Option ReplayTag) (header : Option String) (complete : Bool)
+    (count : Nat) (indices : List Nat)
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (hlen : indices.length = blocks.length) :
+    (stripFirstReasoningBlocks count indices blocks).1 = count -
+      (reasoningCandidatesFrom source header complete indices blocks).length := by
+  induction blocks generalizing count indices with
+  | nil =>
+      cases indices with
+      | nil => simp [stripFirstReasoningBlocks, reasoningCandidatesFrom]
+      | cons _ _ => simp at hlen
+  | cons block rest ih =>
+      cases indices with
+      | nil => simp at hlen
+      | cons index tail =>
+          have htail : tail.length = rest.length := by simpa using hlen
+          cases block <;> cases count <;>
+            simp [stripFirstReasoningBlocks, reasoningCandidatesFrom,
+              ih _ _ htail, Nat.succ_sub_succ_eq_sub]
 
-theorem historical_narrowing_idempotent
+theorem stripFirstReasoningBlocks_indices_sublist
+    (count : Nat) (indices : List Nat)
     (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
-    stripHistoricalReasoning (stripHistoricalReasoning blocks) =
-      stripHistoricalReasoning blocks := by
-  induction blocks with
+    List.Sublist (stripFirstReasoningBlocks count indices blocks).2.1 indices := by
+  induction blocks generalizing count indices with
+  | nil => simp [stripFirstReasoningBlocks]
+  | cons block rest ih =>
+      cases block <;> cases indices <;> cases count <;>
+        simp [stripFirstReasoningBlocks, ih, List.Sublist.cons, List.Sublist.cons₂]
+
+theorem stripFirstReasoningBlocks_keeps_alignment
+    (count : Nat) (indices : List Nat)
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (hlen : indices.length = blocks.length) :
+    (stripFirstReasoningBlocks count indices blocks).2.1.length =
+      (stripFirstReasoningBlocks count indices blocks).2.2.length := by
+  induction blocks generalizing count indices with
+  | nil =>
+      cases indices with
+      | nil => simp [stripFirstReasoningBlocks]
+      | cons _ _ => simp at hlen
+  | cons block rest ih =>
+      cases indices with
+      | nil => simp at hlen
+      | cons index tail =>
+          have htail : tail.length = rest.length := by simpa using hlen
+          cases block <;> cases count <;>
+            simp [stripFirstReasoningBlocks, ih _ _ htail]
+
+theorem stripFirstReasoningBlocks_keeps_valid_indices
+    (count : Nat) (indices : List Nat)
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (hlen : indices.length = blocks.length)
+    (hordered : strictlyIncreasingIndices indices = true) :
+    let result := stripFirstReasoningBlocks count indices blocks
+    result.2.1.length = result.2.2.length ∧
+      strictlyIncreasingIndices result.2.1 = true := by
+  have haligned := stripFirstReasoningBlocks_keeps_alignment count indices blocks hlen
+  have hsub := stripFirstReasoningBlocks_indices_sublist count indices blocks
+  have hpair : List.Pairwise (· < ·) indices := by
+    exact of_decide_eq_true (by simpa [strictlyIncreasingIndices] using hordered)
+  have hpair' := hpair.sublist hsub
+  exact ⟨haligned, by simpa [strictlyIncreasingIndices] using
+    (decide_eq_true hpair')⟩
+
+def stripFirstReasoningRows (count : Nat) : List TaggedReplayRow → List TaggedReplayRow
+  | [] => []
+  | row :: rest =>
+      let (remaining, blockIndices, blocks) :=
+        stripFirstReasoningBlocks count row.blockIndices row.blocks
+      let physicalHeader := if replayRowIndicesValid row then row.physicalHeader else none
+      { row with blocks, blockIndices, physicalHeader } ::
+        stripFirstReasoningRows remaining rest
+
+theorem stripFirstReasoningRows_preserves_valid (count : Nat)
+    (rows : List TaggedReplayRow)
+    (hvalid : rows.all replayRowIndicesValid = true) :
+    (stripFirstReasoningRows count rows).all replayRowIndicesValid = true := by
+  induction rows generalizing count with
   | nil => rfl
-  | cons block rest ih =>
-      cases block <;> simp [stripHistoricalReasoning, ih]
+  | cons row rest ih =>
+      simp only [List.all_cons, Bool.and_eq_true] at hvalid ⊢
+      have hrow : row.blockIndices.length = row.blocks.length ∧
+          strictlyIncreasingIndices row.blockIndices = true := by
+        simpa [replayRowIndicesValid, Bool.and_eq_true] using hvalid.1
+      have hblock := stripFirstReasoningBlocks_keeps_valid_indices count
+        row.blockIndices row.blocks hrow.1 hrow.2
+      simp [stripFirstReasoningRows, replayRowIndicesValid, hvalid.1,
+        hblock.1, hblock.2, ih _ hvalid.2]
 
-theorem required_claude_replays_exact_blocks
-    (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
-    narrowReplay (ReplayInput.mk .requiredCurrent .claudeSubscription
-      (some (reasoningProjection blocks)) blocks) =
-      replayBlocks blocks := by
-  simp [narrowReplay]
+theorem stripFirstReasoningRows_exact_candidates (count : Nat)
+    (rows : List TaggedReplayRow)
+    (hvalid : rows.all replayRowIndicesValid = true)
+    (hpost : (stripFirstReasoningRows count rows).all replayRowIndicesValid = true) :
+    reasoningCandidates (stripFirstReasoningRows count rows) =
+      (reasoningCandidates rows).drop count := by
+  induction rows generalizing count with
+  | nil => simp [stripFirstReasoningRows, reasoningCandidates]
+  | cons row rest ih =>
+      simp only [List.all_cons, Bool.and_eq_true] at hvalid
+      let result := stripFirstReasoningBlocks count row.blockIndices row.blocks
+      let outputRow : TaggedReplayRow :=
+        { source := row.source,
+          physicalHeader := if replayRowIndicesValid row then row.physicalHeader else none,
+          blockIndices := result.2.1, blocks := result.2.2 }
+      have hpost' : replayRowIndicesValid outputRow = true ∧
+          (stripFirstReasoningRows result.1 rest).all replayRowIndicesValid = true := by
+        simpa [stripFirstReasoningRows, result, outputRow] using hpost
+      have hlen : row.blockIndices.length = row.blocks.length := by
+        simp [replayRowIndicesValid] at hvalid
+        exact hvalid.1.1
+      have hblock := stripFirstReasoningBlocks_exact_candidates row.source
+        row.physicalHeader true count row.blockIndices row.blocks hlen
+      have hremaining := stripFirstReasoningBlocks_remaining row.source
+        row.physicalHeader true count row.blockIndices row.blocks hlen
+      simp only [reasoningCandidates, stripFirstReasoningRows, List.flatMap_cons]
+      simp only [hvalid.1, ite_true]
+      have htail := ih result.1 hvalid.2 hpost'.2
+      simp only [reasoningCandidates, result] at htail
+      rw [htail]
+      have hout : replayRowIndicesValid
+          { source := row.source, physicalHeader := row.physicalHeader,
+            blockIndices := (stripFirstReasoningBlocks count row.blockIndices row.blocks).2.1,
+            blocks := (stripFirstReasoningBlocks count row.blockIndices row.blocks).2.2 } = true := by
+        simpa [outputRow, result, hvalid.1] using hpost'.1
+      rw [hout]
+      simp only [result] at hblock
+      rw [hblock, hremaining]
+      simp only [List.drop_append_eq_append_drop]
 
-theorem required_claude_reasoning_parts_keep_exact_bytes
-    (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) :
-    narrowReplay (ReplayInput.mk .requiredCurrent .claudeSubscription
-      (some (reasoningProjection [.reasoning none parts]))
-      [.reasoning none parts]) = parts.mapM replayPart := by
-  rw [required_claude_replays_exact_blocks]
-  cases hparts : parts.mapM replayPart <;>
-    simp [replayBlocks, replayBlock, hparts]
+theorem stripFirstReasoningRows_exact_candidates_of_valid (count : Nat)
+    (rows : List TaggedReplayRow)
+    (hvalid : rows.all replayRowIndicesValid = true) :
+    reasoningCandidates (stripFirstReasoningRows count rows) =
+      (reasoningCandidates rows).drop count := by
+  exact stripFirstReasoningRows_exact_candidates count rows hvalid
+    (stripFirstReasoningRows_preserves_valid count rows hvalid)
 
-theorem required_success_has_claude_origin_and_exact_witness
-    (input : ReplayInput) (replay : List ReplayBlock)
-    (husage : input.usage = .requiredCurrent)
-    (hsuccess : narrowReplay input = .ok replay) :
-    input.origin = .claudeSubscription ∧
-      input.expectedReasoning = some (reasoningProjection input.blocks) ∧
-      replayBlocks input.blocks = .ok replay := by
-  cases input with
-  | mk usage origin expectedReasoning blocks =>
-    cases usage with
-    | historical => contradiction
-    | requiredCurrent =>
-      cases origin with
-      | foreign => simp [narrowReplay] at hsuccess
-      | missing => simp [narrowReplay] at hsuccess
-      | ambiguous => simp [narrowReplay] at hsuccess
-      | claudeSubscription =>
-        cases expectedReasoning with
-        | none => simp [narrowReplay] at hsuccess
-        | some expected =>
-          by_cases hexact : reasoningProjection blocks = expected
-          · simp [narrowReplay, hexact] at hsuccess ⊢
-            exact hsuccess
-          · simp [narrowReplay, hexact] at hsuccess
+/-! ## Replay selection over accepted turns
 
-theorem narrowResolvedReplay_success_has_unique_claude_evidence
-    (tag : ReplayTag) (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
-    (resolve : ReplayTag → List ResolvedReplayEvidence) (replay : List ReplayBlock)
-    (h : narrowResolvedReplay tag blocks resolve = .ok replay) :
-    ∃ evidence, resolve tag = [evidence] ∧
-      evidence.origin = .claudeSubscription ∧
-      evidence.reasoning = reasoningProjection blocks ∧
-      replayBlocks blocks = .ok replay := by
-  unfold narrowResolvedReplay at h
-  cases hresolve : resolve tag with
-  | nil => simp [hresolve] at h
-  | cons first rest =>
-      cases rest with
-      | nil =>
-          have howner := required_success_has_claude_origin_and_exact_witness
-            (ReplayInput.mk .requiredCurrent first.origin (some first.reasoning) blocks)
-            replay rfl (by simpa [hresolve] using h)
-          exact ⟨first, rfl, howner.1,
-            Option.some.inj howner.2.1, howner.2.2⟩
-      | cons second tail => simp [hresolve] at h
+A turn is one physical accepted row's reasoning. Selection has two phases.
+First, the longest suffix of turns whose provenance and payload are valid is
+assembled into the actual provider body (a turn failing those checks cannot be
+encoded, and everything before it is dropped). Second, each assembled turn is
+located in that body and judged against its accepted capture
+(`ReplayFrontier.turnOk`); the longest admissible suffix is replayed. Whole
+turns are kept or dropped, so removal is always a leading run of reasoning. -/
 
-private theorem mapM_except_success_at_member {α β : Type}
-    (f : α → Except MapError β) (rows : List α) (result : List β)
-    (h : rows.mapM f = .ok result) (row : α) (hrow : row ∈ rows) :
-    ∃ value, f row = .ok value := by
-  induction rows generalizing result with
-  | nil => simp at hrow
-  | cons first rest ih =>
-      cases hfirst : f first with
-      | error error =>
-          simp [List.mapM_cons, hfirst] at h
-          change (Except.error error : Except MapError (List β)) = .ok result at h
-          cases h
-      | ok firstValue =>
-          cases hrest : rest.mapM f with
-          | error error =>
-              simp [List.mapM_cons, hfirst, hrest] at h
-              change (Except.error error : Except MapError (List β)) = .ok result at h
-              cases h
-          | ok restValues =>
-              simp only [List.mem_cons] at hrow
-              rcases hrow with rfl | htail
-              · exact ⟨firstValue, hfirst⟩
-              · exact ih restValues hrest htail
+/-- One accepted row's reasoning, with whether the row keeps an encodable
+ordinary block once its reasoning is removed. The Claude encoder omits an empty
+assistant message, which would shift every later ordinary item. -/
+structure TurnGroup where
+  candidates : List ReasoningCandidate
+  ordinary : Bool
+  deriving Repr
 
-/-- A successful restored replay has an exactly-once retained assistant row
-and an exactly-one canonical resolution for *every* independently required
-coordinate. Each resolved row passed the same strict replay codec in list
-order. This is conditional on native issuance, durable sidecar integrity and
-the supplied canonical resolution; it does not prove those DB operations. -/
-theorem restored_success_has_all_required_claude_evidence
-    (checkpoint : ReplayCheckpoint)
+def encodableOrdinary : CanonicalOutput.MessageBlock (List UInt8) → Bool
+  | .text payload => !payload.isEmpty
+  | .toolCall .. => true
+  | .reasoning .. | .toolResult .. | .media .. => false
+
+def turnGroups (rows : List TaggedReplayRow) : List TurnGroup :=
+  rows.filterMap fun row =>
+    match reasoningCandidates [row] with
+    | [] => none
+    | group => some { candidates := group, ordinary := row.blocks.any encodableOrdinary }
+
+def groupCandidates (groups : List TurnGroup) : List ReasoningCandidate :=
+  groups.flatMap (·.candidates)
+
+theorem reasoningCandidates_cons (row : TaggedReplayRow) (rest : List TaggedReplayRow) :
+    reasoningCandidates (row :: rest) = reasoningCandidates [row] ++ reasoningCandidates rest := by
+  simp [reasoningCandidates]
+
+theorem turnGroups_candidates (rows : List TaggedReplayRow) :
+    groupCandidates (turnGroups rows) = reasoningCandidates rows := by
+  induction rows with
+  | nil => simp [turnGroups, groupCandidates, reasoningCandidates]
+  | cons row rest ih =>
+      rw [reasoningCandidates_cons, ← ih]
+      unfold turnGroups
+      cases hgroup : reasoningCandidates [row] with
+      | nil => simp [List.filterMap_cons, hgroup, groupCandidates]
+      | cons first others => simp [List.filterMap_cons, hgroup, groupCandidates]
+
+/-- Wire reasoning items one canonical reasoning block renders to: one Claude
+block per part, one Responses `reasoning` item per block. -/
+def wireReasoningCount : ReplayWire → ReasoningCandidate → Nat
+  | .claudeMessages, candidate => candidate.parts.length
+  | .responses, _ => 1
+
+/-- Items between a turn's start and its first reasoning item: the Claude
+assistant message header; Responses has none. -/
+def turnHeaderOffset : ReplayWire → Nat
+  | .claudeMessages => 1
+  | .responses => 0
+
+def turnBase (issuer : ReplayIssuer) (wire : ReplayWire)
     (resolve : ReplayTag → List ResolvedReplayEvidence)
-    (replay : List (List ReplayBlock))
-    (h : restoreAndNarrowReplay checkpoint resolve = .ok replay)
-    (tag : ReplayTag) (htag : tag ∈ checkpoint.required) :
-    replayTagCount tag checkpoint.prefixRows = 0 ∧
-    replayTagCount tag checkpoint.retained = 1 ∧
-    ∃ row, row ∈ checkpoint.retained ∧ row.source = some tag ∧
-      ∃ evidence rowReplay, resolve tag = [evidence] ∧
-        evidence.origin = .claudeSubscription ∧
-        evidence.reasoning = reasoningProjection row.blocks ∧
-        replayBlocks row.blocks = .ok rowReplay := by
-  have hcounts := restored_success_retains_each_required_once
-    checkpoint resolve replay h tag htag
-  refine ⟨hcounts.1, hcounts.2, ?_⟩
-  have hrow : ∃ row, row ∈ checkpoint.retained ∧ row.source = some tag := by
-    unfold replayTagCount at hcounts
-    cases hfiltered : checkpoint.retained.filter
-        (fun row => row.source == some tag) with
-    | nil => simp [hfiltered] at hcounts
-    | cons row rest =>
-        have hmem : row ∈ checkpoint.retained.filter
-            (fun row => row.source == some tag) := by
-          rw [hfiltered]
-          simp
-        have hparts := List.mem_filter.mp hmem
-        exact ⟨row, hparts.1, by simpa using hparts.2⟩
-  obtain ⟨row, hmem, hsource⟩ := hrow
-  let runRow : TaggedReplayRow → Except MapError (List ReplayBlock) := fun candidate =>
-    match candidate.source with
-    | some candidateTag =>
-        if candidateTag ∈ checkpoint.required then
-          narrowResolvedReplay candidateTag candidate.blocks resolve
-        else
-          narrowReplay (ReplayInput.mk .historical .missing none candidate.blocks)
-    | none => narrowReplay (ReplayInput.mk .historical .missing none candidate.blocks)
-  cases hprepared : prepareReplayCheckpoint checkpoint.required
-      (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length with
-  | error error => simp [restoreAndNarrowReplay, hprepared] at h
-  | ok checked =>
-      have hsplit := preparedReplayCheckpoint_exact_split checkpoint.required
-        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
-        checked hprepared
-      have hmap : checkpoint.retained.mapM runRow = .ok replay := by
-        simpa [restoreAndNarrowReplay, hprepared, runRow, hsplit.2] using h
-      obtain ⟨rowReplay, hsuccess⟩ :=
-        mapM_except_success_at_member runRow checkpoint.retained replay hmap row hmem
-      have hnarrow : narrowResolvedReplay tag row.blocks resolve = .ok rowReplay := by
-        simpa [runRow, hsource, htag] using hsuccess
-      obtain ⟨evidence, hresolution, horigin, hwitness, hcodec⟩ :=
-        narrowResolvedReplay_success_has_unique_claude_evidence
-          tag row.blocks resolve rowReplay hnarrow
-      exact ⟨row, hmem, hsource, evidence, rowReplay,
-        hresolution, horigin, hwitness, hcodec⟩
+    (candidates : List ReasoningCandidate) (group : TurnGroup) : Bool :=
+  !group.candidates.isEmpty && (wire == .responses || group.ordinary) &&
+    group.candidates.all (validForReplayProjection issuer wire resolve candidates)
+
+def turnCaptured (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (group : TurnGroup) : Option (List ReplayFlatItem) :=
+  match group.candidates.head?.bind (·.source) with
+  | none => none
+  | some tag =>
+      match resolve tag with
+      | [evidence] => evidence.captured
+      | _ => none
+
+def reasoningPositions (body : List ReplayFlatItem) : List Nat :=
+  (body.zip (List.range body.length)).filterMap fun entry =>
+    match entry.1 with
+    | .reasoning _ => some entry.2
+    | .ordinary _ => none
+
+abbrev TurnLayout := List (List UInt8) × List (Nat × List UInt8)
+
+def headerAt (offset : Nat) (body : List ReplayFlatItem) (start : Nat) : Bool :=
+  offset == 0 ||
+    (match body[start]? with
+     | some (.ordinary _) => true
+     | _ => false)
+
+def locateTurnsFrom (offset : Nat) (body : List ReplayFlatItem) (positions : List Nat)
+    (anchoredItems : List (Nat × List UInt8)) : Nat → List Nat → Option (List TurnLayout)
+  | _, [] => some []
+  | seen, count :: rest => do
+      let position ← positions[seen]?
+      if position < offset then none else
+      let start := position - offset
+      if !headerAt offset body start then none else
+      let tail ← locateTurnsFrom offset body positions anchoredItems (seen + count) rest
+      some ((ReplayFrontier.ords (body.take start), (anchoredItems.drop seen).take count) :: tail)
+
+/-- Locate each assembled turn's ordinary prefix and anchored reasoning items in
+the actual body. Any disagreement between the expected wire counts and the body
+fails closed. -/
+def locateTurns (offset : Nat) (body : List ReplayFlatItem) (counts : List Nat) :
+    Option (List TurnLayout) :=
+  let positions := reasoningPositions body
+  if counts.sum != positions.length || counts.any (· == 0) then none
+  else locateTurnsFrom offset body positions (ReplayFrontier.anchored body) 0 counts
+
+theorem locateTurnsFrom_length (offset : Nat) (body : List ReplayFlatItem)
+    (positions : List Nat) (anchoredItems : List (Nat × List UInt8)) (seen : Nat)
+    (counts : List Nat) (layouts : List TurnLayout)
+    (h : locateTurnsFrom offset body positions anchoredItems seen counts = some layouts) :
+    layouts.length = counts.length := by
+  induction counts generalizing seen layouts with
+  | nil => simp [locateTurnsFrom] at h; simp [← h]
+  | cons count rest ih =>
+      simp only [locateTurnsFrom, Option.bind_eq_bind] at h
+      cases hpos : positions[seen]? with
+      | none => simp [hpos] at h
+      | some position =>
+          simp only [hpos, Option.some_bind] at h
+          by_cases hlt : position < offset
+          · simp [hlt] at h
+          · by_cases hhdr : headerAt offset body (position - offset) = true
+            · cases htail : locateTurnsFrom offset body positions anchoredItems
+                  (seen + count) rest with
+              | none => simp [hlt, hhdr, htail] at h
+              | some tail =>
+                  simp [hlt, hhdr, htail] at h
+                  subst h
+                  simp [ih _ _ htail]
+            · simp [hlt, hhdr] at h
+
+/-- Accepted turns in order, as the frontier sees them. -/
+def assembledTurns (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (candidates : List ReasoningCandidate) (groups : List TurnGroup)
+    (layouts : List TurnLayout) : List (ReplayFrontier.Turn (List UInt8) (List UInt8)) :=
+  (groups.zip layouts).map fun entry =>
+    { base := turnBase issuer wire resolve candidates entry.1,
+      prefixOrds := entry.2.1, items := entry.2.2,
+      captured := turnCaptured resolve entry.1 }
+
+/-- Phase one: the longest suffix of turns with valid provenance and payload. -/
+def replayBaseKept (rows : List TaggedReplayRow) (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence) : List TurnGroup :=
+  ReplayFrontier.maxAdmissibleSuffix
+    (fun _ group => turnBase issuer wire resolve (reasoningCandidates rows) group) (turnGroups rows)
+
+/-- The rows the owned loop assembles to locate phase-one turns. -/
+def replayStage (rows : List TaggedReplayRow) (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence) : List TaggedReplayRow :=
+  stripFirstReasoningRows ((reasoningCandidates rows).length -
+    (groupCandidates (replayBaseKept rows issuer wire resolve)).length) rows
+
+/-- The replayed turns: a suffix of the physical turn groups. `assemble` is the
+owned loop's actual request builder applied to rows. -/
+def replayedTurnGroups (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) : List TurnGroup :=
+  let baseKept := replayBaseKept rows issuer wire resolve
+  let counts := baseKept.map fun group => (group.candidates.map (wireReasoningCount wire)).sum
+  match locateTurns (turnHeaderOffset wire) (assemble (replayStage rows issuer wire resolve))
+      counts with
+  | none => []
+  | some layouts =>
+      let turns := assembledTurns issuer wire resolve (reasoningCandidates rows) baseKept layouts
+      baseKept.drop
+        (turns.length - (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns).length)
+
+def restoreHistoricalReasoningSuffix (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) : List TaggedReplayRow :=
+  stripFirstReasoningRows
+    ((reasoningCandidates rows).length -
+      (groupCandidates (replayedTurnGroups rows issuer wire resolve assemble)).length) rows
+
+theorem replayedTurnGroups_suffix (rows : List TaggedReplayRow) (issuer : ReplayIssuer)
+    (wire : ReplayWire) (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem) :
+    replayedTurnGroups rows issuer wire resolve assemble <:+ turnGroups rows := by
+  unfold replayedTurnGroups
+  have hbase : replayBaseKept rows issuer wire resolve <:+ turnGroups rows :=
+    ReplayFrontier.maxAdmissibleSuffix_suffix _ _
+  dsimp only
+  split
+  · exact List.nil_suffix
+  · exact (List.drop_suffix _ _).trans hbase
+
+/-- Replay keeps exactly the reasoning of a suffix of whole accepted turns, byte
+for byte, and drops the leading run before it. -/
+theorem restoreHistoricalReasoningSuffix_exact_candidates (rows : List TaggedReplayRow)
+    (issuer : ReplayIssuer) (wire : ReplayWire)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (assemble : List TaggedReplayRow → List ReplayFlatItem)
+    (hvalid : rows.all replayRowIndicesValid = true) :
+    reasoningCandidates (restoreHistoricalReasoningSuffix rows issuer wire resolve assemble) =
+      groupCandidates (replayedTurnGroups rows issuer wire resolve assemble) := by
+  obtain ⟨dropped, hsplit⟩ := replayedTurnGroups_suffix rows issuer wire resolve assemble
+  unfold restoreHistoricalReasoningSuffix
+  rw [stripFirstReasoningRows_exact_candidates_of_valid _ _ hvalid, ← turnGroups_candidates,
+    ← hsplit]
+  simp [groupCandidates, List.flatMap_append]
+
+/-- Every replayed turn passed the capture check against exactly the replayed
+turns before it, so its assembled prefix is its accepted producing prefix with a
+leading run of reasoning removed (`ReplayFrontier.kept_turn_prefix_is_leading_removal`). -/
+theorem replayed_turns_admissible
+    (turns : List (ReplayFrontier.Turn (List UInt8) (List UInt8))) :
+    ReplayFrontier.admissible ReplayFrontier.turnOk
+      (ReplayFrontier.maxAdmissibleSuffix ReplayFrontier.turnOk turns) = true :=
+  ReplayFrontier.maxAdmissibleSuffix_admissible _ turns
+
+/-- Claude's strict replay codec over already selected rows. Selection is
+`restoreHistoricalReasoningSuffix`; this only validates the association split
+and encodes each retained row. -/
+def restoreContiguousReplay (checkpoint : ReplayCheckpoint) :
+    Except MapError (List (List ReplayBlock)) := do
+  let _ ← prepareReplayCheckpoint []
+    (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
+  checkpoint.retained.mapM fun row => replayBlocks row.blocks
 
 theorem replay_signed_bytes_and_signature (payload : List UInt8) (signature : String)
     (nonempty : signature ≠ "") :

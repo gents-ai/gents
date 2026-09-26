@@ -5,7 +5,8 @@ import Proofs.Basic
 
 The owned completion loop assembles a provider request, arms this attempt's
 capture (`on_rendered_request`, `crates/gents/src/agent/loop_stream.rs`), and
-the innermost HTTP transport then persists the body it is about to post before
+the innermost HTTP transport then persists the capture fact for the body it is
+about to post before
 it posts it (`crates/gents/src/rendered_request/transport.rs`). Every provider,
 the Claude subscription included, posts through that one HTTP transport, so
 `CaptureSeam::TransportBody` is the only seam version 1 emits; `CanonicalRequest`
@@ -45,7 +46,8 @@ capture key never names two different canonical requests.
 
 * `CanonicalRequest` is opaque, so the model does not say *which* artifact the
   implementation binds to a key — only that a key binds one of them. Production
-  binds the **serialized HTTP body at the transport seam**
+  binds the **complete transport capture fact**, including serialized HTTP body
+  and destination/provenance, at the transport seam
   (`crates/gents/src/rendered_request/transport.rs`), captured after the
   ChatGPT-Codex and xAI Grok body rewrites and immediately before the network
   client is called. `boundary.rendered-capture.assembled-request-artifact`,
