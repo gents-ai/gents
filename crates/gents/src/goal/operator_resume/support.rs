@@ -2,24 +2,8 @@ use super::*;
 use crate::identity::KeyIdentity;
 use crate::request_admission::verify_runtime_local_control_receipt;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-pub(super) struct ResumeCase {
-    pub name: String,
-    pub before: Value,
-    pub request: Value,
-    pub commit: bool,
-    pub expected: Value,
-    pub outcome: String,
-    #[serde(default)]
-    // This fixture is also compiled by claimed_publication; only the operator
-    // resume consumer checks this emitted receipt observation.
-    #[allow(dead_code)]
-    pub goal_status: Option<String>,
-}
 
 pub(super) const SESSION: &str = "contract-session";
 pub(super) const PARENT: &str = "contract-parent";
@@ -33,6 +17,10 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub async fn new(before: &Value) -> Self {
+        Self::new_with_parent_state(before, true).await
+    }
+
+    pub async fn new_with_parent_state(before: &Value, terminal_parent: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
@@ -72,7 +60,9 @@ impl Fixture {
             .await
             .unwrap();
         execute(&node, &create.graphql_mutation().unwrap()).await;
-        execute(&node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+        if terminal_parent {
+            execute(&node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+        }
         let rows = request_rows(&node).await;
         let parent = crate::watcher::AgentRequest::try_from(
             rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),

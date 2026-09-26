@@ -177,6 +177,7 @@ struct SuccessfulMutationFault {
     receipt_fired: AtomicBool,
     pause: Option<SuccessfulMutationPause>,
     write_gate_observation: Option<Arc<WriteGateObservation>>,
+    read_storage_failure: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -572,6 +573,7 @@ impl<'a> ConfigApplyTxn<'a> {
             receipt_fired: AtomicBool::new(false),
             pause: None,
             write_gate_observation: None,
+            read_storage_failure: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -599,6 +601,7 @@ impl<'a> ConfigApplyTxn<'a> {
             receipt_fired: AtomicBool::new(false),
             pause: None,
             write_gate_observation: None,
+            read_storage_failure: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -629,6 +632,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 fired: AtomicBool::new(false),
             }),
             write_gate_observation: None,
+            read_storage_failure: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -664,6 +668,27 @@ impl<'a> ConfigApplyTxn<'a> {
                 acquired,
                 queued_fired: AtomicBool::new(false),
             })),
+            read_storage_failure: None,
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    /// Fail every transaction read whose document contains `marker` as a
+    /// storage failure classified by this owner.
+    #[cfg(test)]
+    pub(crate) async fn with_read_storage_failure<F: Future>(
+        marker: &'static str,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_operation: None,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
+            read_storage_failure: Some(marker),
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -747,6 +772,16 @@ impl<'a> ConfigApplyTxn<'a> {
             gents_protocol::graphql::expand_mutation_input_variables(document, variables)?;
         let document = expanded_document.as_str();
         let variables = &expanded_variables;
+        #[cfg(test)]
+        if !document.trim_start().starts_with("mutation")
+            && SUCCESSFUL_MUTATION_FAULT
+                .try_with(|fault| fault.read_storage_failure.is_some_and(|m| document.contains(m)))
+                .unwrap_or(false)
+        {
+            return Err(retry::transaction_storage_failure(anyhow::anyhow!(
+                "injected transaction read storage failure"
+            )));
+        }
         let response = match &self.backend {
             TxnBackend::Http {
                 endpoint,

@@ -1,4 +1,6 @@
 //! Publish an already claimed continuation through the existing Goal transaction.
+mod wait_observation;
+
 use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::{AgentIdentity, RegisteredIdentity};
@@ -18,9 +20,11 @@ pub(crate) async fn publish_claimed_continuation(
 ) -> Result<Option<GoalResumeReceipt>> {
     let identity = RegisteredIdentity::from_registered_did(&observed.agent_did, None)?;
     let identity = &identity;
+    let stopped = std::sync::Mutex::new(None);
+    let stopped_ref = &stopped;
     // Preserve the automatic queue writer's node actor; target identity signs
     // the child independently of the database actor.
-    crate::config_client::ConfigAccess::transact_local(
+    let receipt = crate::config_client::ConfigAccess::transact_local(
         node,
         None,
         "goal.publish_claimed_continuation",
@@ -33,13 +37,22 @@ pub(crate) async fn publish_claimed_continuation(
                     parent_request_id,
                     content,
                     wrapup,
+                    stopped_ref,
                 )
                 .await
             })
         },
     )
-    .await
+    .await?;
+    if let Some(reason) = stopped.into_inner().unwrap_or_else(|poison| poison.into_inner()) {
+        tracing::warn!(goal_id = %observed.goal_id, %parent_request_id, %reason,
+            "stopped Goal automation on invalid wait evidence");
+    }
+    Ok(receipt)
 }
+
+/// The invalid-evidence stop staged by the attempt that committed, if any.
+type StoppedReason = std::sync::Mutex<Option<String>>;
 
 async fn stage_claimed_continuation(
     txn: &ConfigApplyTxn<'_>,
@@ -48,7 +61,10 @@ async fn stage_claimed_continuation(
     parent_request_id: &str,
     content: &str,
     wrapup: bool,
+    stopped: &StoppedReason,
 ) -> Result<Option<GoalResumeReceipt>> {
+    // A conflicted attempt's stop never committed.
+    *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
         identity.did() == observed.agent_did,
         "claimed publication requires the goal owner's signing identity"
@@ -141,7 +157,8 @@ async fn stage_claimed_continuation(
     if !matches!(
         goal.parsed_status(),
         Some(GoalStatus::Active | GoalStatus::BudgetLimited)
-    ) || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
+    ) || goal.wrapup_completed.unwrap_or(false)
+        || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
         || !parent_row
             .lifecycle_state
             .is_some_and(RequestLifecycleState::is_terminal)
@@ -149,6 +166,29 @@ async fn stage_claimed_continuation(
         || !latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id)
     {
         return Ok(None);
+    }
+    match wait_observation::observe_intentional_wait(
+        txn,
+        parent_row
+            .doc_id
+            .as_deref()
+            .context("goal predecessor lacks physical document identity")?,
+        &goal.agent_did,
+        &goal.session_id,
+        parent_row.requester_did.as_deref(),
+    )
+    .await
+    {
+        wait_observation::WaitEvidence::Absent => {}
+        wait_observation::WaitEvidence::Running => return Ok(None),
+        // No Goal write: the claim stays and the next reconciliation retries.
+        wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
+        wait_observation::WaitEvidence::Invalid(error) => {
+            *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
+                stop_for_invalid_wait_evidence(txn, &goal, sequence, parent_request_id, &error, now)
+                    .await?;
+            return Ok(None);
+        }
     }
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
     if let Some(binding) = crate::graph_pipeline::graph_binding_for_request_in_txn(
@@ -208,6 +248,58 @@ async fn stage_claimed_continuation(
         doc_id: child_doc.to_owned(),
         created: true,
     }))
+}
+
+/// Stop automatic continuation on uninterpretable wait evidence, through the
+/// Goal owner's pause (active) or wrap-up abandonment (budget limited), under
+/// the same claim guard as publication. Returns the recorded reason when the
+/// guarded write matched. A paused Goal leaves the automatic candidate set; an
+/// abandoned wrap-up stays a candidate, but publication refuses any claim once
+/// the wrap-up is completed, so neither can publish or stop again. Operator
+/// resume clears `last_failure` and starts a new epoch, so no retry prompt
+/// reads it.
+async fn stop_for_invalid_wait_evidence(
+    txn: &ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    sequence: i64,
+    parent_request_id: &str,
+    error: &anyhow::Error,
+    now: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let state = goal.state().context("goal has an unknown status")?;
+    let reason = format!("invalid Goal wait evidence: {error:#}");
+    let escaped_reason = escape_graphql_string(&reason);
+    let updated_at = escape_graphql_string(&now.to_rfc3339());
+    let fields = if let Some(post) = state.step(GoalAction::Pause) {
+        format!(
+            r#"status: "{}", active_time_seconds: {}, active_started_at: null, last_failure: "{escaped_reason}", updated_at: "{updated_at}""#,
+            post.status.as_str(),
+            goal.current_active_time_seconds(now),
+        )
+    } else if state.step(GoalAction::WrapupAbandoned).is_some() {
+        format!(
+            r#"wrapup_completed: true, last_failure: "{escaped_reason}", updated_at: "{updated_at}""#
+        )
+    } else {
+        return Ok(None);
+    };
+    let doc_id = escape_graphql_string(&goal.doc_id);
+    let did = escape_graphql_string(&goal.agent_did);
+    let status = escape_graphql_string(&goal.status);
+    let parent_id = escape_graphql_string(parent_request_id);
+    let response = txn
+        .execute(&format!(
+            r#"mutation {{ update_Goal(filter: {{
+        _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{did}" }},
+        status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
+        last_continued_from_request_id: {{ _eq: "{parent_id}" }}
+    }}, input: {{ {fields} }}) {{ _docID }} }}"#
+        ))
+        .await?;
+    Ok(response
+        .pointer("/data/update_Goal")
+        .is_some_and(mutation_returned_rows)
+        .then_some(reason))
 }
 
 #[cfg(test)]
