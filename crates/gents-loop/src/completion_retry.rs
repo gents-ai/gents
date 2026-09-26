@@ -78,6 +78,7 @@ pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
         | InferenceError::Timeout { .. }
         | InferenceError::RateLimited { .. } => FailureClass::Transport,
         InferenceError::PermanentFailure { .. }
+        | InferenceError::UsageLimited(_)
         | InferenceError::ContextLengthExceeded { .. }
         | InferenceError::RetriesExhausted { .. } => FailureClass::Permanent,
     }
@@ -294,7 +295,10 @@ impl CompletionRetryState {
     ) -> PreStreamDirective {
         match failure_class(error, error_text) {
             FailureClass::Permanent => PreStreamDirective::Fail {
-                reason: format!("permanent inference failure: {error}"),
+                reason: match error {
+                    InferenceError::UsageLimited(limit) => limit.to_string(),
+                    _ => format!("permanent inference failure: {error}"),
+                },
             },
             FailureClass::Transport => {
                 match ladder_delay(&self.policy.transport_backoff, self.transport_used) {
@@ -305,12 +309,12 @@ impl CompletionRetryState {
                         ),
                     },
                     Some(base_delay) => {
-                        let base_delay =
-                            if let InferenceError::RateLimited { retry_after_secs } = error {
-                                base_delay.max(Duration::from_secs(*retry_after_secs))
-                            } else {
-                                base_delay
-                            };
+                        let base_delay = match error {
+                            InferenceError::RateLimited {
+                                retry_after: Some(retry_after),
+                            } => base_delay.max(*retry_after),
+                            _ => base_delay,
+                        };
                         let delay = jitter(base_delay, &mut rand::rng());
                         if exceeds_deadline(now, delay, deadline) {
                             return PreStreamDirective::Fail {

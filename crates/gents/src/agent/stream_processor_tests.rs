@@ -239,7 +239,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
             0,
             true,
             crate::error::InferenceError::RateLimited {
-                retry_after_secs: 1,
+                retry_after: Some(Duration::from_secs(1)),
             },
         ),
         (

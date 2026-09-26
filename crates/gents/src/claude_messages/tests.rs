@@ -552,6 +552,44 @@ fn non_success_error_carries_status_request_id_and_bounded_body_prefix() {
     assert!(!bare.contains("body="), "{bare}");
 }
 
+/// A live subscription 429 keeps the unified-limit reset through the body
+/// bound, so the classifier reports a usage limit rather than a throttle.
+#[tokio::test]
+async fn transport_429_usage_cap_reports_reset_time() {
+    let _guard = lock_fixtures_for_test();
+    let url = crate::provider_http::tests::one_shot_server(
+        "429 Too Many Requests",
+        &[
+            ("retry-after", "6000"),
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-reset", "1790354400"),
+        ],
+        r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CeoNrgs1EJvDwA2YxXE7R"}"#,
+    )
+    .await;
+    let bearer = crate::claude_subscription::StaticBearer::new("access");
+    let err = stream_messages_at(
+        &url,
+        "claude-sonnet-5",
+        &echo_request(),
+        HashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+    )
+    .await
+    .err()
+    .expect("429");
+    let classified =
+        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(err));
+    assert!(!classified.is_retryable());
+    assert_eq!(
+        classified.to_string(),
+        "provider usage limit reached (resets at 2026-09-25T16:40:00Z): \
+         This request would exceed your account's rate limit. Please try again later."
+    );
+    assert_eq!(bearer.invalidations(), 0);
+}
+
 /// The wire sends the bearer as `authorization: Bearer <token>`, and a 401
 /// from the transport invalidates the bearer exactly once; that request
 /// fails and the next request refreshes.

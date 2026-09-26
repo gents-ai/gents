@@ -43,7 +43,8 @@ impl ProviderAttemptFailure {
                 let error = StreamingError::Completion(error);
                 (
                     crate::error::classify_completion_error(&error),
-                    error.to_string(),
+                    crate::provider_limit::strip_provider_limit_marker(&error.to_string())
+                        .to_string(),
                 )
             }
             Self::Stalled(stall) => (

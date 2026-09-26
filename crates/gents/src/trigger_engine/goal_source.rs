@@ -709,9 +709,14 @@ impl GoalSource {
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        Ok(reason
-            .filter(|reason| provider_reason_is_usage_limited(reason))
-            .map(ToOwned::to_owned))
+        Ok(reason.and_then(|reason| {
+            match gents_loop::provider_limit::classify_provider_limit(reason, Utc::now()) {
+                Some(gents_loop::provider_limit::ProviderLimit::UsageExhausted(limit)) => {
+                    Some(limit.to_string())
+                }
+                _ => None,
+            }
+        }))
     }
 
     async fn pause_goal(
@@ -734,20 +739,6 @@ impl GoalSource {
         )
         .await
     }
-}
-
-fn provider_reason_is_usage_limited(reason: &str) -> bool {
-    let reason = reason.to_ascii_lowercase();
-    [
-        "usage limit",
-        "usage_limit",
-        "quota exceeded",
-        "insufficient_quota",
-        "billing hard limit",
-        "credit balance",
-    ]
-    .iter()
-    .any(|needle| reason.contains(needle))
 }
 
 fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {

@@ -92,6 +92,12 @@ source consistency checks, not a separate runtime compatibility version.
   `unverified` when the process is still running after the signal. Deleting
   the task or trigger that started a run stops that run's background
   processes (reason `task_deleted`) (#1858).
+- Claude, Codex and Grok subscription usage limits now fail the turn at once
+  with the provider's reset time (`provider usage limit reached (resets at
+  …)`) instead of retrying and reporting an exhausted retry budget. Short
+  rate limits still retry, after the provider's `Retry-After` rather than a
+  fixed 60 seconds, and Goals pause as usage-limited on the same
+  classification (#1422).
 - CLI integration tests recover from a port taken between allocation and the
   server's bind, instead of failing the run (#1641).
 - A runtime with one permanently invalid behavior it is not using now settles

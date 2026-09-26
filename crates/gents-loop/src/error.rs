@@ -5,6 +5,8 @@
 
 use thiserror::Error;
 
+use crate::provider_limit::{classify_provider_limit, strip_provider_limit_marker, ProviderLimit};
+
 #[derive(Debug, Error)]
 pub enum DaemonError {
     #[error(transparent)]
@@ -73,8 +75,16 @@ pub enum InferenceError {
     #[error("inference timed out after {timeout:?}")]
     Timeout { timeout: std::time::Duration },
 
-    #[error("rate limited, retry after {retry_after_secs}s")]
-    RateLimited { retry_after_secs: u64 },
+    #[error(
+        "rate limited{}",
+        retry_after.map(|wait| format!(", retry after {wait:?}")).unwrap_or_default()
+    )]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+    },
+
+    #[error("{0}")]
+    UsageLimited(crate::provider_limit::UsageLimit),
 
     #[error("context length exceeded: {reason}")]
     ContextLengthExceeded { reason: String },
@@ -121,7 +131,7 @@ pub enum HookError {
 }
 
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
-    let msg = error.to_string();
+    let msg = strip_provider_limit_marker(&error.to_string()).to_string();
 
     if msg.contains("context_length_exceeded") || msg.contains("maximum context length") {
         return InferenceError::ContextLengthExceeded { reason: msg };
@@ -130,13 +140,25 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
     match error {
         rig::agent::StreamingError::Completion(completion_err) => {
             let reason = completion_err.to_string();
+            if matches!(
+                completion_err,
+                rig::completion::CompletionError::HttpError(_)
+                    | rig::completion::CompletionError::ProviderError(_)
+            ) {
+                match classify_provider_limit(&reason, chrono::Utc::now()) {
+                    Some(ProviderLimit::UsageExhausted(limit)) => {
+                        return InferenceError::UsageLimited(limit);
+                    }
+                    Some(ProviderLimit::Throttled { retry_after }) => {
+                        return InferenceError::RateLimited { retry_after };
+                    }
+                    None => {}
+                }
+            }
+            let reason = strip_provider_limit_marker(&reason).to_string();
             match completion_err {
                 rig::completion::CompletionError::HttpError(_) => {
-                    if error_message_has_status(&reason, 429) {
-                        InferenceError::RateLimited {
-                            retry_after_secs: 60,
-                        }
-                    } else if error_message_has_status(&reason, 400)
+                    if error_message_has_status(&reason, 400)
                         || error_message_has_status(&reason, 401)
                         || error_message_has_status(&reason, 403)
                         || error_message_has_status(&reason, 404)
@@ -149,14 +171,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                 }
                 rig::completion::CompletionError::ProviderError(provider_msg) => {
                     let provider_msg_lower = provider_msg.to_ascii_lowercase();
-                    if provider_msg_lower.contains("rate_limit")
-                        || provider_msg_lower.contains("rate limit")
-                        || error_message_has_status(provider_msg, 429)
-                    {
-                        InferenceError::RateLimited {
-                            retry_after_secs: 60,
-                        }
-                    } else if provider_message_is_tool_call_json_parse_failure(provider_msg) {
+                    if provider_message_is_tool_call_json_parse_failure(provider_msg) {
                         InferenceError::TransientFailure { reason }
                     } else if provider_message_has_any_status(
                         provider_msg,

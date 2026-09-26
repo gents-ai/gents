@@ -66,6 +66,7 @@ pub mod pack;
 pub mod pack_archive;
 pub mod pack_registry;
 pub mod plugin;
+pub mod provider_http;
 pub(crate) mod provider_input;
 /// Exact provider context-window budget policy shared by compaction,
 /// diagnostics, and the final dispatch gate.

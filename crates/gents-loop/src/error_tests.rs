@@ -18,7 +18,7 @@ fn inference_error_retryability() {
     .is_retryable());
 
     assert!(InferenceError::RateLimited {
-        retry_after_secs: 30
+        retry_after: Some(std::time::Duration::from_secs(30))
     }
     .is_retryable());
 
@@ -276,4 +276,46 @@ fn error_display_messages() {
         reason: "already processing".into(),
     };
     assert!(err.to_string().contains("doc-1"));
+}
+
+#[test]
+fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
+    // #1422: the subscription seat was capped for hours, not throttled.
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            r#"Claude Messages HTTP 429 Too Many Requests (request-id -) body={"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}} [provider-limit reset-at=2026-09-25T18:40:00Z usage-exhausted]"#.into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(!classified.is_retryable());
+    assert_eq!(
+        classified.to_string(),
+        "provider usage limit reached (resets at 2026-09-25T18:40:00Z): \
+         This request would exceed your account's rate limit. Please try again later."
+    );
+}
+
+#[test]
+fn http_429_uses_retry_after_instead_of_a_fixed_delay() {
+    let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "429".parse().expect("valid status"),
+                format!("slow down [provider-limit retry-at={retry_at}]"),
+            ),
+        ));
+
+    match classify_completion_error(&error) {
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } => assert!(
+            wait <= std::time::Duration::from_secs(20)
+                && wait >= std::time::Duration::from_secs(18),
+            "{wait:?}"
+        ),
+        other => panic!("expected throttle, got {other:?}"),
+    }
 }

@@ -305,7 +305,7 @@ pub async fn build_responses_client(
         ChatGptCodexHttpClient<
             DbCredentialBearer,
             crate::rendered_request::RenderedRequestCapturingHttpClient<
-                rig::http_client::ReqwestClient,
+                crate::provider_http::ProviderHttpClient,
             >,
         >,
     >,
@@ -330,7 +330,7 @@ pub async fn build_responses_client(
     let http = ChatGptCodexHttpClient::with_inner(
         bearer,
         crate::rendered_request::RenderedRequestCapturingHttpClient::<
-            rig::http_client::ReqwestClient,
+            crate::provider_http::ProviderHttpClient,
         >::default(),
     );
     crate::inference_http::build_openai_responses_client(

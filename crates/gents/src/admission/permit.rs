@@ -84,7 +84,7 @@ impl AdmissionPermit {
     pub(crate) async fn finish_failure(&mut self, reason: &str) -> Result<(), CompletionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "failed",
-            failure_reason: Some(reason.to_string()),
+            failure_reason: Some(recorded_failure_reason(reason)),
             usage: None,
         });
         self.finish().await
@@ -157,7 +157,7 @@ impl StreamGuardLifecycle for AdmissionPermit {
         if self.terminal.is_none() {
             self.terminal = Some(PermitTerminal {
                 call_state: "failed",
-                failure_reason: Some(error.to_string()),
+                failure_reason: Some(recorded_failure_reason(&error.to_string())),
                 usage: None,
             });
         }
@@ -250,4 +250,10 @@ impl Drop for AdmissionPermit {
             }
         });
     }
+}
+
+/// The Goal reclassifies usage limits from this record, so it carries the
+/// rendered limit rather than the transport's header marker.
+fn recorded_failure_reason(reason: &str) -> String {
+    gents_loop::provider_limit::persisted_failure_reason(reason, chrono::Utc::now())
 }
