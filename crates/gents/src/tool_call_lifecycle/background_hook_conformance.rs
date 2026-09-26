@@ -2,6 +2,7 @@
 //! Native admissions come from canonical assistant publication.
 
 use crate::graphql::escape_graphql_string;
+use crate::identity::AgentIdentity;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
