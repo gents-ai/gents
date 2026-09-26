@@ -757,7 +757,7 @@ fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
     }
     if let Some(lifecycle) = row.lifecycle_state.as_deref().and_then(nonempty) {
         return match lifecycle {
-            "pending" | "awaitingApproval" => ToolCallStatus::Pending,
+            "pending" => ToolCallStatus::Pending,
             "running" => ToolCallStatus::InProgress,
             "completed" => ToolCallStatus::Completed,
             "failed" | "timedOut" | "cancelled" => ToolCallStatus::Failed,

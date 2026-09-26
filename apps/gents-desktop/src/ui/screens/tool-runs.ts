@@ -47,8 +47,7 @@ const failed = (tool: RenderedToolCallView) =>
 
 /* what the agent is doing right now is the one thing a person is watching
    for, so it is never folded away behind a count */
-const live = (tool: RenderedToolCallView) =>
-  tool.statusKind === "running" || tool.statusKind === "held";
+const live = (tool: RenderedToolCallView) => tool.statusKind === "running";
 
 /* `cd <dir> && real-command …` is the common shape, and the cd is
    scaffolding: a profile of a real export found `cd` as the leading token
