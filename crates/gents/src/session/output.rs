@@ -781,7 +781,6 @@ pub(crate) async fn resolve_canonical_replay_tags(
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
-    projection: &gents_loop::loop_stream::ReplayProjectionContext,
 ) -> Result<
     Vec<(
         gents_loop::claude_messages_body::ReplayTag,
@@ -825,18 +824,13 @@ pub(crate) async fn resolve_canonical_replay_tags(
                         ));
                     };
                     let capture = candidate.capture.as_ref().expect("capture filtered above");
-                    let prefix_compatible = gents_loop::provider_input::replay_prefix::project(
+                    // An undecodable capture leaves the turn without evidence
+                    // of its producing prefix, which makes it non-replayable.
+                    let captured = gents_loop::provider_input::replay_frontier::flatten(
                         &capture.body,
                         capture.wire,
                     )
-                    .and_then(|captured| {
-                        gents_loop::provider_input::replay_prefix::project(
-                            &projection.body,
-                            projection.wire,
-                        )
-                        .map(|current| captured.compatible_with(&current))
-                    })
-                    .unwrap_or(false);
+                    .ok();
                     Ok(ResolvedReplayEvidence {
                         origin: gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider,
                         reasoning: reasoning_witness(content),
@@ -844,7 +838,7 @@ pub(crate) async fn resolve_canonical_replay_tags(
                         wire: capture.wire,
                         physical_header: candidate.header_doc_id.clone(),
                         complete: true,
-                        prefix_compatible,
+                        captured,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -860,10 +854,9 @@ pub(crate) async fn resolve_canonical_replay_tag(
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
-    projection: &gents_loop::loop_stream::ReplayProjectionContext,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(
-        resolve_canonical_replay_tags(node, scope, boundary, std::slice::from_ref(tag), projection)
+        resolve_canonical_replay_tags(node, scope, boundary, std::slice::from_ref(tag))
             .await?
             .pop()
             .expect("singleton replay resolution returns one entry")

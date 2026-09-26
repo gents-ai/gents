@@ -1309,6 +1309,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_replay_cases_drive_native_messages_body",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_reasoning_suffix_cases_bind_native_selection",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_reasoning_suffix_cases_bind_native_selection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_replay_shape_cases_bind_source_index_projection",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_replay_shape_cases_bind_source_index_projection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_replay_prefix_cases_bind_acceptance_checks",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_replay_prefix_cases_bind_acceptance_checks",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection",
             package: "gents",
             source_path: "crates/gents/tests/conformance/prompt_assembly.rs",

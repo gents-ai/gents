@@ -22,6 +22,8 @@
 //!   falls through to repair, because repair's guard requires
 //!   deterministic-or-budget-spent, neither of which holds for a fresh error
 //!   with budget still available.
+//! - `ReasoningRejected` classification goes straight to the one-shot
+//!   `Repair` (which strips every reasoning block) or, once spent, `Fail`.
 //! - Mid-stream failures consume a transport ladder entry the same way:
 //!   `effects_this_turn == false` retracts and resamples the same turn;
 //!   `true` closes the turn durably and continues into a new one.
@@ -52,6 +54,7 @@ pub struct CompletionRetryProfileFields {
 pub enum FailureClass {
     Transport,
     ParseBadRequest,
+    ReasoningRejected,
     Permanent,
 }
 
@@ -70,6 +73,11 @@ pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
     };
     if is_parse_failure(error_text) || is_parse_failure(&error.to_string()) {
         return FailureClass::ParseBadRequest;
+    }
+    if crate::error::provider_message_is_reasoning_rejection(error_text)
+        || crate::error::provider_message_is_reasoning_rejection(&error.to_string())
+    {
+        return FailureClass::ReasoningRejected;
     }
 
     match error {
@@ -322,6 +330,18 @@ impl CompletionRetryState {
                             delay,
                             kind: RetryKind::Transport,
                         }
+                    }
+                }
+            }
+            FailureClass::ReasoningRejected => {
+                if self.policy.allow_repair && !self.repair_used {
+                    self.last_parse_error = Some(error_text.to_string());
+                    PreStreamDirective::Repair
+                } else {
+                    PreStreamDirective::Fail {
+                        reason: format!(
+                            "provider rejected replayed reasoning after the one repair: {error}"
+                        ),
                     }
                 }
             }

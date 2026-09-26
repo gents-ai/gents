@@ -344,8 +344,23 @@ pub(crate) struct LeanClaudeCheckpointResolution {
     pub(crate) wire: LeanReasoningReplayWire,
     pub(crate) physical_header: String,
     pub(crate) complete: bool,
-    pub(crate) prefix_compatible: bool,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) captured: Option<Vec<LeanReplayFlatItem>>,
     pub(crate) expected_reasoning: Vec<LeanClaudeReasoningWitness>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanReplayFlatKind {
+    Ordinary,
+    Reasoning,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanReplayFlatItem {
+    pub(crate) kind: LeanReplayFlatKind,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -363,8 +378,9 @@ pub(crate) struct LeanPromptAssemblyReasoningSuffixCase {
     pub(crate) issuer_endpoint: String,
     pub(crate) wire: LeanReasoningReplayWire,
     pub(crate) rows: Vec<LeanClaudeTaggedReplayRow>,
-    pub(crate) retired: Vec<LeanCanonicalCoordinate>,
     pub(crate) resolutions: Vec<LeanClaudeCheckpointResolution>,
+    pub(crate) stage: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) assembled: Vec<LeanReplayFlatItem>,
     pub(crate) replay: Vec<LeanClaudeTaggedReplayRow>,
 }
 
@@ -372,32 +388,21 @@ pub(crate) struct LeanPromptAssemblyReasoningSuffixCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPromptAssemblyReplayShapeCase {
     pub(crate) name: String,
-    pub(crate) issuer_family: String,
-    pub(crate) issuer_endpoint: String,
-    pub(crate) wire: LeanReasoningReplayWire,
     pub(crate) source: LeanClaudeTaggedReplayRow,
     pub(crate) retained_indices: Vec<usize>,
-    pub(crate) retired: Vec<LeanCanonicalCoordinate>,
-    pub(crate) resolutions: Vec<LeanClaudeCheckpointResolution>,
     pub(crate) outcome: String,
     pub(crate) shaped: Option<LeanClaudeTaggedReplayRow>,
-    pub(crate) replay: Vec<LeanClaudeTaggedReplayRow>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanReplayPrefixProjection {
-    pub(crate) context: Vec<u8>,
-    pub(crate) messages: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPromptAssemblyReplayPrefixCase {
     pub(crate) name: String,
-    pub(crate) captured: LeanReplayPrefixProjection,
-    pub(crate) current: LeanReplayPrefixProjection,
-    pub(crate) compatible: bool,
+    pub(crate) captured: Vec<LeanReplayFlatItem>,
+    pub(crate) current: Vec<LeanReplayFlatItem>,
+    pub(crate) ordinary_equal: bool,
+    pub(crate) reasoning_suffix: bool,
+    pub(crate) leading_removal: bool,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

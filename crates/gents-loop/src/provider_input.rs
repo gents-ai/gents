@@ -19,7 +19,7 @@ use crate::openai_wire::OpenAiWireApi;
 #[path = "provider_input_budget.rs"]
 pub mod budget;
 
-pub mod replay_prefix;
+pub mod replay_frontier;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderInputProfile {
@@ -34,6 +34,19 @@ pub enum ProviderInputProfile {
 }
 
 impl ProviderInputProfile {
+    /// The wire on which this profile replays reasoning; Chat Completions
+    /// carries none.
+    pub fn replay_wire(self) -> Option<crate::claude_messages_body::ReplayWire> {
+        use crate::claude_messages_body::ReplayWire;
+        match self {
+            Self::ClaudeMessages => Some(ReplayWire::ClaudeMessages),
+            Self::OpenAiResponsesNormalized | Self::ChatGptCodexResponses | Self::XaiResponses => {
+                Some(ReplayWire::Responses)
+            }
+            Self::OpenAiChatCompletions | Self::OpenRouterChatCompletions => None,
+        }
+    }
+
     pub fn resolve(provider: BackendProviderKind, wire: OpenAiWireApi) -> Self {
         match (provider, wire) {
             (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions)

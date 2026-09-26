@@ -96,54 +96,6 @@ impl ReplayAssociations {
                 .collect(),
         }
     }
-
-    /// The immutable pre-summary split identifies every old current-request
-    /// source whose signed reasoning must stay out of the rewritten provider
-    /// prefix, including sources in the retained suffix.
-    pub(crate) fn retired_for_prefix_rewrite(&self) -> Vec<ReplayTag> {
-        let mut retired = Vec::new();
-        for tag in self
-            .prefix_rows
-            .iter()
-            .chain(&self.retained_rows)
-            .filter_map(|row| row.source.as_ref())
-        {
-            if !retired.contains(tag) {
-                retired.push(tag.clone());
-            }
-        }
-        retired
-    }
-}
-
-pub(crate) fn retired_replay_tags_for_scope(
-    rows: &[ProviderContextReduction],
-    agent_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    request_id: &str,
-    request_doc_id: &str,
-) -> Result<Vec<ReplayTag>> {
-    let mut retired = Vec::new();
-    for row in rows {
-        anyhow::ensure!(
-            row.agent_did == agent_did
-                && row.requester_did.as_deref() == requester_did
-                && row.session_id == session_id
-                && row.request_id == request_id
-                && row.request_doc_id == request_doc_id,
-            "provider-context retirement crossed its request scope"
-        );
-        if row.summary.trim().is_empty() {
-            continue;
-        }
-        for tag in row.replay_associations()?.retired_for_prefix_rewrite() {
-            if !retired.contains(&tag) {
-                retired.push(tag);
-            }
-        }
-    }
-    Ok(retired)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -360,23 +312,6 @@ pub(crate) async fn persist(
     node: &EmbeddedNode,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
-    let input = &input;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
-        node,
-        None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
-        "provider_context.create_reduction",
-        move |txn| Box::pin(persist_in_transaction(txn, input)),
-    )
-    .await
-}
-
-/// The caller may compose the immutable reduction and its session cursor in
-/// this transaction; neither fact may become visible without the other.
-pub(crate) async fn persist_in_transaction(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    input: &NewProviderContextReduction<'_>,
-) -> Result<ProviderContextReduction> {
     if input.checkpoint_messages.is_empty() {
         anyhow::bail!("provider-context reduction checkpoint cannot be empty");
     }
@@ -418,12 +353,9 @@ pub(crate) async fn persist_in_transaction(
         input.turn_index,
         input.reduction_index,
     )?;
-    let intended = IntendedReduction::from_input(input, reduction_key.clone())?;
+    let intended = IntendedReduction::from_input(&input, reduction_key.clone())?;
 
-    match load_by_key_in_transaction(txn, &reduction_key)
-        .await?
-        .as_slice()
-    {
+    match load_by_key(node, &reduction_key).await?.as_slice() {
         [] => {}
         [existing] => {
             intended.ensure_matches(existing)?;
@@ -493,11 +425,15 @@ pub(crate) async fn persist_in_transaction(
         original_tokens = input.original_tokens,
         compacted_tokens = input.compacted_tokens,
     );
-    txn.execute(&mutation)
-        .await
-        .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "provider_context.create_reduction",
+        &mutation,
+    )
+    .await
+    .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
 
-    let rows = load_by_key_in_transaction(txn, &reduction_key).await?;
+    let rows = load_by_key(node, &reduction_key).await?;
     if rows.len() != 1 {
         anyhow::bail!(
             "provider-context reduction key {reduction_key} has {} visible logical twins after create",
@@ -692,8 +628,8 @@ pub fn rendered_capture_cites_reduction(
 
 const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
-async fn load_by_key_in_transaction(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+async fn load_by_key(
+    node: &EmbeddedNode,
     reduction_key: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
@@ -701,13 +637,14 @@ async fn load_by_key_in_transaction(
         escape_graphql_string(reduction_key),
         REDUCTION_FIELDS
     );
-    let response = txn
-        .execute(&query)
-        .await
-        .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
+            .await
+            .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
     serde_json::from_value(
         response
-            .get("data")
+            .data
+            .as_ref()
             .and_then(|data| data.get("ProviderContextReduction"))
             .cloned()
             .unwrap_or_else(|| json!([])),
@@ -1529,33 +1466,6 @@ mod tests {
             .is_none());
         let durable_lineage = load_for_request(&node, "request-doc").await.unwrap();
         assert_eq!(durable_lineage.len(), 2);
-        let retired = retired_replay_tags_for_scope(
-            &durable_lineage,
-            "did:key:agent",
-            Some("did:key:user"),
-            "session",
-            "request",
-            "request-doc",
-        )
-        .unwrap();
-        assert_eq!(retired, vec![source_tag.clone()]);
-        assert!(retired_replay_tags_for_scope(
-            &durable_lineage,
-            "did:key:other",
-            Some("did:key:user"),
-            "session",
-            "request",
-            "request-doc",
-        )
-        .is_err());
-        let mut later_tag = source_tag;
-        let gents_protocol::output::OutputSource::ProviderTurn { turn_index, .. } =
-            &mut later_tag.source
-        else {
-            unreachable!("fixture source is a provider turn")
-        };
-        *turn_index = 1;
-        assert!(!retired.contains(&later_tag));
 
         assert!(load_for_request(&node, "fork-request-doc")
             .await

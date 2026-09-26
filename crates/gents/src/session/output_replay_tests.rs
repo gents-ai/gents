@@ -18,10 +18,17 @@ use super::output::{load_canonical_assistant_candidates, CanonicalReplayScope};
 use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
-    restore_historical_reasoning_suffix, ReplayCheckpoint, ReplayIssuer, ReplayTag, ReplayWire,
-    TaggedAssistantRow,
+    replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
 };
-use gents_loop::loop_stream::ReplayProjectionContext;
+use gents_loop::provider_input::replay_frontier::flatten;
+
+/// The accepted request a fixture capture recorded.
+#[derive(Clone)]
+struct CapturedRequest {
+    issuer: ReplayIssuer,
+    wire: ReplayWire,
+    body: serde_json::Value,
+}
 
 const AGENT_DID: &str = "did:test:replay-agent";
 const SESSION_ID: &str = "replay-session";
@@ -54,10 +61,7 @@ impl ReplayFixture {
         load_canonical_assistant_candidates(&self.node, self.scope(), &self.boundary).await
     }
 
-    async fn insert_capture(
-        &self,
-        source: RenderedRequestSource,
-    ) -> Option<ReplayProjectionContext> {
+    async fn insert_capture(&self, source: RenderedRequestSource) -> Option<CapturedRequest> {
         use crate::rendered_request::{
             build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
             DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
@@ -128,7 +132,7 @@ impl ReplayFixture {
             .capture(rendered)
             .await
             .expect("durable capture owner");
-        wire.map(|wire| ReplayProjectionContext { issuer, wire, body })
+        wire.map(|wire| CapturedRequest { issuer, wire, body })
     }
 
     async fn insert_authored_assistant(&mut self) {
@@ -260,7 +264,6 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         fixture.scope(),
         &fixture.boundary,
         &tag,
-        &projection,
     )
     .await
     .unwrap();
@@ -270,6 +273,10 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         gents_loop::claude_messages_body::ReplayOrigin::AcceptedProvider
     );
     assert_eq!(evidence[0].reasoning.len(), 2);
+    assert_eq!(
+        evidence[0].captured,
+        Some(flatten(&projection.body, projection.wire).unwrap())
+    );
 
     let mut absent = tag.clone();
     let OutputSource::ProviderTurn { attempt, .. } = &mut absent.source else {
@@ -281,7 +288,6 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         fixture.scope(),
         &fixture.boundary,
         &[tag.clone(), absent.clone(), tag.clone()],
-        &projection,
     )
     .await
     .unwrap();
@@ -304,7 +310,6 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         wrong_scope,
         &fixture.boundary,
         &tag,
-        &projection,
     )
     .await
     .unwrap();
@@ -616,57 +621,56 @@ async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritte
         panic!("canonical fixture must reconstruct an assistant");
     };
     assert_eq!(content.len(), 4);
-    let checkpoint = ReplayCheckpoint {
-        required: vec![],
-        prefix_rows: vec![],
-        retained: vec![TaggedAssistantRow {
-            source: Some(tag.clone()),
-            physical_header: Some(candidate.header_doc_id.clone()),
-            block_indices: (0..content.len()).collect(),
-            id: id.clone(),
-            content: content.clone(),
-        }],
-        retired: vec![],
-    };
+    let rows = vec![TaggedAssistantRow {
+        source: Some(tag.clone()),
+        physical_header: Some(candidate.header_doc_id.clone()),
+        block_indices: (0..content.len()).collect(),
+        id: id.clone(),
+        content: content.clone(),
+    }];
     let evidence = super::output::resolve_canonical_replay_tag(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
         &tag,
-        &projection,
     )
     .await
     .unwrap();
     assert_eq!(evidence.len(), 1);
-    assert!(evidence[0].prefix_compatible);
     assert_eq!(evidence[0].reasoning.len(), 2);
-    let restored = restore_historical_reasoning_suffix(
-        &checkpoint,
+    let resolve = |_: &ReplayTag| evidence.clone();
+    let stage = replay_stage(&rows, &projection.issuer, projection.wire, resolve);
+    assert_eq!(stage, rows, "provenance-valid turn stays in the stage");
+    // The next request appends this turn and a user message to the accepted
+    // capture, exactly as the owned loop assembles it.
+    let next_body = |system: &str| {
+        let mut body = projection.body.clone();
+        body["system"] = serde_json::json!([{"type": "text", "text": system}]);
+        let assistant =
+            gents_loop::claude_messages_body::encode_assistant_content(&stage[0].content).unwrap();
+        let messages = body["messages"].as_array_mut().unwrap();
+        messages.push(serde_json::json!({"role": "assistant", "content": assistant}));
+        messages.push(
+            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "next"}]}),
+        );
+        flatten(&body, projection.wire).unwrap()
+    };
+    let restored = select_replay(
+        &rows,
         &projection.issuer,
         projection.wire,
-        |_| evidence.clone(),
+        resolve,
+        &next_body("system"),
     );
     assert_eq!(restored[0].content, content);
     assert_eq!(restored[0].block_indices, vec![0, 1, 2, 3]);
 
-    let mut changed = projection.clone();
-    changed.body["system"] = serde_json::json!([{"type":"text","text":"changed system"}]);
-    let rejected = super::output::resolve_canonical_replay_tag(
-        &fixture.node,
-        fixture.scope(),
-        &fixture.boundary,
-        &tag,
-        &changed,
-    )
-    .await
-    .unwrap();
-    assert_eq!(rejected.len(), 1);
-    assert!(!rejected[0].prefix_compatible);
-    let stripped = restore_historical_reasoning_suffix(
-        &checkpoint,
+    let stripped = select_replay(
+        &rows,
         &projection.issuer,
         projection.wire,
-        |_| rejected.clone(),
+        resolve,
+        &next_body("changed system"),
     );
     assert!(stripped[0]
         .content
@@ -691,22 +695,11 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let projection = ReplayProjectionContext {
-        issuer: ReplayIssuer {
-            family: gents_loop::backend_provider::BackendProviderKind::ClaudeCliSubscription
-                .as_str()
-                .into(),
-            endpoint: "not-a-captured-route".into(),
-        },
-        wire: ReplayWire::ClaudeMessages,
-        body: serde_json::json!({"messages":[]}),
-    };
     assert!(super::output::resolve_canonical_replay_tag(
         &missing.node,
         missing.scope(),
         &missing.boundary,
         &tag,
-        &projection,
     )
     .await
     .unwrap()
@@ -730,7 +723,6 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
         foreign.scope(),
         &foreign.boundary,
         &foreign_tag,
-        &projection,
     )
     .await
     .unwrap();
@@ -797,7 +789,6 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
         claude.scope(),
         &claude.boundary,
         &tag,
-        &projection,
     )
     .await
     .unwrap();
@@ -817,7 +808,7 @@ async fn authored_assistant_is_history_not_provider_continuation() {
 
 #[tokio::test]
 async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive() {
-    use gents_loop::loop_stream::{narrow_tagged_history, provider_view_tagged, LoopReplayInput};
+    use gents_loop::loop_stream::provider_view_tagged;
     use gents_loop::provider_input::ProviderInputProfile;
     use gents_protocol::message::AssistantContent;
     use gents_protocol::rendered_request::CaptureScopeKind;
@@ -859,24 +850,42 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         if content.iter().filter(|block| matches!(block, AssistantContent::Reasoning(_))).count() == 2
     ));
 
-    let mut replay = LoopReplayInput {
-        request_doc_id: Some(fixture.request_doc_id.clone()),
-        ..LoopReplayInput::default()
-    };
-    let tagged = crate::provider_input::replay::tag_canonical_history(
-        &history,
-        &mut replay,
-        ProviderInputProfile::ClaudeMessages,
+    let tagged = crate::provider_input::replay::tag_canonical_history(&history);
+    let projected = provider_view_tagged(ProviderInputProfile::ClaudeMessages, tagged).unwrap();
+    let rows = projected
+        .iter()
+        .map(|row| {
+            let Message::Assistant { id, content } = &row.message else {
+                panic!("fixture history is one assistant")
+            };
+            TaggedAssistantRow {
+                source: row.source.clone(),
+                physical_header: row.physical_header.clone(),
+                block_indices: row.block_indices.clone(),
+                id: id.clone(),
+                content: content.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let issuer = crate::llm::backend_client::claude_subscription_replay_issuer()
+        .unwrap()
+        .unwrap();
+    let selected = select_replay(
+        &rows,
+        &issuer,
+        ReplayWire::ClaudeMessages,
+        |_| Vec::new(),
+        &[],
     );
-    let mut projected = provider_view_tagged(ProviderInputProfile::ClaudeMessages, tagged).unwrap();
-    narrow_tagged_history(
-        ProviderInputProfile::ClaudeMessages,
-        &mut projected,
-        &mut replay,
-        None,
-    )
-    .await
-    .unwrap();
+    let projected = vec![gents_loop::loop_stream::TaggedMessage {
+        message: Message::Assistant {
+            id: selected[0].id.clone(),
+            content: selected[0].content.clone(),
+        },
+        source: selected[0].source.clone(),
+        physical_header: selected[0].physical_header.clone(),
+        block_indices: selected[0].block_indices.clone(),
+    }];
     assert_eq!(projected.len(), 1);
     assert!(projected[0].source.is_none());
     assert!(matches!(&projected[0].message,

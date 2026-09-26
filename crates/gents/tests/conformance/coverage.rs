@@ -1138,6 +1138,14 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyReasoningSuffixCases",
             !snapshot.prompt_assembly_reasoning_suffix_cases.is_empty(),
         ),
+        (
+            "PromptAssemblyReplayShapeCases",
+            !snapshot.prompt_assembly_replay_shape_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyReplayPrefixCases",
+            !snapshot.prompt_assembly_replay_prefix_cases.is_empty(),
+        ),
     ] {
         assert!(present, "{domain} must emit cases");
         emitted.insert(("prompt_assembly_cases".to_string(), domain.to_string()));

@@ -195,21 +195,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
-                replay.issuer = self.replay_issuer.clone();
-                replay.wire = match provider_profile {
-                    gents_loop::provider_input::ProviderInputProfile::ClaudeMessages => {
-                        Some(gents_loop::claude_messages_body::ReplayWire::ClaudeMessages)
-                    }
-                    gents_loop::provider_input::ProviderInputProfile::OpenAiResponsesNormalized
-                    | gents_loop::provider_input::ProviderInputProfile::ChatGptCodexResponses
-                    | gents_loop::provider_input::ProviderInputProfile::XaiResponses => {
-                        Some(gents_loop::claude_messages_body::ReplayWire::Responses)
-                    }
-                    gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions
-                    | gents_loop::provider_input::ProviderInputProfile::OpenRouterChatCompletions => {
-                        None
-                    }
-                };
                 let turn_context_window = self.behavior.context_window;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
@@ -390,17 +375,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         request_doc_id: &request.doc_id,
                         request_commit_cid: &row.request_commit_cid,
                     };
-                    let associations = row.replay_associations()?;
-                    if row.summary.trim().is_empty() {
-                        replay.required = associations.required;
-                    } else {
-                        for tag in associations.retired_for_prefix_rewrite() {
-                            if !replay.retired.contains(&tag) {
-                                replay.retired.push(tag);
-                            }
-                        }
-                        replay.required.clear();
-                    }
+                    replay.required = row.replay_associations()?.required;
                     crate::session::validate_canonical_replay_boundary(
                         self.node.as_ref(), replay_scope, &boundary,
                     ).await?;

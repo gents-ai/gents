@@ -32,13 +32,6 @@ pub struct ReplayEvidenceRow {
     pub evidence: ResolvedReplayEvidence,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReplayProjectionContext {
-    pub issuer: ReplayIssuer,
-    pub wire: ReplayWire,
-    pub body: serde_json::Value,
-}
-
 /// A deterministic violation of canonical replay provenance. Native owners
 /// preserve this type through contextual errors; storage failures must not be
 /// relabeled as invalid provider input.
@@ -51,7 +44,6 @@ pub struct ReplayEvidenceViolation(pub String);
 pub type ReplayEvidenceResolver = Arc<
     dyn Fn(
             Vec<ReplayTag>,
-            ReplayProjectionContext,
         ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ReplayEvidenceRow>>> + Send>>
         + Send
         + Sync,
@@ -65,13 +57,9 @@ pub struct LoopReplayInput {
     pub issuer: Option<ReplayIssuer>,
     /// Wire selected by the running loop's actual provider profile.
     pub wire: Option<ReplayWire>,
-    /// Required-current coordinates are independent of the surviving rows.
+    /// The pending tool round's sources, which a reduction must not
+    /// summarize. Replay selection does not read them.
     pub required: Vec<ReplayTag>,
-    /// Current signed rows awaiting canonical-origin selection; a foreign
-    /// producer stays historical rather than becoming claimed Claude replay.
-    pub candidates: Vec<ReplayTag>,
-    /// Signed coordinates permanently omitted after a client prefix rewrite.
-    pub retired: Vec<ReplayTag>,
     pub resolve: Option<ReplayEvidenceResolver>,
 }
 

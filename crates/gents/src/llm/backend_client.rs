@@ -91,9 +91,7 @@ impl BackendClient {
             Self::ChatGptCodex(client) => client.post("/responses")?,
             Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
             Self::XaiGrokResponses(client) => client.post("/responses")?,
-            Self::ClaudeSubscription(_) => {
-                rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI)
-            }
+            Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
         }
         .body(())?;
         Ok(
@@ -118,6 +116,18 @@ impl BackendClient {
             Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
         }
     }
+}
+
+/// The Claude subscription posts to its fixed Messages URI.
+pub(crate) fn claude_subscription_replay_issuer(
+) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
+    let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI).body(())?;
+    Ok(
+        gents_loop::rendered_request::transport::replay_issuer_for_destination(
+            BackendProviderKind::ClaudeCliSubscription.as_str(),
+            request.uri(),
+        ),
+    )
 }
 
 /// Build the provider completion client for `behavior`'s

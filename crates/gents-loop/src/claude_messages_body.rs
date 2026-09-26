@@ -11,6 +11,10 @@ use rig::completion::{CompletionRequest, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::provider_input::replay_frontier::{
+    admissible_turn_drop, anchored, ords, FlatItem, Turn,
+};
+
 const DEFAULT_MAX_TOKENS: u64 = 4096;
 #[doc(hidden)]
 pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasoning_efforts";
@@ -46,69 +50,6 @@ pub fn reasoning_witness(content: &[AssistantContent]) -> ReasoningWitness {
         .collect()
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum ReplayUsage<'a> {
-    Historical,
-    RequiredCurrent {
-        origin: ReplayOrigin,
-        expected: Option<&'a ReasoningWitness>,
-    },
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ReplayEvidenceError {
-    #[error("missingContinuationOrigin: required Claude continuation has no provider provenance")]
-    MissingOrigin,
-    #[error("foreignContinuationOrigin: required continuation was not produced by Claude")]
-    ForeignOrigin,
-    #[error(
-        "ambiguousContinuationOrigin: required continuation has ambiguous provider provenance"
-    )]
-    AmbiguousOrigin,
-    #[error("missingReasoningWitness: required continuation has no canonical reasoning witness")]
-    MissingWitness,
-    #[error(
-        "alteredReasoning: required continuation differs from its canonical reasoning witness"
-    )]
-    AlteredReasoning,
-    #[error("unsupportedContinuationOrigin: legacy Claude-only replay cannot accept Responses provenance")]
-    UnsupportedOrigin,
-}
-
-/// Lean `ClaudeMap.narrowReplay`'s native narrowing stage. Strict wire encoding
-/// below then checks signature/redaction shape. The runtime must supply the
-/// witness independently of `content`; rebuilding it from this argument would
-/// erase the missing/altered-block check. This does not license changes to a
-/// provider-bound prompt prefix (tracked separately in #1693).
-pub fn narrow_assistant_content(
-    content: &[AssistantContent],
-    usage: ReplayUsage<'_>,
-) -> Result<Vec<AssistantContent>, ReplayEvidenceError> {
-    match usage {
-        ReplayUsage::Historical => Ok(content
-            .iter()
-            .filter(|block| !matches!(block, AssistantContent::Reasoning(_)))
-            .cloned()
-            .collect()),
-        ReplayUsage::RequiredCurrent { origin, expected } => {
-            match origin {
-                ReplayOrigin::ClaudeSubscription => {}
-                ReplayOrigin::AcceptedProvider => {
-                    return Err(ReplayEvidenceError::UnsupportedOrigin)
-                }
-                ReplayOrigin::Foreign => return Err(ReplayEvidenceError::ForeignOrigin),
-                ReplayOrigin::Missing => return Err(ReplayEvidenceError::MissingOrigin),
-                ReplayOrigin::Ambiguous => return Err(ReplayEvidenceError::AmbiguousOrigin),
-            }
-            let expected = expected.ok_or(ReplayEvidenceError::MissingWitness)?;
-            if reasoning_witness(content) != *expected {
-                return Err(ReplayEvidenceError::AlteredReasoning);
-            }
-            Ok(content.to_vec())
-        }
-    }
-}
-
 /// A physical provider-output coordinate. The request document identity is
 /// part of the tag; provider message IDs are not continuation identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,7 +82,6 @@ pub struct ReplayCheckpoint {
     pub required: Vec<ReplayTag>,
     pub prefix_rows: Vec<TaggedAssistantRow>,
     pub retained: Vec<TaggedAssistantRow>,
-    pub retired: Vec<ReplayTag>,
 }
 
 /// Supplied by the canonical header/close/capture owner, never reconstructed
@@ -154,7 +94,9 @@ pub struct ResolvedReplayEvidence {
     pub wire: ReplayWire,
     pub physical_header: String,
     pub complete: bool,
-    pub prefix_compatible: bool,
+    /// The flattened accepted request that produced the turn; `None` when the
+    /// capture is missing or undecodable.
+    pub captured: Option<Vec<FlatItem>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,12 +125,6 @@ pub enum ReplayCheckpointError {
     RequiredInPrefix,
     #[error("missingRequiredReplay")]
     MissingRequired,
-    #[error("invalidReplayGap")]
-    InvalidReplayGap,
-    #[error("retiredReplayRequired")]
-    RetiredReplayRequired,
-    #[error("{0}")]
-    Evidence(#[from] ReplayEvidenceError),
     #[error("{0}")]
     Codec(#[from] AssistantCodecError),
 }
@@ -247,157 +183,27 @@ pub fn prepare_replay_checkpoint(
         required,
         prefix_rows: rows[..split].to_vec(),
         retained: rows[split..].to_vec(),
-        retired: Vec::new(),
     })
 }
 
-/// A client-side prefix rewrite invalidates every signed block already in
-/// the selected provider input, including signed rows in the retained suffix.
-/// The original rows remain in the canonical audit transcript.
-pub fn retire_for_prefix_rewrite(mut checkpoint: ReplayCheckpoint) -> ReplayCheckpoint {
-    checkpoint.retired.extend(
-        checkpoint
-            .prefix_rows
-            .iter()
-            .chain(&checkpoint.retained)
-            .filter_map(|row| row.source.clone()),
-    );
-    checkpoint.required.clear();
-    checkpoint
-}
-
-/// Complete the retained signed-reasoning run from its first required Claude
-/// source onward. Each promoted source still needs canonical origin and exact
-/// reasoning evidence at restore; an unassociated signed row cannot join it.
-pub fn complete_required_reasoning_run(
-    required: &[ReplayTag],
-    rows: &[TaggedAssistantRow],
-) -> Result<Vec<ReplayTag>, ReplayCheckpointError> {
-    let mut started = false;
-    let mut completed = required.to_vec();
-    for row in rows {
-        if row
-            .source
-            .as_ref()
-            .is_some_and(|tag| required.contains(tag))
-        {
-            started = true;
-        }
-        if !started || reasoning_witness(&row.content).is_empty() {
-            continue;
-        }
-        let tag = row
-            .source
-            .as_ref()
-            .ok_or(ReplayCheckpointError::InvalidReplayGap)?;
-        if !completed.contains(tag) {
-            completed.push(tag.clone());
-        }
-    }
-    Ok(completed)
-}
-
-/// One transient, checked assistant occurrence for the same downstream body
-/// projection used by estimation, capture, and the live Claude transport.
-#[derive(Clone, Debug, PartialEq)]
-pub struct NarrowedAssistantRow {
-    pub source: Option<ReplayTag>,
-    pub id: Option<String>,
-    pub content: Vec<AssistantContent>,
-    pub wire_blocks: Vec<Value>,
-}
-
-/// Lean `ClaudeMap.restoreAndNarrowReplay`: validate the carried split again,
-/// resolve only required coordinates, narrow in row order, then invoke the
-/// same strict assistant codec that the live body builder uses. The resolver
-/// must be backed by the owning canonical physical header/close/capture join;
-/// this pure function cannot verify a stored sidecar against that database.
-pub fn restore_and_narrow_replay(
+/// Lean `ClaudeMap.restoreContiguousReplay`: validate the carried split, then
+/// encode each already selected row with the strict codec the live body
+/// builder uses.
+pub fn restore_contiguous_replay(
     checkpoint: &ReplayCheckpoint,
-    mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
-) -> Result<Vec<NarrowedAssistantRow>, ReplayCheckpointError> {
-    if checkpoint
-        .required
-        .iter()
-        .any(|tag| checkpoint.retired.contains(tag))
-    {
-        return Err(ReplayCheckpointError::RetiredReplayRequired);
-    }
+) -> Result<Vec<Vec<Value>>, ReplayCheckpointError> {
     let rows = checkpoint
         .prefix_rows
         .iter()
         .chain(&checkpoint.retained)
         .cloned()
         .collect();
-    let checked = prepare_replay_checkpoint(
-        checkpoint.required.clone(),
-        rows,
-        checkpoint.prefix_rows.len(),
-    )?;
-    let mut kept = false;
-    let mut gap = false;
-    for row in &checked.retained {
-        if reasoning_witness(&row.content).is_empty() {
-            continue;
-        }
-        if row
-            .source
-            .as_ref()
-            .is_some_and(|tag| checked.required.contains(tag))
-        {
-            if gap {
-                return Err(ReplayCheckpointError::InvalidReplayGap);
-            }
-            kept = true;
-        } else if kept {
-            gap = true;
-        }
-    }
+    let checked = prepare_replay_checkpoint(Vec::new(), rows, checkpoint.prefix_rows.len())?;
     checked
         .retained
-        .into_iter()
-        .map(|row| {
-            let evidence = match row
-                .source
-                .as_ref()
-                .filter(|tag| checked.required.contains(tag))
-            {
-                Some(tag) => match resolve(tag).as_slice() {
-                    [] => return Err(ReplayEvidenceError::MissingOrigin.into()),
-                    [evidence] => Some(evidence.clone()),
-                    _ => return Err(ReplayEvidenceError::AmbiguousOrigin.into()),
-                },
-                None => None,
-            };
-            let usage = match evidence.as_ref() {
-                Some(evidence) => ReplayUsage::RequiredCurrent {
-                    origin: evidence.origin,
-                    expected: Some(&evidence.reasoning),
-                },
-                None => ReplayUsage::Historical,
-            };
-            let content = narrow_assistant_content(&row.content, usage)?;
-            let wire_blocks = encode_assistant_content(&content)?;
-            Ok(NarrowedAssistantRow {
-                source: row.source,
-                id: row.id,
-                content,
-                wire_blocks,
-            })
-        })
+        .iter()
+        .map(|row| Ok(encode_assistant_content(&row.content)?))
         .collect()
-}
-
-/// The composed projection expands the authenticated run before strict
-/// origin, witness and codec checks are applied to every retained row.
-pub fn restore_contiguous_replay(
-    checkpoint: &ReplayCheckpoint,
-    resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
-) -> Result<Vec<NarrowedAssistantRow>, ReplayCheckpointError> {
-    let mut completed = checkpoint.clone();
-    completed.required =
-        complete_required_reasoning_run(&checkpoint.required, &checkpoint.retained)?;
-    restore_and_narrow_replay(&completed, resolve)
 }
 
 struct ReasoningCandidate<'a> {
@@ -408,24 +214,46 @@ struct ReasoningCandidate<'a> {
     parts: &'a [ReasoningContent],
 }
 
-fn reasoning_candidates(rows: &[TaggedAssistantRow]) -> Vec<ReasoningCandidate<'_>> {
-    let mut candidates = Vec::new();
-    for row in rows {
-        let indices_complete = row.block_indices.len() == row.content.len()
-            && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
-        for (position, block) in row.content.iter().enumerate() {
-            if let AssistantContent::Reasoning(reasoning) = block {
-                candidates.push(ReasoningCandidate {
-                    source: row.source.as_ref(),
-                    physical_header: row.physical_header.as_deref(),
-                    block_index: row.block_indices.get(position).copied(),
-                    indices_complete,
-                    parts: &reasoning.content,
-                });
-            }
-        }
-    }
-    candidates
+fn row_candidates(row: &TaggedAssistantRow) -> Vec<ReasoningCandidate<'_>> {
+    let indices_complete = row.block_indices.len() == row.content.len()
+        && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
+    row.content
+        .iter()
+        .enumerate()
+        .filter_map(|(position, block)| match block {
+            AssistantContent::Reasoning(reasoning) => Some(ReasoningCandidate {
+                source: row.source.as_ref(),
+                physical_header: row.physical_header.as_deref(),
+                block_index: row.block_indices.get(position).copied(),
+                indices_complete,
+                parts: &reasoning.content,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Lean `ClaudeMap.TurnGroup`: one accepted row's reasoning and whether the row
+/// keeps an encodable ordinary block once its reasoning is removed.
+struct TurnGroup<'a> {
+    candidates: Vec<ReasoningCandidate<'a>>,
+    ordinary: bool,
+}
+
+fn turn_groups(rows: &[TaggedAssistantRow]) -> Vec<TurnGroup<'_>> {
+    rows.iter()
+        .filter_map(|row| {
+            let candidates = row_candidates(row);
+            (!candidates.is_empty()).then(|| TurnGroup {
+                candidates,
+                ordinary: row.content.iter().any(|block| match block {
+                    AssistantContent::Text(text) => !text.text.is_empty(),
+                    AssistantContent::ToolCall(_) => true,
+                    AssistantContent::Reasoning(_) | AssistantContent::Image(_) => false,
+                }),
+            })
+        })
+        .collect()
 }
 
 fn replayable_reasoning(wire: ReplayWire, parts: &[ReasoningContent]) -> bool {
@@ -453,67 +281,184 @@ fn replayable_reasoning(wire: ReplayWire, parts: &[ReasoningContent]) -> bool {
     }
 }
 
-/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`: only the longest
-/// authenticated, complete, prefix-compatible suffix of physical reasoning
-/// candidates survives. This pure projection consumes independently bound
-/// header/close/capture evidence; it never manufactures that evidence from
-/// native bytes or provider message IDs. Ordinary blocks stay in their rows.
-pub fn restore_historical_reasoning_suffix(
-    checkpoint: &ReplayCheckpoint,
-    issuer: &ReplayIssuer,
+/// Lean `ClaudeMap.wireReasoningCount`.
+fn wire_reasoning_count(wire: ReplayWire, parts: &[ReasoningContent]) -> usize {
+    match wire {
+        ReplayWire::ClaudeMessages => parts.len(),
+        ReplayWire::Responses => 1,
+    }
+}
+
+/// Lean `ClaudeMap.turnHeaderOffset`.
+fn turn_header_offset(wire: ReplayWire) -> usize {
+    match wire {
+        ReplayWire::ClaudeMessages => 1,
+        ReplayWire::Responses => 0,
+    }
+}
+
+/// Evidence resolved once per selection; the owner queries every tag.
+struct Selection<'a> {
+    rows: &'a [TaggedAssistantRow],
+    issuer: &'a ReplayIssuer,
     wire: ReplayWire,
-    mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
-) -> Vec<TaggedAssistantRow> {
-    let candidates = reasoning_candidates(&checkpoint.retained);
-    let valid =
-        |candidate: &ReasoningCandidate<'_>,
-         resolve: &mut dyn FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>| {
-            let (Some(tag), Some(header), Some(index)) = (
-                candidate.source,
-                candidate.physical_header,
-                candidate.block_index,
-            ) else {
-                return false;
-            };
-            if !tag.is_provider()
-                || checkpoint.retired.contains(tag)
-                || !candidate.indices_complete
-                || candidates
-                    .iter()
-                    .filter(|other| {
-                        other.source == Some(tag)
-                            && other.physical_header == Some(header)
-                            && other.block_index == Some(index)
-                    })
-                    .count()
-                    != 1
-                || !replayable_reasoning(wire, candidate.parts)
-            {
-                return false;
+    groups: Vec<TurnGroup<'a>>,
+    resolved: Vec<(ReplayTag, Vec<ResolvedReplayEvidence>)>,
+}
+
+impl<'a> Selection<'a> {
+    fn new(
+        rows: &'a [TaggedAssistantRow],
+        issuer: &'a ReplayIssuer,
+        wire: ReplayWire,
+        mut resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+    ) -> Self {
+        let groups = turn_groups(rows);
+        let mut resolved: Vec<(ReplayTag, Vec<ResolvedReplayEvidence>)> = Vec::new();
+        for tag in groups
+            .iter()
+            .flat_map(|group| &group.candidates)
+            .filter_map(|candidate| candidate.source)
+        {
+            if !resolved.iter().any(|(known, _)| known == tag) {
+                resolved.push((tag.clone(), resolve(tag)));
             }
-            let evidence_rows = resolve(tag);
-            let [evidence] = evidence_rows.as_slice() else {
-                return false;
-            };
-            evidence.origin == ReplayOrigin::AcceptedProvider
-                && &evidence.issuer == issuer
-                && evidence.wire == wire
-                && evidence.physical_header == header
-                && evidence.complete
-                && evidence.prefix_compatible
-                && evidence.reasoning.iter().any(|(block_index, parts)| {
-                    *block_index == index && parts.as_slice() == candidate.parts
-                })
+        }
+        Self {
+            rows,
+            issuer,
+            wire,
+            groups,
+            resolved,
+        }
+    }
+
+    fn evidence(&self, tag: &ReplayTag) -> &[ResolvedReplayEvidence] {
+        self.resolved
+            .iter()
+            .find(|(known, _)| known == tag)
+            .map(|(_, evidence)| evidence.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Lean `ClaudeMap.validForReplayProjection`.
+    fn candidate_valid(&self, candidate: &ReasoningCandidate<'_>) -> bool {
+        let (Some(tag), Some(header), Some(index)) = (
+            candidate.source,
+            candidate.physical_header,
+            candidate.block_index,
+        ) else {
+            return false;
         };
-    let kept = candidates
+        if !tag.is_provider()
+            || !candidate.indices_complete
+            || self
+                .groups
+                .iter()
+                .flat_map(|group| &group.candidates)
+                .filter(|other| {
+                    other.source == Some(tag)
+                        && other.physical_header == Some(header)
+                        && other.block_index == Some(index)
+                })
+                .count()
+                != 1
+            || !replayable_reasoning(self.wire, candidate.parts)
+        {
+            return false;
+        }
+        let [evidence] = self.evidence(tag) else {
+            return false;
+        };
+        evidence.origin == ReplayOrigin::AcceptedProvider
+            && &evidence.issuer == self.issuer
+            && evidence.wire == self.wire
+            && evidence.physical_header == header
+            && evidence.complete
+            && evidence.reasoning.iter().any(|(block_index, parts)| {
+                *block_index == index && parts.as_slice() == candidate.parts
+            })
+    }
+
+    /// Lean `ClaudeMap.turnBase`.
+    fn turn_base(&self, group: &TurnGroup<'_>) -> bool {
+        !group.candidates.is_empty()
+            && (self.wire == ReplayWire::Responses || group.ordinary)
+            && group
+                .candidates
+                .iter()
+                .all(|candidate| self.candidate_valid(candidate))
+    }
+
+    /// Lean `ClaudeMap.turnCaptured`.
+    fn turn_captured(&self, group: &TurnGroup<'_>) -> Option<Vec<FlatItem>> {
+        let tag = group.candidates.first()?.source?;
+        match self.evidence(tag) {
+            [evidence] => evidence.captured.clone(),
+            _ => None,
+        }
+    }
+
+    /// Lean `ClaudeMap.replayBaseKept`, as the index of its first group.
+    fn base_start(&self) -> usize {
+        self.groups
+            .iter()
+            .rposition(|group| !self.turn_base(group))
+            .map_or(0, |index| index + 1)
+    }
+
+    fn candidates_before(&self, group: usize) -> usize {
+        self.groups[..group]
+            .iter()
+            .map(|group| group.candidates.len())
+            .sum()
+    }
+}
+
+/// Lean `ClaudeMap.locateTurns`: each assembled turn's ordinary prefix and its
+/// own anchored reasoning items. Any disagreement with the expected wire
+/// counts fails closed.
+fn locate_turns(
+    offset: usize,
+    body: &[FlatItem],
+    counts: &[usize],
+) -> Option<Vec<(Vec<Vec<u8>>, Vec<(usize, Vec<u8>)>)>> {
+    let positions = body
         .iter()
-        .rev()
-        .take_while(|candidate| valid(candidate, &mut resolve))
-        .count();
-    let mut to_strip = candidates.len() - kept;
-    checkpoint
-        .retained
-        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| matches!(item, FlatItem::Reasoning(_)).then_some(index))
+        .collect::<Vec<_>>();
+    if counts.iter().sum::<usize>() != positions.len() || counts.contains(&0) {
+        return None;
+    }
+    let anchored_items = anchored(body);
+    let mut seen = 0;
+    let mut layouts = Vec::with_capacity(counts.len());
+    for count in counts {
+        let position = *positions.get(seen)?;
+        let start = position.checked_sub(offset)?;
+        if offset != 0 && !matches!(body.get(start), Some(FlatItem::Ordinary(_))) {
+            return None;
+        }
+        layouts.push((
+            ords(&body[..start])
+                .into_iter()
+                .map(<[u8]>::to_vec)
+                .collect(),
+            anchored_items[seen..seen + count]
+                .iter()
+                .map(|(anchor, bytes)| (*anchor, bytes.to_vec()))
+                .collect(),
+        ));
+        seen += count;
+    }
+    Some(layouts)
+}
+
+/// Lean `ClaudeMap.stripFirstReasoningRows`: ordinary blocks and their original
+/// indices stay in place.
+fn strip_first_reasoning(rows: &[TaggedAssistantRow], mut count: usize) -> Vec<TaggedAssistantRow> {
+    rows.iter()
         .map(|row| {
             let valid_indices = row.block_indices.len() == row.content.len()
                 && row.block_indices.windows(2).all(|pair| pair[0] < pair[1]);
@@ -524,8 +469,8 @@ pub fn restore_historical_reasoning_suffix(
             narrowed.content.clear();
             narrowed.block_indices.clear();
             for (position, block) in row.content.iter().enumerate() {
-                if matches!(block, AssistantContent::Reasoning(_)) && to_strip > 0 {
-                    to_strip -= 1;
+                if matches!(block, AssistantContent::Reasoning(_)) && count > 0 {
+                    count -= 1;
                     continue;
                 }
                 narrowed.content.push(block.clone());
@@ -536,6 +481,64 @@ pub fn restore_historical_reasoning_suffix(
             narrowed
         })
         .collect()
+}
+
+/// Lean `ClaudeMap.replayStage`: the rows the owned loop assembles so the
+/// provenance-valid turns can be located in the actual provider body.
+pub fn replay_stage(
+    rows: &[TaggedAssistantRow],
+    issuer: &ReplayIssuer,
+    wire: ReplayWire,
+    resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+) -> Vec<TaggedAssistantRow> {
+    let selection = Selection::new(rows, issuer, wire, resolve);
+    strip_first_reasoning(rows, selection.candidates_before(selection.base_start()))
+}
+
+/// Lean `ClaudeMap.restoreHistoricalReasoningSuffix`. `stage_body` is the
+/// flattened provider body the owned loop assembled from `replay_stage`. Only
+/// the longest suffix of whole accepted turns whose assembled prefix is their
+/// accepted producing prefix minus a leading reasoning run keeps reasoning;
+/// ordinary blocks stay in their rows.
+pub fn select_replay(
+    rows: &[TaggedAssistantRow],
+    issuer: &ReplayIssuer,
+    wire: ReplayWire,
+    resolve: impl FnMut(&ReplayTag) -> Vec<ResolvedReplayEvidence>,
+    stage_body: &[FlatItem],
+) -> Vec<TaggedAssistantRow> {
+    let selection = Selection::new(rows, issuer, wire, resolve);
+    let total = selection.candidates_before(selection.groups.len());
+    let base_start = selection.base_start();
+    let base_kept = &selection.groups[base_start..];
+    let counts = base_kept
+        .iter()
+        .map(|group| {
+            group
+                .candidates
+                .iter()
+                .map(|candidate| wire_reasoning_count(wire, candidate.parts))
+                .sum()
+        })
+        .collect::<Vec<usize>>();
+    let kept_start = match locate_turns(turn_header_offset(wire), stage_body, &counts) {
+        None => selection.groups.len(),
+        Some(layouts) => {
+            let turns = base_kept
+                .iter()
+                .zip(layouts)
+                .map(|(group, (prefix_ords, items))| Turn {
+                    base: selection.turn_base(group),
+                    prefix_ords,
+                    items,
+                    captured: selection.turn_captured(group),
+                })
+                .collect::<Vec<_>>();
+            base_start + admissible_turn_drop(&turns)
+        }
+    };
+    let kept = total - selection.candidates_before(kept_start);
+    strip_first_reasoning(selection.rows, total - kept)
 }
 
 /// Anthropic Messages JSON body from a rig `CompletionRequest`. The history

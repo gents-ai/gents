@@ -59,8 +59,8 @@ mod turn_threading;
 
 pub use contract::{
     LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, ReplayProjectionContext, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
+    TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotProviderFailure,
@@ -68,7 +68,7 @@ pub use one_shot::{
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{
-    narrow_tagged_history, provider_view_tagged, replay_compaction_prefix_bound,
+    assemble_provider_request, provider_view_tagged, replay_compaction_prefix_bound,
     sanitize_tagged_history, select_tagged_assistant_blocks,
 };
 // Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
@@ -353,7 +353,6 @@ where
                                         &mut new_messages,
                                         tools.as_slice(),
                                         &config,
-                                        &mut replay,
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
@@ -550,7 +549,6 @@ where
                                         &mut new_messages,
                                         tools.as_slice(),
                                         &config,
-                                        &mut replay,
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;

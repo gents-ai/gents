@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        21,
+        24,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -49,6 +49,9 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "local_request_build_fails_permanently_without_retry",
             "retryable_transport_still_requires_retraction",
             "provider_stream_malformed_requires_retraction",
+            "provider_reasoning_rejection_requires_retraction",
+            "reasoning_rejection_moves_directly_to_repair",
+            "reasoning_rejection_after_repair_is_exhausted",
         ]),
         "CompletionRetry witness names drifted"
     );
@@ -135,6 +138,13 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             );
             rig::agent::StreamingError::Completion(completion)
         }
+        "provider_reasoning_rejected" => {
+            rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+                "400 invalid_request_error: messages.5.content.0: Invalid `signature` in \
+                 `thinking` block. The block is bound to a different conversation."
+                    .into(),
+            ))
+        }
         other => panic!("unknown modeled failure origin {other}"),
     };
     let classified = classify_completion_error(&error);
@@ -157,6 +167,22 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             assert_eq!(state.retry_count(), 0, "{}", case.name);
+        }
+        Some("retract_required") if origin == "provider_reasoning_rejected" => {
+            assert!(
+                matches!(&directive, PreStreamDirective::Repair),
+                "{}: a rejected replay goes straight to the one repair: {directive:?}",
+                case.name
+            );
+            state.mark_repair_used();
+            assert!(
+                matches!(
+                    state.on_pre_stream_failure(&classified, &error.to_string(), now(), None),
+                    PreStreamDirective::Fail { .. }
+                ),
+                "{}: a second rejection after the repair fails",
+                case.name
+            );
         }
         Some("retract_required") => {
             assert!(
@@ -214,12 +240,26 @@ fn assert_failure_class_bridge_matches_vocabulary() {
         class_name(failure_class(&transient(&parse_text), &parse_text)),
         class_name(failure_class(
             &InferenceError::PermanentFailure {
+                reason: "Invalid `signature` in `thinking` block".to_string(),
+            },
+            "Invalid `signature` in `thinking` block",
+        )),
+        class_name(failure_class(
+            &InferenceError::PermanentFailure {
                 reason: "bad request".to_string(),
             },
             "bad request",
         )),
     ];
-    assert_eq!(observed, ["transport", "parse_bad_request", "permanent"]);
+    assert_eq!(
+        observed,
+        [
+            "transport",
+            "parse_bad_request",
+            "reasoning_rejected",
+            "permanent"
+        ]
+    );
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
         domain: "CompletionRetryFailureClass",
         rust_source: "failure_class observations",
@@ -448,6 +488,7 @@ fn class_name(class: FailureClass) -> &'static str {
     match class {
         FailureClass::Transport => "transport",
         FailureClass::ParseBadRequest => "parse_bad_request",
+        FailureClass::ReasoningRejected => "reasoning_rejected",
         FailureClass::Permanent => "permanent",
     }
 }

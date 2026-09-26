@@ -240,8 +240,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
-    pub(crate) durable_full_input_rewrite_cases: Vec<LeanDurableFullInputRewriteCase>,
-    pub(crate) durable_session_rewrite_cases: Vec<LeanDurableSessionRewriteCase>,
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
     pub(crate) compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
@@ -1906,15 +1904,6 @@ pub(crate) fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCap
 
 pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
-}
-
-pub(crate) fn lean_durable_full_input_rewrite_cases() -> &'static [LeanDurableFullInputRewriteCase]
-{
-    &lean_contract_snapshot().durable_full_input_rewrite_cases
-}
-
-pub(crate) fn lean_durable_session_rewrite_cases() -> &'static [LeanDurableSessionRewriteCase] {
-    &lean_contract_snapshot().durable_session_rewrite_cases
 }
 
 pub(crate) fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompactionCase] {

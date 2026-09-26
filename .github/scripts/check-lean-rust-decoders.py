@@ -35,7 +35,6 @@ GROUPS = {
     "prompt_assembly_reasoning_suffix_cases": "LeanPromptAssemblyReasoningSuffixCase",
     "prompt_assembly_replay_shape_cases": "LeanPromptAssemblyReplayShapeCase",
     "prompt_assembly_replay_prefix_cases": "LeanPromptAssemblyReplayPrefixCase",
-    "durable_full_input_rewrite_cases": "LeanDurableFullInputRewriteCase",
     "title_request_admission_cases": "LeanTitleRequestAdmissionCase",
     "title_request_purpose_wire_cases": "LeanTitleRequestPurposeWireCase",
     "title_usage_cases": "LeanTitleUsageCase",

@@ -79,6 +79,9 @@ async fn signed_claude_tool_round_trip_with_scope(
             .expect("claimed request commit CID")
             .to_owned(),
         scope_kind,
+        crate::llm::backend_client::claude_subscription_replay_issuer()
+            .expect("Claude Messages route"),
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let request_commit_cid = lifecycle
         .request_commit_cid()

@@ -1,7 +1,7 @@
 use super::*;
 use crate::claude_messages_body::{
-    prepare_replay_checkpoint, restore_historical_reasoning_suffix, ReplayCheckpoint,
-    ReplayCheckpointError, ReplayTag, TaggedAssistantRow,
+    prepare_replay_checkpoint, replay_stage, select_replay, ReplayCheckpointError, ReplayTag,
+    ResolvedReplayEvidence, TaggedAssistantRow,
 };
 use crate::provider_input::ProviderInputProfile;
 
@@ -61,7 +61,6 @@ pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
 pub(super) async fn resolve_replay_evidence(
     replay: &LoopReplayInput,
     requested: &[ReplayTag],
-    context: &ReplayProjectionContext,
 ) -> Result<Vec<ReplayEvidenceRow>, StreamingError> {
     let mut distinct = Vec::new();
     for tag in requested {
@@ -76,7 +75,7 @@ pub(super) async fn resolve_replay_evidence(
         .resolve
         .as_ref()
         .ok_or_else(|| replay_input_error("reasoning replay has no canonical evidence resolver"))?;
-    let evidence = resolve(distinct.clone(), context.clone())
+    let evidence = resolve(distinct.clone())
         .await
         .map_err(replay_resolution_error)?;
     if evidence.iter().any(|row| !distinct.contains(&row.tag)) {
@@ -251,45 +250,31 @@ mod replay_error_tests {
     }
 
     #[tokio::test]
-    async fn unresolved_sources_are_batched_but_requeried_for_each_projection() {
-        let tags = (0..2)
-            .map(|turn_index| ReplayTag {
-                request_doc_id: "request".into(),
-                source: OutputSource::ProviderTurn {
-                    scope: "inference.1".parse().unwrap(),
-                    turn_index,
-                    attempt: 0,
-                },
-            })
-            .collect::<Vec<_>>();
+    async fn repeated_sources_are_resolved_once_per_selection() {
+        let tag = ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = calls.clone();
-        let expected = tags.clone();
+        let expected = vec![tag.clone()];
         let replay = LoopReplayInput {
-            resolve: Some(Arc::new(move |requested, _context| {
+            resolve: Some(Arc::new(move |requested| {
                 assert_eq!(requested, expected);
                 observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Box::pin(async { Ok(Vec::new()) })
             })),
             ..LoopReplayInput::default()
         };
-        let context = ReplayProjectionContext {
-            issuer: crate::claude_messages_body::ReplayIssuer {
-                family: "claude".into(),
-                endpoint: "[\"endpoint\",\"path\"]".into(),
-            },
-            wire: crate::claude_messages_body::ReplayWire::ClaudeMessages,
-            body: serde_json::json!({}),
-        };
-        assert!(resolve_replay_evidence(&replay, &tags, &context)
+        assert!(resolve_replay_evidence(&replay, &[tag.clone(), tag])
             .await
             .unwrap()
             .is_empty());
-        assert!(resolve_replay_evidence(&replay, &tags, &context)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -445,110 +430,105 @@ pub fn provider_view_tagged(
     tagged_from_sourced(&rows, sourced)
 }
 
-/// Narrow the selected native rows against a fresh projection of the exact
-/// request core. Missing issuer or wire evidence strips reasoning while
-/// retaining ordinary blocks; it never promotes a configured provider name.
-pub async fn narrow_tagged_history(
-    profile: ProviderInputProfile,
-    rows: &mut [TaggedMessage],
-    replay: &mut LoopReplayInput,
-    context: Option<&ReplayProjectionContext>,
-) -> Result<(), StreamingError> {
-    let expected_wire = match profile {
-        ProviderInputProfile::ClaudeMessages => {
-            Some(crate::claude_messages_body::ReplayWire::ClaudeMessages)
-        }
-        ProviderInputProfile::OpenAiResponsesNormalized
-        | ProviderInputProfile::ChatGptCodexResponses
-        | ProviderInputProfile::XaiResponses => {
-            Some(crate::claude_messages_body::ReplayWire::Responses)
-        }
-        ProviderInputProfile::OpenAiChatCompletions
-        | ProviderInputProfile::OpenRouterChatCompletions => None,
-    };
-    if context.is_some_and(|context| Some(context.wire) != expected_wire) {
-        return Err(replay_input_error(
-            "replay wire differs from built provider profile",
-        ));
-    }
-    let assistant_indices = rows
-        .iter()
+fn assistant_rows(rows: &[TaggedMessage]) -> (Vec<usize>, Vec<TaggedAssistantRow>) {
+    rows.iter()
         .enumerate()
-        .filter_map(|(index, row)| {
-            matches!(row.message, Message::Assistant { .. }).then_some(index)
+        .filter_map(|(index, row)| match &row.message {
+            Message::Assistant { id, content } => Some((
+                index,
+                TaggedAssistantRow {
+                    source: row.source.clone(),
+                    physical_header: row.physical_header.clone(),
+                    block_indices: row.block_indices.clone(),
+                    id: id.clone(),
+                    content: content.clone(),
+                },
+            )),
+            _ => None,
         })
-        .collect::<Vec<_>>();
-    let assistant_rows = assistant_indices
-        .iter()
-        .map(|index| {
-            let row = &rows[*index];
-            let Message::Assistant { id, content } = &row.message else {
-                unreachable!("assistant_indices contains only assistant rows")
-            };
-            TaggedAssistantRow {
-                source: row.source.clone(),
-                physical_header: row.physical_header.clone(),
-                block_indices: row.block_indices.clone(),
-                id: id.clone(),
-                content: content.clone(),
-            }
-        })
-        .collect::<Vec<_>>();
-    let tags = assistant_rows
-        .iter()
-        .filter(|row| {
-            row.content
-                .iter()
-                .any(|block| matches!(block, AssistantContent::Reasoning(_)))
-        })
-        .filter_map(|row| row.source.clone())
-        .filter(|tag| !replay.retired.contains(tag))
-        .collect::<Vec<_>>();
-    let evidence = if let Some(context) = context {
-        resolve_replay_evidence(replay, &tags, context).await?
-    } else {
-        Vec::new()
-    };
-    let checkpoint = ReplayCheckpoint {
-        required: Vec::new(),
-        prefix_rows: Vec::new(),
-        retained: assistant_rows,
-        retired: replay.retired.clone(),
-    };
-    let absent_issuer = crate::claude_messages_body::ReplayIssuer {
-        family: String::new(),
-        endpoint: String::new(),
-    };
-    let issuer = context
-        .map(|context| &context.issuer)
-        .unwrap_or(&absent_issuer);
-    let wire = expected_wire.unwrap_or(crate::claude_messages_body::ReplayWire::ClaudeMessages);
-    let narrowed = restore_historical_reasoning_suffix(&checkpoint, issuer, wire, |tag| {
-        evidence
-            .iter()
-            .filter(|row| row.tag == *tag)
-            .map(|row| row.evidence.clone())
-            .collect()
-    });
-    if narrowed.len() != assistant_indices.len() {
+        .unzip()
+}
+
+fn apply_assistant_rows(
+    rows: &mut [TaggedMessage],
+    indices: &[usize],
+    selected: Vec<TaggedAssistantRow>,
+) -> Result<(), StreamingError> {
+    if selected.len() != indices.len() {
         return Err(replay_input_error(
-            "Claude replay narrowing changed assistant row cardinality",
+            "reasoning replay changed assistant row cardinality",
         ));
     }
-    for (index, selected) in assistant_indices.into_iter().zip(narrowed) {
-        if rows[index].source != selected.source {
+    for (index, selected) in indices.iter().zip(selected) {
+        let row = &mut rows[*index];
+        if row.source != selected.source {
             return Err(replay_input_error(
-                "Claude replay narrowing changed assistant source association",
+                "reasoning replay changed assistant source association",
             ));
         }
-        let Message::Assistant { content, .. } = &mut rows[index].message else {
-            unreachable!("assistant_indices contains only assistant rows")
+        let Message::Assistant { content, .. } = &mut row.message else {
+            unreachable!("indices name assistant rows")
         };
         *content = selected.content;
-        rows[index].block_indices = selected.block_indices;
-        rows[index].physical_header = selected.physical_header;
+        row.block_indices = selected.block_indices;
+        row.physical_header = selected.physical_header;
     }
     Ok(())
+}
+
+/// Removing every reasoning block is always a leading run, so the result is
+/// accepted under preserved thinking whatever the history holds.
+pub(super) fn strip_all_reasoning(rows: &mut [TaggedMessage]) {
+    for row in rows {
+        let Message::Assistant { content, .. } = &mut row.message else {
+            continue;
+        };
+        let mut indices = row.block_indices.iter();
+        let mut kept_indices = Vec::new();
+        content.retain(|block| {
+            let index = indices.next();
+            let keep = !matches!(block, AssistantContent::Reasoning(_));
+            if keep {
+                kept_indices.extend(index.copied());
+            }
+            keep
+        });
+        if !row.block_indices.is_empty() {
+            row.block_indices = kept_indices;
+        }
+    }
+}
+
+fn split_joined(
+    mut joined: Vec<TaggedMessage>,
+    history_len: usize,
+) -> (Vec<TaggedMessage>, Vec<TaggedMessage>) {
+    let new_messages = joined.split_off(history_len);
+    (joined, new_messages)
+}
+
+async fn build_core<M: CompletionModel>(
+    model: &M,
+    history: &[TaggedMessage],
+    new_messages: &[TaggedMessage],
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+) -> Result<CompletionRequest, StreamingError> {
+    let prompt = new_messages
+        .last()
+        .expect("new messages retain a prompt")
+        .message
+        .clone();
+    let prior = message_values(&new_messages[..new_messages.len() - 1]);
+    build_request(
+        model,
+        prompt,
+        &message_values(history),
+        &prior,
+        tools,
+        config,
+    )
+    .await
 }
 
 /// Assemble the per-request message tail: an optional runtime context message
@@ -858,60 +838,83 @@ pub fn ensure_context_can_dispatch(
     )))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn build_and_narrow_request<M: CompletionModel>(
+/// The owned loop's single provider-input assembly owner. Replays the model's
+/// own reasoning per Lean `ClaudeMap.restoreHistoricalReasoningSuffix`: the
+/// provenance-valid turns are assembled once, located in that actual body, and
+/// judged against their accepted captures; the selected rows then replace the
+/// chat history of the same built request. Without a proven issuer and wire,
+/// no reasoning is replayed.
+pub async fn assemble_provider_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<TaggedMessage>,
     new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
-    replay: &mut LoopReplayInput,
+    replay: &LoopReplayInput,
 ) -> Result<CompletionRequest, StreamingError> {
-    let prompt = new_messages
-        .last()
-        .expect("new messages retain a prompt")
-        .message
-        .clone();
-    let prior = message_values(&new_messages[..new_messages.len() - 1]);
-    let history_messages = message_values(history);
-    let mut core = build_request(model, prompt, &history_messages, &prior, tools, config).await?;
-    let context = if let (Some(issuer), Some(wire)) = (&replay.issuer, replay.wire) {
-        let mut stripped_history = history.clone();
-        let mut stripped_new = new_messages.clone();
-        for row in stripped_history.iter_mut().chain(stripped_new.iter_mut()) {
-            if let Message::Assistant { content, .. } = &mut row.message {
-                content.retain(|block| !matches!(block, AssistantContent::Reasoning(_)));
-            }
+    let profile_wire = config.provider_input_counter.profile().replay_wire();
+    if replay.wire.is_some() && replay.wire != profile_wire {
+        return Err(replay_input_error(
+            "replay wire differs from built provider profile",
+        ));
+    }
+    let history_len = history.len();
+    let mut joined = std::mem::take(history);
+    joined.append(new_messages);
+    let (indices, rows) = assistant_rows(&joined);
+    let has_reasoning = rows.iter().any(|row| {
+        row.content
+            .iter()
+            .any(|block| matches!(block, AssistantContent::Reasoning(_)))
+    });
+    let selection = match (has_reasoning, profile_wire, replay.issuer.as_ref()) {
+        (false, ..) => None,
+        (true, Some(wire), Some(issuer)) if replay.wire == Some(wire) => Some((wire, issuer)),
+        (true, ..) => {
+            strip_all_reasoning(&mut joined);
+            None
         }
-        let mut stripped_core = core.clone();
-        super::replace_core_chat_history(
-            &mut stripped_core,
-            config,
-            &stripped_history,
-            &stripped_new,
-        );
-        let body = config
-            .provider_input_counter
-            .project_body(&stripped_core)
-            .map_err(|error| {
-                replay_input_error(format!("provider replay prefix projection: {error:#}"))
-            })?;
-        Some(ReplayProjectionContext {
-            issuer: issuer.clone(),
-            wire,
-            body,
-        })
-    } else {
-        None
     };
-    narrow_joined_input(
-        config.provider_input_counter.profile(),
-        history,
-        new_messages,
-        replay,
-        context.as_ref(),
-    )
-    .await?;
+    let Some((wire, issuer)) = selection else {
+        (*history, *new_messages) = split_joined(joined, history_len);
+        return build_core(model, history, new_messages, tools, config).await;
+    };
+    let tags = rows
+        .iter()
+        .filter(|row| {
+            row.content
+                .iter()
+                .any(|block| matches!(block, AssistantContent::Reasoning(_)))
+        })
+        .filter_map(|row| row.source.clone())
+        .collect::<Vec<_>>();
+    let evidence = resolve_replay_evidence(replay, &tags).await?;
+    let resolve = |tag: &ReplayTag| -> Vec<ResolvedReplayEvidence> {
+        evidence
+            .iter()
+            .filter(|row| row.tag == *tag)
+            .map(|row| row.evidence.clone())
+            .collect()
+    };
+    apply_assistant_rows(
+        &mut joined,
+        &indices,
+        replay_stage(&rows, issuer, wire, resolve),
+    )?;
+    let (stage_history, stage_new) = split_joined(joined.clone(), history_len);
+    let mut core = build_core(model, &stage_history, &stage_new, tools, config).await?;
+    let body = config
+        .provider_input_counter
+        .project_body(&core)
+        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+    let stage_body = crate::provider_input::replay_frontier::flatten(&body, wire)
+        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+    apply_assistant_rows(
+        &mut joined,
+        &indices,
+        select_replay(&rows, issuer, wire, resolve, &stage_body),
+    )?;
+    (*history, *new_messages) = split_joined(joined, history_len);
     super::replace_core_chat_history(&mut core, config, history, new_messages);
     Ok(core)
 }
@@ -929,7 +932,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     active_reduction_keys: &mut Vec<String>,
 ) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
     let request =
-        build_and_narrow_request(model, history, new_messages, tools, config, replay).await?;
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
@@ -962,7 +965,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         .cloned()
         .collect::<Vec<_>>();
     let outcome = compactor(TurnCompactionRequest {
-        messages: provider_messages.clone(),
+        messages: provider_messages,
         required: replay.required.clone(),
         admission,
         turn_index,
@@ -989,16 +992,12 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
         )
     })?;
-    let (mut compacted, reduction_key, reason, prefix_rewritten) = match outcome {
-        TurnCompactionOutcome::ProviderViewRepaired { messages } => {
-            let rewritten = messages != provider_messages;
-            (
-                messages,
-                None,
-                ContextCompactionReason::ProviderViewRepaired,
-                rewritten,
-            )
-        }
+    let (mut compacted, reduction_key, reason) = match outcome {
+        TurnCompactionOutcome::ProviderViewRepaired { messages } => (
+            messages,
+            None,
+            ContextCompactionReason::ProviderViewRepaired,
+        ),
         TurnCompactionOutcome::Reduced {
             messages,
             reduction_key,
@@ -1006,7 +1005,6 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             messages,
             Some(reduction_key),
             ContextCompactionReason::Compacted,
-            true,
         ),
         TurnCompactionOutcome::CannotFit => {
             return Err(StreamingError::Completion(CompletionError::RequestError(
@@ -1014,16 +1012,6 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             )));
         }
     };
-    if prefix_rewritten
-        && config.provider_input_counter.profile() == ProviderInputProfile::ClaudeMessages
-    {
-        for tag in provider_messages.into_iter().filter_map(|row| row.source) {
-            if !replay.retired.contains(&tag) {
-                replay.retired.push(tag);
-            }
-        }
-        replay.required.clear();
-    }
     let compacted_prompt = compacted.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
@@ -1041,7 +1029,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     }
 
     let rebuilt =
-        build_and_narrow_request(model, history, new_messages, tools, config, replay).await?;
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
     let rebuilt_projection =
         completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
     let after_tokens = rebuilt_projection.estimated_input_tokens;
@@ -1096,7 +1084,11 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
 }
 
 /// Apply the one lossy repair and rebuild the complete assembled request. The
-/// returned request is deliberately not projected or clamped here; the next
+/// repair also removes every reasoning block for the rest of this request: the
+/// rejection may be a replayed signature or ciphertext, and edited arguments
+/// invalidate every later block. The accepted retry's capture then carries no
+/// earlier reasoning, which makes it the durable replay frontier. The returned
+/// request is deliberately not projected or clamped here; the next
 /// provider-attempt iteration must pass through `prepare_dispatch_attempt`.
 pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
     model: &M,
@@ -1104,48 +1096,13 @@ pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
     new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
-    replay: &mut LoopReplayInput,
 ) -> Result<CompletionRequest, StreamingError> {
-    let before_repair = history
-        .iter()
-        .chain(new_messages.iter())
-        .cloned()
-        .collect::<Vec<_>>();
     repair_provider_input(
         config.provider_input_counter.profile(),
         history,
         new_messages,
     )?;
-    if config.provider_input_counter.profile() == ProviderInputProfile::ClaudeMessages
-        && before_repair
-            != history
-                .iter()
-                .chain(new_messages.iter())
-                .cloned()
-                .collect::<Vec<_>>()
-    {
-        for tag in before_repair.into_iter().filter_map(|row| row.source) {
-            if !replay.retired.contains(&tag) {
-                replay.retired.push(tag);
-            }
-        }
-        replay.required.clear();
-    }
-    build_and_narrow_request(model, history, new_messages, tools, config, replay).await
-}
-
-pub(super) async fn narrow_joined_input(
-    profile: ProviderInputProfile,
-    history: &mut Vec<TaggedMessage>,
-    new_messages: &mut Vec<TaggedMessage>,
-    replay: &mut LoopReplayInput,
-    context: Option<&ReplayProjectionContext>,
-) -> Result<(), StreamingError> {
-    let history_len = history.len();
-    let mut joined = std::mem::take(history);
-    joined.append(new_messages);
-    narrow_tagged_history(profile, &mut joined, replay, context).await?;
-    *new_messages = joined.split_off(history_len);
-    *history = joined;
-    Ok(())
+    strip_all_reasoning(history);
+    strip_all_reasoning(new_messages);
+    build_core(model, history, new_messages, tools, config).await
 }
