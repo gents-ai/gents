@@ -644,6 +644,8 @@ fn narrow_manifold_always_forces_listen_to_none() {
 }
 
 pub(crate) mod executor;
+#[cfg(target_os = "macos")]
+mod trap_handler;
 
 #[test]
 fn a_plugin_call_gets_one_attempt_unless_configured() {

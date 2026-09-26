@@ -330,6 +330,7 @@ impl PluginRunner {
             "a granted manifold must never carry a listen capability"
         );
 
+        start_wasm_trap_handler_with_signals_blocked()?;
         let stdin =
             serde_json::to_vec(arguments).context("encoding plugin arguments as canonical JSON")?;
         let request = AfbRunRequest {
@@ -383,6 +384,63 @@ impl PluginRunner {
     pub fn definition(&self) -> &PackPlugin {
         &self.plugin
     }
+}
+
+/// Creates Afterburner's first Wasmtime engine on a thread that blocks every
+/// signal, before any plugin runs.
+///
+/// Afterburner's engines keep Wasmtime's macOS default of Mach-port trap
+/// handling. Wasmtime starts that handler's process-wide thread from the first
+/// engine created, and the thread aborts the process when a signal interrupts
+/// its `mach_msg` receive (`MACH_RCV_INTERRUPTED`). The runtime installs signal
+/// handlers (tokio's `SIGCHLD` for child processes), and the kernel may deliver
+/// such a signal to any thread that does not block it. A new thread inherits
+/// its creator's signal mask, so the handler thread started here never
+/// receives one. Opting that engine out of Mach ports instead is not
+/// available: Afterburner exposes no Wasmtime configuration, and Wasmtime
+/// panics on an engine whose trap mode differs from the first one's.
+///
+/// Fails closed: if the masked thread cannot be started, cannot mask its
+/// signals, or cannot create the engine, every plugin call is refused with
+/// that error rather than letting a call create the engine unprotected.
+fn start_wasm_trap_handler_with_signals_blocked() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        static STARTED: std::sync::OnceLock<std::result::Result<(), String>> =
+            std::sync::OnceLock::new();
+        STARTED
+            .get_or_init(|| {
+                std::thread::Builder::new()
+                    .name("gents-wasm-trap-init".into())
+                    .spawn(|| -> std::result::Result<(), String> {
+                        // SAFETY: changes only this short-lived thread's own mask.
+                        let masked = unsafe {
+                            let mut all: libc::sigset_t = std::mem::zeroed();
+                            libc::sigfillset(&mut all);
+                            libc::pthread_sigmask(libc::SIG_BLOCK, &all, std::ptr::null_mut())
+                        };
+                        if masked != 0 {
+                            return Err(format!(
+                                "blocking signals: {}",
+                                std::io::Error::from_raw_os_error(masked)
+                            ));
+                        }
+                        afterburner::wasi::embedder_vm::shared_epoch_vm()
+                            .map(|_| ())
+                            .map_err(|error| format!("creating the engine: {error}"))
+                    })
+                    .map_err(|error| format!("spawning the thread: {error}"))?
+                    .join()
+                    .map_err(|_| "the thread panicked".to_owned())?
+            })
+            .clone()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "could not start the Wasmtime trap handler with signals blocked: {error}"
+                )
+            })?;
+    }
+    Ok(())
 }
 
 /// What one call to this artifact would ask for that its dispatch path
