@@ -96,6 +96,8 @@ fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
             "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
             "{{ now() }}",
             "{% if doc.urgent %}{{ now() }}{% endif %}",
+            "{{ doc.items | map('nosuchfilter') }}",
+            "{% if doc.urgent %}{{ doc.rows | selectattr('id', 'nosuchtest') }}{% endif %}",
         ] {
             let error = task(field, template)
                 .validate()
@@ -108,6 +110,16 @@ fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
             );
         }
     }
+    // Vocabulary is judged before the reference catalog, so a template that
+    // fails both reports the name.
+    let both = task("prompt_template", "{{ ctx.not_available | toyaml }}")
+        .validate()
+        .expect_err("accepted an unknown filter over an unavailable reference");
+    let message = format!("{both:#}");
+    assert!(
+        message.contains("names an unknown filter, test or function"),
+        "{message}"
+    );
     // Every scope root a fire can supply, including fields only the invocation
     // knows, stays authorable.
     task(

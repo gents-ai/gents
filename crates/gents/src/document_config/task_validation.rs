@@ -1,7 +1,7 @@
 use super::Task;
 use crate::template::{
     catalog::{default_catalog, Site},
-    check_template_vocabulary, parse_template_for_validation,
+    check_template_vocabulary, parse_template_for_validation, TemplateError,
 };
 use anyhow::{ensure, Context, Result};
 
@@ -56,11 +56,15 @@ impl Task {
         {
             let references = parse_template_for_validation(template)
                 .with_context(|| format!("task {} {field} failed to parse", self.task_id))?;
-            check_template_vocabulary(template).with_context(|| {
-                format!(
-                    "task {} {field} names an unknown filter, test or function",
-                    self.task_id
-                )
+            check_template_vocabulary(template).map_err(|error| {
+                let judgement = match &error {
+                    TemplateError::UnknownName { .. } => {
+                        "names an unknown filter, test or function"
+                    }
+                    _ => "failed to parse",
+                };
+                anyhow::Error::new(error)
+                    .context(format!("task {} {field} {judgement}", self.task_id))
             })?;
             for reference in references {
                 if matches!(reference.root(), Some("node" | "ctx")) {
