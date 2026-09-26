@@ -4699,3 +4699,68 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+/// #1895: the reconciler links a foreground bridge (clearing its unclaimed
+/// bound) between the waiter's edge read and its own settle call. The waiter
+/// must adopt the running row and keep waiting, not fail the spawn and drop
+/// its in-flight lifecycle while the child runs.
+#[tokio::test]
+async fn foreground_waiter_keeps_waiting_when_bridge_was_linked_under_it() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-foreground-linked-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    let session_id = hook.session_id().await.unwrap();
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "parent-linked", &session_id, deadline).await;
+    let mut bridge = accepted_subagent_lifecycle(
+        &hook,
+        "linked-bridge",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+        "child-linked",
+    )
+    .await;
+    bridge.start_running().await.unwrap();
+    // The waiter's view: an expired bound. The durable row: already linked,
+    // so it carries no bound.
+    bridge.set_unclaimed_deadline_at(Some(chrono::Utc::now() - chrono::Duration::minutes(1)));
+    let bridge_doc_id = bridge.doc_id().unwrap().to_owned();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("linked-bridge".to_string(), bridge);
+
+    let settled = hook
+        .settle_unconfirmed_foreground_spawn("linked-bridge", chrono::Utc::now())
+        .await
+        .expect("a linked bridge is not a failed spawn");
+    assert!(settled.is_none(), "the waiter keeps waiting: {settled:?}");
+    let map = hook.in_flight_lifecycles.lock().await;
+    let kept = map
+        .get("linked-bridge")
+        .expect("the in-flight lifecycle stays tracked");
+    assert!(kept.unclaimed_deadline_at.is_none());
+    drop(map);
+    let row = fetch_tool_call_row(&node, &session_id, "linked-bridge").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("running"),
+        "{bridge_doc_id}"
+    );
+}

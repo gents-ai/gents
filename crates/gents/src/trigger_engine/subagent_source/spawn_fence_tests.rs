@@ -695,7 +695,7 @@ async fn settlement_after_background_clears_the_bound_is_a_no_op() {
             .unwrap();
     assert!(matches!(
         settled,
-        crate::background_completion::UnclaimedSpawnSettlement::AlreadySettled
+        crate::background_completion::UnclaimedSpawnSettlement::Unarmed(None)
     ));
     // Even a stale in-memory owner cannot abandon it: the write requires the bound.
     let mut stale = crate::tool_call_lifecycle::ToolCallLifecycle::load_physical(
