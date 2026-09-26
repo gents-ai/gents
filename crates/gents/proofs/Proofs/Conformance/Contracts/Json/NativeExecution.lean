@@ -19,12 +19,7 @@ operation and its externally supplied fence values; fixture documents are the
 canonical `Execution.Examples` documents, not an encoded copy of `World`. -/
 inductive Input where
   | acceptForeground
-  | acceptRemote
-  | acceptRemoteBehaviorDrift
-  | acceptRemoteWorkspaceDrift
-  | realSpawnAccept
-  | realSpawnBehaviorDrift
-  | realSpawnWorkspaceDrift
+  | acceptBackground
   | dispatch (now : Nat)
   | closeForeground
   | completeForeground
@@ -69,19 +64,9 @@ inductive Step where
 
 def Input.step : Input → Step
   | .acceptForeground =>
-      .commit (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
-  | .acceptRemote =>
-      .commit (.accept 7 providerTurn providerMessage [remote] [remoteAdmission])
-  | .acceptRemoteBehaviorDrift =>
-      .commit (.accept 7 providerTurn providerMessage [remote] [driftedRemoteAdmission])
-  | .acceptRemoteWorkspaceDrift =>
-      .commit (.accept 7 providerTurn providerMessage [remote] [driftedWorkspaceAdmission])
-  | .realSpawnAccept =>
-      .commit (.accept 7 realSpawnProviderTurn realSpawnProviderMessage [remote] [remoteAdmission])
-  | .realSpawnBehaviorDrift =>
-      .commit (.accept 7 realSpawnProviderTurn realSpawnProviderMessage [remote] [driftedRemoteAdmission])
-  | .realSpawnWorkspaceDrift =>
-      .commit (.accept 7 realSpawnProviderTurn realSpawnProviderMessage [remote] [driftedWorkspaceAdmission])
+      .commit (.accept 7 providerTurn providerMessage [foregroundAdmission])
+  | .acceptBackground =>
+      .commit (.accept 7 providerTurn providerMessage [backgroundAdmission])
   | .dispatch _ => .commit (.dispatch 7 permit)
   | .closeForeground => .commit (.toolClose 600 (.native .complete) toolOutputClose)
   | .completeForeground => .commit
@@ -101,7 +86,7 @@ def Input.step : Input → Step
       .commit (.recoverTerminal 7 fresh outcome selection items)
   | .closePartial _ generation item => .commit (.closePartial generation item)
   | .acceptTurn closing message admissions =>
-      .commit (.accept 7 closing message [] admissions)
+      .commit (.accept 7 closing message admissions)
   | .dispatchCall _ call => .commit (.dispatch 7 ⟨call, true, true⟩)
   | .backgroundTool => .commit (.toolControl 7 600 .background)
   | .backgroundReceipt =>
@@ -141,12 +126,7 @@ def Input.now : Input → Nat
 
 def Input.tag : Input → String
   | .acceptForeground => "accept_foreground"
-  | .acceptRemote => "accept_remote"
-  | .acceptRemoteBehaviorDrift => "accept_remote"
-  | .acceptRemoteWorkspaceDrift => "accept_remote"
-  | .realSpawnAccept => "accept_remote"
-  | .realSpawnBehaviorDrift => "accept_remote"
-  | .realSpawnWorkspaceDrift => "accept_remote"
+  | .acceptBackground => "accept_background"
   | .dispatch _ => "dispatch"
   | .closeForeground => "close_foreground_tool"
   | .completeForeground => "complete_foreground_tool"
@@ -183,7 +163,6 @@ structure Observation where
   requestState : String
   toolState : Option String
   toolStuckSince : Option Nat
-  toolCancelIntentAt : Option Nat
   inFlight : Bool
   nextSequence : Nat
   acceptedSequence : Option Nat
@@ -213,7 +192,6 @@ def observe (document : Nat) (accepted : Bool) (world : World) : Observation :=
     requestState := world.lease.request.toDefraDB
     toolState := tool.map (ToolExecution.ToolCallState.toDefraDB ·.context.state)
     toolStuckSince := tool.bind (·.stuckSince)
-    toolCancelIntentAt := tool.bind (·.cancelCascadeIntentAt)
     inFlight := document ∈ world.transcript.inFlight
     nextSequence := world.transcript.nextSeq
     acceptedSequence := tool.map (·.acceptedSequence)
@@ -324,11 +302,11 @@ def compactionBoundary : MessageEnvelope :=
 
 /-- The four original tool-seam scripts. -/
 def toolSeamCases : List Case :=
-  [ mkModelCase "pending_remote_recovery_cancels_before_dispatch"
-      (routedWorld 5) [.acceptRemote, .recover 2 10 8 20, .dispatch 10]
-      "The abstract nativeCommand child and resume-to-active recovery are model primitives; product terminal recovery of a real spawn_subagent is covered separately."
-  , mkCase "real_spawn_pending_terminal_recovery_cancels_before_dispatch"
-      (routedWorld 5) [.realSpawnAccept,
+  [ mkModelCase "pending_background_recovery_cancels_before_dispatch"
+      (world 5) [.acceptBackground, .recover 2 10 8 20, .dispatch 10]
+      "The resume-to-active recovery primitive has no product transaction; native terminal recovery separately cancels a pending background call."
+  , mkCase "pending_background_terminal_recovery_cancels_before_dispatch"
+      (world 5) [.acceptBackground,
         .recoverTerminal 2 10 8 .failed (.message 501) [], .dispatch 10]
   , mkModelCase "running_foreground_recovery_records_handoff"
       (world 5) [.acceptForeground, .dispatch 5, .recover 2 10 8 20]
@@ -366,11 +344,8 @@ def leaseOrderingCases : List Case :=
       (world 5) [.appendRaw 1 5 (raw 100 0 0 5),
         .recoverTerminal 2 10 8 .failed (.message 200) recoveryItems,
         .appendRaw 1 11 lateStaleFlush]
-  , mkModelCase "dispatched_tool_wait_explicitly_renews"
-      (routedWorld 5) [.acceptRemote, .dispatch 5, .renew 8 10]
-      "The abstract nativeCommand child has no native spawn bridge; the same lease-ordering obligation is exercised by a real spawn_subagent counterpart."
-  , mkCase "real_spawn_dispatched_wait_explicitly_renews"
-      (routedWorld 5) [.realSpawnAccept, .dispatch 5, .renew 8 10] ]
+  , mkCase "dispatched_background_tool_explicitly_renews"
+      (world 5) [.acceptBackground, .dispatch 5, .renew 8 10] ]
 
 def toolDeadlineFlush (now : Time) : Segment :=
   { ToolDelivery.Cases.toolOutputClose with
@@ -484,28 +459,10 @@ def regressedProviderMessage : MessageEnvelope :=
 def publicationCases : List Case :=
   [ mkCase "short_complete_closure_rejected_after_two_flushes"
       (world 5) [.appendRaw 1 5 providerFirstFlush, .appendRaw 1 5 providerSecondFlush,
-        .acceptTurn shortProviderClose shortProviderMessage [remoteAdmission]]
+        .acceptTurn shortProviderClose shortProviderMessage [backgroundAdmission]]
   , mkCase "complete_closure_timestamp_cannot_precede_committed_data"
       (world 5) [.appendRaw 1 5 providerFirstFlush,
         .acceptTurn regressedProviderClose regressedProviderMessage [foregroundAdmission]]
-  , mkCase "real_spawn_same_route_replay_is_idempotent"
-      (routedWorld 5) [.realSpawnAccept, .realSpawnAccept]
-  , mkCase "real_spawn_depth_two_copies_parent_depth"
-      (routedDepthWorld 2) [.realSpawnAccept]
-  , mkCase "real_spawn_depth_three_copies_parent_depth"
-      (routedDepthWorld Subagent.maxSubagentDepth) [.realSpawnAccept]
-  , mkCase "real_spawn_fresh_parent_workspace_mismatch_rejected"
-      (routedWorld 5) [.realSpawnWorkspaceDrift]
-  , mkCase "real_spawn_route_behavior_drift_rejected_on_replay"
-      (routedWorld 5) [.realSpawnAccept, .realSpawnBehaviorDrift]
-  , mkCase "real_spawn_route_workspace_drift_rejected_on_replay"
-      (routedWorld 5) [.realSpawnAccept, .realSpawnWorkspaceDrift]
-  , mkModelCase "accepted_remote_behavior_is_immutable_across_replay"
-      (routedWorld 5) [.acceptRemote, .acceptRemoteBehaviorDrift]
-      "The abstract nativeCommand child cannot enter the spawn_subagent publication owner; real_spawn_route_behavior_drift_rejected_on_replay exercises its immutable route contract natively."
-  , mkModelCase "accepted_remote_workspace_source_is_immutable_across_replay"
-      (routedWorld 5) [.acceptRemote, .acceptRemoteWorkspaceDrift]
-      "The abstract nativeCommand child cannot enter the spawn_subagent publication owner; real_spawn_route_workspace_drift_rejected_on_replay exercises its immutable workspace contract natively."
   , mkModelCase "background_tool_closes_after_parent_terminal"
       (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
         .terminalizeCompleted, .closeForeground]
@@ -520,10 +477,6 @@ def publicationCases : List Case :=
         .admitSpawned spawnedAdmission,
         .admitSpawned { spawnedAdmission with document := 602 }] with
       nativeGap := some "The native spawned-child owner derives the child document from the parent and has no candidate child-document argument; it cannot execute the modeled conflicting-document admission." } ]
-
-example : (run (routedWorld 5) 600 [.realSpawnAccept, .realSpawnAccept]).map
-    (List.map (·.accepted)) = some [true, true] := by
-  native_decide
 
 /-- A distinct replicated twin makes the source unreconstructable. Revocation
 must still terminate the request without discarding either fact. -/
@@ -782,22 +735,11 @@ def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
     ++ "\"failure_class\":" ++
       (context.failureClass.map (jsonString ∘ ToolExecution.FailureClass.toDefraDB)).getD "null" ++ ","
     ++ "\"persistence\":" ++ jsonString context.persistence.toDefraDB ++ ","
-    ++ "\"await_mode\":" ++ jsonString context.awaitMode.toDefraDB ++ ","
-    ++ "\"cancel_policy\":" ++ jsonString context.cancelPolicy.toDefraDB ++
-      ",\"child_request_id\":" ++ jsonOptionalNat context.childRequestId ++
-      ",\"spawn_behavior_id\":" ++ jsonOptionalNat context.spawnBehaviorId
-
-def delegatedWorkspaceJson (value : Option DelegatedWorkspace) : String :=
-  (value.map (fun workspace =>
-      "{\"workspace_id\":" ++ toString workspace.workspaceId ++
-      ",\"workspace_owner_agent_did\":" ++ toString workspace.ownerAgent ++
-      ",\"workspace_seal_hash\":" ++ jsonOptionalNat workspace.sealHash ++
-      ",\"workspace_authority\":" ++ jsonString workspace.authority.toDefraDB ++ "}")).getD "null"
+    ++ "\"await_mode\":" ++ jsonString context.awaitMode.toDefraDB
 
 def admissionJson (value : ToolAdmission) : String :=
   "{" ++ "\"document\":" ++ toString value.document ++ "," ++
-    contextFieldsJson value.context ++ ",\"delegated_workspace\":" ++
-    delegatedWorkspaceJson value.delegatedWorkspace ++ "}"
+    contextFieldsJson value.context ++ "}"
 
 def spawnedAdmissionJson (value : SpawnedToolAdmission) : String :=
   "{" ++ "\"document\":" ++ toString value.document ++ ","
@@ -808,21 +750,11 @@ def recoveryItemJson (value : RecoveryItem) : String :=
   "{\"closing\":" ++ canonicalSegmentJson value.closing ++ ",\"message\":" ++
     (value.message.map canonicalMessageJson).getD "null" ++ "}"
 
-def targetJson (value : RemoteTarget) : String :=
-  "{\"call\":" ++ toString value.call ++ ",\"coordinator\":" ++
-    toString value.coordinator ++ ",\"target\":" ++ toString value.target ++
-    ",\"behavior\":" ++ toString value.behavior ++ "}"
-
 def seedJson (value : World) : String :=
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
     ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"principal\":" ++ toString value.principal ++ ","
-    ++ "\"subagent_depth\":" ++ toString value.subagentDepth ++ ","
-    ++ "\"workspace\":" ++ delegatedWorkspaceJson value.workspace ++ ","
-    ++ "\"remote_routes\":" ++ jsonArray (value.remoteRoutes.map fun (call, target, behavior) =>
-      "{\"call\":" ++ toString call ++ ",\"target\":" ++ toString target ++
-        ",\"behavior\":" ++ toString behavior ++ "}") ++ ","
     ++ "\"lease\":" ++ Conformance.RequestExecutionLeaseContracts.worldJson value.lease ++ ","
     ++ "\"transcript_session_id\":" ++ toString value.transcript.sessionId ++ ","
     ++ "\"next_sequence\":" ++ toString value.transcript.nextSeq ++ ","
@@ -839,10 +771,10 @@ def inputJson (input : Input) : String :=
   | .commitWhileSiblingWaits _ => "null"
   | .commit operation =>
   match operation with
-  | .accept generation closing message targets admissions =>
+  | .accept generation closing message admissions =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
         canonicalSegmentJson closing ++ ",\"message\":" ++ canonicalMessageJson message ++
-        ",\"targets\":" ++ jsonArray (targets.map targetJson) ++ ",\"admissions\":" ++
+        ",\"admissions\":" ++
         jsonArray (admissions.map admissionJson) ++ "}"
   | .dispatch generation permit =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"call\":" ++
@@ -933,7 +865,6 @@ def observationJson (value : Observation) : String :=
     ++ "\"request_state\":" ++ jsonString value.requestState ++ ","
     ++ "\"tool_state\":" ++ (value.toolState.map jsonString).getD "null" ++ ","
     ++ "\"tool_stuck_since\":" ++ jsonOptionalNat value.toolStuckSince ++ ","
-    ++ "\"tool_cancel_intent_at\":" ++ jsonOptionalNat value.toolCancelIntentAt ++ ","
     ++ "\"in_flight\":" ++ jsonOptionalBool (some value.inFlight) ++ ","
     ++ "\"next_sequence\":" ++ toString value.nextSequence ++ ","
     ++ "\"accepted_sequence\":" ++ jsonOptionalNat value.acceptedSequence ++ ","
@@ -964,7 +895,7 @@ typed claim, which the current native initializer cannot represent. -/
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
     value.seed.transcript.messages.isEmpty && value.seed.transcript.toolCalls.isEmpty &&
     value.seed.transcript.inFlight == ∅ && value.seed.compactionCursor.isNone &&
-    value.seed.toolContexts.isEmpty && value.seed.delegatedCalls.isEmpty &&
+    value.seed.toolContexts.isEmpty &&
     value.seed.terminalSelection.isNone &&
     (value.nativeGap.isSome ||
       (value.seed.gateOwner.isNone && value.seed.claimed.isNone))) = true := by

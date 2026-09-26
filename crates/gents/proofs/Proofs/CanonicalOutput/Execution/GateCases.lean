@@ -29,9 +29,9 @@ intent reaches its held write gate at the due time, it renews explicitly before
 yielding. This composes the transcript intent, not the external tool scheduler,
 and uses no tool output as heartbeat evidence. -/
 opaque toolWaitExplicitRenewal : Option Bool := do
-  let acceptHeld ← acquire (initial (routedWorld 5)) 1 true
+  let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
-    (.accept 7 providerTurn providerMessage [remote] [remoteAdmission])
+    (.accept 7 providerTurn providerMessage [backgroundAdmission])
   let acceptReleased ← scheduling accepted 1 .release
   let dispatchHeld ← acquire acceptReleased 1 true
   let dispatched ← commit dispatchHeld 1 5 (.dispatch 7 permit)
@@ -73,7 +73,7 @@ opaque completeTruncationRejected : Option Bool := do
   let secondReleased ← scheduling secondCommitted 1 .release
   let publication ← acquire secondReleased 1 true
   pure ((commit publication 1 5
-    (.accept 7 shortProviderClose shortProviderMessage [] [remoteAdmission])).isNone)
+    (.accept 7 shortProviderClose shortProviderMessage [backgroundAdmission])).isNone)
 
 def toolOutputClose : Segment :=
   { id := 700, coordinate := ⟨10, .tool 600⟩, writer := .tool 600
@@ -132,7 +132,7 @@ owner operations, and parent completion occurs only afterward. -/
 opaque foregroundEndToEnd : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
-    (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+    (.accept 7 providerTurn providerMessage [foregroundAdmission])
   let dispatchHeld ← releaseAndAcquire accepted
   let dispatched ← commit dispatchHeld 1 5 (.dispatch 7 permit)
   let closeHeld ← releaseAndAcquire dispatched
@@ -156,7 +156,7 @@ opaque foregroundEndToEnd : Option Bool := do
 opaque foregroundCompletionWhileRunningRejected : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
-    (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+    (.accept 7 providerTurn providerMessage [foregroundAdmission])
   let dispatchHeld ← releaseAndAcquire accepted
   let dispatched ← commit dispatchHeld 1 5 (.dispatch 7 permit)
   let terminalHeld ← releaseAndAcquire dispatched
@@ -174,7 +174,7 @@ opaque foregroundCompletionWhileRunningRejected : Option Bool := do
 and the still-running tool closes and publishes afterward without reviving it. -/
 opaque backgroundAccepted : Option World := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
-  commit acceptHeld 1 5 (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+  commit acceptHeld 1 5 (.accept 7 providerTurn providerMessage [foregroundAdmission])
 
 opaque backgroundDispatched : Option World := do
   let accepted ← backgroundAccepted
@@ -212,9 +212,9 @@ opaque backgroundLateDelivery : Option Bool := do
     delivered)
 
 opaque recoveryCancelsPendingAtomically : Option Bool := do
-  let acceptHeld ← acquire (initial (routedWorld 5)) 1 true
+  let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
-    (.accept 7 providerTurn providerMessage [remote] [remoteAdmission])
+    (.accept 7 providerTurn providerMessage [backgroundAdmission])
   let releasedForRecovery ← scheduling accepted 1 .release
   let recoveryHeld ← acquire releasedForRecovery 2 true
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 [])
@@ -224,12 +224,12 @@ opaque recoveryCancelsPendingAtomically : Option Bool := do
   pure (tool.context.state == .cancelled &&
     recovered.currentGeneration? == some 8 &&
     (commit staleHeld 1 10 (.dispatch 7 permit)).isNone &&
-    !remoteExecutionAdmitted recovered 600)
+    !executionAdmitted recovered 600)
 
 opaque recoveryHandsOffRunning : Option Bool := do
   let acceptHeld ← acquire (initial (world 5)) 1 true
   let accepted ← commit acceptHeld 1 5
-    (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
+    (.accept 7 providerTurn providerMessage [foregroundAdmission])
   let dispatchHeld ← releaseAndAcquire accepted
   let dispatched ← commit dispatchHeld 1 5 (.dispatch 7 permit)
   let releasedForRecovery ← scheduling dispatched 1 .release
@@ -237,7 +237,6 @@ opaque recoveryHandsOffRunning : Option Bool := do
   let recovered ← commit recoveryHeld 2 10 (.recover 7 8 5 20 [])
   let tool ← ownedToolByDocument? recovered 600
   pure (tool.context.state == .running && tool.stuckSince == some 10 &&
-    tool.cancelCascadeIntentAt.isNone && !tool.cancelPendingRemoteAck &&
     !(600 ∈ recovered.transcript.inFlight) &&
     recovered.currentGeneration? == some 8)
 
@@ -260,7 +259,7 @@ def foreignAdmission : ToolAdmission :=
 
 def foreignAccepted : World :=
   match acceptAndPublish { world 5 with requestId := 11 } 7 foreignProviderTurn
-      foreignProviderMessage [] [foreignAdmission] with
+      foreignProviderMessage [foreignAdmission] with
   | .ok accepted => accepted
   | .error _ => world 5
 
@@ -306,7 +305,7 @@ def spawnedContext : ToolExecution.ToolCallContext :=
 def spawnedAdmission : SpawnedToolAdmission := ⟨601, 600, spawnedContext⟩
 
 opaque spawnedRunningCase : Option World := do
-  let accepted ← acceptAndPublish (world 5) 7 spawnProviderTurn spawnProviderMessage []
+  let accepted ← acceptAndPublish (world 5) 7 spawnProviderTurn spawnProviderMessage
     [foregroundAdmission] |>.toOption
   let parentRunning ← dispatch accepted 7 permit |>.toOption
   let spawned ← admitSpawnedBackground parentRunning 7 spawnedAdmission |>.toOption
@@ -359,7 +358,7 @@ def corruptTwin : Segment :=
            tool := some ⟨"native-call", none, "child"⟩ }⟩], [66, 123, 125]⟩ }
 
 opaque corruptAcceptedCase : Option World :=
-  acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] |>.toOption
+  acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] |>.toOption
 
 opaque corruptPendingRevocationCase : Option (World × World) := do
   let accepted ← corruptAcceptedCase

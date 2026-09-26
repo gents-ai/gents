@@ -20,7 +20,6 @@ abbrev Actor := CanonicalOutput.Execution.Gate.Actor
 inductive Operation where
   | retract (generation : Nat) (closing : Segment)
   | accept (generation : Nat) (closing : Segment) (message : MessageEnvelope)
-      (targets : List CanonicalOutput.Execution.RemoteTarget)
       (admissions : List CanonicalOutput.Execution.ToolAdmission)
   deriving DecidableEq
 
@@ -54,8 +53,8 @@ private def optionOr {α : Type} (error : Error) : Option α → Except Error α
 
 def gateOperation : Operation → CanonicalOutput.Execution.Gate.Operation
   | .retract generation closing => .retract generation closing
-  | .accept generation closing message targets admissions =>
-      .accept generation closing message targets admissions
+  | .accept generation closing message admissions =>
+      .accept generation closing message admissions
 
 def policyStep (purpose : RequestPurpose) (retry : CompletionRetry.State) :
     Operation → Except Error CompletionRetry.State
@@ -81,7 +80,7 @@ theorem policyStep_preserves_now (purpose : RequestPurpose)
         cases hp : before.phase <;> simp [policyStep, CompletionRetry.step?,
           retractionReplay, hp] at h
         all_goals cases h; rfl
-  | accept generation closing message targets admissions =>
+  | accept generation closing message admissions =>
       simp only [policyStep] at h
       split at h <;> try contradiction
       next hsource =>

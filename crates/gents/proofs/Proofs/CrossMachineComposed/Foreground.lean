@@ -178,7 +178,7 @@ theorem invFG_preserved
       intro h_post_p
       exfalso
       simp [hp, h_post] at h_post_p
-    | foreground h_state h_mode h_post =>
+    | foreground h_state h_mode _ h_post =>
       have h_post_fg : toolPost.awaitMode = .foreground := by simp [h_post]
       have h_no_other : ¬ ∃ t ∈ pre.tools, t.awaitMode = .foreground ∧
                             ¬ isTerminal t.state :=
@@ -194,11 +194,6 @@ theorem invFG_preserved
         rw [h_filter_nil]; rfl
       have h_le := length_filter_set_le_succ p pre.tools idx toolPost
       omega
-    | detach h_live h_pol h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp only [hp, h_post] at h_post_p ⊢
-      exact h_post_p
     | timeAdvance t h_le h_post =>
       refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
       intro h_post_p

@@ -112,17 +112,17 @@ theorem Trace.sequenceBound {before after : World} (trace : Trace before after)
         simp [hc] at h
         rcases h with ⟨rfl, rfl⟩
         exact finish_sequenceBound _ _ actor bound hc
-  | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
+  | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
       rename_i before after
       unfold SessionComposition.activateGoal at h
       cases hc : Handover.claimAndActivate before actor now
-          (GoalContinuation.childActivation result routes authenticated generation duration leaseDeadline) with
+          (GoalContinuation.childActivation result generation duration leaseDeadline) with
       | none => simp [hc] at h
       | some world =>
         simp [hc] at h
         cases h
         have hb := claim_sequenceBound before world actor now
-          (GoalContinuation.childActivation result routes authenticated generation duration
+          (GoalContinuation.childActivation result generation duration
             leaseDeadline) bound hc
         simpa [SequenceBound] using hb
   | beginProcessing before after actor now generation h =>

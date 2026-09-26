@@ -290,46 +290,6 @@
       "constructors": []
     },
     {
-      "id": "projection-canonical-remote-delegated-arguments",
-      "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.prepareDelegatedInput" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.prepareDelegatedCall" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.receiveDelegatedInput" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.toolIntents" }
-      ],
-      "generated_groups": [],
-      "fixture_status": "not_exported",
-      "native_owner_paths": [
-        "crates/gents-protocol/src/output.rs",
-        "crates/gents-protocol/src/row.rs",
-        "crates/gents/src/tool_call_lifecycle/transition/native.rs",
-        "crates/gents/src/request_admission.rs",
-        "crates/gents/src/background_tools.rs"
-      ],
-      "consumer_paths": [
-        "crates/gents/tests/conformance/r5_cross_principal.rs",
-        "crates/gents/tests/e2e_live/subagent_delegation_live.rs",
-        "crates/gents/src/tool_call_lifecycle/query/cascade_scope_tests.rs"
-      ],
-      "native_status": "pending",
-      "required_cases": [
-        "On accepted Complete assistant request publication, reconstruct exactly the addressed tool call's argument stream and validate native JSON before copying it.",
-        "Reject Partial, recovery, fork, tool-delivery, retracted, malformed, wrong-source, unknown-call, and local-target attempts to create delegated input.",
-        "Bind copied bytes and source provenance to the exact physical addressed call, coordinator, and remote target in the publication transaction.",
-        "Ensure the remote host can consume authenticated delegated arguments without authority to hydrate the parent header, sibling streams, reasoning, text, or history.",
-        "Replay the same immutable delegated input and reject changed bytes or source identity without adding a second argument owner.",
-        "Export concrete records, message, intent, principals, expected delegated value or exact error; no canonical delegation fixture group currently exists."
-      ],
-      "retired_bindings": [
-        "AgentToolCall.args",
-        "AgentToolCall.result",
-        "AgentToolCall.partial_output_start",
-        "AgentToolCall.partial_output_end",
-        "AgentToolResult"
-      ],
-      "constructors": []
-    },
-    {
       "id": "projection-provider-input-materialization-and-narrowing",
       "model_symbols": [
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },

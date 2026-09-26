@@ -21,7 +21,7 @@ def ordinaryActivation : Handover.Activation :=
   { request :=
       { document := 200, entry := ordinaryEntry, agent := 1, session := 1
       , requester := none, authenticated := true }
-  , evidence := .ordinary, configuredRoutes := [], routesAuthenticated := true
+  , evidence := .ordinary
   , generation := 8, duration := 5, deadline := 11 }
 
 def initial : Option World := do
@@ -93,7 +93,7 @@ operations move the storage gate. -/
   let streamingAgainState ← CompletionRetry.CanonicalGate.stepPolicy issuingState 9
     ⟨.issue, rfl⟩
   let heldForAccept ← releaseAcquire streamingAgainState
-  (commitProvider heldForAccept 1 9 (.accept 8 acceptedClose acceptedMessage [] [])).toOption
+  (commitProvider heldForAccept 1 9 (.accept 8 acceptedClose acceptedMessage [])).toOption
 
 @[noinline] opaque finishedPhase : Option World := do
   let accepted ← acceptedPhase
@@ -192,7 +192,7 @@ open CanonicalOutput.Execution.Examples
 
 def seed : World :=
   let running :=
-    ((acceptAndPublish (world 5) 7 providerTurn providerMessage [] [foregroundAdmission] >>=
+    ((acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] >>=
       fun accepted => dispatch accepted 7 permit).toOption).getD (world 5)
   { running with retry := { running.retry with request := running.requestId } }
 

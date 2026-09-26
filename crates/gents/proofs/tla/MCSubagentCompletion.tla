@@ -1,4 +1,0 @@
----- MODULE MCSubagentCompletion ----
-EXTENDS SubagentCompletion
-
-====

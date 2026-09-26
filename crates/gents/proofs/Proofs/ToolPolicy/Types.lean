@@ -59,10 +59,9 @@ structure Surface where
   memory : Bool
   sessionHistory : Bool
   contextBudget : Bool
-  spawn : Bool
-  steering : Bool
-  background : Bool
-  crossPrincipal : Bool
+  /-- `create_session`/`send_message` over the `subagentTargets` allowlist
+  (`SubagentTools.enabled`). -/
+  sessionMessages : Bool
   skills : Bool
   lsp : Bool
   cliTools : EndpointScope ToolId (Finset String)

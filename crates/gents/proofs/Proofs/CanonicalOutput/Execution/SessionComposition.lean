@@ -122,10 +122,9 @@ def GoalPublication (result : GoalContinuation.Result) : Prop :=
 
 def activateGoal (state : World) (actor : Gate.Actor) (now : Time)
     (result : GoalContinuation.Result) (_published : GoalPublication result)
-    (routes : List (DocId × Nat × Nat)) (routesAuthenticated : Bool)
     (generation : Generation) (duration leaseDeadline : Time) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time) : Option World := do
-  let activation := GoalContinuation.childActivation result routes routesAuthenticated
+  let activation := GoalContinuation.childActivation result
     generation duration leaseDeadline
   let world ← Handover.claimAndActivate state actor now activation
   some { world with retry := initialRetry activation.request.document now scope budget deadline }
@@ -192,10 +191,9 @@ inductive Trace : World → World → Prop where
       (h : finish before actor = some (after, acknowledged)) : Trace before after
   | activateGoal {before after : World} (actor : Gate.Actor) (now : Time)
       (result : GoalContinuation.Result) (published : GoalPublication result)
-      (routes : List (DocId × Nat × Nat)) (authenticated : Bool)
       (generation : Generation) (duration leaseDeadline : Time) (scope : Nat)
       (budget : CompletionRetry.Budget) (deadline : Option Time)
-      (h : activateGoal before actor now result published routes authenticated generation
+      (h : activateGoal before actor now result published generation
         duration leaseDeadline scope budget deadline = some after) : Trace before after
   | beginProcessing (before after : World)
       (actor : Gate.Actor) (now : Time) (generation : Generation)
@@ -305,11 +303,11 @@ theorem Trace.nextSequence_monotone {before after : World} (trace : Trace before
   | activateTitle actor now activation scope budget deadline h =>
       rw [activateTitle_preserves_nextSequence _ _ actor now activation scope budget deadline h]
   | finish actor acknowledged h => rw [finish_preserves_nextSequence _ _ actor acknowledged h]
-  | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
+  | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
       rename_i prior next
       unfold SessionComposition.activateGoal at h
       cases hc : Handover.claimAndActivate prior actor now
-          (GoalContinuation.childActivation result routes authenticated generation duration leaseDeadline) with
+          (GoalContinuation.childActivation result generation duration leaseDeadline) with
       | none => simp [hc] at h
       | some session =>
           simp [hc] at h

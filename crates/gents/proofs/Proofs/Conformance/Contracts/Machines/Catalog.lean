@@ -7,7 +7,6 @@ import Proofs.Conformance.Contracts.Machines.SessionRecovery
 import Proofs.Conformance.Contracts.Machines.InferenceCall
 import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
-import Proofs.Conformance.Contracts.Machines.Subagent
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
 import Proofs.Conformance.Contracts.Machines.EthSubmission
@@ -52,13 +51,7 @@ def vocabularies : List VocabularyContract :=
   , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   , { domain := "AwaitMode"
-    , values := Subagent.AwaitMode.all.map Subagent.AwaitMode.toDefraDB
-    }
-  , { domain := "CancelPolicy"
-    , values := Subagent.CancelPolicy.all.map Subagent.CancelPolicy.toDefraDB
-    }
-  , { domain := "ChildTerminal"
-    , values := childFailureNames
+    , values := ToolExecution.AwaitMode.all.map ToolExecution.AwaitMode.toDefraDB
     }
   , { domain := "GoalStatus", values := goalStatusNames }
   , { domain := "MailboxStatus", values := Mailbox.statusVocabulary }

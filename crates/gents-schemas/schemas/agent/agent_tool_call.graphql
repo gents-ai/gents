@@ -50,6 +50,9 @@ type AgentToolCall @branchable {
     # Separate spawn_process execution: exact accepted meta-call provenance.
     # Same sequence/name is not sufficient when a turn has multiple spawns.
     spawned_by_tool_call_doc_id: String @index @immutable
+    # A running call outlives its request's exceptional terminal: the terminal
+    # transaction records this uncertainty handoff, never a cancel.
+    stuck_since: DateTime
     # Delivery is separate from lifecycle_state; a failed/cancelled/timedOut
     # result can be durably published without changing its execution outcome.
     completion_notification_delivered_at: DateTime

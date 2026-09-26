@@ -362,6 +362,8 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub cancel_cause: Option<String>,
     #[serde(default)]
+    pub stuck_since: Option<String>,
+    #[serde(default)]
     pub completion_notification_delivered_at: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,

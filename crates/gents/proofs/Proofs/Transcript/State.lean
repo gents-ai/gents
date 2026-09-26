@@ -349,7 +349,7 @@ def dispatchToolCall (s : TranscriptState)
   }
 
 def dispatchToolCallWithMode (s : TranscriptState)
-    (callId : ToolExecution.ToolCallId) (mode : Subagent.AwaitMode) : TranscriptState :=
+    (callId : ToolExecution.ToolCallId) (mode : ToolExecution.AwaitMode) : TranscriptState :=
   let dispatched := s.dispatchToolCall callId
   match mode with
   | .foreground => dispatched

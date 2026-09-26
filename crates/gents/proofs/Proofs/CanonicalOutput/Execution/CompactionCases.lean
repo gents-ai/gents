@@ -109,7 +109,7 @@ theorem cannot_rewind_committed_cursor :
 boundary, and advances the cursor. No seeded delivery row or second allocator
 is used to make the compaction preconditions true. -/
 def executionThroughCompaction : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   let closed ← (ToolDelivery.closeToolOutput dispatched 600 (.native .complete)

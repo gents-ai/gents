@@ -30,16 +30,9 @@ theorem handoffRunningEdit_provenance (world : World) (document : DocId) (tool :
     (handoffRunningEdit world document tool).provenance = tool.provenance := by
   unfold handoffRunningEdit handoffRunningTool; split <;> rfl
 
-theorem handoffRunningEdit_await (world : World) (document : DocId) (tool : OwnedTool)
-    (hchild : tool.context.childRequestId.isNone = true) :
+theorem handoffRunningEdit_await (world : World) (document : DocId) (tool : OwnedTool) :
     (handoffRunningEdit world document tool).context.awaitMode = tool.context.awaitMode := by
-  have : tool.context.childRequestId.isSome = false := by
-    cases h : tool.context.childRequestId <;> simp_all
-  unfold handoffRunningEdit handoffRunningTool; split <;> simp [this]
-
-theorem handoffRunningEdit_child (world : World) (document : DocId) (tool : OwnedTool) :
-    (handoffRunningEdit world document tool).context.childRequestId = tool.context.childRequestId := by
-  unfold handoffRunningEdit handoffRunningTool; split <;> (try split) <;> rfl
+  unfold handoffRunningEdit handoffRunningTool; split <;> rfl
 
 theorem handoffRunningEdit_state (world : World) (document : DocId) (tool : OwnedTool) :
     (handoffRunningEdit world document tool).context.state = tool.context.state := by
@@ -64,8 +57,7 @@ theorem handoffRunningWorld_header (world : World) (document : DocId) (tool : Ow
     (handoffRunningEdit_document world document) (handoffRunningEdit_requestDoc world document)
     (handoffRunningEdit_session world document) (handoffRunningEdit_sequence world document)
     (handoffRunningEdit_provenance world document)
-    (fun value hchild => handoffRunningEdit_await world document value hchild)
-    (handoffRunningEdit_child world document)
+    (handoffRunningEdit_await world document)
 
 theorem handoffRunningWorld_result (world : World) (document : DocId) (tool : OwnedTool)
     (key : Transcript.ToolResultKey) :

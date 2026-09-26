@@ -15,7 +15,7 @@ budget remain native representation details. Conformance rows use ASCII and
 positive budgets, where both are inert.
 -/
 
-namespace Subagent
+namespace Background
 namespace ToolOutput
 
 /-! ## Retained-window slice (mirrors `read_retained_output_slice`) -/
@@ -155,4 +155,4 @@ theorem canonical_window_starts_at_zero (projection : Projection) :
     projection.window.firstOffset = 0 := rfl
 
 end ToolOutput
-end Subagent
+end Background

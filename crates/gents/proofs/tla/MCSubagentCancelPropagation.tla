@@ -1,4 +1,0 @@
----- MODULE MCSubagentCancelPropagation ----
-EXTENDS SubagentCancelPropagation
-
-====

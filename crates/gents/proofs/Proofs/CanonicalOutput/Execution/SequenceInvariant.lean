@@ -81,13 +81,13 @@ theorem closeAuxiliary_preserves_sequenceBound (before after : World)
 
 theorem acceptAndPublish_preserves_sequenceBound
     (before after : World) (generation : Generation) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
+    (message : MessageEnvelope) (admissions : List ToolAdmission)
     (hbound : SequenceBound before)
-    (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
+    (h : acceptAndPublish before generation closing message admissions = .ok after) :
     SequenceBound after := by
   have hcore := checked_core_success _ _ _ h
-  rcases acceptAndPublishCore_success_effect before after generation closing message targets
-    admissions hcore with ⟨rfl, _⟩ | ⟨_, _, hpub, rfl, _⟩
+  rcases acceptAndPublishCore_success_effect before after generation closing message
+    admissions hcore with ⟨rfl, _⟩ | ⟨_, hpub, rfl, _⟩
   · exact hbound
   · apply SequenceBound.of_append (before := before) hbound
     · rfl
@@ -439,9 +439,9 @@ theorem Gate.evaluate_preserves_sequenceBound
   | retract generation record =>
       exact retractBeforeRetry_preserves_sequenceBound before after generation record hbound
         (mapError_success Error.execution _ _ h)
-  | accept generation closing message targets admissions =>
+  | accept generation closing message admissions =>
       exact acceptAndPublish_preserves_sequenceBound before after generation closing message
-        targets admissions hbound (mapError_success Error.execution _ _ h)
+        admissions hbound (mapError_success Error.execution _ _ h)
   | authored generation closing message =>
       exact publishAuthored_preserves_sequenceBound before after generation closing message hbound
         (mapError_success Error.execution _ _ h)

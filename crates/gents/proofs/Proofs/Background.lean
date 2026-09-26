@@ -1,9 +1,5 @@
-import Proofs.Background.State
-import Proofs.Background.Bridge
-import Proofs.Background.Transition
+import Proofs.Background.Budget
 import Proofs.Background.CompletionDelivery
-import Proofs.Background.Properties
-import Proofs.Background.Executable
 import Proofs.Background.ToolOutput
 import Proofs.Background.ToolOutputCases
 import Proofs.Background.CompletionContinuation
@@ -11,8 +7,9 @@ import Proofs.Background.ProcessControl
 import Proofs.Background.Interrupt
 
 /-!
-# Subagent
+# Background work
 
-Barrel import for subagent lifecycle (mode/policy state, BridgedState
-paired-context, bridge transitions, properties B1–B6).
+Barrel import for background tool rows: the admission budget, completion
+delivery and continuation, canonical output paging, process control and the
+interrupt scope.
 -/

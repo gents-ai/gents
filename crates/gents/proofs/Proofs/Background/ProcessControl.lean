@@ -1,4 +1,4 @@
-import Proofs.Background.State
+import Proofs.ToolExecution.State
 
 /-!
 # Background Process Control
@@ -10,7 +10,7 @@ When requester identity is unavailable on both requests, absence is the shared
 principal scope. A missing requester on only one side fails closed.
 -/
 
-namespace Subagent.ProcessControl
+namespace Background.ProcessControl
 
 structure Scope where
   requestId : String
@@ -72,13 +72,13 @@ def reason : WaitBoundary -> String
 end WaitBoundary
 
 structure WaitObservation where
-  processState : Subagent.ChildTerminal
+  processState : ToolExecution.ToolCallState
   cancellationRequested : Bool
   reason : String
   deriving DecidableEq, Repr
 
 def observeBoundary
-    (processState : Subagent.ChildTerminal)
+    (processState : ToolExecution.ToolCallState)
     (boundary : WaitBoundary) : WaitObservation :=
   { processState := processState
   , cancellationRequested := false
@@ -86,13 +86,23 @@ def observeBoundary
   }
 
 theorem wait_boundary_preserves_process
-    (state : Subagent.ChildTerminal) (boundary : WaitBoundary) :
+    (state : ToolExecution.ToolCallState) (boundary : WaitBoundary) :
     (observeBoundary state boundary).processState = state := by
   rfl
 
 theorem wait_boundary_never_cancels
-    (state : Subagent.ChildTerminal) (boundary : WaitBoundary) :
+    (state : ToolExecution.ToolCallState) (boundary : WaitBoundary) :
     (observeBoundary state boundary).cancellationRequested = false := by
   rfl
 
-end Subagent.ProcessControl
+/-- `wait_process` accepts only process rows. A `create_session` or
+`send_message` row is refused: the started session's result arrives only as a
+completion notification appended to the calling session, never as a blocking
+wait. Jack's 0.20 decision removes the foreground subagent wait because a wait
+couples the caller's turn to another agent's lifetime, which is exactly the
+privileged parent position the runtime no longer encodes. -/
+def waitAdmissible (sessionMessage : Bool) : Bool := !sessionMessage
+
+theorem session_message_rows_refuse_wait : waitAdmissible true = false := rfl
+
+end Background.ProcessControl

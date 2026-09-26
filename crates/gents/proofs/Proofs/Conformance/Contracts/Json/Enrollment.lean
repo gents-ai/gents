@@ -164,7 +164,6 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
     ++ "\"signer_matches_target\":" ++ boolJson c.signerMatchesTarget ++ ","
     ++ "\"signer_matches_issuer\":" ++ boolJson c.signerMatchesIssuer ++ ","
     ++ "\"requester_matches_issuer\":" ++ boolJson c.requesterMatchesIssuer ++ ","
-    ++ "\"requester_matches_bridge_author\":" ++ boolJson c.requesterMatchesBridgeAuthor ++ ","
     ++ "\"current_approval\":" ++ boolJson c.currentApproval ++ ","
     ++ "\"exact_generation\":" ++ boolJson c.exactGeneration ++ ","
     ++ "\"authorization_fresh\":" ++ boolJson c.authorizationFresh ++ ","
@@ -176,13 +175,9 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
     ++ "\"trigger_config_document_binding_current\":" ++
       boolJson c.triggerConfigDocumentBindingCurrent ++ ","
     ++ "\"source_document_binding_current\":" ++ boolJson c.sourceDocumentBindingCurrent ++ ","
-    ++ "\"source_tool_call_binding_current\":" ++ boolJson c.sourceToolCallBindingCurrent ++ ","
     ++ "\"target_policy_allows\":" ++ boolJson c.targetPolicyAllows ++ ","
-    ++ "\"bridge_author_binding_current\":" ++ boolJson c.bridgeAuthorBindingCurrent ++ ","
-    ++ "\"bridge_author_authorization_fresh\":" ++
-      boolJson c.bridgeAuthorAuthorizationFresh ++ ","
-    ++ "\"target_cross_principal_policy_allows\":" ++
-      boolJson c.targetCrossPrincipalPolicyAllows ++ ","
+    ++ "\"peer_authority_allows\":" ++ boolJson c.peerAuthorityAllows ++ ","
+    ++ "\"hop_within_bound\":" ++ boolJson c.hopWithinBound ++ ","
     ++ "\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ ","
     ++ "\"expected_disposition\":" ++ jsonString c.expectedDisposition
     ++ "}"
@@ -234,13 +229,10 @@ private def titleParentEvidenceJson (parent : Enrollment.TitleParentEvidence) : 
 
 private def titleRuntimeEvidenceJson (evidence : Enrollment.RuntimeInternalEvidence) : String :=
   "{" ++ "\"source_kind\":" ++ jsonString (match evidence.sourceKind with
-      | .localChild => "local-child"
-      | .crossPrincipalChild => "cross-principal-child"
       | .localControl => "local-control"
       | .automatedTrigger => "automated-trigger") ++ ","
     ++ "\"issuer_did\":" ++ jsonString evidence.issuerDid ++ ","
     ++ "\"source_request_id\":" ++ jsonString evidence.sourceRequestId ++ ","
-    ++ "\"bridge_author_did\":" ++ jsonString evidence.bridgeAuthorDid ++ ","
     ++ "\"target_agent\":" ++ jsonString evidence.targetAgent ++ ","
     ++ "\"target_runtime_attestation_valid\":" ++ boolJson evidence.targetRuntimeAttestationValid ++ ","
     ++ "\"source_binding_current\":" ++ boolJson evidence.sourceBindingCurrent ++ ","
@@ -281,16 +273,14 @@ def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
     ++ "\"kind\":" ++ jsonString (match admission.kind with
       | .enrollment => "enrollment"
       | .localSelf => "local-self"
-      | .runtimeInternal => "runtime-internal") ++ ","
+      | .runtimeInternal => "runtime-internal"
+      | .peer => "peer") ++ ","
     ++ "\"signer_did\":" ++ jsonString admission.signerDid ++ ","
     ++ "\"issuer_did\":" ++ jsonString admission.issuerDid ++ ","
     ++ "\"source_request_id\":" ++ jsonString admission.sourceRequestId ++ ","
     ++ "\"runtime_source_kind\":" ++ jsonString (match admission.runtimeSourceKind with
-      | .localChild => "local-child"
-      | .crossPrincipalChild => "cross-principal-child"
       | .localControl => "local-control"
       | .automatedTrigger => "automated-trigger") ++ ","
-    ++ "\"bridge_author_did\":" ++ jsonString admission.bridgeAuthorDid ++ ","
     ++ "\"signature_valid\":" ++ boolJson admission.signatureValid ++ ","
     ++ "\"model_signed_fields_hex\":" ++ titleFieldsHexJson admission.signedFields ++ ","
     ++ "\"model_expected_fields_hex\":" ++

@@ -47,11 +47,9 @@ def predecessorReady (world : World) : Bool :=
   | .terminal _ _ => world.terminalSelection.isSome
   | _ => false
 
-def freshRequestWorld (old : World) (physical : DocId) (routes : List (DocId × Nat × Nat))
-    (now : Time) : World :=
+def freshRequestWorld (old : World) (physical : DocId) (now : Time) : World :=
   { old with
     requestId := physical
-    remoteRoutes := routes
     lease := { RequestExecutionLease.initial Generation with now := now }
     terminalSelection := none }
 
@@ -65,7 +63,7 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
       activation.request.document == old.requestId ||
       state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < old.lease.now then none
-  else if !activation.request.authenticated || !activation.routesAuthenticated ||
+  else if !activation.request.authenticated ||
       activation.request.agent != old.principal ||
       activation.request.session != old.sessionId ||
       state.queue.scope.agent != old.principal ||
@@ -78,10 +76,7 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
       if queue.active != some activation.request.entry.requestId ||
           state.queue.pending.head? != some activation.request.entry then none
       else
-        let base := { freshRequestWorld old activation.request.document
-            activation.configuredRoutes now with
-          subagentDepth := activation.request.subagentDepth
-          workspace := activation.request.workspace }
+        let base := freshRequestWorld old activation.request.document now
         match RequestExecutionLease.step? base.lease
             (.claim .mutationWriteGate activation.generation activation.duration activation.deadline) with
         | none => none
@@ -170,17 +165,6 @@ theorem successful_claim_has_exact_binding
   all_goals simp [freshRequestWorld] at *
   all_goals aesop
 
-theorem successful_claim_carries_request_provenance
-    (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
-    (h : claimAndActivate before actor now activation = some after) :
-    after.subagentDepth = activation.request.subagentDepth ∧
-      after.workspace = activation.request.workspace := by
-  unfold claimAndActivate at h
-  dsimp only at h
-  repeat' first | contradiction | split at h
-  all_goals cases h
-  all_goals simp [freshRequestWorld] at *
-
 /-- A successful claim changes exactly the physical-request and claim-control
 fields named here.  In particular, the durable session facts and retry owner
 are framed as one equation rather than independently reconstructed projections. -/
@@ -190,9 +174,6 @@ theorem successful_claim_frame
     after =
       { before with
         requestId := after.requestId
-        subagentDepth := after.subagentDepth
-        workspace := after.workspace
-        remoteRoutes := after.remoteRoutes
         lease := after.lease
         terminalSelection := none
         gateSchedule := after.gateSchedule
@@ -212,10 +193,9 @@ theorem successful_claim_preserves_session_facts
     after.transcript = before.transcript ∧
     after.compactionCursor = before.compactionCursor ∧
     after.toolContexts = before.toolContexts ∧
-    after.delegatedCalls = before.delegatedCalls ∧
     after.terminalSelection = none := by
   rw [successful_claim_frame before after actor now activation h]
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem successful_claim_preserves_nextSeq
     (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)

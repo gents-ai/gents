@@ -38,7 +38,6 @@ def closeAction : Recovery.ToolRecoveryCause → ToolExecution.ToolCallContext.A
   | .deadlineExceeded => .timeout
   | .parentInterrupted | .terminalizeBackgroundedAsInterrupted | .taskDeleted =>
       .cancelDuringRun .interrupted
-  | .unclaimedCrossPrincipalSpawn => .fail .spawnUnclaimed
   | _ => .fail .external
 
 def restartEvidence? (observation : Recovery.OrphanedBackgroundToolRow) :

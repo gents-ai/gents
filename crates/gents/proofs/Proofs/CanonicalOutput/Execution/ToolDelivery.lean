@@ -1,6 +1,5 @@
 import Proofs.CanonicalOutput.Execution.Transition
 import Proofs.CanonicalOutput.ToolDelivery
-import Proofs.Background.Executable
 
 /-!
 # Tool delivery in the shared execution world
@@ -24,8 +23,8 @@ inductive Error where
   deriving DecidableEq, Repr
 
 /-- The complete write authority of tool delivery. Identity, request control,
-the parent lease, routing, compaction authority, delegation, and terminal
-selection remain read-only inputs from `World`. -/
+the parent lease, compaction authority and terminal selection remain
+read-only inputs from `World`. -/
 private structure ToolWrite where
   segments : List Segment
   messages : List MessageEnvelope
@@ -92,14 +91,13 @@ theorem tool_write_preserves_composed_control {before after : World}
 
 inductive CloseAuthority where
   /-- A confirmed native lifecycle result. A cancellation request by itself is
-  not this evidence; `.cancelDuringRun` means the host stop was confirmed. -/
+  not this evidence; `.cancelDuringRun` means the host stop was confirmed. For
+  a `create_session`/`send_message` row the action is projected from the
+  caused request's durable terminal output by the completion observer. -/
   | native (action : ToolExecution.ToolCallContext.Action)
   /-- A terminal lifecycle already committed by the cancellation/recovery
   owner, including never-dispatched pending cancellation. -/
   | alreadyTerminal
-  /-- Reuse the executable child bridge owner rather than accepting a raw
-  caller-supplied child-complete Boolean. -/
-  | bridge (state : Subagent.BridgedState) (event : Subagent.BridgedState.Event)
 
 def resultKey (document : DocId) (message : MessageEnvelope) : Transcript.ToolResultKey :=
   { sessionId := message.header.session
@@ -121,39 +119,18 @@ def bindingValid (world : World) (tool : OwnedTool) : Bool :=
     (world.toolContexts.filter (fun candidate => candidate.document == tool.document)).length == 1 &&
     acceptedHeaderBindsTool world tool
 
-def bridgeTerminalContext? (tool : OwnedTool) (state : Subagent.BridgedState)
-    (event : Subagent.BridgedState.Event) : Option ToolExecution.ToolCallContext := do
-  let (_, before) ← Subagent.BridgedState.findBridgeSlot?
-    state.parent.tools state.bridgeCallId
-  if before != tool.context then none
-  let after ← Subagent.BridgedState.step state event
-  let (_, terminal) ← Subagent.BridgedState.findBridgeSlot?
-    after.parent.tools state.bridgeCallId
-  if terminal.callId != tool.context.callId ||
-      !decide (isTerminal terminal.state) then none
-  else some terminal
-
 def terminalContext? (world : World) (tool : OwnedTool)
     (authority : CloseAuthority) : Option ToolExecution.ToolCallContext := do
   let observed ← updateClock world tool
   let terminal ← match authority with
-    | .native action =>
-        if observed.context.childRequestId.isSome then none
-        else ToolExecution.ToolCallContext.step? observed.context action
+    | .native action => ToolExecution.ToolCallContext.step? observed.context action
     | .alreadyTerminal => some observed.context
-    | .bridge state event => do
-        let projected ← bridgeTerminalContext? tool state event
-        if projected.currentTime ≤ world.lease.now then
-          some { projected with currentTime := world.lease.now }
-        else none
   if decide (isTerminal terminal.state) then some terminal else none
 
 def clearReconcileIntent (tool : OwnedTool)
     (context : ToolExecution.ToolCallContext) : OwnedTool :=
   { tool with
     context := context
-    cancelCascadeIntentAt := none
-    cancelPendingRemoteAck := false
     stuckSince := none }
 
 /-- Tool output uses the tool lifecycle only. It cannot revive or extend the

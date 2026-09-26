@@ -19,6 +19,15 @@ def toolCallCancelCauses : List ToolExecution.CancelCause :=
 def toolCallCancelCauseNames : List String :=
   toolCallCancelCauses.map ToolExecution.CancelCause.toDefraDB
 
+def toolRetryDispositions : List ToolExecution.RetryDisposition :=
+  ToolExecution.RetryDisposition.all
+
+def toolRetryDispositionNames : List String :=
+  toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
+
+def failureClassNames : List String :=
+  ToolExecution.FailureClass.all.map ToolExecution.FailureClass.toDefraDB
+
 def toolCallCancelActions : List (String × ToolExecution.ToolCallContext.Action) :=
   toolCallCancelCauses.flatMap fun cause =>
     [ ("cancelBeforeDispatch_" ++ cause.toDefraDB, .cancelBeforeDispatch cause)
@@ -33,7 +42,6 @@ def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
   , ("timeout", .timeout)
   , ("background", .background)
   , ("foreground", .foreground)
-  , ("detach", .detach)
   ] ++ toolCallCancelActions
 
 def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.ToolCallContext :=
@@ -49,82 +57,28 @@ def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.Tool
   }
 
 /-- Mode evidence for the executable `foreground` arm. The ordinary running
-sample starts in foreground/cascade and already exercises `background` and
-`detach`; this sample closes the inverse mode-flip row. -/
+sample starts in foreground and already exercises `background`; this sample
+closes the inverse mode-flip row. -/
 def toolCallModeSamples : List ToolExecution.ToolCallContext :=
   [ { toolCallWithState .running with awaitMode := .background } ]
 
-/-- Named transition rows for the ToolCall machine.
-
-Bucket 2 of the R2 Rust subagent data plane consumes these to assert that
-the Rust runtime's transition matrix matches Lean. They cover three new
-classes of edge that the plain `(source, target)` pairs in
-`legalTransitions` cannot express on their own:
-
-* native-only edges: `complete` and `fail` on a tool whose
-  `childRequestId = none`. The relational `Transition.complete` constructor
-  carries `pre.childRequestId = none` as a precondition (and `step?` mirrors
-  it); `requires_native: true` lets the Rust matrix test reject calling
-  these on a subagent-typed tool.
-* mode-flip edges: `background`, `foreground`, `detach_running`,
-  `detach_pending` are state-preserving on `ToolCallState` and so don't
-  appear in the pair-based `legalTransitions` list. They live in
-  `ToolCallContext.Transition` (subagent extensions in `State.lean`) and
-  flip `awaitMode`/`cancelPolicy` while leaving `state` unchanged.
-  `detach` is split into two rows (`detach_running`, `detach_pending`)
-  mirroring the `bridge_failure` split pattern, because its
-  `h_live` precondition permits both `.pending` and `.running`.
-* bridge edges: `bridge_complete`, `bridge_failure`,
-  `bridge_cancel_cascade`. These are defined relationally on
-  `Subagent.BridgedState.Transition`, not on `ToolCallContext.Transition`,
-  but their effect on the bridge tool's inner state is what Bucket 2 needs
-  to enforce in Rust. `bridge_complete` advances the bridge tool from
-  `running → completed` (with `requires_child = true`); `bridge_failure`
-  drives `running → failed` or `running → cancelled` (per the disjunction in
-  `BridgedState.Transition.bridge_failure`); `bridge_cancel_cascade` fires
-  only from an explicitly cancelled bridge tool and preserves it (it sets the
-  child's `interruptRequestedAt`) so its row uses `cancelled → cancelled`. -/
+/-- Named transition rows for the ToolCall machine. Mode flips are
+state-preserving on `ToolCallState`, so the pair-based `legalTransitions` list
+cannot express them. A `create_session`/`send_message` row closes through the
+same `complete`/`fail` edges as every other row; there are no bridge edges. -/
 def toolCallNamedTransitions : List NamedTransition :=
-  [ -- native-only inner transitions: subagent-typed tools (with a child) take
-    -- the bridge_* path instead.
-    { name := "complete_native"
+  [ { name := "complete"
     , source := "running"
-    , target := "completed"
-    , requiresNative := true }
-  , { name := "fail_native"
+    , target := "completed" }
+  , { name := "fail"
     , source := "running"
-    , target := "failed"
-    , requiresNative := true }
-    -- mode flips (state-preserving on ToolCallState):
+    , target := "failed" }
   , { name := "background"
     , source := "running"
     , target := "running" }
   , { name := "foreground"
     , source := "running"
     , target := "running" }
-  , { name := "detach_running"
-    , source := "running"
-    , target := "running" }
-  , { name := "detach_pending"
-    , source := "pending"
-    , target := "pending" }
-    -- bridge edges (subagent-typed tools only):
-  , { name := "bridge_complete"
-    , source := "running"
-    , target := "completed"
-    , requiresChild := true }
-  , { name := "bridge_failure_failed"
-    , source := "running"
-    , target := "failed"
-    , requiresChild := true }
-  , { name := "bridge_failure_cancelled"
-    , source := "running"
-    , target := "cancelled"
-    , requiresChild := true }
-  , { name := "bridge_cancel_cascade"
-    , source := "cancelled"
-    , target := "cancelled"
-    , requiresChild := true }
   ]
 
 def toolCallMachine : StateMachineContract :=

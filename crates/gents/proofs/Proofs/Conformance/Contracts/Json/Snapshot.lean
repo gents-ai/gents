@@ -9,7 +9,6 @@ import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.ArtifactAuthority
-import Proofs.EventDelivery.SubagentSource
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.Contracts.Json.Core
@@ -21,9 +20,6 @@ import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
-import Proofs.Conformance.Contracts.Json.DelegatedChild
-import Proofs.Conformance.Contracts.Json.DescendantGraph
-import Proofs.Conformance.Contracts.Json.SpawnClaimFence
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
@@ -69,56 +65,10 @@ import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
-import Proofs.Conformance.Contracts.Json.R5Scenarios
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 
 namespace Conformance.Contracts
-
-def reservedChildDecisionString : EventDelivery.SubagentSource.MaterializationDecision → String
-  | .created => "created"
-  | .replayed => "replayed"
-  | .conflict => "conflict"
-
-def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChildBinding) : String :=
-  let workspaceJson := (binding.workspace.map
-    Conformance.DelegatedChildContracts.stampJson).getD "null"
-  "{" ++ "\"child\":" ++ toString binding.child ++ ","
-    ++ "\"agent\":" ++ toString binding.agent ++ ","
-    ++ "\"behavior\":" ++ toString binding.behavior ++ ","
-    ++ "\"parent_request\":" ++ toString binding.parentRequest ++ ","
-    ++ "\"parent_request_doc\":" ++ toString binding.parentRequestDoc ++ ","
-    ++ "\"parent_tool\":" ++ toString binding.parentTool ++ ","
-    ++ "\"parent_tool_doc\":" ++ toString binding.parentToolDoc ++ ","
-    ++ "\"payload\":" ++ toString binding.payload ++ ","
-    ++ "\"depth\":" ++ toString binding.depth ++ ","
-    ++ "\"workspace\":" ++ workspaceJson ++ ","
-    ++ "\"admission\":" ++ toString binding.admission ++ "}"
-
-def reservedChildCaseJson (w : EventDelivery.SubagentSource.ReservedChildCase) : String :=
-  let actual := EventDelivery.SubagentSource.ensureReservedChild w.stored w.candidate
-  "{" ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"stored\":" ++ jsonArray (w.stored.map reservedChildBindingJson) ++ ","
-    ++ "\"candidate\":" ++ reservedChildBindingJson w.candidate ++ ","
-    ++ "\"expected_decision\":" ++ jsonString (reservedChildDecisionString actual.1) ++ ","
-    ++ "\"expected_count\":" ++ toString actual.2.length ++ "}"
-
-def localParentDepthCaseJson
-    (value : EventDelivery.SubagentSource.LocalParentDepthCase) : String :=
-  let observed := match value.storedParentDepth with
-    | none => "null"
-    | some depth => toString depth
-  let expected := match EventDelivery.SubagentSource.admitLocalChildDepth
-      value.suppliedParentDepth value.storedParentDepth with
-    | .ok child => "{\"kind\":\"admitted\",\"child_depth\":" ++ toString child ++ "}"
-    | .error .depthExceeded =>
-        "{\"kind\":\"rejected\",\"reason\":\"depth_exceeded\"}"
-    | .error .parentLinkageIncoherent =>
-        "{\"kind\":\"rejected\",\"reason\":\"parent_linkage_incoherent\"}"
-  "{\"name\":" ++ jsonString value.name ++
-    ",\"supplied_parent_depth\":" ++ toString value.suppliedParentDepth ++
-    ",\"stored_parent_depth\":" ++ observed ++
-    ",\"expected\":" ++ expected ++ "}"
 
 open Conformance.ContractCases
 
@@ -131,7 +81,6 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"child_failure_projections\":" ++ childFailureProjectionsJson ++ ","
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
@@ -347,12 +296,6 @@ def snapshotJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
-    ++ "\"reserved_child_materialization_cases\":"
-      ++ jsonArray
-        (EventDelivery.SubagentSource.reservedChildCases.map reservedChildCaseJson) ++ ","
-    ++ "\"local_parent_depth_cases\":"
-      ++ jsonArray
-        (EventDelivery.SubagentSource.localParentDepthCases.map localParentDepthCaseJson) ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
@@ -361,26 +304,11 @@ def snapshotJson : String :=
     ++ "\"tool_output_paging_cases\":"
       ++ jsonArray
         (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","
-    ++ "\"bridge_step_cases\":"
-      ++ jsonArray
-        (bridgeStepCases.map bridgeStepCaseJson) ++ ","
     ++ "\"interrupt_disposition_cases\":"
       ++ jsonArray
         (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
     ++ "\"codex_shim_projection_cases\":"
       ++ codexShimProjectionCasesJson ++ ","
-    ++ "\"codex_shim_subagent_tool_cases\":"
-      ++ codexShimSubagentToolCasesJson ++ ","
-    ++ "\"codex_shim_subagent_status_cases\":"
-      ++ codexShimSubagentStatusCasesJson ++ ","
-    ++ "\"codex_shim_subagent_visibility_cases\":"
-      ++ codexShimSubagentVisibilityCasesJson ++ ","
-    ++ "\"codex_shim_subagent_metadata_cases\":"
-      ++ codexShimSubagentMetadataCasesJson ++ ","
-    ++ "\"codex_shim_subagent_listing_cases\":"
-      ++ codexShimSubagentListingCasesJson ++ ","
-    ++ "\"codex_shim_subagent_thread_shape_cases\":"
-      ++ codexShimSubagentThreadShapeCasesJson ++ ","
     ++ "\"codex_shim_reasoning_projection_cases\":"
       ++ codexShimReasoningProjectionCasesJson ++ ","
     ++ "\"codex_shim_thread_status_cases\":"
@@ -400,26 +328,9 @@ def snapshotJson : String :=
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
-    ++ "\"descendant_graph_cases\":"
-      ++ descendantGraphCasesJson ++ ","
-    ++ "\"descendant_cursor_cases\":"
-      ++ descendantCursorCasesJson ++ ","
-    ++ "\"spawn_fence_cases\":"
-      ++ spawnFenceCasesJson ++ ","
-    ++ "\"spawn_claim_lineage_cases\":"
-      ++ spawnClaimLineageCasesJson ++ ","
-    ++ "\"cancel_child_session_cases\":"
-      ++ cancelChildSessionCasesJson ++ ","
-    ++ "\"r5_cross_principal_cases\":"
-      ++ jsonArray
-        (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","
-    ++ "\"r5_scenario_cases\":" ++ r5ScenarioCasesJson ++ ","
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
-    ++ "\"cancel_propagation_cases\":"
-      ++ jsonArray
-        (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"logical_output_obligation_cases\":"
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"mailbox_notification_cases\":"
@@ -452,11 +363,6 @@ def snapshotJson : String :=
     ++ "\"r6_background_theorem_witnesses\":"
       ++ jsonArray
         (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
-    ++ "\"subagent_delegation_graph_cases\":"
-      ++ jsonArray
-        (subagentDelegationGraphCases.map subagentDelegationGraphCaseJson) ++ ","
-    ++ "\"delegated_child_resolution_cases\":"
-      ++ Conformance.DelegatedChildContracts.casesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

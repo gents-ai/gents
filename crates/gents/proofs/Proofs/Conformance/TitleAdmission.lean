@@ -66,12 +66,10 @@ private def world (c : Case) : World :=
   , sessionId := session
   , purpose := request.purpose
   , principal := agent
-  , remoteRoutes := []
   , lease := RequestExecutionLease.initial Nat
   , segments := []
   , messages := []
   , transcript := { sessionId := session, nextSeq := 0, messages := [], toolCalls := [], inFlight := ∅ }
-  , delegatedCalls := []
   , terminalSelection := none
   , gateOwner := some 9
   , gateSchedule := ⟨.storage, true, false⟩

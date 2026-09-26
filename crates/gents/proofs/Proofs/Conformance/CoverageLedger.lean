@@ -79,9 +79,6 @@ def consumerWithFollowUp
   , acceptedFollowUp := acceptedFollowUp
   }
 
-def r5ScenarioFollowUp : String :=
-  "Six finite generated traces exercise physical two-principal P2P rows, signed child admission, live-child recovery inertness, expired-child recovery, terminal-bridge receipt repair, cancel acknowledgment and keyed delivery through native owners. Generations bind model symbols to observed native UUIDs, not injected stale-CAS parameters. Interrupted expired-child recovery has a model witness but no native trace here. Every trace materializes children before recovery; orphan materialization is outside this composition. Checkpoints cover selected post-action states and pending queue coalescing; clock scheduling, ACP outcomes and atomic canonical publication remain external premises, not universal native proofs."
-
 def tagged (entry : CoverageEntry)
     (feature : String) (surfaces : List Surface) : CoverageEntry :=
   { entry with feature := feature, surfaces := surfaces }
@@ -183,14 +180,6 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred :=
         [ (Surface.operatorCli, "#268")
         ]
-    }
-  , { feature := "descendant-graph"
-    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
-    , deferred := []
-    }
-  , { feature := "subagents-cross-principal"
-    , required := [Surface.agentFacing, Surface.api, Surface.operatorUi]
-    , deferred := []
     }
   , { feature := "interrupt-and-cancel"
     , required := [Surface.agentFacing, Surface.operatorUi]
@@ -413,16 +402,6 @@ def vocabularyCoverage : List CoverageEntry :=
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
-      "CancelPolicy"
-      "conformance::tool_call::lean_emits_await_mode_and_cancel_policy_vocabularies")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "vocabulary"
-      "ChildTerminal"
-      "conformance::tool_call::lean_emits_child_terminal_vocabulary")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "vocabulary"
       "GoalStatus"
       "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
       "durable-goals" [Surface.runtimeInternal]
@@ -552,11 +531,6 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile::generated_pairing_reconcile_cases_drive_production_projector"
       "The consumer exercises the production resource diff over emitted multi-resource snapshots. Connected flags are observations; actual transport dial/failure and applying operations to reach the post-state still require the transport reconciliation owner.")
       "pairing-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "child_failure_projections"
-      "ChildFailureProjections"
-      "background_tools::tests::generated_child_failure_projections_match_bridge_owner")
-      "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "lifecycle_transition_cases"
       "RequestTransitions"
@@ -1176,27 +1150,10 @@ def caseCoverage : List CoverageEntry :=
       "RestartDispositionCases"
       "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")
       "recovery" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "reserved_child_materialization_cases"
-      "ReservedChildMaterializationCases"
-      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_reserved_child_cases_drive_actual_transaction_owner"
-      "The native consumer drives reserved-child create, replay and conflict through the transaction owner and checks physical rows. It does not prove arbitrary parent authorization or host-independent child execution.")
-      "tool-call" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "local_parent_depth_cases"
-      "LocalParentDepthCases"
-      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_local_child_parent_depth_cases_drive_owner"
-      "The native consumer compares supplied local-child depth with a freshly loaded parent row through the creation owner. Present valid depths use canonical signed parent chains; missing or malformed depths are imported-row observations, not reachable publication witnesses (publication requires stored depth). This binds only observed local parent depth and creation result, not child execution admission, independent signed ancestry, remote bridge trust, or document ACP.")
-      "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
       "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "restart_disposition_cases"
-      "RestartDispositionCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "r6_background_cases"
@@ -1240,11 +1197,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_expired_child_liveness_cases_use_accepted_bridge")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases"
       "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1258,61 +1210,10 @@ def caseCoverage : List CoverageEntry :=
       "tool_call_lifecycle::recovery_closeout_conformance::generated_background_completion_recovery_uses_accepted_native_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_unclaimed_remote_spawn_uses_accepted_bridge")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
       "tool_call_lifecycle::completion_owner_conformance::generated_r6_notification_precedes_continuation_claim")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "r5_cross_principal_cases"
-      "R5CrossPrincipalCases"
-      "conformance::generated_r5_cross_principal_cases_drive_production_dispatch")
-      "subagents-cross-principal" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "r5_cross_principal_cases"
-      "R5CrossPrincipalCases"
-      "http::r5_dispatch::tests::subagent_dispatch_endpoint_matches_agent_request_parent_walk")
-      "subagents-cross-principal" [Surface.api]
-  , tagged (consumerCoverage
-      "r5_cross_principal_cases"
-      "R5CrossPrincipalCases"
-      "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases")
-      "subagents-cross-principal" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases"
-      "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_happy_path_uses_native_owners_and_physical_p2p_docs"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases" "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_b_crash_mid_execution_uses_native_recovery"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases" "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_a_crash_mid_wait_uses_native_recovery"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases" "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_partition_during_cancel_uses_native_mirror"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases" "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_multi_completion_coalesces_native_wake"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r5_scenario_cases" "R5Scenarios"
-      "conformance::r5_scenarios::generated_r5_remote_depth_ceiling_uses_native_admission"
-      r5ScenarioFollowUp)
-      "subagents-cross-principal" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
@@ -1320,70 +1221,10 @@ def caseCoverage : List CoverageEntry :=
       "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "cancel_propagation_cases"
-      "CancelPropagationCases"
-      "conformance::cancel_propagation_cases_drive_production_interrupt")
-      "interrupt-and-cancel" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
       "hook::tests::background_budget::generated_background_budget_uses_accepted_dispatch")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "r6_background_theorem_witnesses"
-      "CascadeCancelsChildTheoremWitness"
-      "tool_call_lifecycle::cascade_source_conformance::canonical_source_cascade_interrupts_processing_child_trace")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "subagent_delegation_graph_cases"
-      "SubagentDelegationGraphCases"
-      "conformance::delegation_depth_matches_runtime_limit"
-      "This consumer compares the runtime depth limit only. Generated path acyclicity, boundedness and cascade witnesses need actual delegation/control traces; asserting their expected flags is not implementation coverage.")
-      "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "delegated_child_resolution_cases"
-      "DelegatedChildResolutionCases"
-      "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver"
-      "Three generated cases bind the composed receive/reservation owner's depth-two inherit, depth-three rejection and read-only bind outcomes to the real SubagentSource receiver with no local parent request. Copied accepted bridge fields and peer membership are fixture inputs; this test does not establish publication provenance, P2P delivery or document ACP. The composed theorem binds parentToolDoc to the accepted call; other HostChildFacts identities and admission remain supplied observations, not independently validated parent provenance. LocalChild stored-depth validation is accounted for separately by local_parent_depth_cases, not this remote receiver test. Separate publication bindings recheck signed parent workspace provenance. Host workspace observations and argument decoding remain native premises. Provision and changed-seal cases are not covered by this receiver test; separate resolver tests cover two provision parent-seal drift cases, not full host materialization. No atomicity is claimed between workspace observation and child creation.")
-      "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "descendant_graph_cases"
-      "DescendantGraphCases"
-      "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control")
-      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
-  , tagged (consumerCoverage
-      "descendant_cursor_cases"
-      "DescendantCursorCases"
-      "descendant_graph::tests::generated_descendant_cursor_cases_page_native_edges")
-      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "spawn_fence_cases"
-      "SpawnFenceCases"
-      "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_fence_cases_replay_native_owners")
-      "background-tools" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "spawn_claim_lineage_cases"
-      "SpawnClaimLineageCases"
-      "trigger_engine::subagent_source::spawn_fence_tests::generated_spawn_claim_lineage_cases_drive_claim_gate")
-      "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "descendant_graph_cases"
-      "DescendantGraphCases"
-      "descendant_graph::tests::generated_steer_admission_cases_fence_terminal_child_steering"
-      "Generated steer admissions bind the native steer_admission decision to DescendantGraph.steerAdmission over the modeled edge and SteerEvidence (child request state, unclaimed-spawn failure class and cancel intent). Readable and controllable edge facts are adapted from the same generated case, which the visibility consumer fences separately. The enqueue transaction re-evaluates the same decision (steerAppend); database steer tests exercise the fence loader and the append to a finished child's session.")
-      "descendant-graph" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "cancel_child_session_cases"
-      "CancelChildSessionCases"
-      "hook::tests::r4c_steer_subagent::generated_cancel_child_session_cases_drive_cancel_subagent"
-      "Each generated child session is built through the real spawn and steer tools (original child request plus steered requests), then cancel_session_subagent runs once. A queued request is drained to interrupted; an active one gets its durable interrupt latch, which the owned execution loop turns into the interrupted terminal, so the consumer reads a latched active request as interrupted.")
-      "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "r4c_background_work_cases"
-      "R4cBackgroundWorkCases"
-      "conformance::unmaterialized_child_status_matches_runtime_vocabulary"
-      "This consumer compares runtime status vocabulary only. Existing subagent e2e tests exercise visibility and steering; generated lineage rejection, cursor, append and interrupt observations need those owner consumers. Fixture-only assertions did not establish them.")
-      "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
@@ -1399,12 +1240,6 @@ def caseCoverage : List CoverageEntry :=
       "ToolOutputPagingCases"
       "background_tools::tests::generated_tool_output_paging_cases_match_slice_function")
       "background-tools" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "bridge_step_cases"
-      "BridgeStepCases"
-      "tool_call_lifecycle::background_hook_conformance::generated_bridge_steps_drive_real_background_projector_and_cascade"
-      "Ten committed-bridge cases drive canonical admission, the production background projector and cascade owner. The uncommitted-bridge rejection remains a model assertion, not a native owner invocation.")
-      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "interrupt_disposition_cases"
       "InterruptDispositionCases"
@@ -1416,37 +1251,6 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
       "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
       "codex-shim" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_subagent_tool_cases"
-      "CodexShimSubagentToolCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "codex_shim_subagent_status_cases"
-      "CodexShimSubagentStatusCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
-      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
-      "codex-shim" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_subagent_visibility_cases"
-      "CodexShimSubagentVisibilityCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_subagent_metadata_cases"
-      "CodexShimSubagentMetadataCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_subagent_listing_cases"
-      "CodexShimSubagentListingCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_subagent_thread_shape_cases"
-      "CodexShimSubagentThreadShapeCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "codex_shim_reasoning_projection_cases"
       "CodexShimReasoningProjectionCases"
@@ -1522,7 +1326,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "canonical_worker_capacity_cases"
       "CanonicalWorkerCapacityCases"
-      "Bind modeled fresh admission, exact dependency parking, guarded resumption, overflow rejection and cleanup to the slot-owned Rust capacity scheduler. Native retained continuation, independent renewal and capacity-one child progress must be exercised before desktop acceptance.")
+      "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "canonical_execution_gate_cases"
@@ -1932,27 +1736,7 @@ def caseCoverage : List CoverageEntry :=
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.foreground_blocks_processing_continuation_admission"
-      "Subagent.BridgedState.foreground_blocks_processing_continuation_admission proves the composed request-step guard rejects owned-loop continuation admission while a foreground tool is live. Generic identity preservation is stated separately by parent_transition_preserves_request_origin_and_message_sequence; neither theorem claims scheduler or output progress.")
-      "background-tools" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.bridged_child_completion_propagates"
-      "Subagent.BridgedState.bridged_child_completion_propagates proves child completion projects to parent bridge-tool completion; related failure projection: Subagent.BridgedState.bridged_child_failure_projects. Accepted Lean-only today because R6Background emits data-shape cases and this theorem remains a formal trace projection.")
-      "background-tools" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.subagent_depth_bounded"
-      "Subagent.BridgedState.subagent_depth_bounded proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.bridge_link_symmetric. The arbitrary graph-level closure is emitted through subagent_delegation_graph_cases; this hook remains for the paired bridge trace invariant.")
-      "background-tools" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "Subagent.BridgedState.bridgedUniqueCallIds_preserved"
-      "Subagent.BridgedState.bridgedUniqueCallIds_preserved proves parent and child tool call ids remain unique across bridged traces. Accepted Lean-only today because the theorem lifts a structural uniqueness proof rather than an operational R6 witness.")
-      "background-tools" []
-  , tagged (boundaryCoverage
+  [ tagged (boundaryCoverage
       "follow_up_hook"
       "PromptAssembly.providerInput.sanitizeLoadedHistory"
       boundaryPromptAssemblyProviderInputSanitizationId)

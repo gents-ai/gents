@@ -13,9 +13,9 @@ def transcript : Transcript.TranscriptState :=
   { sessionId := 1, nextSeq := 0, messages := [], toolCalls := [], inFlight := ∅ }
 
 def world (now : Time := 5) (segments : List Segment := []) : World :=
-  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1, remoteRoutes := [],
+  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1,
     lease := lease now, segments := segments,
-    messages := [], transcript := transcript, delegatedCalls := [], terminalSelection := none }
+    messages := [], transcript := transcript, terminalSelection := none }
 
 def raw (id attempt ordinal : Nat) (createdAt : Time) : Segment :=
   { id := id, coordinate := ⟨10, .provider 0 0 attempt⟩, writer := .request 7,
@@ -65,7 +65,7 @@ theorem producer_output_does_not_renew_deadline :
 
 theorem payload_free_assistant_can_commit_zero_stream_source :
     succeeds (acceptAndPublish (world 5) 7 (emptyClose 100 0 .complete 5)
-      (emptyAssistant 200 5) [] []) = true := by
+      (emptyAssistant 200 5) []) = true := by
   native_decide
 
 theorem complete_closure_replay_is_not_a_retry_retraction :
@@ -310,178 +310,28 @@ def shortProviderMessage : MessageEnvelope :=
 theorem fresh_provider_close_must_cover_every_committed_flush :
     succeeds (acceptAndPublish
       { world 5 with segments := [providerFirstFlush, providerSecondFlush] }
-      7 shortProviderClose shortProviderMessage [] []) = false := by
+      7 shortProviderClose shortProviderMessage []) = false := by
   native_decide
 
-def remote : RemoteTarget := ⟨600, 1, 2, 8⟩
 def permit : DispatchPermit := ⟨600, true, true⟩
-def remoteToolContext : ToolExecution.ToolCallContext :=
+def foregroundToolContext : ToolExecution.ToolCallContext :=
   { callId := 600, requestId := 10, state := .pending
     operation := .nativeCommand, deadline := 20, currentTime := 5
-    persistence := .committed, awaitMode := .background, childRequestId := some 50,
-    spawnBehaviorId := some 8 }
-def remoteWorkspace : DelegatedWorkspace :=
-  ⟨70, 2, some 71, .readOnly⟩
-def remoteAdmission : ToolAdmission := ⟨600, remoteToolContext, some remoteWorkspace⟩
-def foregroundToolContext : ToolExecution.ToolCallContext :=
-  { remoteToolContext with awaitMode := .foreground, childRequestId := none, spawnBehaviorId := none }
-def foregroundAdmission : ToolAdmission := ⟨600, foregroundToolContext, none⟩
-def routedWorld (now : Time := 5) : World :=
-  { world now with remoteRoutes := [(600, 2, 8)], workspace := some remoteWorkspace }
-
-def routedDepthWorld (depth : Nat) : World :=
-  { routedWorld 5 with subagentDepth := depth }
-
-/-- The actual provider-native spawn argument stream used by conformance. -/
-def realSpawnArguments : String :=
-  "{\"await_mode\":\"background\",\"name\":\"lean-behavior-8\",\"prompt\":\"work\"}"
-
-def realSpawnArgumentBytes : List UInt8 := realSpawnArguments.toUTF8.data.toList
-
-def realSpawnProviderTurn : Segment :=
-  { providerTurn with
-    flush := some ⟨0,
-      [⟨0, realSpawnArgumentBytes.length, some
-        { block := 0, part := 0, kind := .arguments,
-          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩],
-      realSpawnArgumentBytes⟩
-    close := some (.closed .complete 1 [realSpawnArgumentBytes.length]) }
-
-def realSpawnProviderTurnForArguments (arguments : String) : Segment :=
-  let bytes := arguments.toUTF8.data.toList
-  { realSpawnProviderTurn with
-    flush := some ⟨0,
-      [⟨0, bytes.length, some
-        { block := 0, part := 0, kind := .arguments,
-          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩], bytes⟩
-    close := some (.closed .complete 1 [bytes.length]) }
-
-def realSpawnProviderMessage : MessageEnvelope :=
-  { providerMessage with
-    header := { providerMessage.header with refs := [⟨500, 0⟩] }
-    blocks := [.toolCall 600 "native-call" none "spawn_subagent"
-      ⟨⟨500, 0⟩, .full⟩ none none] }
-
-/-- Distinct physical calls and supplied argument bytes use the same
-accept-and-publish owner. The flush and close lengths are derived from those
-bytes; the addressed host resolves the requested workspace later. -/
-def acceptedDelegatedCallFor (call depth : Nat)
-    (workspace : Option DelegatedWorkspace)
-    (arguments : String := realSpawnArguments) : Option DelegatedCall := do
-  let world := { routedDepthWorld depth with
-    remoteRoutes := [(call, 2, 8)], workspace := workspace }
-  let toolContext := { remoteToolContext with callId := call }
-  let admission : ToolAdmission := ⟨call, toolContext, workspace⟩
-  let message := { realSpawnProviderMessage with
-    blocks := [.toolCall call "native-call" none "spawn_subagent"
-      ⟨⟨500, 0⟩, .full⟩ none none] }
-  let accepted ← (acceptAndPublish world 7
-    (realSpawnProviderTurnForArguments arguments) message
-    [{ remote with call := call }] [admission]).toOption
-  accepted.delegatedCalls.find? (fun row => row.call == call)
-
-def acceptedDelegatedCallAtDepthWithWorkspace (depth : Nat)
-    (workspace : DelegatedWorkspace) : Option DelegatedCall := do
-  acceptedDelegatedCallFor 600 depth (some workspace)
-
-def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall :=
-  acceptedDelegatedCallAtDepthWithWorkspace depth remoteWorkspace
-
-theorem accepted_depth_two_creates_child_at_bound :
-    (acceptedDelegatedCallAtDepth 2).bind
-      (receiveDelegatedChildDepth 1 2 8) = some Subagent.maxSubagentDepth := by
-  native_decide
-
-theorem accepted_depth_three_cannot_create_child :
-    (acceptedDelegatedCallAtDepth Subagent.maxSubagentDepth).bind
-      (receiveDelegatedChildDepth 1 2 8) = none := by
-  native_decide
-
-def observedParentWorkspace : Workspace.ObservedWorkspace :=
-  ⟨remoteWorkspace.workspaceId, remoteWorkspace.ownerAgent,
-    remoteWorkspace.sealHash, .ready, true⟩
-
-def observedProvisionedWorkspace : Workspace.ObservedWorkspace :=
-  ⟨71, 2, none, .ready, true⟩
-
-theorem readonly_parent_inheritance_cannot_escalate :
-    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.inherit observedParentWorkspace)) =
-      some (3, some remoteWorkspace) := by
-  native_decide
-
-theorem provisioned_child_can_have_distinct_identity_without_escalation :
-    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedParentWorkspace true (some observedProvisionedWorkspace))) =
-      some (3, some ⟨71, 2, none, .readOnly⟩) := by
-  native_decide
-
-theorem unverified_provision_is_not_a_child_workspace :
-    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedParentWorkspace true
-          (some { observedProvisionedWorkspace with available := false }))) = none := by
-  native_decide
-
-theorem failed_provision_cannot_stamp_child :
-    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedParentWorkspace true none)) = none := by
-  native_decide
-
-theorem changed_parent_seal_blocks_provision :
-    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.provision { observedParentWorkspace with sealHash := some 99 } true
-          (some observedProvisionedWorkspace))) = none := by
-  native_decide
-
-theorem absent_to_present_parent_seal_blocks_provision :
-    (acceptedDelegatedCallAtDepthWithWorkspace 2
-      { remoteWorkspace with sealHash := none }).bind (fun row =>
-      receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedParentWorkspace true
-          (some observedProvisionedWorkspace))) = none := by
-  native_decide
-
-theorem accepted_depth_replay_rejects_changed_source :
-    (match acceptAndPublish (routedDepthWorld 2) 7 realSpawnProviderTurn realSpawnProviderMessage
-        [remote] [remoteAdmission] with
-    | .error _ => false
-    | .ok accepted =>
-      let altered := { accepted with subagentDepth := 3 }
-      match acceptAndPublish altered 7 realSpawnProviderTurn realSpawnProviderMessage [remote]
-          [remoteAdmission] with
-      | .error .identityCollision => true
-      | _ => false) = true := by
-  native_decide
-
-def acceptedAndDispatched : Bool :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
-      [remoteAdmission] with
-  | .error _ => false
-  | .ok accepted => match dispatch accepted 7 permit with
-    | .error _ => false
-    | .ok dispatched =>
-        physicalRunning dispatched 600 && !(600 ∈ dispatched.transcript.inFlight) &&
-          dispatched.delegatedCalls.any (fun row =>
-            row.call == 600 && row.coordinator == 1 && row.target == 2 &&
-              row.input.arguments == "{}")
-
-theorem nonempty_provider_acceptance_delegates_then_dispatches :
-    acceptedAndDispatched = true := by native_decide
+    persistence := .committed, awaitMode := .foreground }
+def foregroundAdmission : ToolAdmission := ⟨600, foregroundToolContext⟩
+def backgroundToolContext : ToolExecution.ToolCallContext :=
+  { foregroundToolContext with awaitMode := .background }
+def backgroundAdmission : ToolAdmission := ⟨600, backgroundToolContext⟩
 
 theorem expired_acceptance_is_rejected :
-    (match acceptAndPublish (routedWorld 10) 7
+    (match acceptAndPublish (world 10) 7
         { providerTurn with createdAt := 10 }
-        { providerMessage with createdAt := 10 } [remote] [remoteAdmission] with
+        { providerMessage with createdAt := 10 } [foregroundAdmission] with
       | .error .leaseRejected => true | _ => false) = true := by
   native_decide
 
 def foregroundAcceptedAndDispatched : Except Error World := do
-  let accepted ← acceptAndPublish (world 5) 7 providerTurn providerMessage []
+  let accepted ← acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]
   dispatch accepted 7 permit
 
@@ -492,8 +342,8 @@ theorem foreground_provider_call_reaches_physical_running_state :
   native_decide
 
 def acceptedToolWorld : World :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
-      [remoteAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage
+      [foregroundAdmission] with
   | .ok accepted => accepted
   | .error _ => world 5
 
@@ -510,8 +360,8 @@ theorem terminalization_fails_owned_pending_call_and_keeps_header :
   native_decide
 
 def acceptedToTerminalTrace : Bool :=
-  match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
-      [remoteAdmission] with
+  match acceptAndPublish (world 5) 7 providerTurn providerMessage
+      [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match terminalize accepted 7 .completed (.message 501) with
     | .error _ => false
@@ -538,63 +388,6 @@ theorem transcript_rows_without_canonical_publication_cannot_dispatch :
       | .error .publicationIncomplete => true | _ => false) = true := by
   native_decide
 
-def missingDelegatedRowWorld : World :=
-  { acceptedToolWorld with delegatedCalls := [] }
-
-theorem remote_call_without_exact_delegated_row_cannot_dispatch :
-    (match dispatch missingDelegatedRowWorld 7 permit with
-      | .error .publicationIncomplete => true | _ => false) = true := by
-  native_decide
-
-theorem missing_remote_route_projection_is_rejected :
-    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage []
-        [remoteAdmission] with
-      | .error .invalidDelegation => true | _ => false) = true := by
-  native_decide
-
-theorem wrong_remote_target_is_rejected :
-    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage
-        [⟨600, 1, 3, 8⟩] [remoteAdmission] with
-      | .error .invalidDelegation => true | _ => false) = true := by
-  native_decide
-
-theorem wrong_remote_behavior_is_rejected :
-    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage
-        [⟨600, 1, 2, 9⟩] [remoteAdmission] with
-      | .error .invalidDelegation => true | _ => false) = true := by
-  native_decide
-
-def driftedRemoteAdmission : ToolAdmission :=
-  ⟨600, { remoteToolContext with spawnBehaviorId := some 9 }, some remoteWorkspace⟩
-
-def driftedWorkspaceAdmission : ToolAdmission :=
-  ⟨600, remoteToolContext, some { remoteWorkspace with authority := .readWrite }⟩
-
-theorem fresh_remote_admission_cannot_escalate_parent_stamp :
-    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
-        [driftedWorkspaceAdmission] with
-    | .error .transcriptRejected => true
-    | _ => false) = true := by
-  native_decide
-
-theorem unbound_parent_can_admit_unbound_remote_call :
-    (match acceptAndPublish { routedWorld 5 with workspace := none } 7
-        providerTurn providerMessage [remote]
-        [{ remoteAdmission with delegatedWorkspace := none }] with
-    | .ok accepted => accepted.delegatedCalls.length == 1
-    | _ => false) = true := by
-  native_decide
-
-theorem accepted_call_replay_cannot_select_different_behavior :
-    (match acceptAndPublish acceptedToolWorld 7 providerTurn providerMessage [remote]
-        [driftedRemoteAdmission] with
-      | .error .identityCollision => true | _ => false) = true := by
-  native_decide
-
-theorem accepted_call_replay_cannot_change_workspace_source :
-    acceptedAdmissionsPresent acceptedToolWorld [driftedWorkspaceAdmission] = false := by
-  native_decide
-
 def partialProviderTurn : Segment :=
   { providerTurn with close := some (.closed .«partial» 1 [1, 2]) }
 
@@ -606,7 +399,7 @@ def forgedPartialAcceptedWorld : World :=
 
 theorem partial_closure_cannot_replay_as_complete_acceptance :
     succeeds (acceptAndPublish forgedPartialAcceptedWorld 7 partialProviderTurn
-      providerMessage [] [remoteAdmission]) = false := by
+      providerMessage [foregroundAdmission]) = false := by
   native_decide
 
 def partialAuthored : Segment :=

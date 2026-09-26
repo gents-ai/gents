@@ -7,8 +7,6 @@ See `../README.md` for how this fits the broader formal-verification model.
 ## Specs
 
 - `ReversePairing` — control-plane convergence of subscription/replicator reverse-pairing between two peers.
-- `SubagentCompletion` — background subagent terminal projection where the parent bridge row lives on deployment A and the child terminalizes on deployment B.
-- `SubagentCancelPropagation` - cascade-cancel delivery from a parent bridge row on deployment A to the child request owner on deployment B.
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer *below* `ReversePairing`. `ReversePairing` and the Lean `PairingReconcile` model both assume the transport carries the install RPC / that `connect` succeeds; neither models *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
 - `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
 - `ReplicatedRequestConvergence` — owner-only terminal convergence for
@@ -51,16 +49,6 @@ For ReversePairing (the real model):
 For the multi-collection ReversePairing sanity bound:
 ```bash
 ./scripts/run-tlc.sh MCReversePairingMulti
-```
-
-For SubagentCompletion:
-```bash
-./scripts/run-tlc.sh MCSubagentCompletion
-```
-
-For SubagentCancelPropagation:
-```bash
-./scripts/run-tlc.sh MCSubagentCancelPropagation
 ```
 
 For PairingTransport — the dialable model checks clean (all properties hold):
@@ -142,31 +130,6 @@ Larger parameters increase state space exponentially. State-space-exhaustion art
 | `MaxCrashes` | `0` | Keeps the multi-collection liveness run tractable; crash recovery remains covered by the default single-collection bound |
 | `StateBound` | `Cardinality(rpcIdsUsed) <= 4` | Same total-issued-RPC bound as the default model |
 
-Current parameters in `MCSubagentCompletion.cfg`:
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `Deployment` | `{A, B}` | Parent bridge row on A, child terminal authority on B |
-| `ParentDeployment` / `ChildDeployment` | `A` / `B` | Avoids hard-coding deployment symbols inside the model |
-| `Child` | `{c1, c2}` | Two background children exercise independent projection and notification delivery |
-| `EventId` | `{e1, e2, e3, e4}` | Bounded document-gossip ids; `StateBound` permits three consumed ids |
-| `QueueId` | `{q1, q2}` | Bounded ids for the independently modelled user request queue |
-| `MaxCrashes` | `1` | A and B can each crash once |
-| `MaxDrops` | `1` | One document-gossip observation can be dropped before fair re-emission |
-| `StateBound` | `Cardinality(eventIdsUsed) <= 3 /\ Cardinality(queueIdsUsed) <= 2` | Leaves enough room for two child terminals plus one dropped observation while cutting off arbitrary duplicate-event churn |
-
-Current parameters in `MCSubagentCancelPropagation.cfg`:
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `Deployment` | `{A, B}` | Parent bridge/cancel intent on A, child request owner on B |
-| `ParentDeployment` / `ChildDeployment` | `A` / `B` | Avoids hard-coding deployment symbols inside the model |
-| `Child` | `{c1}` | One live child edge is enough for the default cancel-delivery liveness run |
-| `RPCId` | `{r1, r2, r3, r4, r5, r6}` | Bounded cancel and ack attempt ids |
-| `MaxCrashes` | `1` | A and B can each crash once |
-| `MaxDrops` | `1` | One cancel or ack RPC can be dropped before fair retry/delivery |
-| `StateBound` | `\A child : ~cancelHandledB[child] => FreshIds(1)` | Excludes finite-id-pool exhaustion before B can allocate the handling ack; real RPC ids are unbounded |
-
 Current parameters in `MCReplicatedRequestConvergence.cfg` / `MCReplicatedRequestConvergenceStuck.cfg`:
 
 | Parameter | Value | Rationale |
@@ -204,33 +167,6 @@ Active lines from `MCReversePairing.cfg`:
 - **`CONSTRAINT StateBound`** — not a checked property; truncates state-space exploration at `Cardinality(rpcIdsUsed) <= 4` to keep the bounded RPCId pool from exhausting before convergence completes.
 
 Note: `InFlightJustified` is defined in `ReversePairing.tla` as a documented model property but is not enforced by TLC due to a bounded-model artifact (pool-exhausted states cannot be excluded without parameter changes that explode the state space). See its block comment in the .tla file.
-
-Active lines from `MCSubagentCompletion.cfg`:
-
-- **`INVARIANT TypeOK`** — all state variables stay within their declared bounded domains.
-- **`INVARIANT DurableChildTerminalOK`** — any durable child terminal on B has a durable final response.
-- **`INVARIANT EventIdsTracked`**, **`ObservationBackedByBDurable`**, **`ADurableObservationBackedByB`** — document-gossip observations and A's durable observations are backed by B's durable terminal/final-response state.
-- **`INVARIANT BridgeTerminalUnique`** — every parent bridge row terminalizes at most once.
-- **`INVARIANT ProjectionRequiresBDurableTerminal`**, **`ProjectionRequiresADurableObservation`**, **`ProjectionMatchesLeanBridgeMapping`** — A projects only from durable observations and maps child `Completed` to bridge `Completed`, all child non-completed terminals to bridge `Failed`.
-- **`INVARIANT CancelledOnlyByParentCancel`**, **`ParentCancelAbsorbsLateTerminal`**, **`CancelRequestedCausal`** — bridge `Cancelled` is parent-cancel only, and late child terminals cannot resurrect a cancelled bridge.
-- **`INVARIANT NotificationCausal`** — transcript notifications exist only after child projection.
-- **`INVARIANT QueueIdsTracked`**, **`NoSyntheticCompletionWakeups`**, **`UserPendingPreserved`** — completion delivery never creates an agent request, while independently authored user requests remain pending.
-- **`PROPERTY CompletionProgress`** — durable child terminals eventually project or settle to parent cancellation, and projected terminals eventually append a durable notification.
-- **`CONSTRAINT StateBound`** — bounds finite event/queue id consumption to keep TLC from exploring duplicate-id churn that is not meaningful in the real unbounded-id system.
-
-Active lines from `MCSubagentCancelPropagation.cfg`:
-
-- **`INVARIANT TypeOK`** - all state variables stay within their declared bounded domains.
-- **`INVARIANT RPCIdsTracked`**, **`RPCWellFormed`** - every cancel/ack RPC is tracked and has the expected A-to-B or B-to-A shape.
-- **`INVARIANT CancelIntentCausal`** - attempts, handled cancels, acks, and in-system RPCs are justified by durable A-side cancel intent.
-- **`INVARIANT AckRequiresHandled`** - every ack that exists is backed by durable B-side cancel handling.
-- **`INVARIANT CancelHandledIdempotent`** - B records at most one durable cancel-handling effect per child.
-- **`INVARIANT CascadeInterruptsOnlyRunning`**, **`InterruptedOnlyByCascade`** - `Interrupted` is produced only by cascade cancel handling.
-- **`INVARIANT InterruptExactlyOnce`**, **`NaturalTerminalStableAfterCancel`**, **`HandledCancelStable`** - repeated deliveries do not double-write; natural terminals remain stable when late cancel handling arrives.
-- **`PROPERTY CancelPropagationProgress`** - durable A-side cancel intent eventually reaches durable B-side handling, and a live child eventually becomes interrupted or naturally terminal.
-- **`CONSTRAINT StateBound`** - cuts off the bounded RPCId-pool artifact where no fresh id remains for the first B-side handling ack.
-
-Note: `CancelAckProgress` is defined in `SubagentCancelPropagation.tla` but is not enforced by the default TLC config. It can fail only in bounded-pool-exhausted traces after B has already durably handled the cancel and A has lost the matching in-flight attempt through crash or timeout. The #188 safety boundary is `cancelHandledB`; ack progress is an observability/retry-retirement requirement.
 
 Active lines from `MCPairingTransportDialable.cfg` (`Dialable = TRUE`, `ReplicatorInstallable = TRUE`, all hold):
 
@@ -288,24 +224,6 @@ Notes:
 - SF (not WF) on `Reconcile` is required because `OperatorWrite` can transiently disable individual `(p, c)` reconcile preconditions, defeating WF's "continuously enabled" requirement. SF's "infinitely often enabled" matches a real periodic reconcile loop.
 - No fairness on `Drop`, `Crash`, or `OperatorWrite` — those are voluntary actions that the model can skip.
 
-`SubagentCompletion` uses weak fairness on the recovery/projection workers:
-
-- per-child `EmitTerminalObservation`
-- document delivery and A-side durable observation persistence
-- per-child bridge projection and notification append
-
-It deliberately has no fairness on child terminal writes, document drops, crashes, parent cancellation, or user request enqueue.
-
-`SubagentCancelPropagation` uses weak fairness on:
-
-- per-child `EmitCancel`
-- cancel/ack `Deliver`
-- B-side `ProcessCancel`
-- A-side `ReceiveAck`
-- A-side `Timeout`
-
-It deliberately has no fairness on `InvokeBridgeCancelCascade`, `NaturalTerminalize`, `Drop`, or `Crash`.
-
 `ReplicatedRequestConvergence` uses weak fairness on the bounded repair workers:
 
 - `EmitTerminalDelta` (one owner write fanned out to online replicators)
@@ -358,8 +276,6 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 |--------|-------|--------|-------------|-------|---------|
 | `MCReversePairing.cfg` | `Collection = {c1}`, `MaxCrashes = 2` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 322,560 distinct states | 19 | 3min 21s |
 | `MCReversePairingMulti.cfg` | `Collection = {c1, c2}`, `MaxCrashes = 0` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 2,164,720 distinct states; 28,085,121 generated | 18 | 36min 38s |
-| `MCSubagentCompletion.cfg` | `Child = {c1, c2}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = eventIdsUsed <= 3 /\ queueIdsUsed <= 2` | Passes all listed SubagentCompletion invariants and `CompletionProgress` | 504,272 distinct states; 3,648,561 generated | 18 | 1min 17s |
-| `MCSubagentCancelPropagation.cfg` | `Child = {c1}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = unhandled child retains one fresh RPC id` | Passes all listed SubagentCancelPropagation invariants and `CancelPropagationProgress` | 416,230 distinct states; 1,651,727 generated | 21 | 11s |
 | `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportReplicatorStuck.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = FALSE` | **MODE B/C diagnostic:** `TypeOK`/`ReplicationImpliesReplicator` hold; `PartialApplyHasProgress` intentionally VIOLATED at `Connected ∧ subscribed ∧ ¬installed` (the partial row); `ReplicatorLiveness`/`EndToEndLiveness` also violated | 5 distinct states; 6 generated | — | <1s (OpenJDK 25) |
@@ -368,10 +284,6 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCReplicatedRequestConvergencePeerClaim.cfg` | `AllowPeerClaim = TRUE` | `SingleClaimer` intentionally VIOLATED by `PeerClaimsForeign` | 47 distinct states before counterexample; 51 generated | 6 | <1s |
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
-
-The SubagentCompletion run used TLC2 `2026.07.03.221739` (rev `227f61b`) with OpenJDK 26.0.1 on macOS arm64, `-workers auto` using 18 workers. TLC checked 6 temporal branches; the final temporal phase took 45s.
-
-The SubagentCancelPropagation run used TLC2 `2026.05.12.170007` (rev `8033878`) with OpenJDK 17.0.19 on macOS arm64, `-workers auto` using 18 workers. TLC checked 2 temporal branches; the final temporal phase took 3s.
 
 The three ReplicatedRequestConvergence runs used TLC2
 `2026.07.03.221739` (rev `227f61b`) with Homebrew OpenJDK 26.0.1 on macOS
@@ -407,38 +319,6 @@ Crash-enabled two-collection attempts were stopped for tractability, not propert
 - **Provenance.** Not modeled here. The structural-safety invariants check actions are well-formed, but a full provenance proof — every replicator entry traces back to a prior `desired`-then-`Process` chain — is a future TLAPS effort.
 - **Set semantics for `messages`.** Assumes RPC ids are unique (which the model enforces). Real network duplicates can be modeled via `Send` re-emitting under different ids.
 - **N > 2 nodes, data-plane convergence, authorization correctness.** Explicit non-goals per the spec.
-- **SubagentCompletion foreground mode.** The model covers background completion projection only. Foreground cross-deployment blocking is a separate liveness surface.
-- **SubagentCompletion cancel propagation.** `SubagentCompletion` still records only `cancelRequested[child]`; delivery of that cascade interrupt is modeled in the sibling `SubagentCancelPropagation` artifact.
-- **SubagentCompletion duplicate-event bound.** The default config permits two child terminal observations plus one dropped/re-emitted observation. Arbitrary duplicate document churn is cut off by `StateBound`; the real system relies on unbounded event ids and idempotent projection.
-- **SubagentCompletion legacy queue rows.** The model proves that current completion delivery cannot create a `subagent_completion` queue row. Runtime migration code separately terminalizes such pending rows written by older versions or received through delayed replication.
-- **Unsafe early projection counterexample.** Not committed as a separate failing config. The counterexample is direct: if A projects from `pendingInboundA` before `PersistObservationOnA`, then `ProjectionRequiresADurableObservation` fails immediately, and an A crash would erase the only local evidence for the bridge terminal.
-- **SubagentCancelPropagation default fanout.** The default liveness config models one child. The action and properties are child-parametric, but a two-child sanity bound is left for future work if R5 needs explicit fanout coverage.
-- **SubagentCancelPropagation ack progress.** `CancelAckProgress` is defined but excluded from the default config because finite RPCId exhaustion can strand ack retirement after B durable handling has already satisfied the #188 delivery boundary.
-- **SubagentCancelPropagation foreground mode and detach policy.** Parent foreground progress and detach semantics remain separate follow-ups.
-
-## SubagentCompletion derived requirements
-
-The SubagentCompletion model surfaces these implementation obligations:
-
-1. A's projection worker must consume durable local child terminal/final-response rows, not volatile subscription callbacks.
-2. B must persist the child final response before or atomically with the child terminal, and terminal observability must wait until both documents are durable.
-3. Projection and notification append must be idempotent under duplicate observations and retries.
-4. Completion delivery must not create an `AgentRequest`; the durable notification is consumed by the next independently authored turn.
-5. Runtime intake must terminalize legacy `subagent_completion` wake rows without executing them and preserve user-originated pending work.
-6. Late child terminal after parent cancellation is a no-op for the parent bridge.
-
-## SubagentCancelPropagation derived requirements
-
-The SubagentCancelPropagation model surfaces these implementation obligations:
-
-1. A must persist cascade intent before relying on remote cancel delivery.
-2. A recovery/retry worker must re-emit cancel RPCs from durable intent after timeout, drop, or crash.
-3. B must durably handle the cancel before emitting an ack.
-4. B-side cancel handling must be idempotent under duplicate RPCs.
-5. A live child interrupted by cascade reaches `Interrupted` exactly once.
-6. A child that naturally terminalizes before cancel delivery keeps that natural terminal; late cancel handling is absorbed.
-7. Timeout is liveness-only and must not infer or mutate child terminal state.
-8. A ack receipt is useful observability/retry retirement, but B durable handling is the safety boundary.
 
 ## PairingTransport derived requirements
 

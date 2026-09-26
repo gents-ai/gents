@@ -34,10 +34,9 @@ private def admissionKindJson : AgentRequestAdmissionKind → String
   | .enrollment => jsonString "enrollment"
   | .localSelf => jsonString "local-self"
   | .runtimeInternal => jsonString "runtime-internal"
+  | .peer => jsonString "peer"
 
 private def runtimeSourceJson : RuntimeInternalSourceKind → String
-  | .localChild => jsonString "local-child"
-  | .crossPrincipalChild => jsonString "cross-principal-child"
   | .localControl => jsonString "local-control"
   | .automatedTrigger => jsonString "automated-trigger"
 

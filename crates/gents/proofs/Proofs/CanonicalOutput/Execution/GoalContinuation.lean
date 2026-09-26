@@ -170,8 +170,7 @@ def childAdmission (result : Result) : Handover.PhysicalRequestAdmission :=
   , requester := result.binding.childRequester
   , authenticated := result.binding.authenticated }
 
-def childActivation (result : Result) (configuredRoutes : List (DocId × Nat × Nat))
-    (routesAuthenticated : Bool) (generation : Generation)
+def childActivation (result : Result) (generation : Generation)
     (duration deadline : Time) : Handover.Activation :=
   let admission := childAdmission result
   { request := admission
@@ -180,7 +179,6 @@ def childActivation (result : Result) (configuredRoutes : List (DocId × Nat × 
       , parentPhysical := result.binding.parentDocument
       , parentLogical := result.binding.parentLogical
       , authenticated := result.binding.authenticated }
-  , configuredRoutes := configuredRoutes, routesAuthenticated := routesAuthenticated
   , generation := generation, duration := duration, deadline := deadline }
 
 private theorem successful_publication_origin

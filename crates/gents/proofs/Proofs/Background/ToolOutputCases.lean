@@ -2,7 +2,7 @@ import Proofs.Background.ToolOutput
 import Proofs.CanonicalOutput.Execution.Examples
 import Proofs.CanonicalOutput.Execution.ToolDelivery
 
-namespace Subagent.ToolOutput.Cases
+namespace Background.ToolOutput.Cases
 
 open CanonicalOutput CanonicalOutput.Execution
 open CanonicalOutput.Execution.Examples
@@ -18,7 +18,7 @@ def closing : Segment :=
   , flush := none, close := some (.closed .complete 1 [4]), createdAt := 5 }
 
 def running : Option World := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption
   let dispatched ← (dispatch accepted 7 permit).toOption
   ToolDelivery.appendToolOutput dispatched 600 output |>.toOption
@@ -28,7 +28,7 @@ def closed : Option World := do
   ToolDelivery.closeToolOutput current 600 (.native .complete) closing |>.toOption
 
 def emptyOpen : Option World := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage []
+  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
     [foregroundAdmission]).toOption
   (dispatch accepted 7 permit).toOption
 
@@ -78,4 +78,4 @@ def canonicalEmptyProjectionCases : Bool :=
 theorem canonical_known_empty_open_and_closed_but_missing_extent_rejected :
     canonicalEmptyProjectionCases = true := by native_decide
 
-end Subagent.ToolOutput.Cases
+end Background.ToolOutput.Cases

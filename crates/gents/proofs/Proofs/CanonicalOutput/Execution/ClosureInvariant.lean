@@ -147,17 +147,17 @@ private theorem auxiliaryClose_preserves (before after : World) (generation : Ge
     exact hp.1.2
 
 private theorem accept_preserves (before after : World) (generation : Generation)
-    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (closing : Segment) (message : MessageEnvelope)
     (admissions : List ToolAdmission) (unique : ClosureUnique before)
-    (h : acceptAndPublish before generation closing message targets admissions = .ok after) :
+    (h : acceptAndPublish before generation closing message admissions = .ok after) :
     ClosureUnique after := by
   have hcore := checked_core_success _ _ _ h
-  rcases acceptAndPublishCore_success_effect before after generation closing message targets
-      admissions hcore with ⟨rfl, _⟩ | ⟨lease, delegated, _, rfl, _⟩
+  rcases acceptAndPublishCore_success_effect before after generation closing message
+      admissions hcore with ⟨rfl, _⟩ | ⟨lease, _, rfl, _⟩
   · exact unique
   · apply closureUnique_append_winner before.segments closing unique
     have valid := (accepted_publication_is_composed_atomically before _ generation closing
-      message targets admissions h).2.2.2.2.1
+      message admissions h).2.2.2.1
     exact validateClosingRecord_winner _ _ valid
 
 private theorem authored_core_effect (before after : World) (generation : Generation)
@@ -470,8 +470,8 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
   | retract generation record =>
       exact retract_preserves before after generation record unique
         (mapError_success Gate.Error.execution _ _ h)
-  | accept generation closing message targets admissions =>
-      exact accept_preserves before after generation closing message targets admissions unique
+  | accept generation closing message admissions =>
+      exact accept_preserves before after generation closing message admissions unique
         (mapError_success Gate.Error.execution _ _ h)
   | authored generation closing message =>
       exact authored_preserves before after generation closing message unique
@@ -651,11 +651,11 @@ theorem Trace.closureUnique {before after : World} (trace : Trace before after)
           exact closureUnique_of_segments_eq unique
             (by simpa using (congrArg (fun w : World => w.segments)
               (Handover.successful_finish_frame before result actor hc)))
-  | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
+  | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
       rename_i before after
       unfold SessionComposition.activateGoal at h
       cases hc : Handover.claimAndActivate before actor now
-          (GoalContinuation.childActivation result routes authenticated generation duration
+          (GoalContinuation.childActivation result generation duration
             leaseDeadline) with
       | none => simp [hc] at h
       | some world =>

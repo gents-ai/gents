@@ -17,7 +17,6 @@ INVENTORIES = {
     "ToolExecution.ToolCallContext.Action": ("ToolExecution/Executable.lean", "Action"),
     "CanonicalOutput.Execution.ToolDelivery.CloseAuthority":
         ("CanonicalOutput/Execution/ToolDelivery.lean", "CloseAuthority"),
-    "Subagent.BridgedState.Event": ("Background/Executable.lean", "Event"),
     "CompletionRetry.Action": ("CompletionRetry/Transition.lean", "Action"),
     "CompletionRetry.CanonicalGate.Operation": ("CompletionRetry/CanonicalGate.lean", "Operation"),
     "SessionQueue.Action": ("Session/Executable.lean", "Action"),

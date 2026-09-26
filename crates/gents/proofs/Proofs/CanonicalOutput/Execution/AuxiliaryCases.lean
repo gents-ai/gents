@@ -45,7 +45,7 @@ def staleWriterCloseReplayAccepted (kind : AuxiliaryKind) (outcome : Outcome) : 
 
 def emptyHeaderAccepted (kind : AuxiliaryKind) (outcome : Outcome) : Bool :=
   succeeds (acceptAndPublish (world 5 [observed kind]) 7
-    (close kind outcome) (emptyAssistant 200 5) [] [])
+    (close kind outcome) (emptyAssistant 200 5) [])
 
 def nativePublicationClose (kind : AuxiliaryKind) : Segment := close kind .complete
 
@@ -60,7 +60,7 @@ def nativePublicationMessage : MessageEnvelope :=
 
 def nativePublicationAccepted (kind : AuxiliaryKind) : Bool :=
   succeeds (acceptAndPublish (world 5 [observed kind]) 7
-    (nativePublicationClose kind) nativePublicationMessage [] [])
+    (nativePublicationClose kind) nativePublicationMessage [])
 
 def observation (kind : AuxiliaryKind) (records : List Segment) : Observation :=
   { ReasoningAudit.observation records with
@@ -149,7 +149,7 @@ theorem recovery_header_cannot_promote_auxiliary :
 
 theorem accepted_header_cannot_promote_auxiliary :
     succeeds (acceptAndPublish (world 5 [observed .compaction]) 7
-      (close .compaction .complete) (emptyAssistant 200 5) [] []) = false := by
+      (close .compaction .complete) (emptyAssistant 200 5) []) = false := by
   native_decide
 
 end CanonicalOutput.Execution.AuxiliaryCases

@@ -1,6 +1,7 @@
 import Proofs.Enrollment.Transition
 import Proofs.Enrollment.RequestInput
 import Proofs.Request.Executable
+import Proofs.Request.CausalHop
 
 /-!
 # Agent request admission owned by authenticated enrollment
@@ -17,11 +18,17 @@ inductive AgentRequestAdmissionKind where
   | enrollment
   | localSelf
   | runtimeInternal
+  /-- A request authored by another principal's agent: a cross-principal
+  `create_session`/`send_message`. The requester signs, the target differs
+  from the requester, and the target's `PeerAdmissionAuthority` document ACP
+  authorizes the requester DID. Premise: DefraDB authenticates the requester
+  DID and enforces that ACP; the runtime adds no bridge row, claim fence,
+  cancel mirror or delegated input. The reply routes back to `requesterDid`
+  best-effort through the P2P templates. A same-principal send is `localSelf`. -/
+  | peer
   deriving DecidableEq, Repr
 
 inductive RuntimeInternalSourceKind where
-  | localChild
-  | crossPrincipalChild
   | localControl
   | automatedTrigger
   deriving DecidableEq, Repr
@@ -52,6 +59,9 @@ def titleParentFields (link : TitleParentLink) : CanonicalFields :=
 
 /-- Exact immutable request semantics covered by the request signature. -/
 structure AgentRequestSemantics where
+  /-- Signed causal hop (`subagent_depth`, see `CausalHop`). Its canonical
+  encoding is the leading element of `parentFields`. -/
+  hop : Nat := 0
   requestId : String
   purpose : RequestPurpose
   targetAgent : Did
@@ -88,7 +98,6 @@ structure AgentRequestAdmission where
   issuerDid : Did
   sourceRequestId : String
   runtimeSourceKind : RuntimeInternalSourceKind
-  bridgeAuthorDid : Did
   signedFields : CanonicalFields
   signatureValid : Bool
   deriving DecidableEq, Repr
@@ -100,6 +109,7 @@ def agentRequestAdmissionFields
       | .enrollment => "enrollment"
       | .localSelf => "local-self"
       | .runtimeInternal => "runtime-internal"
+      | .peer => "peer"
     , admission.signerDid
     , admission.enrollmentRequestId
     , renderDigestString admission.enrollmentRequestDigest
@@ -110,12 +120,9 @@ def agentRequestAdmissionFields
     , admission.sourceRequestId
     , match admission.kind with
       | .runtimeInternal => match admission.runtimeSourceKind with
-          | .localChild => "local-child"
-          | .crossPrincipalChild => "cross-principal-child"
           | .localControl => "local-control"
           | .automatedTrigger => "automated-trigger"
-      | _ => ""
-    , admission.bridgeAuthorDid ]
+      | _ => "" ]
 
 theorem purpose_change_changes_signed_fields
     (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
@@ -137,20 +144,14 @@ structure RuntimeInternalEvidence where
   sourceKind : RuntimeInternalSourceKind
   issuerDid : Did
   sourceRequestId : String
-  bridgeAuthorDid : Did
   targetAgent : Did
   targetRuntimeAttestationValid : Bool
   /-- Includes complete signed workspace reference agreement with the existing
-  authenticated source via requestWorkspaceWithinSource; cross-principal sources
-  are exact ACP-authenticated bridges, not a parent-replication requirement. -/
+  authenticated source via requestWorkspaceWithinSource. -/
   sourceBindingCurrent : Bool
   triggerConfigDocumentBindingCurrent : Bool
   sourceDocumentBindingCurrent : Bool
-  sourceToolCallBindingCurrent : Bool
   targetPolicyAllows : Bool
-  bridgeAuthorBindingCurrent : Bool
-  bridgeAuthorAuthorizationFresh : Bool
-  targetCrossPrincipalPolicyAllows : Bool
   /-- Existing Goal physical-edge validator authenticates this exact receipt's
   original sequence/wrapup, source/goal/physical-parent binding and deterministic
   identity. This is reconstructed evidence, never copied from input unchecked. -/
@@ -170,27 +171,11 @@ def exactRuntimeInternalEvidence
   evidence.targetRuntimeAttestationValid = true ∧
   evidence.sourceBindingCurrent = true ∧
   match admission.runtimeSourceKind with
-  | .localChild =>
-      request.requesterDid = request.targetAgent ∧
-      admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
-      evidence.sourceDocumentBindingCurrent = true ∧
-      evidence.sourceToolCallBindingCurrent = true ∧
-      evidence.targetPolicyAllows = true
-  | .crossPrincipalChild =>
-      admission.bridgeAuthorDid ≠ "" ∧
-      request.requesterDid = admission.bridgeAuthorDid ∧
-      evidence.bridgeAuthorDid = admission.bridgeAuthorDid ∧
-      evidence.sourceToolCallBindingCurrent = true ∧
-      evidence.bridgeAuthorBindingCurrent = true ∧
-      evidence.bridgeAuthorAuthorizationFresh = true ∧
-      evidence.targetCrossPrincipalPolicyAllows = true
   | .localControl =>
       request.requesterDid = request.targetAgent ∧
-      admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.sourceDocumentBindingCurrent = true
   | .automatedTrigger =>
       request.requesterDid = request.targetAgent ∧
-      admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.triggerConfigDocumentBindingCurrent = true ∧
       evidence.targetPolicyAllows = true
 
@@ -279,12 +264,17 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
 /--
 The executable router boundary. `authorizationFresh` is the current-clock
 lease check made during this admission attempt, not a cached observation.
+`peerAuthorityAllows` is the target's `PeerAdmissionAuthority` ACP verdict for
+the requester DID. Every branch also bounds the signed causal hop by the
+target's `max_request_hop` (`CausalHop.admitHop`).
 -/
 def agentRequestAdmissible
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
     (authorizationFresh : Bool) (runtimeEvidence : Option RuntimeInternalEvidence)
-    (branchFieldsExact pendingDeadlineAbsent : Bool) : Prop :=
+    (branchFieldsExact pendingDeadlineAbsent : Bool)
+    (peerAuthorityAllows : Bool := false)
+    (maxRequestHop : Nat := CausalHop.defaultMaxRequestHop) : Prop :=
   admission.signatureValid = true ∧
   admission.signedFields = agentRequestAdmissionFields request admission ∧
   branchFieldsExact = true ∧
@@ -300,18 +290,25 @@ def agentRequestAdmissible
   | .localSelf =>
       admission.signerDid = request.requesterDid ∧
       request.requesterDid = request.targetAgent
+  | .peer =>
+      admission.signerDid = request.requesterDid ∧
+      request.requesterDid ≠ request.targetAgent ∧
+      peerAuthorityAllows = true
   | .runtimeInternal =>
       match runtimeEvidence with
       | some evidence => exactRuntimeInternalEvidence request admission evidence
       | none => False) ∧
-  requestPurposeAllowed request admission runtimeEvidence
+  requestPurposeAllowed request admission runtimeEvidence ∧
+  CausalHop.admitHop maxRequestHop request.hop = true
 
 instance (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (enrollmentRequest : Option Request) (decision : Option Decision)
     (authorizationFresh : Bool) (runtimeEvidence : Option RuntimeInternalEvidence)
-    (branchFieldsExact pendingDeadlineAbsent : Bool) :
+    (branchFieldsExact pendingDeadlineAbsent peerAuthorityAllows : Bool)
+    (maxRequestHop : Nat) :
     Decidable (agentRequestAdmissible s request admission enrollmentRequest decision
-      authorizationFresh runtimeEvidence branchFieldsExact pendingDeadlineAbsent) := by
+      authorizationFresh runtimeEvidence branchFieldsExact pendingDeadlineAbsent
+      peerAuthorityAllows maxRequestHop) := by
   unfold agentRequestAdmissible
   cases admission.kind <;> cases enrollmentRequest <;> cases decision <;>
     cases runtimeEvidence <;> infer_instance
@@ -398,7 +395,7 @@ theorem title_requires_runtime_parent_only
       parent.sessionId = request.sessionId ∧
       parent.behaviorId = request.behaviorId := by
   have htitle : titlePurposeAllowed request admission runtimeEvidence := by
-    simpa [requestPurposeAllowed, hpurpose] using hadmit.2.2.2.2.2
+    simpa [requestPurposeAllowed, hpurpose] using hadmit.2.2.2.2.2.1
   rcases runtimeEvidence with _ | evidence
   · simp [titlePurposeAllowed] at htitle
   cases hparent : evidence.titleParent with
@@ -431,7 +428,6 @@ structure AgentRequestAdmissionObservation where
   signerMatchesTarget : Bool
   signerMatchesIssuer : Bool
   requesterMatchesIssuer : Bool
-  requesterMatchesBridgeAuthor : Bool
   currentApproval : Bool
   exactGeneration : Bool
   authorizationFresh : Bool
@@ -441,16 +437,14 @@ structure AgentRequestAdmissionObservation where
   sourceBindingCurrent : Bool
   triggerConfigDocumentBindingCurrent : Bool
   sourceDocumentBindingCurrent : Bool
-  sourceToolCallBindingCurrent : Bool
   targetPolicyAllows : Bool
-  bridgeAuthorBindingCurrent : Bool
-  bridgeAuthorAuthorizationFresh : Bool
-  targetCrossPrincipalPolicyAllows : Bool
+  peerAuthorityAllows : Bool
+  hopWithinBound : Bool
   deriving DecidableEq, Repr
 
 def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation) : Bool :=
   observation.signatureValid && observation.signedFieldsMatch && observation.branchFieldsExact &&
-  observation.pendingDeadlineAbsent &&
+  observation.pendingDeadlineAbsent && observation.hopWithinBound &&
   match observation.kind with
   | .enrollment =>
       observation.signerMatchesRequester && observation.currentApproval &&
@@ -458,21 +452,15 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
   | .localSelf =>
       observation.signerMatchesRequester &&
       observation.requesterMatchesTarget
+  | .peer =>
+      observation.signerMatchesRequester &&
+      !observation.requesterMatchesTarget &&
+      observation.peerAuthorityAllows
   | .runtimeInternal =>
       observation.runtimeEvidencePresent &&
       observation.signerMatchesIssuer && observation.signerMatchesTarget &&
       observation.targetRuntimeAttestationValid && observation.sourceBindingCurrent &&
       match observation.runtimeSourceKind with
-      | .localChild =>
-          observation.requesterMatchesIssuer && observation.requesterMatchesTarget &&
-          observation.sourceDocumentBindingCurrent &&
-          observation.sourceToolCallBindingCurrent && observation.targetPolicyAllows
-      | .crossPrincipalChild =>
-          observation.requesterMatchesBridgeAuthor &&
-          observation.sourceToolCallBindingCurrent &&
-          observation.bridgeAuthorBindingCurrent &&
-          observation.bridgeAuthorAuthorizationFresh &&
-          observation.targetCrossPrincipalPolicyAllows
       | .localControl =>
           observation.requesterMatchesIssuer && observation.requesterMatchesTarget &&
           observation.sourceDocumentBindingCurrent
@@ -659,5 +647,33 @@ theorem runtime_internal_admission_is_independent_of_enrollment_state
       agentRequestAdmissible s₂ request admission enrollmentRequest decision fresh runtimeEvidence
         branchFieldsExact pendingDeadlineAbsent := by
   simp [agentRequestAdmissible, hkind]
+
+/-- A peer request is authored by another principal and authorized only by the
+target's peer ACP; a same-principal request can never take this branch. -/
+theorem peer_requires_foreign_signed_authorized_requester
+    {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
+    {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
+    {runtimeEvidence : Option RuntimeInternalEvidence}
+    {branchFieldsExact pendingDeadlineAbsent peerAuthorityAllows : Bool} {maxRequestHop : Nat}
+    (hkind : admission.kind = .peer)
+    (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
+      runtimeEvidence branchFieldsExact pendingDeadlineAbsent peerAuthorityAllows
+      maxRequestHop) :
+    admission.signerDid = request.requesterDid ∧
+      request.requesterDid ≠ request.targetAgent ∧ peerAuthorityAllows = true := by
+  simp only [agentRequestAdmissible, hkind] at hadmit
+  exact hadmit.2.2.2.2.1
+
+/-- Every admitted request, whatever its branch, is within the hop bound. -/
+theorem admitted_request_within_hop_bound
+    {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
+    {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
+    {runtimeEvidence : Option RuntimeInternalEvidence}
+    {branchFieldsExact pendingDeadlineAbsent peerAuthorityAllows : Bool} {maxRequestHop : Nat}
+    (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
+      runtimeEvidence branchFieldsExact pendingDeadlineAbsent peerAuthorityAllows
+      maxRequestHop) :
+    request.hop ≤ maxRequestHop := by
+  simpa [CausalHop.admitHop] using hadmit.2.2.2.2.2.2
 
 end Enrollment

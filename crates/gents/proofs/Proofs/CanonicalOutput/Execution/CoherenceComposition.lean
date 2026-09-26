@@ -24,9 +24,9 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | retract generation record =>
     exact retractBeforeRetry_preserves_toolProjectionCoherent before after generation record coherent
       (mapError_success Gate.Error.execution _ _ h)
-  | accept generation closing message targets admissions =>
+  | accept generation closing message admissions =>
     exact (accepted_publication_is_composed_atomically before after generation closing
-      message targets admissions (mapError_success Gate.Error.execution _ _ h)).2.2.1
+      message admissions (mapError_success Gate.Error.execution _ _ h)).2.2.1
   | authored generation closing message =>
     exact publishAuthored_preserves_toolProjectionCoherent before after generation closing
       message coherent (mapError_success Gate.Error.execution _ _ h)
@@ -186,11 +186,11 @@ theorem Trace.toolProjectionCoherent {before after : World} (trace : Trace befor
       rcases h with ⟨rfl, rfl⟩
       rw [Handover.successful_finish_frame before result actor hc]
       exact coherent
-  | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
+  | activateGoal actor now result published generation duration leaseDeadline scope budget deadline h =>
     rename_i before after
     unfold SessionComposition.activateGoal at h
     cases hc : Handover.claimAndActivate before actor now
-        (GoalContinuation.childActivation result routes authenticated generation duration leaseDeadline) with
+        (GoalContinuation.childActivation result generation duration leaseDeadline) with
     | none => simp [hc] at h
     | some world =>
       simp [hc] at h

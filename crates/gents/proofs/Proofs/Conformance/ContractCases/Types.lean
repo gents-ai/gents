@@ -195,7 +195,6 @@ structure AgentRequestAdmissionCase where
   signerMatchesTarget : Bool
   signerMatchesIssuer : Bool
   requesterMatchesIssuer : Bool
-  requesterMatchesBridgeAuthor : Bool
   currentApproval : Bool
   exactGeneration : Bool
   authorizationFresh : Bool
@@ -205,11 +204,9 @@ structure AgentRequestAdmissionCase where
   sourceBindingCurrent : Bool
   triggerConfigDocumentBindingCurrent : Bool
   sourceDocumentBindingCurrent : Bool
-  sourceToolCallBindingCurrent : Bool
   targetPolicyAllows : Bool
-  bridgeAuthorBindingCurrent : Bool
-  bridgeAuthorAuthorizationFresh : Bool
-  targetCrossPrincipalPolicyAllows : Bool
+  peerAuthorityAllows : Bool
+  hopWithinBound : Bool
   expectedAdmitted : Bool
   expectedDisposition : String
   deriving Repr
@@ -466,7 +463,6 @@ structure RecoverySweepCase where
   measureAfter : Nat
   deadlineAuditRef : String
   deadlineExpired : Option Bool := none
-  unclaimedExpired : Option Bool := none
   parentLive : Option Bool := none
   parentInterrupted : Option Bool := none
   parentTerminal : Option Bool := none
@@ -486,61 +482,32 @@ structure RestartDispositionCase where
   name : String
   rustFunction : String
   awaitMode : String
-  cancelPolicy : String
-  childLinked : Bool
+  sessionMessage : Bool
   parentObservation : String
   deadlineExpired : Bool
-  unclaimedExpired : Bool
   processOutcome : String
-  childObserved : Bool
   disposition : String
   cause : Option String
   terminalState : Option String
-  /-- `SpawnClaimFence` projection of the settlement: whether the terminal
-      write carries a cancel intent and leaves the acknowledgement pending. -/
-  bridgeCancelIntent : Option Bool
-  bridgeAckPending : Option Bool
-  postAwaitMode : Option String
   notificationReason : Option String
   queueSource : Option String
   queueKeyPrefix : Option String
   theoremName : String
   deriving DecidableEq, Repr
 
-/-- Executable bridge-step witness (#937): one concrete subagent-bridge
-    fixture, one bridge event, and the outcome of
-    `Subagent.BridgedState.step` — `legal`, the bridge tool's post state, and
-    whether the child's interrupt flag was latched are all computed by
-    running the step, never hand-written. -/
-structure BridgeStepCase where
-  name : String
-  event : String
-  childState : String
-  parentState : String
-  cancelPolicy : String
-  bridgeCommitted : Bool
-  bridgeState : String
-  legal : Bool
-  postToolState : Option String
-  postChildInterruptSet : Bool
-  theoremName : String
-  deriving DecidableEq, Repr
-
 /-- Interrupt disposition witness: one owned tool-call shape and the
-    disposition and post-state computed by `Subagent.Interrupt.interruptTool`. -/
+    disposition and post-state computed by `Background.Interrupt.interruptTool`. -/
 structure InterruptDispositionCase where
   name : String
   state : String
   awaitMode : String
-  childLinked : Bool
-  cancelPolicy : String
   disposition : String
   postState : String
   postAwaitMode : String
   deriving DecidableEq, Repr
 
 /-- Paging witness over the retained output window (#937): inputs plus the
-    slice outputs, computed from `Subagent.ToolOutput.readSlice` — never
+    slice outputs, computed from `Background.ToolOutput.readSlice` — never
     hand-written. Consumed by the `background_tools` unit test against
     `read_retained_output_slice`. -/
 structure ToolOutputPagingCase where
@@ -567,8 +534,6 @@ structure R6BackgroundingCase where
   preLiveCount : Nat
   maxBackgrounded : Nat
   awaitMode : String
-  cancelPolicy : String
-  childRequestId : Option String
   terminalState : String
   result : Option String
   reason : Option String
@@ -591,48 +556,6 @@ structure R6BackgroundingCase where
   notificationPersisted : Option Bool := none
   wakeCreated : Option Bool := none
   redriveAllowed : Option Bool := none
-  deriving Repr
-
-structure R5CrossPrincipalCase where
-  name : String
-  route : String
-  action : String
-  parentPrincipal : String
-  childPrincipal : String
-  parentRequestId : String
-  parentToolCallId : String
-  childRequestId : String
-  targetBehaviorId : String
-  awaitMode : String
-  cancelPolicy : String
-  parentTriggerPersisted : Bool
-  childMaterialized : Bool
-  childOwnedByTargetPrincipal : Bool
-  causedByParentRequestIdMatches : Bool
-  causedByParentToolCallIdMatches : Bool
-  causedByTriggerKind : String
-  crossPrincipalRoutingFired : Bool
-  samePrincipalFallback : Bool
-  unclaimedDeadlineSet : Bool
-  deriving Repr
-
-structure CancelPropagationCase where
-  name : String
-  route : String
-  action : String
-  parentPrincipal : String
-  childPrincipal : String
-  parentRequestId : String
-  parentToolCallId : String
-  childRequestId : String
-  bridgeCollection : String
-  childRequestCollection : String
-  cancelIntentWrittenOnBridge : Bool
-  bridgeCancelReplicatesToHost : Bool
-  hostInterruptsChild : Bool
-  childInterruptIntentReplicatesToCoordinator : Bool
-  cancelAckReturnsToCoordinator : Bool
-  noThirdPartyRows : Bool
   deriving Repr
 
 structure BackgroundTheoremWitness where
@@ -667,51 +590,10 @@ structure ComposedInvariantWitness where
   cancelCause : Option String
   deriving Repr
 
-structure SubagentDelegationGraphCase where
-  name : String
-  theoremName : String
-  property : String
-  witnessKind : String
-  maxDepth : Nat
-  pathLength : Nat
-  parentDepth : Nat
-  terminalDepth : Nat
-  cascadePath : Bool
-  acyclic : Bool
-  bounded : Bool
-  cascadeCovered : Bool
-  edgeTheorem : String
-  cascadeEdgeTheorem : Option String
-  deriving Repr
-
 namespace R4cWitnesses
 
-structure ListSubagentsLineageRejects where
-  callerRequestId : String
-  siblingRequestId : String
-  siblingChildId : String
-  callerSeesSiblingChild : Bool
-  deriving Repr
-
-structure ReadTranscriptCursorAdvances where
-  childSessionId : String
-  firstSinceSequence : Nat
-  firstThroughSequence : Nat
-  firstNextSequence : Nat
-  secondSinceSequence : Nat
-  secondThroughSequence : Nat
-  noGap : Bool
-  noOverlap : Bool
-  deriving Repr
-
-structure ReadTranscriptHidesBridgeRows where
-  childSessionId : String
-  bridgeCallId : String
-  renderedTranscript : String
-  deriving Repr
-
 /-- One executable canonical-tool-source projection input and the result
-    computed by `Subagent.ToolOutput.project`.  The native adapter supplies the
+    computed by `Background.ToolOutput.project`.  The native adapter supplies the
     fixed accepted physical tool binding and persists these exact segment
     facts; it does not infer output from flags. -/
 structure ToolOutputProjectionCase where
@@ -728,46 +610,6 @@ structure ReadToolOutputCanonicalSourceReconstruction where
   toolCallId : String
   canonicalSource : String
   cases : List ToolOutputProjectionCase
-  deriving Repr
-
-structure SteerAppendPreservesLineage where
-  callerRequestId : String
-  callerRequestDocId : String
-  childSessionId : String
-  queuedRequestId : String
-  causedByParentRequestId : String
-  causedByParentRequestDocId : String
-  causedByParentToolCallIdPresent : Bool
-  causedByParentToolCallDocIdPresent : Bool
-  lineageAdmissible : Bool
-  depthZeroLineageAdmissible : Bool
-  backgroundCompletionDepthZeroAdmissible : Bool
-  queueSource : String
-  queuePolicy : String
-  deriving Repr
-
-structure SteerInterruptComposes where
-  callerRequestId : String
-  childSessionId : String
-  interruptedActiveRequestId : String
-  drainedWakeUpRequestIds : List String
-  drainedWakeUpQueueKey : String
-  queuedRequestId : String
-  queueInterruptedRequestId : String
-  deriving Repr
-
-structure UnmaterializedChildVisible where
-  callerRequestId : String
-  bridgeToolCallId : String
-  childRequestId : String
-  childMaterialized : Bool
-  bridgeLifecycleState : String
-  listedStatus : String
-  listedUnderAllFilter : Bool
-  listedUnderRunningFilter : Bool
-  readLifecycleState : String
-  readTerminal : Bool
-  waitRetryable : Bool
   deriving Repr
 
 end R4cWitnesses

@@ -212,12 +212,12 @@ theorem revokeCorruptCore_preserves_request_identity
 
 theorem acceptAndPublish_nextSeq_monotone
     (world after : World) (generation : Generation) (closing : Segment)
-    (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
-    (h : acceptAndPublish world generation closing message targets admissions = .ok after) :
+    (message : MessageEnvelope) (admissions : List ToolAdmission)
+    (h : acceptAndPublish world generation closing message admissions = .ok after) :
     world.transcript.nextSeq ≤ after.transcript.nextSeq := by
   have hcore := checked_core_success _ _ _ h
-  rcases acceptAndPublishCore_success_effect world after generation closing message targets
-    admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩
+  rcases acceptAndPublishCore_success_effect world after generation closing message
+    admissions hcore with ⟨rfl, _⟩ | ⟨_, _, rfl, _⟩
   · exact Nat.le_refl _
   · simp [Transcript.TranscriptState.publishAcceptedAssistant]
 
@@ -348,7 +348,7 @@ theorem retractBeforeRetry_preserves_nextSeq (world after : World) (generation :
   repeat' first | contradiction | (solve | cases hcore; rfl) | split at hcore
 
 @[simp] theorem dispatchMode_preserves_nextSeq (transcript : Transcript.TranscriptState)
-    (call : ToolExecution.ToolCallId) (mode : Subagent.AwaitMode) :
+    (call : ToolExecution.ToolCallId) (mode : ToolExecution.AwaitMode) :
     (transcript.dispatchToolCallWithMode call mode).nextSeq = transcript.nextSeq := by
   cases mode <;> rfl
 
