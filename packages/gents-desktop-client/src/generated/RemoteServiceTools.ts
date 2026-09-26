@@ -46,15 +46,18 @@ timeout_secs?: number | null,
  */
 stale_timeout_secs?: number | null,
 /**
- * Background lifetime ceiling; current process default 36,000s. The service
- * call timeout still applies; backgrounding does not bypass either limit.
+ * Lifetime of a call to this service started with `spawn_process`. Unset
+ * uses 36,000s; larger values are clamped to 36,000s. The per-call
+ * `timeout_secs` still applies inside it; backgrounding bypasses neither.
  */
 background_timeout_secs?: number | null,
 /**
- * Default observation wait for background work; current default 30s.
+ * `wait_process` wait on a background call to this service when the call
+ * omits `timeout_secs`. Unset uses 30s. Clamped to the wait maximum.
  */
 wait_timeout_secs?: number | null,
 /**
- * Maximum requested observation wait; current default 600s.
+ * Longest `wait_process` wait a call can request on a background call to
+ * this service. Unset uses 600s; larger values are clamped to 600s.
  */
 max_wait_timeout_secs?: number | null, };

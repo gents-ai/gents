@@ -293,7 +293,10 @@ impl Tool for ListFilesTool {
                 NativeFsRunnerRequest::ListFiles(NativeListFilesArgs {
                     path: args.path,
                     recursive: args.recursive,
-                    max_entries: args.max_entries.max(1).min(self.default_max_entries.max(1)),
+                    max_entries: args
+                        .max_entries
+                        .unwrap_or(self.default_max_entries)
+                        .clamp(1, self.default_max_entries.max(1)),
                     raw_json: args.raw_json,
                     max_entries_visited: None,
                     max_wall_ms: None,
@@ -345,7 +348,7 @@ impl Tool for ReadFileTool {
                         "default": self.default_max_chars,
                         "minimum": 1,
                         "maximum": self.default_max_chars,
-                        "description": "Maximum characters to return; higher values are capped by the tool."
+                        "description": "Maximum bytes of content to return, cut on a character boundary; higher values are capped by the tool."
                     },
                     "raw_json": {
                         "type": "boolean",
@@ -364,7 +367,10 @@ impl Tool for ReadFileTool {
         let content_hash = content_hash(&bytes);
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let rendered = render_file_contents(&text, args.start_line, args.end_line);
-        let max_chars = args.max_chars.min(self.default_max_chars).max(1);
+        let max_chars = args
+            .max_chars
+            .unwrap_or(self.default_max_chars)
+            .clamp(1, self.default_max_chars.max(1));
         let (content, truncated) = cap_output(&rendered.content, max_chars);
 
         let output = ReadFileOutput {
@@ -443,7 +449,10 @@ impl Tool for GlobTool {
                 NativeFsRunnerRequest::Glob(NativeGlobArgs {
                     pattern: args.pattern,
                     path: args.path,
-                    max_matches: args.max_matches.min(self.default_max_matches).max(1),
+                    max_matches: args
+                        .max_matches
+                        .unwrap_or(self.default_max_matches)
+                        .clamp(1, self.default_max_matches.max(1)),
                     raw_json: args.raw_json,
                     max_entries_visited: None,
                     max_wall_ms: None,
@@ -511,7 +520,10 @@ impl Tool for GrepTool {
                     pattern: args.pattern,
                     path: args.path,
                     case_sensitive: args.case_sensitive,
-                    max_matches: args.max_matches.min(self.default_max_matches).max(1),
+                    max_matches: args
+                        .max_matches
+                        .unwrap_or(self.default_max_matches)
+                        .clamp(1, self.default_max_matches.max(1)),
                     raw_json: args.raw_json,
                     max_entries_visited: None,
                     max_bytes_read: None,

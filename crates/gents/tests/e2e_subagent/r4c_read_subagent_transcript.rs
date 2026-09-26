@@ -978,6 +978,14 @@ async fn read_transcript_terminal_flag_tracks_child_lifecycle() {
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
+    // The child materializes `pending` and a separate worker claims it; read
+    // only once that claim is durable.
+    crate::support::interrupt::wait_for_request_lifecycle_state(
+        db.node.as_ref(),
+        child["child_request_doc_id"].as_str().unwrap(),
+        "processing",
+    )
+    .await;
     append_message(
         db.node.as_ref(),
         child_session_id,

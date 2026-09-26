@@ -25,6 +25,7 @@ GROUPS = {
     "interrupt_queue_cases": "LeanInterruptQueueCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
     "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",
+    "terminal_diagnostic_replay_cases": "LeanTerminalDiagnosticReplayCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",

@@ -58,9 +58,9 @@ pub async fn run_openai_oneshot_with_tools(
     let tools = Arc::new(tools);
     // Background executions run through `call_tool_managed`, which owns the
     // deadline/cancellation envelope — no per-tool wrapper needed.
-    let background_tool_registry = BackgroundToolRegistry::from_tools(
+    let background_tool_registry = BackgroundToolRegistry::from_config(
         tool_surface.build_tools(&tool_runtime).await?,
-        &tool_surface.background_tools().allowlist,
+        tool_surface.background_tools(),
     );
 
     let client = crate::llm::backend_client::build_backend_client(

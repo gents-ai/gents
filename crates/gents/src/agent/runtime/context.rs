@@ -144,9 +144,9 @@ impl RuntimeContext {
         let loop_tools = std::sync::Arc::new(loop_tools);
         // Background executions run through `call_tool_managed`, which owns
         // the deadline/cancellation envelope — no per-tool wrapper needed.
-        let background_tool_registry = BackgroundToolRegistry::from_tools(
+        let background_tool_registry = BackgroundToolRegistry::from_config(
             tool_surface.build_tools(&self.tool_runtime).await?,
-            &tool_surface.background_tools().allowlist,
+            tool_surface.background_tools(),
         );
         tracing::info!(
             behavior_id = %behavior.behavior_id,

@@ -12,30 +12,17 @@ pub(crate) use command::validate_command_policy;
 pub(crate) use command::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
-    workspace_write_sandbox_enforced,
 };
 #[cfg(test)]
 pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};
 pub(super) use command::{captured_channel, stopped_stream, truncate_stream};
 pub use command::{
-    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    WorkspaceAuthority,
+    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
 pub(crate) use context::ToolContext;
 pub(super) use context::ToolError;
 pub(super) use filesystem::{cap_output, render_file_contents};
-
-pub(super) fn default_max_list_entries() -> usize {
-    super::DEFAULT_MAX_LIST_ENTRIES
-}
-
-pub(super) fn default_max_file_chars() -> usize {
-    super::DEFAULT_MAX_FILE_CHARS
-}
-
-pub(super) fn default_max_matches() -> usize {
-    super::DEFAULT_MAX_MATCHES
-}
 
 /// Resolves the effective command timeout for a bash tool call (#985, #1018).
 ///

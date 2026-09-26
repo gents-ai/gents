@@ -86,30 +86,6 @@ fn clean_text(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn redact_sensitive(value: String) -> String {
-    if looks_sensitive(&value) {
-        "[redacted sensitive input]".to_string()
-    } else {
-        value
-    }
-}
-
-fn redact_sensitive_optional(value: Option<String>) -> Option<String> {
-    value.map(redact_sensitive)
-}
-
-fn redact_sensitive_output(value: String) -> String {
-    if looks_sensitive(&value) {
-        "[redacted sensitive output]".to_string()
-    } else {
-        value
-    }
-}
-
-fn redact_sensitive_output_optional(value: Option<String>) -> Option<String> {
-    value.map(redact_sensitive_output)
-}
-
 fn split_envelope<'a>(value: &'a str, prefix: &str) -> (Option<Map<String, Value>>, &'a str) {
     let Some(head) = value.strip_prefix(prefix) else {
         return (None, value);
@@ -279,15 +255,13 @@ fn project_command(tool: &ToolCallView) -> ToolPresentationView {
         || exit_code.is_some_and(|code| code != 0);
     let parsed_output = raw_result.is_empty() || meta.is_some();
     ToolPresentationView::Command {
-        command: redact_sensitive(
-            string_field(meta.as_ref(), "command")
-                .or_else(|| string_field(args.as_ref(), "command"))
-                .unwrap_or_else(|| {
-                    tool.tool_name
-                        .clone()
-                        .unwrap_or_else(|| "command".to_string())
-                }),
-        ),
+        command: string_field(meta.as_ref(), "command")
+            .or_else(|| string_field(args.as_ref(), "command"))
+            .unwrap_or_else(|| {
+                tool.tool_name
+                    .clone()
+                    .unwrap_or_else(|| "command".to_string())
+            }),
         exit_code,
         timed_out,
         failed,
@@ -295,11 +269,9 @@ fn project_command(tool: &ToolCallView) -> ToolPresentationView {
         cwd: string_field(meta.as_ref(), "cwd").or_else(|| string_field(args.as_ref(), "cwd")),
         execution_mode: string_field(meta.as_ref(), "execution_mode"),
         network_mode: string_field(meta.as_ref(), "network_mode"),
-        stdout: redact_sensitive_output(streams.stdout),
-        stderr: redact_sensitive_output(streams.stderr),
-        fallback_output: redact_sensitive_output_optional(
-            (!parsed_output).then(|| raw_result.to_string()),
-        ),
+        stdout: streams.stdout,
+        stderr: streams.stderr,
+        fallback_output: (!parsed_output).then(|| raw_result.to_string()),
     }
 }
 
@@ -309,31 +281,26 @@ fn project_file_read(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     let (meta, body) = split_envelope(raw_result, "gents_fs: ");
     ToolPresentationView::FileRead {
         operation: operation.to_string(),
-        target: redact_sensitive_optional(
-            string_field(meta.as_ref(), "path")
-                .or_else(|| string_field(args.as_ref(), "path"))
-                .or_else(|| string_field(args.as_ref(), "pattern")),
-        ),
+        target: string_field(meta.as_ref(), "path")
+            .or_else(|| string_field(args.as_ref(), "path"))
+            .or_else(|| string_field(args.as_ref(), "pattern")),
         returned_count: i64_field(meta.as_ref(), "returned_count"),
         total_count: i64_field(meta.as_ref(), "total_count"),
         truncated: bool_field(meta.as_ref(), "truncated") == Some(true),
-        body: redact_sensitive_output(
-            meta.as_ref()
-                .map(|_| body.trim_end().to_string())
-                .unwrap_or_default(),
-        ),
-        fallback_output: redact_sensitive_output_optional(
-            (meta.is_none())
-                .then(|| raw_result.to_string())
-                .filter(|v| !v.is_empty()),
-        ),
+        body: meta
+            .as_ref()
+            .map(|_| body.trim_end().to_string())
+            .unwrap_or_default(),
+        fallback_output: (meta.is_none())
+            .then(|| raw_result.to_string())
+            .filter(|v| !v.is_empty()),
     }
 }
 
 fn diff_line(kind: ToolDiffLineKind, text: &str) -> ToolDiffLineView {
     ToolDiffLineView {
         kind,
-        text: redact_sensitive(text.trim_end_matches('\r').to_string()),
+        text: text.trim_end_matches('\r').to_string(),
     }
 }
 
@@ -446,17 +413,13 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     };
     ToolPresentationView::FileEdit {
         operation: operation.to_string(),
-        path: redact_sensitive_optional(
-            string_field(args.as_ref(), "path").or_else(|| string_field(meta.as_ref(), "path")),
-        ),
+        path: string_field(args.as_ref(), "path").or_else(|| string_field(meta.as_ref(), "path")),
         created: bool_field(meta.as_ref(), "created"),
         replacements_applied: i64_field(meta.as_ref(), "replacements_applied"),
         diff,
-        fallback_output: redact_sensitive_output_optional(
-            (meta.is_none())
-                .then(|| raw_result.to_string())
-                .filter(|v| !v.is_empty()),
-        ),
+        fallback_output: (meta.is_none())
+            .then(|| raw_result.to_string())
+            .filter(|v| !v.is_empty()),
     }
 }
 
@@ -475,36 +438,31 @@ fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
         .clone()
         .or_else(|| string_field(args.as_ref(), "child_request_id"))
         .or_else(|| string_field(result.as_ref(), "child_request_id"));
-    let description = redact_sensitive_optional(
-        string_field(args.as_ref(), "prompt")
-            .or_else(|| string_field(args.as_ref(), "message"))
-            .or_else(|| string_field(args.as_ref(), "reason")),
-    );
+    let description = string_field(args.as_ref(), "prompt")
+        .or_else(|| string_field(args.as_ref(), "message"))
+        .or_else(|| string_field(args.as_ref(), "reason"));
     ToolPresentationView::Subagent {
         action: action_label(name, "_subagent"),
         name: string_field(args.as_ref(), "name"),
         child_request_id,
         description,
-        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
+        output: clean_text(tool.result.as_deref()),
     }
 }
 
 fn project_process(tool: &ToolCallView, name: &str) -> ToolPresentationView {
     let args = json_object(tool.args.as_deref());
     let result = json_object(tool.result.as_deref());
-    let target = redact_sensitive_optional(
-        string_field(args.as_ref(), "tool_name")
-            .or_else(|| string_field(args.as_ref(), "tool_call_id"))
-            .or_else(|| string_field(result.as_ref(), "tool_call_id")),
-    );
-    let description = redact_sensitive_optional(
-        json_field(args.as_ref(), "args").or_else(|| string_field(args.as_ref(), "reason")),
-    );
+    let target = string_field(args.as_ref(), "tool_name")
+        .or_else(|| string_field(args.as_ref(), "tool_call_id"))
+        .or_else(|| string_field(result.as_ref(), "tool_call_id"));
+    let description =
+        json_field(args.as_ref(), "args").or_else(|| string_field(args.as_ref(), "reason"));
     ToolPresentationView::Process {
         action: action_label(name, "_process"),
         target,
         description,
-        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
+        output: clean_text(tool.result.as_deref()),
     }
 }
 
@@ -513,8 +471,8 @@ fn project_mcp(tool: &ToolCallView) -> ToolPresentationView {
     ToolPresentationView::Mcp {
         service_id: string_field(args.as_ref(), "service_id"),
         selected_tool_name: string_field(args.as_ref(), "tool_name"),
-        arguments: redact_sensitive_optional(json_field(args.as_ref(), "arguments")),
-        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
+        arguments: json_field(args.as_ref(), "arguments"),
+        output: clean_text(tool.result.as_deref()),
     }
 }
 
@@ -530,33 +488,12 @@ fn project_generic(tool: &ToolCallView) -> ToolPresentationView {
         "command",
     ]
     .into_iter()
-    .find_map(|key| string_field(args.as_ref(), key))
-    .filter(|value| !looks_sensitive(value));
+    .find_map(|key| string_field(args.as_ref(), key));
     ToolPresentationView::Generic {
         summary,
-        input: redact_sensitive_optional(clean_text(tool.args.as_deref())),
-        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
+        input: clean_text(tool.args.as_deref()),
+        output: clean_text(tool.result.as_deref()),
     }
-}
-
-fn looks_sensitive(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase();
-    [
-        "api_key",
-        "api-key",
-        "access_token",
-        "access-token",
-        "refresh_token",
-        "refresh-token",
-        "password",
-        "passwd",
-        "secret",
-        "authorization",
-        "bearer ",
-        "cookie",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
 }
 
 fn tool_status_is_error(tool: &ToolCallView) -> bool {
@@ -765,40 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_summary_does_not_surface_credentials() {
-        let projected = project_tool_presentation(&tool(
-            "web_request",
-            r#"{"command":"curl -H 'Authorization: Bearer secret' example.com"}"#,
-            "done",
-            "completed",
-        ));
-        assert!(matches!(
-            projected,
-            ToolPresentationView::Generic {
-                summary: None,
-                input: Some(ref input),
-                ..
-            } if input == "[redacted sensitive input]"
-        ));
-    }
-
-    #[test]
-    fn command_summary_redacts_credentials() {
-        let projected = project_tool_presentation(&tool(
-            "bash",
-            r#"{"command":"curl -H 'Authorization: Bearer secret' example.com"}"#,
-            "",
-            "completed",
-        ));
-        assert!(matches!(
-            projected,
-            ToolPresentationView::Command { ref command, .. }
-                if command == "[redacted sensitive input]"
-        ));
-    }
-
-    #[test]
-    fn command_output_redaction_names_the_output() {
+    fn command_and_output_are_presented_as_run() {
         let projected = project_tool_presentation(&tool(
             "bash",
             r#"{"command":"env"}"#,
@@ -808,22 +712,7 @@ mod tests {
         assert!(matches!(
             projected,
             ToolPresentationView::Command { ref command, ref stdout, .. }
-                if command == "env" && stdout == "[redacted sensitive output]"
-        ));
-    }
-
-    #[test]
-    fn subagent_summary_redacts_credentials() {
-        let projected = project_tool_presentation(&tool(
-            "spawn_subagent",
-            r#"{"prompt":"Use Authorization: Bearer secret"}"#,
-            "",
-            "completed",
-        ));
-        assert!(matches!(
-            projected,
-            ToolPresentationView::Subagent { description: Some(ref value), .. }
-                if value == "[redacted sensitive input]"
+                if command == "env" && stdout.contains("API_KEY=abc")
         ));
     }
 }

@@ -186,31 +186,19 @@ describe("long command output", () => {
   });
 });
 
-describe("redacted tool content", () => {
-  it("says why a command or output is hidden instead of printing the marker", () => {
-    const hidden = tool({
-      kind: "command",
-      command: "[redacted sensitive input]",
-      exitCode: 0,
-      timedOut: false,
-      failed: false,
-      durationMs: null,
-      cwd: null,
-      executionMode: null,
-      networkMode: null,
-      stdout: "[redacted sensitive output]",
-      stderr: "",
-      fallbackOutput: null,
-    } as RenderedToolCallView["presentation"]);
-    expect(toolSummary(hidden).primary).toBe(
-      "Command hidden: it contains a credential",
+describe("command content", () => {
+  it("shows a command and its output as they ran", () => {
+    const run = tool(
+      command({
+        command: "curl -H 'Authorization: Bearer x' example.com",
+        stdout: "API_KEY=abc",
+      }),
     );
-    expect(toolSummary(hidden).mono).toBeFalsy();
-    render(<ToolBody tool={hidden} />);
-    expect(screen.queryByText("[redacted sensitive output]")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Hidden because it looks like it contains a credential."),
-    ).toBeInTheDocument();
+    expect(toolSummary(run).primary).toBe(
+      "curl -H 'Authorization: Bearer x' example.com",
+    );
+    render(<ToolBody tool={run} />);
+    expect(screen.getByText("API_KEY=abc")).toBeInTheDocument();
   });
 });
 

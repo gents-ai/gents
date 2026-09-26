@@ -789,13 +789,14 @@ async fn initialize_runtime_home(
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
-    if args.setup_steward {
-        tools.self_config = Some(setup_steward_self_config());
-        tools
-            .built_ins
-            .get_or_insert_with(Default::default)
-            .enable_graph_tools = Some(true);
-    }
+    // Every first run carries the Engineer's configuration tools, as the
+    // desktop first run does; the stored tool ceiling still bounds any host
+    // tool change they make.
+    tools.self_config = Some(setup_steward_self_config());
+    tools
+        .built_ins
+        .get_or_insert_with(Default::default)
+        .enable_graph_tools = Some(true);
     let context = AgentContext {
         context_id: default_context_id_for_behavior(&default_behavior_id),
         agent_did: agent_did.to_string(),
@@ -1014,7 +1015,7 @@ fn tools_for_package(
                         ToolPackageArg::Readonly => FileToolMode::ReadOnly,
                         _ => FileToolMode::ReadWrite,
                     },
-                    timeout_secs: None,
+                    ..Default::default()
                 }),
                 bash: Some(BashTools {
                     mode: match tool_package {
@@ -1064,14 +1065,12 @@ fn tools_for_package(
             enable_memory: Some(enable_memory),
             enable_session_history_tool: None,
             enable_context_budget: Some(true),
-            timeout_secs: None,
         }),
         datastore: Some(DatastoreTools {
             enable_defra_query: Some(enable_defra_query),
             defra_query_collections: (!defra_query_collections.is_empty())
                 .then_some(defra_query_collections),
             datastore_tool_surface_ids: None,
-            timeout_secs: None,
         }),
         integrations: None,
         self_config: None,
@@ -1793,7 +1792,7 @@ mod tests {
 
         assert!(
             tools.self_config.is_none(),
-            "readonly init leaves self-config off unless --setup-steward"
+            "package profiles leave self-config to init's first-run preset"
         );
         let built_ins = tools.built_ins.as_ref().unwrap();
         assert_eq!(built_ins.enable_memory, Some(true));

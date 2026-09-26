@@ -82,6 +82,7 @@ import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.RepeatedToolFailure
+import Proofs.Conformance.ToolTimeouts
 
 import Proofs.Conformance.LogicalOutputObligation
 

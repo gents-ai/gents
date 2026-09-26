@@ -311,6 +311,72 @@ async fn spawn_background_child(
     fetch_child_workspace(fixture.db.node.as_ref(), &child.request_id).await
 }
 
+/// Without a WorkspaceWrite sandbox, admission refuses a ReadWrite-bound parent
+/// before any provider turn, tool call or child workspace exists.
+async fn assert_readwrite_parent_refused_without_sandbox(
+    fixture: &SpawnFixture,
+    tool_call_id: &str,
+    workspace: Value,
+    parent_workspace_id: &str,
+) {
+    let args = json!({
+        "name": CHILD_BEHAVIOR_ID,
+        "prompt": "workspace child prompt",
+        "await_mode": "background",
+        "workspace": workspace,
+    })
+    .to_string();
+    let runtime = boot_canonical_spawn_turn(
+        fixture,
+        tool_call_id,
+        &args,
+        "child held for fixture observation",
+        1,
+    )
+    .await;
+    let reason = wait_for_canonical_parent_terminal(fixture)
+        .await
+        .expect_err("ReadWrite parent must be refused on a host without a WorkspaceWrite sandbox");
+    assert!(
+        reason.contains("requires an enforceable WorkspaceWrite sandbox on this host"),
+        "expected explicit unsupported-sandbox refusal, got {reason:?}"
+    );
+    assert_eq!(
+        runtime.backend.observed_completion_requests(),
+        0,
+        "refused parent must not reach the provider"
+    );
+    let session = escape_graphql_string(&fixture.session_id);
+    let response = fixture
+        .db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ tool_call_id }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.as_ref().unwrap()["AgentToolCall"],
+        json!([]),
+        "refused parent must not dispatch a tool call"
+    );
+    let owner = escape_graphql_string(&fixture.agent_did);
+    let response = fixture
+        .db
+        .node
+        .execute(&format!(
+            r#"{{ IsolatedWorkspace(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ workspace_id }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.as_ref().unwrap()["IsolatedWorkspace"],
+        json!([{ "workspace_id": parent_workspace_id }]),
+        "refused parent must not provision a child workspace"
+    );
+    runtime.shutdown().await;
+}
+
 fn git(cwd: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
@@ -686,6 +752,22 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         &std::fs::canonicalize(root.path()).unwrap(),
     )
     .await;
+    if !gents::toolset::workspace_write_sandbox_enforced() {
+        let before = git(&repo, &["worktree", "list"]);
+        assert_readwrite_parent_refused_without_sandbox(
+            &fixture,
+            "internal-spawn-provision",
+            json!({ "provision": { "policy": "git_worktree_diff" } }),
+            parent_workspace_id,
+        )
+        .await;
+        assert_eq!(
+            git(&repo, &["worktree", "list"]),
+            before,
+            "refused spawn must not add a worktree"
+        );
+        return;
+    }
 
     let first = spawn_background_child(
         &fixture,
@@ -834,7 +916,9 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
     let parent_workspace_id = "ws-provision-ceiling";
     let owner = "did:test:workspace-provision-ceiling";
     let (root, repo, sha) = init_git_repo();
-    let extra = parent_workspace_fields(parent_workspace_id, owner, "readWrite");
+    // The ceiling guard precedes authority stamping; a ReadOnly parent keeps
+    // this premise admissible on hosts without a WorkspaceWrite sandbox.
+    let extra = parent_workspace_fields(parent_workspace_id, owner, "readOnly");
     let mut fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_provision_ceiling",
         vec![CHILD_BEHAVIOR_ID],

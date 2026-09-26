@@ -70,6 +70,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reasoning_visibility_matches_live_preview",
         },
         ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_replay_cases_bind_native_replay",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/delivery.rs",
+            module_path: "tool_call_lifecycle::delivery::spawned_background_tests",
+            function: "generated_terminal_diagnostic_replay_cases_bind_native_replay",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_cases_bind_native_presentation",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/delivery.rs",
@@ -313,6 +320,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/agent/output_obligation/logical_tests.rs",
             module_path: "agent::output_obligation::logical_tests",
             function: "generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution",
+            package: "gents",
+            source_path: "crates/gents/src/tool_surface/timeouts.rs",
+            module_path: "tool_surface::timeouts::tests",
+            function: "generated_tool_timeout_cases_bind_native_resolution",
         },
         ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop",

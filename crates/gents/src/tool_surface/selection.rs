@@ -122,6 +122,7 @@ impl SubagentToolConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BackgroundToolConfig {
     pub allowlist: Vec<String>,
+    pub timeouts: super::BackgroundTimeouts,
 }
 
 impl BackgroundToolConfig {
@@ -147,6 +148,9 @@ pub struct ResolvedToolSelection {
     pub command_policy: Option<CommandExecutionPolicy>,
     pub cli_tool_names: Vec<String>,
     pub command_output_limits: CommandOutputLimits,
+    pub timeouts: super::ToolTimeouts,
+    /// `host.files` per-call limits; unset fields keep the toolset defaults.
+    pub file_limits: crate::toolset::FileToolLimits,
     pub enable_meta_tools: bool,
     /// Enables the session-owned durable goal read/update tools independently
     /// of generic MCP discovery and dispatch.
@@ -190,6 +194,8 @@ impl Default for ResolvedToolSelection {
             command_policy: None,
             cli_tool_names: Vec::new(),
             command_output_limits: CommandOutputLimits::default(),
+            timeouts: super::ToolTimeouts::default(),
+            file_limits: crate::toolset::FileToolLimits::default(),
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_graph_tools: false,
@@ -337,6 +343,8 @@ impl ResolvedToolSelection {
             command_policy,
             cli_tool_names,
             command_output_limits,
+            timeouts: super::ToolTimeouts::from_document(tools),
+            file_limits: file_limits_from_document(files),
             enable_meta_tools,
             enable_goal_tools,
             enable_graph_tools: built_ins
@@ -404,6 +412,31 @@ impl ResolvedToolSelection {
                 .and_then(|group| group.plugins.clone())
                 .unwrap_or_default(),
         })
+    }
+}
+
+fn file_limits_from_document(
+    files: Option<&crate::document_config::FileTools>,
+) -> crate::toolset::FileToolLimits {
+    let defaults = crate::toolset::FileToolLimits::default();
+    let limit = |value: Option<i64>, fallback: usize| {
+        value
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(fallback)
+    };
+    crate::toolset::FileToolLimits {
+        max_read_chars: limit(
+            files.and_then(|files| files.max_read_chars),
+            defaults.max_read_chars,
+        ),
+        max_list_entries: limit(
+            files.and_then(|files| files.max_list_entries),
+            defaults.max_list_entries,
+        ),
+        max_matches: limit(
+            files.and_then(|files| files.max_matches),
+            defaults.max_matches,
+        ),
     }
 }
 

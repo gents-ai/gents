@@ -351,8 +351,13 @@ async fn raw_request(
     )))
 }
 
+/// `LspTool::call` resolves `timeout` through the configured action policy.
 fn request_timeout(req: &ActionRequest) -> std::time::Duration {
-    std::time::Duration::from_secs(req.timeout.unwrap_or(20).clamp(5, 300) as u64)
+    std::time::Duration::from_secs(
+        req.timeout
+            .map(u64::from)
+            .unwrap_or(super::DEFAULT_ACTION_TIMEOUT_SECS),
+    )
 }
 
 pub fn validate_raw_request(

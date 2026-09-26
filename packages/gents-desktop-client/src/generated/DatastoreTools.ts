@@ -8,9 +8,4 @@ export type DatastoreTools = { enable_defra_query?: boolean | null, defra_query_
  * Bare `surface_id` refs to same-agent `DatastoreToolSurface` docs.
  * Expanded into create and query tools at snapshot build (fail-closed).
  */
-datastore_tool_surface_ids?: Array<string> | null,
-/**
- * Optional execution cap per tool call. Unset retains the existing enclosing
- * tool-call/request deadline without introducing an independent timer.
- */
-timeout_secs?: number | null, };
+datastore_tool_surface_ids?: Array<string> | null, };

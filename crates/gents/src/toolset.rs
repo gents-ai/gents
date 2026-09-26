@@ -71,11 +71,10 @@ pub(crate) use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
-    workspace_write_sandbox_enforced,
 };
 pub use shared::{
-    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
-    WorkspaceAuthority,
+    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
 
 /// Canonical baseline for inspecting or narrowing the read-only host capability.
@@ -83,21 +82,34 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
 }
 
-const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
+/// `read_file` bytes per call (cut on a character boundary) when
+/// `host.files.max_read_chars` is unset.
+pub(crate) const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 pub(crate) const MAX_CONFIGURED_COMMAND_CHARS: usize = 1_000_000;
-const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
-const DEFAULT_MAX_MATCHES: usize = 200;
+/// `list_files` entries per call when `host.files.max_list_entries` is unset.
+pub(crate) const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
+/// `glob`/`grep` matches per call when `host.files.max_matches` is unset.
+pub(crate) const DEFAULT_MAX_MATCHES: usize = 200;
+/// Ceiling on a configured `host.files.max_read_chars`, matching the command
+/// output ceiling: one tool result should not dominate a context window.
+pub(crate) const MAX_CONFIGURED_FILE_CHARS: usize = 1_000_000;
+/// Ceiling on configured `host.files` entry and match counts. Independently,
+/// the filesystem runner cuts a result that would exceed its response budget
+/// (`gents_fs_runner::MAX_RESPONSE_BYTES`) and reports it as truncated, so a
+/// large count over long paths or previews degrades to a shorter result
+/// rather than an error.
+pub(crate) const MAX_CONFIGURED_FILE_RESULTS: usize = 5_000;
 // Foreground default aligned with other agent frameworks (Claude Code and
 // grok-build both default to 120s); deployments raise or lower it with
 // `--command-timeout-secs`. Explicit model requests may exceed it up to the
 // separately configured `--command-timeout-max-secs` ceiling (#985, #1018).
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
-// Lifetime budget for commands backgrounded via spawn_process. Background
+// Lifetime ceiling for work backgrounded via spawn_process. Background
 // runs are exempt from the foreground ceiling — cancel_process and the
 // completion notification are the lifecycle controls — but keep a 10-hour
 // backstop (grok-build uses the same bound) so an orphaned job cannot run
-// forever (#985).
+// forever (#985). `background_timeout_secs` may only shorten it.
 pub(crate) const BACKGROUND_COMMAND_TIMEOUT_SECS: u64 = 36_000;
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
@@ -128,6 +140,9 @@ pub struct CliToolConfig {
 pub struct ToolSet {
     tools: Vec<NativeTool>,
     read_root: Option<PathBuf>,
+    /// Lifetime of a bash run started with `spawn_process`, advertised by the
+    /// bash tools; the spawn admission owner enforces the same value.
+    background_lifetime: Duration,
 }
 
 impl ToolSet {
@@ -155,6 +170,7 @@ impl ToolSet {
                 },
             ],
             read_root: None,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
         }
     }
 
@@ -192,6 +208,7 @@ impl ToolSet {
                 },
             ],
             read_root: Some(root),
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
         }
     }
 
@@ -199,6 +216,7 @@ impl ToolSet {
         Self {
             tools: Vec::new(),
             read_root: None,
+            background_lifetime: Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS),
         }
     }
 
@@ -282,26 +300,32 @@ impl ToolSet {
                     max_output_chars,
                     policy,
                     ..
-                } => built.push(Box::new(ReadOnlyBashTool::with_policy(
-                    read_context.clone(),
-                    *timeout,
-                    *timeout_max,
-                    *max_output_chars,
-                    policy.clone(),
-                ))),
+                } => built.push(Box::new(
+                    ReadOnlyBashTool::with_policy(
+                        read_context.clone(),
+                        *timeout,
+                        *timeout_max,
+                        *max_output_chars,
+                        policy.clone(),
+                    )
+                    .with_background_lifetime(self.background_lifetime),
+                )),
                 NativeTool::BashUnrestricted {
                     timeout,
                     timeout_max,
                     max_output_chars,
                     root,
                     policy,
-                } => built.push(Box::new(UnrestrictedBashTool::with_policy(
-                    ToolContext::new(root.clone(), true)?,
-                    *timeout,
-                    *timeout_max,
-                    *max_output_chars,
-                    policy.clone(),
-                ))),
+                } => built.push(Box::new(
+                    UnrestrictedBashTool::with_policy(
+                        ToolContext::new(root.clone(), true)?,
+                        *timeout,
+                        *timeout_max,
+                        *max_output_chars,
+                        policy.clone(),
+                    )
+                    .with_background_lifetime(self.background_lifetime),
+                )),
                 NativeTool::Cli(tool) => built.push(Box::new(CliTool::new(tool.clone()))),
             }
         }
@@ -357,6 +381,30 @@ pub enum NativeTool {
     Cli(CliToolConfig),
 }
 
+/// Per-call default and maximum of the read-side file tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileToolLimits {
+    pub max_read_chars: usize,
+    pub max_list_entries: usize,
+    pub max_matches: usize,
+}
+
+impl Default for FileToolLimits {
+    fn default() -> Self {
+        Self {
+            max_read_chars: DEFAULT_MAX_FILE_CHARS,
+            max_list_entries: DEFAULT_MAX_LIST_ENTRIES,
+            max_matches: DEFAULT_MAX_MATCHES,
+        }
+    }
+}
+
+/// Whether `name` is a native bash tool, the only native host tool that can
+/// run in the background.
+pub(crate) fn is_bash_tool_name(name: &str) -> bool {
+    name == NativeTool::BASH_NAME || name == NativeTool::BASH_UNRESTRICTED_NAME
+}
+
 impl NativeTool {
     const LIST_FILES_NAME: &'static str = <ListFilesTool as crate::llm::tool::Tool>::NAME;
     const READ_FILE_NAME: &'static str = <ReadFileTool as crate::llm::tool::Tool>::NAME;
@@ -409,6 +457,7 @@ impl NativeTool {
 pub struct ToolSetBuilder {
     tools: Vec<NativeTool>,
     read_root: Option<PathBuf>,
+    background_lifetime: Option<Duration>,
 }
 
 impl ToolSetBuilder {
@@ -442,6 +491,25 @@ impl ToolSetBuilder {
         self.tools.push(NativeTool::Grep {
             max_matches: DEFAULT_MAX_MATCHES,
         });
+        self
+    }
+
+    /// The four read-side file tools with explicit per-call limits.
+    pub fn read_file_tools_with_limits(mut self, limits: FileToolLimits) -> Self {
+        self.tools.extend([
+            NativeTool::ListFiles {
+                max_entries: limits.max_list_entries,
+            },
+            NativeTool::ReadFile {
+                max_chars: limits.max_read_chars,
+            },
+            NativeTool::Glob {
+                max_matches: limits.max_matches,
+            },
+            NativeTool::Grep {
+                max_matches: limits.max_matches,
+            },
+        ]);
         self
     }
 
@@ -560,10 +628,19 @@ impl ToolSetBuilder {
         self
     }
 
+    /// Configured `spawn_process` lifetime for bash runs.
+    pub fn background_lifetime(mut self, lifetime: Duration) -> Self {
+        self.background_lifetime = Some(lifetime);
+        self
+    }
+
     pub fn build(self) -> ToolSet {
         ToolSet {
             tools: self.tools,
             read_root: self.read_root,
+            background_lifetime: self
+                .background_lifetime
+                .unwrap_or(Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS)),
         }
     }
 }

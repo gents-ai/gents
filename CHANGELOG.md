@@ -8,17 +8,64 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Breaking
 
+- Tools document timeouts now take effect, and the ones that could not are
+  gone (#1768). `host.bash` `timeout_secs` and `max_timeout_secs` set the
+  foreground default and maximum, clamped to the host's
+  `--command-timeout-secs` / `--command-timeout-max-secs`.
+  `host.cli[].timeout_secs` replaces the CLI registration's timeout, clamped
+  the same way. `background_timeout_secs` on `host.bash` and each remote
+  service sets a `spawn_process` lifetime (at most 36,000s).
+  `wait_timeout_secs` and `max_wait_timeout_secs` there set `wait_process`
+  waits on that kind of handle (at most 600s). `integrations.lsp`
+  `timeout_secs` and `max_timeout_secs` set LSP action timeouts (at most
+  300s). Values above a ceiling are clamped, not rejected. Removed, and now
+  rejected: `host.files.timeout_secs`, `built_ins.timeout_secs`,
+  `datastore.timeout_secs`, `self_config.timeout_secs`,
+  `subagents.wait_timeout_secs`, `subagents.max_wait_timeout_secs` and
+  `integrations.lsp.rpc_timeout_secs`. Delete them from stored Tools
+  documents before upgrading.
 - `gents subagent list` JSON: `state` replaced by `edge_state` (null on
   root/forest rows) and `request_lifecycle_state`; table column `STATE` →
   `EDGE_STATE`/`REQUEST_STATE` (#1783).
 
+### Added
+
+- Tools documents can set file tool limits: `host.files.max_read_chars`
+  (default 32,000 bytes, allowed 1 to 1,000,000) for `read_file`, and
+  `host.files.max_list_entries` and `host.files.max_matches` (default 200,
+  allowed 1 to 5,000) for `list_files`, `glob` and `grep`. Each is both the
+  per-call default and the most a call can request. The desktop Tools editor
+  shows them (#1764).
+
 ### Changed
 
+- Plain `gents init` enables the Engineer's self-config tools and graph tools,
+  as the desktop first run does. The tool ceiling set at init still bounds what
+  they can change. `--setup-steward` now only seeds the Engineer identity, the
+  write package default and deferred inference (#1874).
 - `write_file` no longer replaces an existing file blindly: pass the
   `content_hash` from your latest read (rejected if the file changed since) or
   `overwrite: true`. Creating new files is unchanged (#1605).
+- A configured `max_output_chars` now also bounds what an interrupted
+  command's diagnostic shows and how much a background command's completion
+  notice summarizes (at most 4,000 bytes) (#1770). The value is read from the
+  behavior's current Tools document when the output is presented, including
+  after a restart; a behavior that no longer resolves uses the default.
+- `list_files`, `glob` and `grep` return a truncated result when their output
+  would exceed the filesystem runner's response budget (1.5 MiB), instead of
+  failing the call. Glob and grep patterns longer than 4,096 bytes are refused
+  with an error instead of crashing the runner (#1764).
+- The subagent tree view shows three levels below its root when no depth is
+  requested, the delegation depth limit, instead of eight. Explicit depths
+  and the desktop cascade-cancel preview use the descendant walk's 32-level
+  bound, matching what cancellation reaches (#1764).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
+- The desktop transcript shows tool commands, arguments and output as they
+  ran. It no longer hides text that mentions a credential-like word (such as
+  `password` or `Authorization`) behind "Command hidden" or "Hidden because it
+  looks like it contains a credential"; the stored transcript was never
+  redacted (#1620).
 
 ### Fixed
 
@@ -71,6 +118,18 @@ source consistency checks, not a separate runtime compatibility version.
   output captured so far, followed by the deadline, instead of only the
   deadline. A command stopped by its own timeout keeps the last part of its
   output, marked `[Showing last N of M bytes]`, instead of the first part (#1669).
+- The isolated-workspace spawn tests now pass on Linux hosts. They check
+  whether the host can enforce the WorkspaceWrite sandbox. Where it can't
+  (Linux, until #1601 adds one), they assert that the runtime refuses a
+  ReadWrite-bound request with the explicit "requires an enforceable
+  WorkspaceWrite sandbox on this host" failure before any provider turn,
+  tool call or child workspace (#1846).
+- `read_transcript_terminal_flag_tracks_child_lifecycle` no longer
+  intermittently sees a `pending` child. It now waits until the child's claim
+  (`processing`) is durable before reading the transcript (#1847).
+- A command whose CRLF output runs past the output limit no longer fails to
+  record its result. The shown part keeps each line's `\r`, so it is exactly
+  the start of the captured output (#1867).
 
 ## 0.19.0 - 2026-09-24
 
@@ -132,9 +191,7 @@ every runtime you pair with to 0.19.0 together.
 - Tools documents can set how much command output a completed call returns:
   `host.bash.max_output_chars` and `host.cli[].max_output_chars` bound stdout
   and stderr, each (UTF-8 bytes; default 16,000, allowed 1 to 1,000,000).
-  Background completion notices and interrupted-call diagnostics keep their
-  fixed budgets for now (#1770). Runtimes older than 0.19.0 reject documents
-  that set them.
+  Runtimes older than 0.19.0 reject documents that set them.
 
 ### Changed
 

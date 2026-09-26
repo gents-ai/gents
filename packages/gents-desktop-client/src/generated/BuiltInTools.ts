@@ -16,9 +16,4 @@ enable_goal_tools?: boolean | null,
 /**
  * Additional opt-in for model-facing goal creation. Unset is disabled.
  */
-enable_goal_creation?: boolean | null, enable_memory?: boolean | null, enable_session_history_tool?: boolean | null, enable_context_budget?: boolean | null,
-/**
- * Optional execution cap per tool call. Unset retains the existing enclosing
- * tool-call/request deadline without introducing an independent timer.
- */
-timeout_secs?: number | null, };
+enable_goal_creation?: boolean | null, enable_memory?: boolean | null, enable_session_history_tool?: boolean | null, enable_context_budget?: boolean | null, };

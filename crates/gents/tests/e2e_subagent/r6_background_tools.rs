@@ -151,8 +151,6 @@ async fn boot_background_turn_with_bounds(
                         "sh".to_string(),
                     ]),
                     background_enabled: true,
-                    wait_timeout_secs: Some(1),
-                    max_wait_timeout_secs: Some(1),
                     ..Default::default()
                 }),
                 ..Default::default()

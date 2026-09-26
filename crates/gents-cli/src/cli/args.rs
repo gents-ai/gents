@@ -1492,7 +1492,7 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Seed the default behavior as a first-run setup steward with self-config tools"
+        help = "Seed the default behavior as The Engineer: setup prompt and tag, the write package unless one is chosen, and inference off until a model is selected. Every init enables the self-config tools"
     )]
     pub(crate) setup_steward: bool,
     #[arg(

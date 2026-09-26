@@ -402,7 +402,7 @@ fn workspace_tools(
             root,
             files: Some(FileTools {
                 mode: file_mode,
-                timeout_secs: None,
+                ..Default::default()
             }),
             bash: bash.map(|(mode, execution_mode)| BashTools {
                 mode,

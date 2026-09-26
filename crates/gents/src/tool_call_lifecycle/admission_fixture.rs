@@ -78,6 +78,9 @@ pub struct PublishedAdmissionOptions {
     /// when `None`, through the plain native `SPAWN_PROCESS_TOOL_NAME`
     /// parent path.
     pub spawn_plan: Option<crate::streaming::SpawnAdmissionPlan>,
+    /// Native tool name published without a spawn plan; `None` publishes
+    /// `SPAWN_PROCESS_TOOL_NAME`.
+    pub tool_name: Option<String>,
 }
 
 impl Default for PublishedAdmissionOptions {
@@ -90,6 +93,7 @@ impl Default for PublishedAdmissionOptions {
             start_running: true,
             request_created_at: None,
             spawn_plan: None,
+            tool_name: None,
         }
     }
 }
@@ -495,7 +499,10 @@ pub async fn published_admission_with_owner(
                         id: "spawn-native-tool".into(),
                         call_id: Some("spawn-provider-call".into()),
                         function: gents_protocol::message::ToolFunction::new(
-                            crate::toolset::SPAWN_PROCESS_TOOL_NAME.into(),
+                            options
+                                .tool_name
+                                .clone()
+                                .unwrap_or_else(|| crate::toolset::SPAWN_PROCESS_TOOL_NAME.into()),
                             serde_json::json!({"command": "work"}),
                         ),
                         signature: None,
@@ -591,6 +598,7 @@ pub async fn published_background_bridge(
             delegated_workspace: None,
             await_mode: AwaitMode::Background,
         }),
+        tool_name: None,
     })
     .await
     .expect("publish canonical background bridge admission");
@@ -883,6 +891,7 @@ pub async fn pending_background_bridge(
             delegated_workspace: None,
             await_mode: AwaitMode::Background,
         }),
+        tool_name: None,
     })
     .await
     .expect("publish pending canonical background bridge admission");

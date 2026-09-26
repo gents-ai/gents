@@ -50,6 +50,7 @@ pub struct BackgroundToolRegistry {
 struct BackgroundToolRegistryInner {
     tools: HashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
+    timeouts: crate::tool_surface::BackgroundTimeouts,
 }
 
 impl BackgroundToolRegistry {
@@ -73,8 +74,30 @@ impl BackgroundToolRegistry {
             inner: Arc::new(BackgroundToolRegistryInner {
                 tools: registry_tools,
                 allowlist,
+                timeouts: Default::default(),
             }),
         }
+    }
+
+    /// Register the behavior's allowed background tools with its configured
+    /// lifetimes and observation waits.
+    pub(crate) fn from_config(
+        tools: Vec<Box<dyn ToolDyn>>,
+        config: &crate::tool_surface::BackgroundToolConfig,
+    ) -> Self {
+        let registry = Self::from_tools(tools, &config.allowlist);
+        let inner = Arc::into_inner(registry.inner)
+            .expect("a freshly built background registry has one owner");
+        Self {
+            inner: Arc::new(BackgroundToolRegistryInner {
+                timeouts: config.timeouts.clone(),
+                ..inner
+            }),
+        }
+    }
+
+    pub(crate) fn timeouts(&self) -> &crate::tool_surface::BackgroundTimeouts {
+        &self.inner.timeouts
     }
 
     pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {

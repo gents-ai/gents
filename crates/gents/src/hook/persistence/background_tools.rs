@@ -129,12 +129,26 @@ impl DefraSessionHook {
 
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
+        let selected_tool_identity = self.remote_tools.as_ref().and_then(|remote| {
+            crate::meta_tools::selected_remote_identity(target_name, &target_args, remote)
+        });
         // Backgrounded executions are decoupled from the parent request
-        // deadline (like background subagent bridges): they get the
-        // background lifetime budget, with cancel_process and the completion
-        // notification as the lifecycle controls (#985).
+        // deadline (like background subagent bridges): they get their
+        // configured background lifetime, with cancel_process and the
+        // completion notification as the lifecycle controls (#985).
+        let lifetime = self
+            .background_tool_registry
+            .timeouts()
+            .for_execution(
+                target_name,
+                selected_tool_identity
+                    .as_ref()
+                    .map(|(service, _)| service.as_str()),
+            )
+            .lifetime;
         let background_deadline_at = chrono::Utc::now()
-            + chrono::Duration::seconds(crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS as i64);
+            + chrono::Duration::from_std(lifetime)
+                .context("background lifetime exceeds the representable range")?;
         let background_tool_call_id = format!(
             "spawned:{}",
             parent_lifecycle.doc_id().ok_or_else(|| anyhow::anyhow!(
@@ -153,6 +167,7 @@ impl DefraSessionHook {
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                     tool_name: target_tool_name.clone(),
                     deadline_at: background_deadline_at,
+                    selected_tool_identity,
                 },
                 &receipt,
             )
@@ -600,15 +615,28 @@ impl DefraSessionHook {
                 .await;
         }
 
-        let wait_deadline_at = chrono::Utc::now()
-            + chrono::Duration::from_std(parsed.validated_wait_timeout())
-                .unwrap_or_else(|_| chrono::Duration::seconds(30));
         let caller = ProcessControlScope {
             request_id,
             session_id,
             agent_did: self.agent_did.clone(),
             requester_did,
         };
+        // The handle's own durable record selects its configured wait policy;
+        // an unknown or unauthorized handle is reported by the wait loop.
+        let wait_policy = match self
+            .load_authorized_background_tool(&caller, background_tool_call_id)
+            .await
+        {
+            Ok(target) => self
+                .background_tool_registry
+                .timeouts()
+                .for_execution(target.tool_name(), target.selected_service_id()),
+            Err(_) => crate::tool_surface::BackgroundTimeoutPolicy::default(),
+        }
+        .wait;
+        let wait_deadline_at = chrono::Utc::now()
+            + chrono::Duration::from_std(wait_policy.wait_for(parsed.timeout_secs))
+                .context("wait timeout exceeds the representable range")?;
         // wait_process can outlive the hook future that started it: the
         // request execution deadline owns that future. Register the already
         // running accepted lifecycle before awaiting so the existing deadline

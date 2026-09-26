@@ -4,6 +4,86 @@ use serde::Serialize;
 use crate::model::{FilesystemEntry, WalkStats, DEFAULT_IGNORED_NAMES};
 
 const DEFAULT_GREP_PREVIEW_CHARS: usize = 240;
+
+/// Largest response the runner writes. The host reads at most 2 MiB of runner
+/// stdout (`MAX_NATIVE_RUNNER_OUTPUT_BYTES`) and a longer response fails to
+/// decode instead of truncating, so results are cut here. Measured on the
+/// encoded response, after both JSON encodings (`raw_json` output is itself
+/// JSON), with headroom for the envelope and trailing newline.
+pub const MAX_RESPONSE_BYTES: usize = 1536 * 1024;
+
+/// Largest request the runner reads from stdin. Requests carry a pattern and
+/// a path, never file contents; a larger request is refused, not truncated.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+
+/// Characters of a caller-supplied pattern echoed back in result metadata.
+const MAX_ECHOED_PATTERN_CHARS: usize = 1024;
+
+/// Characters of an error message the runner reports. Escaping can grow each
+/// character to at most six bytes, so the error envelope stays far below
+/// `MAX_RESPONSE_BYTES`.
+const MAX_ERROR_CHARS: usize = 64 * 1024;
+
+/// Echo a caller-supplied pattern in metadata, cut to a bounded prefix.
+pub(crate) fn echoed_pattern(pattern: &str) -> String {
+    truncate_inline(pattern, MAX_ECHOED_PATTERN_CHARS)
+}
+
+/// The response line (with trailing newline) reporting `error`, bounded.
+pub fn error_response_line(error: &anyhow::Error) -> String {
+    let message = truncate_inline(&format!("{error:#}"), MAX_ERROR_CHARS);
+    let mut line = serde_json::to_string(&crate::protocol::NativeFsRunnerResponse {
+        ok: false,
+        output: None,
+        error: Some(message),
+    })
+    .unwrap_or_else(|_| r#"{"ok":false,"output":null,"error":"runner error"}"#.to_owned());
+    line.push('\n');
+    line
+}
+
+/// Bytes of the `NativeFsRunnerResponse` line the runner writes for `output`.
+pub(crate) fn encoded_response_len(output: &str) -> Result<usize> {
+    let response = crate::protocol::NativeFsRunnerResponse {
+        ok: true,
+        output: Some(output.to_owned()),
+        error: None,
+    };
+    Ok(serde_json::to_string(&response)
+        .context("measuring runner response")?
+        .len()
+        + 1)
+}
+
+/// Render `items`, cutting to the longest prefix whose encoded response fits
+/// `budget`; a cut result reports `truncated`. Rendered length grows with the
+/// prefix, so the cut is found by bisection.
+pub(crate) fn render_within_budget<T>(
+    items: &[T],
+    truncated: bool,
+    budget: usize,
+    render: impl Fn(&[T], bool) -> Result<String>,
+) -> Result<String> {
+    let full = render(items, truncated)?;
+    if encoded_response_len(&full)? <= budget {
+        return Ok(full);
+    }
+    let (mut fits, mut exceeds) = (0usize, items.len());
+    while exceeds - fits > 1 {
+        let mid = fits + (exceeds - fits) / 2;
+        if encoded_response_len(&render(&items[..mid], true)?)? <= budget {
+            fits = mid;
+        } else {
+            exceeds = mid;
+        }
+    }
+    let cut = render(&items[..fits], true)?;
+    anyhow::ensure!(
+        encoded_response_len(&cut)? <= budget,
+        "result metadata alone exceeds the {budget}-byte runner response budget"
+    );
+    Ok(cut)
+}
 const OUTPUT_META_PREFIX: &str = "gents_fs: ";
 
 #[derive(Serialize)]
@@ -86,7 +166,7 @@ pub(crate) struct GrepOutput {
     pub(crate) matches: Vec<GrepOutputMatch>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct GrepOutputMatch {
     pub(crate) path: String,
     pub(crate) line_number: usize,
@@ -179,4 +259,24 @@ fn truncate_inline(text: &str, max_chars: usize) -> String {
     }
     let truncated = text.chars().take(max_chars).collect::<String>();
     format!("{truncated}... [truncated]")
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn zero_item_render_over_budget_fails_clearly() {
+        let error = render_within_budget(&[1u8, 2, 3], false, 64, |items, _| {
+            Ok(format!("{}{}", "m".repeat(200), items.len()))
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("result metadata alone exceeds"),
+            "{error}"
+        );
+        let error =
+            render_within_budget::<u8>(&[], false, 64, |_, _| Ok("m".repeat(200))).unwrap_err();
+        assert!(error.to_string().contains("exceeds the 64-byte"), "{error}");
+    }
 }

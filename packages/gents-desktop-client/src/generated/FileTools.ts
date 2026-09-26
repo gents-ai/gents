@@ -3,10 +3,25 @@ import type { FileToolMode } from "./FileToolMode.js";
 
 /**
  * File access. The mode owns enablement; there is no separate enable flag.
+ * File operations are bounded by the enclosing request deadline. There is no
+ * per-operation timer: a write cannot be abandoned mid-flight without
+ * misreporting whether it landed.
  */
 export type FileTools = { mode?: FileToolMode | null,
 /**
- * Optional execution cap per file operation. Unset retains the enclosing
- * tool-call/request deadline without adding an independent file timer.
+ * UTF-8 bytes of content `read_file` returns (cut on a character
+ * boundary) when a call omits `max_chars`, and the most a call can
+ * request. Unset uses 32,000. Must be between 1 and 1,000,000.
  */
-timeout_secs?: number | null, };
+max_read_chars?: number | null,
+/**
+ * Entries `list_files` returns when a call omits `max_entries`, and the
+ * most a call can request. Unset uses 200. Must be between 1 and 5,000.
+ */
+max_list_entries?: number | null,
+/**
+ * Matches `glob` and `grep` return when a call omits `max_matches`, and
+ * the most a call can request. Unset uses 200. Must be between 1 and
+ * 5,000.
+ */
+max_matches?: number | null, };

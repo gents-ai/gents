@@ -20,8 +20,10 @@ use crate::types::{
     DesktopPreviewInterruptCascadeRequest, InterruptRequestResult,
 };
 
-/// Maximum descent depth to match the CLI walker's safety limit.
-const MAX_CASCADE_DEPTH: usize = 8;
+/// The preview walks as deep as cancellation's descendant walk does, so it
+/// never under-reports what a cascade will reach. Legitimate lineage stops
+/// at `MAX_SUBAGENT_DEPTH`; the walk bound only stops corrupted data.
+const MAX_CASCADE_DEPTH: usize = gents::descendant_graph::MAX_DESCENDANT_DEPTH;
 
 struct GraphqlAccess;
 
