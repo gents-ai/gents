@@ -38,7 +38,7 @@ parent. Model the new contracts before implementing transitions or projections.
 The foundation must not merge alone; validate the integrated stack before pushing
 its implementation layers.
 
-## Session-message stack
+## Session-message stack (#1938)
 
 The session-message spec layer (`gents_protocol::request_admission`, the
 AgentRequest/AgentToolCall/AgentPrincipal SDL, `SubagentTools` and
