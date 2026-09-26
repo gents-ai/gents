@@ -252,7 +252,7 @@ publication; the receipt cannot be supplied as an unjoined caller record. -/
         { held with retry := initialRetry 999 5 0 budget (some 10) }
       let published : GoalPublication result :=
         ⟨claimedGoal, state, 1, 5, claimedRequest, physicalBinding .active, goalEntry, hp⟩
-      let after ← activateGoal before 1 5 result published [] true 8 5 10 0 budget (some 10)
+      let after ← activateGoal before 1 5 result published 8 5 10 0 budget (some 10)
       pure (after.requestId == 200 &&
         after.queue.active == some 20 &&
         after.retry.request == 200 && after.retry.phase == .issuing)

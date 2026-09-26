@@ -143,7 +143,6 @@ theorem fresh_accept_core_success_requires_exact_extent
   simp (config := { maxSteps := 1000000 })
     [acceptAndPublishCore, acceptedReplayPresent, hnotReplay, hexact] at h
   repeat' (split at h <;> try contradiction)
-  all_goals contradiction
 
 theorem dispatch_requires_committed_intent_and_marks_running
     (pre post : World) (generation : Generation)
@@ -240,7 +239,7 @@ theorem exact_recovery_replay_core_does_not_renew_or_republish
       post.messages = world.messages ∧ post.transcript = world.transcript := by
   simp only [recoverExpiredBatchCore, hreplay, ↓reduceIte] at h
   cases h
-  exact ⟨rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem terminal_recovery_commits_selection_and_tool_accounting
     (pre post : World) (expected fresh : Generation)

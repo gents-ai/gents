@@ -342,7 +342,7 @@ def auxiliaryOutputCaseJson
     [⟨recoveryClosing, some (CanonicalOutput.Execution.Examples.recoveryMessage 201 101 0 20)⟩]
   let publication := CanonicalOutput.Execution.acceptAndPublish
     (CanonicalOutput.Execution.Examples.world 5 [raw]) 7 closing
-    publicationMessage [] []
+    publicationMessage []
   "{\"name\":" ++ jsonString witness.name ++
     ",\"raw\":" ++ canonicalSegmentJson raw ++
     ",\"closing\":" ++ canonicalSegmentJson closing ++

@@ -36,7 +36,7 @@ theorem handoffRunningEdit_await (world : World) (document : DocId) (tool : Owne
 
 theorem handoffRunningEdit_state (world : World) (document : DocId) (tool : OwnedTool) :
     (handoffRunningEdit world document tool).context.state = tool.context.state := by
-  unfold handoffRunningEdit handoffRunningTool; split <;> (try split) <;> rfl
+  unfold handoffRunningEdit handoffRunningTool; split <;> rfl
 
 theorem handoffRunningWorld_owned_lookup (world : World) (document key : DocId) :
     ownedToolByDocument? (handoffRunningWorld world document) key =

@@ -19,8 +19,8 @@ structure Case where
 
 def Case.evaluate (c : Case) : Option State :=
   match c.operation with
-  | .acquire ticket => WorkerCapacity.acquire c.pre ticket
-  | .release ticket => some (WorkerCapacity.release c.pre ticket)
+  | .acquire ticket => CanonicalOutput.Execution.WorkerCapacity.acquire c.pre ticket
+  | .release ticket => some (CanonicalOutput.Execution.WorkerCapacity.release c.pre ticket)
 
 def casesOption : Option (List Case) := do
   let empty := initial 1

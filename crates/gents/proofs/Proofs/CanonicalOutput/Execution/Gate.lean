@@ -38,8 +38,6 @@ inductive Operation where
   | toolComplete (document : DocId) (authority : ToolDelivery.CloseAuthority)
       (record : Segment) (message : MessageEnvelope)
   | toolDeliver (document : DocId) (message : MessageEnvelope)
-  | toolGoalDeliver (document : DocId) (binding : GoalNotificationBinding)
-      (message : MessageEnvelope)
   | backgroundReceipt (parentDocument : DocId) (closing : Segment)
       (message : MessageEnvelope)
   | compact (cursor : Transcript.Sequence)
@@ -159,8 +157,6 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
       (ToolDelivery.completeAndDeliver world document authority record message).mapError .delivery
   | .toolDeliver document message =>
       (ToolDelivery.publishToolDelivery world document message).mapError .delivery
-  | .toolGoalDeliver document binding message =>
-      (ToolDelivery.publishGoalNotification world document binding message).mapError .delivery
   | .backgroundReceipt parentDocument closing message =>
       (ToolDelivery.publishBackgroundReceipt world parentDocument closing message).mapError .delivery
   | .compact cursor =>
@@ -253,9 +249,6 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
         (ToolDelivery.publication_nextSeq_monotone closed after document message hdeliver)
   | toolDeliver document message =>
       exact ToolDelivery.publication_nextSeq_monotone before after document message
-        (mapError_success Error.delivery _ _ h)
-  | toolGoalDeliver document binding message =>
-      exact ToolDelivery.goal_notification_nextSeq_monotone before after document binding message
         (mapError_success Error.delivery _ _ h)
   | backgroundReceipt document closing message =>
       exact ToolDelivery.background_receipt_nextSeq_monotone before after document closing message

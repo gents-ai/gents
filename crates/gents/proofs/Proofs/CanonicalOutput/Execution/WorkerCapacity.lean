@@ -40,7 +40,7 @@ def release (s : State) (ticket : Ticket) : State :=
   { s with active := s.active.erase ticket }
 
 theorem acquire_safe {s t : State} {ticket : Ticket}
-    (hs : Safe s) (h : acquire s ticket = some t) : Safe t := by
+    (_hs : Safe s) (h : acquire s ticket = some t) : Safe t := by
   unfold acquire at h
   split at h
   next guards =>

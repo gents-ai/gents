@@ -141,11 +141,6 @@ def sourceInstances : List SourceInstanceRow :=
     , rescanBoundedBy := EventSource.eventSourceSrc.rescanBoundedBy
     , deviation := none
     }
-  , { name := "SubagentSource"
-    , dedupePolicy := DedupePolicy.toContract .monotoneOnce
-    , rescanBoundedBy := SubagentSource.subagentSourceSrc.rescanBoundedBy
-    , deviation := none
-    }
   ]
 
 def sourceInstanceCount : Nat := sourceInstances.length
@@ -182,20 +177,8 @@ def eventSourceTrace : ConvergenceTraceRow :=
   , status := "substantive"
   }
 
-def subagentSourceTrace : ConvergenceTraceRow :=
-  { name := "subagent_orphan_rescan_handle"
-  , instanceName := "SubagentSource"
-  , initialWorld := World.empty
-  , actions :=
-      [ .persist (doc "tool-call-1")
-      , .rescanTick
-      , .handle (doc "tool-call-1") ]
-  , finalWorld := mkWorld [doc "tool-call-1"] [] [doc "tool-call-1"] [doc "tool-call-1"]
-  , status := "substantive"
-  }
-
 def convergenceTraces : List ConvergenceTraceRow :=
-  [ watcherTrace, eventSourceTrace, subagentSourceTrace ]
+  [ watcherTrace, eventSourceTrace ]
 
 def convergenceTraceCount : Nat := convergenceTraces.length
 

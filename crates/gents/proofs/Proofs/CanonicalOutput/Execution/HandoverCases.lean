@@ -45,7 +45,7 @@ def actualHandoverLateToolAndFinish : Option Bool := do
   let held ← reacquire claimed
   let begun ← beginProcessing held 1 6 8
   let toolHeld ← reacquire begun
-  let oldTool ← ownedToolByDocument? toolHeld 600
+  let _ ← ownedToolByDocument? toolHeld 600
   let lateClose := { toolOutputClose with createdAt := 7 }
   let closeState ← Gate.commit toolHeld 1 7
     (.toolClose 600 (.native .complete) lateClose)

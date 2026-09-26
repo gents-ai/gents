@@ -114,34 +114,9 @@ def wrongWakeBindingsRejected : Option Bool := do
 theorem physical_wake_document_and_logical_queue_id_are_both_exact :
     wrongWakeBindingsRejected = some true := by native_decide
 
-/-- Goal-owned notification uses the ordinary local gate and never constructs
-or mutates a background-completion queue. -/
-def goalGateDoesNotCreateWake : Option Bool := do
-  let accepted ← (acceptAndPublish (world 5) 7 providerTurn providerMessage
-    [foregroundAdmission]).toOption
-  let dispatched ← (dispatch accepted 7 permit).toOption
-  let backgrounded ← (changeToolControl dispatched 7 600 .background).toOption
-  let closed ← (ToolDelivery.closeToolOutput backgrounded 600
-    (.native .complete) toolOutputClose).toOption
-  let held ← Gate.acquire (Gate.initial closed) 1 true
-  let before := { held with queue := wakeQueue }
-  let committed ← Gate.commit before 1 5
-    (.toolGoalDeliver 600 goalBinding (toolDeliveryMessage 1))
-  pure (committed.messages.contains (toolDeliveryMessage 1) &&
-    committed.transcript.nextSeq == 2 &&
-    committed.queue.scope.agent == before.queue.scope.agent &&
-    committed.queue.sessionId == before.queue.sessionId &&
-    committed.queue.scope.requester == before.queue.scope.requester &&
-    committed.queue.active == before.queue.active &&
-    committed.queue.pending == before.queue.pending &&
-    committed.queue.terminal.card == before.queue.terminal.card)
-
-theorem typed_goal_gate_publication_has_no_background_queue_effect :
-    goalGateDoesNotCreateWake = some true := by native_decide
-
 def restartObservation (context : ToolExecution.ToolCallContext)
     (registered : Bool := false) : Recovery.OrphanedBackgroundToolRow :=
-  { call := context, deadlineExpired := false, unclaimedExpired := false
+  { call := context, deadlineExpired := false
     parentLive := true, parentInterrupted := false, parentTerminal := false
     executionRegistered := registered, process := .stopped
     ownerTaskDeleted := false }

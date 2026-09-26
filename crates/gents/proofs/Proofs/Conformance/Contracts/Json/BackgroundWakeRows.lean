@@ -20,7 +20,7 @@ private def failedWakeJson (wake : FailedWake) : Json := Json.mkObj
    ("queue_key", toJson wake.queueKey)]
 
 private def wakeRowsCaseJson (c : WakeRowsCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("goal", toJson (c.goal.map Goals.Status.toDefraDB)),
+  [("name", toJson c.name),
    ("session", documentJson c.session), ("rows", toJson (c.rows.map requestJson)),
    ("parent_doc_id", toJson c.parentDoc), ("wake", failedWakeJson c.wake),
    ("successor", requestJson c.successor), ("normalized_preview", toJson "wake"),

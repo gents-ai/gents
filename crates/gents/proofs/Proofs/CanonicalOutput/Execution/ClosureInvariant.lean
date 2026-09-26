@@ -535,10 +535,6 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
       exact closureUnique_of_segments_eq unique
         (ToolDelivery.publishToolDelivery_preserves_segments before after document message
           (mapError_success Gate.Error.delivery _ _ h))
-  | toolGoalDeliver document binding message =>
-      exact closureUnique_of_segments_eq unique
-        (ToolDelivery.goal_notification_preserves_segments before after document binding message
-          (mapError_success Gate.Error.delivery _ _ h))
   | backgroundReceipt document closing message =>
       have hd := mapError_success Gate.Error.delivery _ _ h
       rcases ToolDelivery.background_receipt_segment_effect before after document closing message hd with

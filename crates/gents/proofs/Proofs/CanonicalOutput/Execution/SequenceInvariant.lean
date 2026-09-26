@@ -307,14 +307,6 @@ theorem ToolDelivery.publishWakeNotification_preserves_sequenceBound
   hbound.of_publicationEffect
     (wake_notification_effect before after document binding message h)
 
-theorem ToolDelivery.publishGoalNotification_preserves_sequenceBound
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope) (hbound : SequenceBound before)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    SequenceBound after :=
-  hbound.of_publicationEffect
-    (goal_notification_effect before after document binding message h)
-
 theorem ToolDelivery.publishBackgroundReceipt_preserves_sequenceBound
     (before after : World) (document : DocId) (closing : Segment)
     (message : MessageEnvelope) (hbound : SequenceBound before)
@@ -480,9 +472,6 @@ theorem Gate.evaluate_preserves_sequenceBound
   | toolDeliver document message =>
       exact ToolDelivery.publishToolDelivery_preserves_sequenceBound before after document message
         hbound (mapError_success Error.delivery _ _ h)
-  | toolGoalDeliver document binding message =>
-      exact ToolDelivery.publishGoalNotification_preserves_sequenceBound
-        before after document binding message hbound (mapError_success Error.delivery _ _ h)
   | backgroundReceipt document closing message =>
       exact ToolDelivery.publishBackgroundReceipt_preserves_sequenceBound
         before after document closing message hbound (mapError_success Error.delivery _ _ h)

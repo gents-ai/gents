@@ -215,7 +215,6 @@ def restartNotificationObligation
       | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
       | .processLost => "process_lost"
       | .taskDeleted => "task_deleted"
-      | _ => "tool_failed"
   , queueSource := "background_completion"
   , queueKeyPrefix := "background_completion:"
   }

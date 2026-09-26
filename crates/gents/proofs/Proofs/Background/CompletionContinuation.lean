@@ -15,12 +15,13 @@ composes those seams into the model-facing background-completion contract:
 1. an assistant wait header and pending call are durably published before dispatch;
 2. only a terminal parent-visible tool may produce a completion notification;
 3. the notification is appended after the reserved assistant row;
-4. without a canonical Goal, a coalesced wake is enqueued only after that append exists; and
+4. a coalesced wake is enqueued only after that append exists, whether or not
+   the session has a Goal; and
 5. when that wake is claimed, the continuation still carries the transcript
    containing both rows in the correct order.
 
-Both local subagents and native background processes converge on a terminal
-parent `ToolCallState`, so they share this continuation model.
+Native background processes and `create_session`/`send_message` rows converge
+on a terminal `ToolCallState`, so they share this continuation model.
 -/
 
 namespace BackgroundCompletion
@@ -104,7 +105,13 @@ structure QueuedCompletion where
 
 /-- Enqueue the first coalesced completion wake for this parent session.
 Subsequent terminal completions reuse the session queue's separately-proved
-coalescing path while each still gets its own transcript notification. -/
+coalescing path while each still gets its own transcript notification.
+
+Goal presence is deliberately not an input. Jack's decision (2026-09-24,
+#1624 wake ownership): Goals and background wakes are independent, so no Goal,
+whatever its status (including paused and complete), suppresses the
+background-completion wake. A terminal background completion always appends
+its notification and enqueues this coalesced wake. -/
 def enqueueWake?
     (notified : NotifiedCompletion)
     (pre : SessionQueue.SessionQueueState) :
@@ -147,30 +154,6 @@ theorem goal_queue_cannot_be_background_wake
     (h : notified.completion.wake.source = .goal) : enqueueWake? notified pre = none := by
   simp [enqueueWake?, h]
 
-/-! Canonical Goal presence selects the existing Goal continuation owner,
-including paused and terminal Goals. This is not another budget/status policy.
-The observation is the canonical same-principal/session Goal in the existing
-publication transaction; no absent-scan phantom protection is claimed.
-Existing pending wakes are not canceled by this projection. -/
-def enqueueWakeForOwner?
-    (goal : Option Goals.Status)
-    (notified : NotifiedCompletion)
-    (pre : SessionQueue.SessionQueueState) : Option QueuedCompletion :=
-  match goal with
-  | some _ => none
-  | none => enqueueWake? notified pre
-
-theorem goal_owned_notification_does_not_enqueue
-    (status : Goals.Status) (notified : NotifiedCompletion)
-    (pre : SessionQueue.SessionQueueState) :
-    enqueueWakeForOwner? (some status) notified pre = none := by
-  rfl
-
-theorem non_goal_enqueue_preserves_existing_policy
-    (notified : NotifiedCompletion) (pre : SessionQueue.SessionQueueState) :
-    enqueueWakeForOwner? none notified pre = enqueueWake? notified pre := by
-  rfl
-
 /-- A claimed continuation retains the notified transcript by construction. -/
 structure Continuation where
   queued : QueuedCompletion
@@ -210,13 +193,6 @@ theorem notified_completion_has_durable_message
     (notified : NotifiedCompletion) :
     HasNotification notified := by
   exact notified.durable
-
-theorem goal_owned_delivery_retains_notification_without_wake
-    (status : Goals.Status) (notified : NotifiedCompletion)
-    (pre : SessionQueue.SessionQueueState) :
-    HasNotification notified ∧ enqueueWakeForOwner? (some status) notified pre = none :=
-  ⟨notified_completion_has_durable_message notified,
-    goal_owned_notification_does_not_enqueue status notified pre⟩
 
 /-- Acceptance theorem: once a background wake is claimed, its parent-visible
 terminal state and durable notification are still available to provider-input
@@ -419,25 +395,17 @@ def redriveWake? (wake : FailedWake) : Option WakeRequest :=
   else
     none
 
-/-- Legacy failed wakes also defer to the canonical Goal owner. This guard
-is applied at publication, not merely during candidate discovery. -/
-def redriveWakeForOwner?
-    (goal : Option Goals.Status) (wake : FailedWake) : Option WakeRequest :=
-  match goal with
-  | some _ => none
-  | none => redriveWake? wake
-
 /-- One publication transaction's result, not another durable request/session.
 The parent WakeRequest projection is decoded from the exact physical row below.
 The DB adapter must read rows and publish all three outputs atomically; this
 executable composition does not prove native isolation or signature verification. -/
 def redriveWakeFromRows?
-    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
     (successor : AgentSession.RequestFact) (preview : String) (now : Time) :
     Option (WakeRequest × AgentSession.Document × List AgentSession.RequestFact) := do
   let parent ← AgentSession.latest rows session.scope.agent session.scope.session none
-  let next ← redriveWakeForOwner? goal wake
+  let next ← redriveWake? wake
   let nextRows := rows ++ [successor]
   if parent.observed.docId = parentDoc ∧ parent.observed.requestId = wake.requestId ∧
       parent.observed.state = wake.ctx.state ∧ parent.scope = session.scope ∧
@@ -455,17 +423,17 @@ def redriveWakeFromRows?
 canonical request head and the session's exact observed identity/state. This is
 an invariant of the executable publication result, not a proof of DB isolation. -/
 theorem redrive_publication_has_one_successor
-    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
     (successor : AgentSession.RequestFact) (preview : String) (now : Time)
     (post : WakeRequest × AgentSession.Document × List AgentSession.RequestFact)
-    (h : redriveWakeFromRows? goal session rows parentDoc wake successor preview now = some post) :
+    (h : redriveWakeFromRows? session rows parentDoc wake successor preview now = some post) :
     post.2.2 = rows ++ [successor] ∧
     AgentSession.latest post.2.2 session.scope.agent session.scope.session none = some successor ∧
     post.2.1.observation.bind (·.latest) = some successor.observed ∧
     successor.observed.state = .pending := by
   cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
-    cases hn : redriveWakeForOwner? goal wake <;>
+    cases hn : redriveWake? wake <;>
     simp [redriveWakeFromRows?, hp, hn] at h
   obtain ⟨guard, rfl⟩ := h
   obtain ⟨_, _, _, _, _, _, hs, hb, hstate, _, _, hhead⟩ := guard
@@ -477,25 +445,16 @@ theorem redrive_publication_has_one_successor
 /-- Cached presentation is deliberately absent from every redrive gate. It is
 updated from the same successor rows as part of successful publication. -/
 theorem redrive_selection_ignores_cached_head
-    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
     (successor : AgentSession.RequestFact) (preview : String) (now : Time)
     (observation : Option AgentSession.Observation) :
-    (redriveWakeFromRows? goal { session with observation } rows parentDoc wake successor preview now).isSome =
-    (redriveWakeFromRows? goal session rows parentDoc wake successor preview now).isSome := by
+    (redriveWakeFromRows? { session with observation } rows parentDoc wake successor preview now).isSome =
+    (redriveWakeFromRows? session rows parentDoc wake successor preview now).isSome := by
   cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
-    cases hn : redriveWakeForOwner? goal wake <;>
+    cases hn : redriveWake? wake <;>
     simp [redriveWakeFromRows?, hp, hn]
   split <;> simp_all
-
-theorem goal_owned_failed_wake_cannot_redrive
-    (status : Goals.Status) (wake : FailedWake) :
-    redriveWakeForOwner? (some status) wake = none := by
-  rfl
-
-theorem non_goal_redrive_preserves_existing_policy (wake : FailedWake) :
-    redriveWakeForOwner? none wake = redriveWake? wake := by
-  rfl
 
 theorem redriveWake?_bounded
     {wake : FailedWake}

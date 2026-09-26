@@ -140,17 +140,6 @@ structure WakeDocumentBinding where
   authenticated : Bool
   deriving DecidableEq, Repr
 
-/-- Authenticated observation of the canonical Goal owner selected in the
-same transaction as a parent-bound completion notification. -/
-structure GoalNotificationBinding where
-  goalDocument : DocId
-  parentRequestDocument : DocId
-  agent : Nat
-  session : SessionId
-  status : Goals.Status
-  authenticated : Bool
-  deriving DecidableEq, Repr
-
 structure World where
   requestId : DocId
   sessionId : SessionId

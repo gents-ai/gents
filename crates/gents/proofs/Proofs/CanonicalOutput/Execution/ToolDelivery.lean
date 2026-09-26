@@ -298,20 +298,6 @@ def wakeNotificationHeaderValid (world : World) (tool : OwnedTool)
     | .ok _ => true
     | .error _ => false
 
-def goalBindingValid (world : World) (tool : OwnedTool)
-    (binding : GoalNotificationBinding) (message : MessageEnvelope) : Bool :=
-  binding.authenticated && binding.agent == world.principal &&
-    binding.session == world.sessionId && binding.session == tool.session &&
-    binding.parentRequestDocument == tool.requestDoc &&
-    message.header.request == some binding.parentRequestDocument
-
-def goalNotificationHeaderValid (world : World) (tool : OwnedTool)
-    (binding : GoalNotificationBinding) (message : MessageEnvelope) : Bool :=
-  goalBindingValid world tool binding message &&
-    tool.context.awaitMode == .background &&
-    deliveryShape? message tool.document == some .backgroundNotification &&
-    deliveryHeaderValid world tool message
-
 def deliveryRowPresent (world : World) (tool : OwnedTool)
     (message : MessageEnvelope) : Bool :=
   match deliveryShape? message tool.document with
@@ -603,7 +589,7 @@ private def publishBackgroundNotificationWith
   ToolWrite.lift world
     (publishBackgroundNotificationWriteWith headerValid world document message)
 
-/-- A non-Goal background notification is request-owned by the exact physical
+/-- A background notification is request-owned by the exact physical
 wake document from the authenticated queue transaction. Its payload refs stay
 bound to the parent tool source; the logical queue request id is never used as
 document authority. Queue enqueue/replay is composed in `BackgroundContinuation`. -/
@@ -611,14 +597,6 @@ def publishWakeNotification (world : World) (document : DocId)
     (binding : WakeDocumentBinding) (message : MessageEnvelope) : Except Error World :=
   publishBackgroundNotificationWith
     (fun world tool message => wakeNotificationHeaderValid world tool binding message)
-    world document message
-
-/-- A canonical Goal owner consumes a parent-bound notification without a
-background wake. The physical Goal binding is an authenticated native premise. -/
-def publishGoalNotification (world : World) (document : DocId)
-    (binding : GoalNotificationBinding) (message : MessageEnvelope) : Except Error World :=
-  publishBackgroundNotificationWith
-    (fun world tool message => goalNotificationHeaderValid world tool binding message)
     world document message
 
 theorem exact_append_replay_is_inert
@@ -973,13 +951,6 @@ theorem wake_notification_preserves_purpose_principal
   unfold publishWakeNotification publishBackgroundNotificationWith at h
   exact tool_write_preserves_purpose_principal h
 
-theorem goal_notification_preserves_parent_lease
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    after.lease = before.lease := by
-  exact ToolWrite.lift_preserves_lease h
-
 theorem wake_notification_preserves_segments
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
@@ -987,15 +958,6 @@ theorem wake_notification_preserves_segments
     after.segments = before.segments :=
   publishBackgroundNotification_preserves_segments
     (fun world tool candidate => wakeNotificationHeaderValid world tool binding candidate)
-    before after document message h
-
-theorem goal_notification_preserves_segments
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    after.segments = before.segments :=
-  publishBackgroundNotification_preserves_segments
-    (fun world tool candidate => goalNotificationHeaderValid world tool binding candidate)
     before after document message h
 
 theorem wake_notification_effect
@@ -1007,28 +969,12 @@ theorem wake_notification_effect
     (fun world tool message => wakeNotificationHeaderValid world tool binding message)
     before after document message h
 
-theorem goal_notification_effect
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    PublicationEffect before after message :=
-  backgroundNotification_effect
-    (fun world tool message => goalNotificationHeaderValid world tool binding message)
-    before after document message h
-
 theorem wake_notification_nextSeq_monotone
     (before after : World) (document : DocId) (binding : WakeDocumentBinding)
     (message : MessageEnvelope)
     (h : publishWakeNotification before document binding message = .ok after) :
     before.transcript.nextSeq ≤ after.transcript.nextSeq :=
   (wake_notification_effect before after document binding message h).nextSeq_monotone
-
-theorem goal_notification_nextSeq_monotone
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    before.transcript.nextSeq ≤ after.transcript.nextSeq :=
-  (goal_notification_effect before after document binding message h).nextSeq_monotone
 
 theorem background_receipt_preserves_parent_lease
     (before after : World) (document : DocId) (closing : Segment) (message : MessageEnvelope)
@@ -1200,15 +1146,6 @@ theorem publishWakeNotification_success_toolProjectionCoherent
     toolProjectionCoherent after = true :=
   publishBackgroundNotification_success_toolProjectionCoherent
     (fun world tool candidate => wakeNotificationHeaderValid world tool binding candidate)
-    before after document message h
-
-theorem publishGoalNotification_success_toolProjectionCoherent
-    (before after : World) (document : DocId) (binding : GoalNotificationBinding)
-    (message : MessageEnvelope)
-    (h : publishGoalNotification before document binding message = .ok after) :
-    toolProjectionCoherent after = true :=
-  publishBackgroundNotification_success_toolProjectionCoherent
-    (fun world tool candidate => goalNotificationHeaderValid world tool binding candidate)
     before after document message h
 
 end CanonicalOutput.Execution.ToolDelivery

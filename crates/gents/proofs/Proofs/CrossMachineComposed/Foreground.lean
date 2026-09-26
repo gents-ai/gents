@@ -148,7 +148,7 @@ theorem invFG_preserved
       intro h_post_p
       simp [hp, h_post] at h_post_p
       exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inl rfl)))
-    | complete h_state _ _ h_post =>
+    | complete h_state _ h_post =>
       refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
       intro h_post_p
       simp [hp, h_post] at h_post_p

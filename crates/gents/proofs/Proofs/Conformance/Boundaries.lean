@@ -14,9 +14,6 @@ structure Boundary where
 def boundaryRequestDeadPreclaimOnlyId : String :=
   "boundary.request.dead-preclaim-only"
 
-def boundaryRequestRecoverySweepReachableId : String :=
-  "boundary.request.recovery-sweep-reachable"
-
 def boundaryToolCallPermanentWithoutRetryEvidenceId : String :=
   "boundary.tool-call.permanent-without-retry-evidence"
 
@@ -88,15 +85,7 @@ def boundaries : List Boundary :=
     , domain := "RequestLifecycle"
     , subject := "dead terminal state"
     , statement :=
-        "In the request machine dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed. The subagent-liveness recovery sweep is the one exception: it terminalizes an expired claimed or processing child as dead, published as recoveryReachable under boundary.request.recovery-sweep-reachable."
-    }
-  , { id := boundaryRequestRecoverySweepReachableId
-    , domain := "RequestLifecycle"
-    , subject := "recovery-sweep reachable request edges"
-    , statement :=
-        "claimed->dead and processing->dead are taken by no single RequestContext.Action, but the subagent-liveness recovery sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs. Expired owned generations otherwise terminalize failed or interrupted through CanonicalOutput.Execution recovery; no durable response row repairs claimed work to completed."
-    , acceptedFollowUp :=
-        some "Compose the Request machine with Proofs/Recovery so these edges are proven in one model instead of cited across two."
+        "In the request machine dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed. No recovery sweep writes dead for claimed or processing work."
     }
   , { id := boundaryToolCallPermanentWithoutRetryEvidenceId
     , domain := "ToolExecution"
@@ -210,8 +199,7 @@ def boundaries : List Boundary :=
         "collection with no pagination, so for collections larger than that cap " ++
         "the tail beyond the first 10_000 docs is not surfaced by rescan and " ++
         "stays dependent on the lossy subscription path. v1 does not target " ++
-        "catalog-scale source collections. SubagentSource's running-bridge rescan " ++
-        "is not subject to this cap."
+        "catalog-scale source collections."
     , acceptedFailureMode := some "missed_event_observation"
     , acceptedFollowUp :=
         some "Paginate EventSource rescan past SEEN_DOCS_SEED_LIMIT to eliminate the residual missed_event_observation mode; tracked in #564."

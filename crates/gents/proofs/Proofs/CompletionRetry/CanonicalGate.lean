@@ -63,7 +63,7 @@ def policyStep (purpose : RequestPurpose) (retry : CompletionRetry.State) :
       else match CompletionRetry.step? retry (.confirmRetraction true) with
       | some post => .ok post
       | none => if retractionReplay retry then .ok retry else .error .policy
-  | .accept _ closing message _ _ =>
+  | .accept _ closing message _ =>
       if !CanonicalExecution.sourceMatches purpose retry closing then .error .source
       else match CompletionRetry.step? retry (.accept message.header.id) with
       | some post => .ok post

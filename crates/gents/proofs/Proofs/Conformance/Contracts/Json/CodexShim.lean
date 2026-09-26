@@ -281,6 +281,15 @@ structure CodexShimThreadStatusCase where
   requestState : Option String
   projectedStatus : String
 
+def clientHeadProjection
+    (requestState : RequestState) : ClientHeadProjection :=
+  projectHead
+    { request :=
+        { lifecycleState := requestState
+        , isSuperseded := false
+        }
+    }
+
 def codexShimThreadStatusCase
     (witness : String)
     (leanTheorems : List String)

@@ -337,9 +337,9 @@ def restartDispositionCases : List RestartDispositionCase :=
     missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_every_disposition :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 9 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 8 ∧
       (restartDispositionCases.filter
-        (fun witness => witness.disposition = "terminalize")).length = 7 := by
+        (fun witness => witness.disposition = "terminalize")).length = 8 := by
   native_decide
 
 /-- Every terminal native background witness with a resolvable parent owes a

@@ -141,14 +141,15 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
 /-- These fields drive actual notification publication and failed-wake
-redrive consumers; they do not model-check a duplicate Rust reference machine. -/
+redrive consumers; they do not model-check a duplicate Rust reference machine.
+The Goal status is a row input only: Goals and background wakes are
+independent, so the owner functions do not read it. -/
 def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6BackgroundingCase :=
   let notified := BackgroundCompletion.appendNotification?
     BackgroundCompletion.canonicalCompletion BackgroundCompletion.canonicalWaitReservedTranscript
   let queued := notified.bind fun notification =>
-    BackgroundCompletion.enqueueWakeForOwner? goal notification BackgroundCompletion.canonicalQueue
-  let redrive := BackgroundCompletion.redriveWakeForOwner? goal
-    (BackgroundCompletion.failedWakeFixture)
+    BackgroundCompletion.enqueueWake? notification BackgroundCompletion.canonicalQueue
+  let redrive := BackgroundCompletion.redriveWake? (BackgroundCompletion.failedWakeFixture)
   { r6Case name "completion_continuation_owner" "notify_and_select_continuation_owner"
       notified.isSome 1 "completed" with
     goalStatus := goal.map Goals.Status.toDefraDB
@@ -173,7 +174,7 @@ def r6FailedWakeRedriveCase
     (wake : BackgroundCompletion.FailedWake) (latest : Bool := true) : R6BackgroundingCase :=
   let parent := wakeParent wake
   let rows := if latest then [parent] else [parent, newerInteractive]
-  let post := (BackgroundCompletion.redriveWakeFromRows? none wakeSession rows 101 wake
+  let post := (BackgroundCompletion.redriveWakeFromRows? wakeSession rows 101 wake
     wakeSuccessor "wake" 3).map (·.1)
   let legal := post.isSome
   { r6Case
@@ -420,12 +421,12 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
   , r6GoalOwnerCase "no_goal_preserves_background_wake" none
-  , r6GoalOwnerCase "active_goal_owns_background_continuation" (some .active)
-  , r6GoalOwnerCase "paused_goal_does_not_background_resume" (some .paused)
-  , r6GoalOwnerCase "blocked_goal_does_not_background_resume" (some .blocked)
-  , r6GoalOwnerCase "usage_limited_goal_does_not_background_resume" (some .usageLimited)
-  , r6GoalOwnerCase "budget_limited_goal_owns_wrapup" (some .budgetLimited)
-  , r6GoalOwnerCase "complete_goal_does_not_background_resume" (some .complete)
+  , r6GoalOwnerCase "active_goal_keeps_background_wake" (some .active)
+  , r6GoalOwnerCase "paused_goal_keeps_background_wake" (some .paused)
+  , r6GoalOwnerCase "blocked_goal_keeps_background_wake" (some .blocked)
+  , r6GoalOwnerCase "usage_limited_goal_keeps_background_wake" (some .usageLimited)
+  , r6GoalOwnerCase "budget_limited_goal_keeps_background_wake" (some .budgetLimited)
+  , r6GoalOwnerCase "complete_goal_keeps_background_wake" (some .complete)
   , r6FailedWakeRedriveCase
       "failed_background_wake_with_budget_redrives"
       (BackgroundCompletion.failedWakeFixture (retryCount := 1))
@@ -555,12 +556,12 @@ theorem r6BackgroundingCases_pinned :
           "background", "completed", some "background_completion",
           some "background_completion:900")
       , ("no_goal_preserves_background_wake", true, "background", "completed", none, none)
-      , ("active_goal_owns_background_continuation", true, "background", "completed", none, none)
-      , ("paused_goal_does_not_background_resume", true, "background", "completed", none, none)
-      , ("blocked_goal_does_not_background_resume", true, "background", "completed", none, none)
-      , ("usage_limited_goal_does_not_background_resume", true, "background", "completed", none, none)
-      , ("budget_limited_goal_owns_wrapup", true, "background", "completed", none, none)
-      , ("complete_goal_does_not_background_resume", true, "background", "completed", none, none)
+      , ("active_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("paused_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("blocked_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("usage_limited_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("budget_limited_goal_keeps_background_wake", true, "background", "completed", none, none)
+      , ("complete_goal_keeps_background_wake", true, "background", "completed", none, none)
       , ("failed_background_wake_with_budget_redrives", true,
           "background", "failed", some "background_completion",
           some "background_completion:900")
@@ -632,18 +633,19 @@ theorem r6BackgroundingCases_pinned :
   rfl
 
 /-- Pin ownership inputs and durable outcomes, not only the older common
-R6 fields. Every emitted owner case retains its notification; only the
-non-Goal case may enqueue or redrive a background wake. -/
+R6 fields. Goals and background wakes are independent: every emitted case
+retains its notification, enqueues the wake and allows failed-wake redrive,
+whatever the Goal status. -/
 theorem goal_owner_delivery_cases_pin_all_outcomes :
     ((r6BackgroundingCases.filter fun c => c.group == "completion_continuation_owner").map
       fun c => (c.name, c.goalStatus, c.notificationPersisted, c.wakeCreated, c.redriveAllowed)) =
       [ ("no_goal_preserves_background_wake", none, some true, some true, some true)
-      , ("active_goal_owns_background_continuation", some "active", some true, some false, some false)
-      , ("paused_goal_does_not_background_resume", some "paused", some true, some false, some false)
-      , ("blocked_goal_does_not_background_resume", some "blocked", some true, some false, some false)
-      , ("usage_limited_goal_does_not_background_resume", some "usage_limited", some true, some false, some false)
-      , ("budget_limited_goal_owns_wrapup", some "budget_limited", some true, some false, some false)
-      , ("complete_goal_does_not_background_resume", some "complete", some true, some false, some false) ] := by
+      , ("active_goal_keeps_background_wake", some "active", some true, some true, some true)
+      , ("paused_goal_keeps_background_wake", some "paused", some true, some true, some true)
+      , ("blocked_goal_keeps_background_wake", some "blocked", some true, some true, some true)
+      , ("usage_limited_goal_keeps_background_wake", some "usage_limited", some true, some true, some true)
+      , ("budget_limited_goal_keeps_background_wake", some "budget_limited", some true, some true, some true)
+      , ("complete_goal_keeps_background_wake", some "complete", some true, some true, some true) ] := by
   rfl
 
 /-! ## Tool output paging witnesses (#937)
@@ -730,7 +732,6 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
 flag. Publication output carries both successor rows and the session observation. -/
 structure WakeRowsCase where
   name : String
-  goal : Option Goals.Status := none
   session : AgentSession.Document := wakeSession
   rows : List AgentSession.RequestFact := [wakeParent BackgroundCompletion.failedWakeFixture]
   parentDoc : Nat := 101
@@ -738,7 +739,7 @@ structure WakeRowsCase where
   successor : AgentSession.RequestFact := wakeSuccessor
 
 def WakeRowsCase.result (c : WakeRowsCase) :=
-  BackgroundCompletion.redriveWakeFromRows? c.goal c.session c.rows c.parentDoc c.wake
+  BackgroundCompletion.redriveWakeFromRows? c.session c.rows c.parentDoc c.wake
     c.successor "wake" 3
 
 def backgroundWakeRowsCases : List WakeRowsCase :=
@@ -752,7 +753,6 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
       successor := { wakeSuccessor with observed := ⟨102, 901, .pending⟩ } }
   , { name := "older-successor-cannot-advance-head",
       successor := { wakeSuccessor with createdAt := 0 } }
-  , { name := "goal-owner-blocks-background-redrive", goal := some .active }
   , { name := "published-successor-prevents-second-redrive",
       rows := [wakeParent BackgroundCompletion.failedWakeFixture, wakeSuccessor],
       successor := { wakeSuccessor with createdAt := 4, observed := ⟨104, 904, .pending⟩ } }
@@ -764,7 +764,7 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
 
 theorem background_recovery_rows_pinned :
     backgroundWakeRowsCases.map (fun c => c.result.isSome) =
-      [true, false, false, false, false, false, false, false, true, false] := by native_decide
+      [true, false, false, false, false, false, false, true, false] := by native_decide
 
 theorem background_successor_publication_pinned :
     ((WakeRowsCase.result { name := "publication" }).map fun post =>

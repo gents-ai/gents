@@ -671,7 +671,7 @@ private def purposeRejected : Except Gate.Error World → Bool
 example :
     purposeRejected (Gate.evaluate (.accept 7
       (AuxiliaryCases.nativePublicationClose .title)
-      AuxiliaryCases.nativePublicationMessage [] []) titleProcessing) = true ∧
+      AuxiliaryCases.nativePublicationMessage []) titleProcessing) = true ∧
     purposeRejected (Gate.evaluate (.dispatch 7 ⟨600, true, true⟩)
       titleProcessing) = true ∧
     purposeRejected (Gate.evaluate (.retract 7 titleRetraction)

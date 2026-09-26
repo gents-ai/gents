@@ -35,10 +35,6 @@ def wakeBinding (message : MessageEnvelope := wakeNotificationMessage) : WakeDoc
     notificationSequence := message.sequence
     wakeDocument := 800, authenticated := true }
 
-def goalBinding : GoalNotificationBinding :=
-  { goalDocument := 900, parentRequestDocument := 10, agent := 1, session := 1
-    status := .active, authenticated := true }
-
 def foregroundResultMessage (sequence : Nat := 1) : MessageEnvelope :=
   { toolDeliveryMessage sequence with
     key := "tool-result-600"
@@ -215,7 +211,7 @@ def secondTerminalNotificationRejected : Option Bool := do
 theorem a_physical_tool_has_at_most_one_terminal_notification :
     secondTerminalNotificationRejected = some true := by native_decide
 
-def authenticatedGoalOwnsParentNotification : Bool :=
+def backgroundNotificationRequiresExactWake : Bool :=
   match acceptAndPublish (world 5) 7 providerTurn providerMessage [foregroundAdmission] with
   | .error _ => false
   | .ok accepted => match dispatch accepted 7 permit with
@@ -236,18 +232,15 @@ def authenticatedGoalOwnsParentNotification : Bool :=
               fakeWake (toolDeliveryMessage 1) with
             | .error .publication => true
             | _ => false
-          match ToolDelivery.publishGoalNotification closed 600 goalBinding
-              (toolDeliveryMessage 1) with
-            | .ok delivered => rawRejected && parentAsWakeRejected &&
-                delivered.transcript.nextSeq == 2 &&
-                delivered.messages.contains (toolDeliveryMessage 1)
-            | .error _ => false
+          rawRejected && parentAsWakeRejected
 
-theorem typed_goal_owner_publishes_without_background_wake :
-    authenticatedGoalOwnsParentNotification = true := by native_decide
+/-- A background notification is published only against its exact physical
+wake document, whether or not the session has a Goal. -/
+theorem background_notification_requires_exact_wake :
+    backgroundNotificationRequiresExactWake = true := by native_decide
 
 def distinctLogicalAdmission : ToolAdmission :=
-  ⟨600, { foregroundToolContext with callId := 999 }, none⟩
+  ⟨600, { foregroundToolContext with callId := 999 }⟩
 
 def physicalDocumentDoesNotAliasLogicalCallId : Bool :=
   match acceptAndPublish (world 5) 7 providerTurn providerMessage [distinctLogicalAdmission] with

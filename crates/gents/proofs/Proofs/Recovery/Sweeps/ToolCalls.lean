@@ -312,6 +312,10 @@ through the same completion notification and coalesced wake. -/
 def isBackgroundCall (call : ToolCallContext) : Prop :=
   call.awaitMode = .background
 
+instance (call : ToolCallContext) : Decidable (isBackgroundCall call) := by
+  unfold isBackgroundCall
+  infer_instance
+
 instance (call : ToolCallContext) : Decidable (isNativeBackgroundCall call) := by
   unfold isNativeBackgroundCall
   infer_instance

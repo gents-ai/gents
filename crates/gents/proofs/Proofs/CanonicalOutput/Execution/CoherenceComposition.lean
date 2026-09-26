@@ -57,9 +57,6 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | toolDeliver document message =>
     exact ToolDelivery.publishToolDelivery_success_toolProjectionCoherent before after document message
       (mapError_success Gate.Error.delivery _ _ h)
-  | toolGoalDeliver document binding message =>
-    exact ToolDelivery.publishGoalNotification_success_toolProjectionCoherent before after document binding message
-      (mapError_success Gate.Error.delivery _ _ h)
   | backgroundReceipt document closing message =>
     exact ToolDelivery.publishBackgroundReceipt_success_toolProjectionCoherent before after document closing message
       (mapError_success Gate.Error.delivery _ _ h)
