@@ -15,7 +15,7 @@ use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 use super::context::BehaviorResolution;
 
 #[derive(Clone)]
-pub(super) struct RuntimeAdmissionGate {
+pub(in crate::agent) struct RuntimeAdmissionGate {
     state: Arc<RwLock<bool>>,
     changed: watch::Sender<bool>,
     #[cfg(test)]
@@ -25,7 +25,7 @@ pub(super) struct RuntimeAdmissionGate {
 }
 
 impl RuntimeAdmissionGate {
-    pub(super) fn closed() -> Self {
+    pub(in crate::agent) fn closed() -> Self {
         let (changed, _) = watch::channel(false);
         Self {
             state: Arc::new(RwLock::new(false)),
@@ -46,12 +46,12 @@ impl RuntimeAdmissionGate {
         gate
     }
 
-    pub(super) async fn open(&self) {
+    pub(in crate::agent) async fn open(&self) {
         *self.state.write().await = true;
         self.changed.send_replace(true);
     }
 
-    pub(super) async fn close(&self) {
+    pub(in crate::agent) async fn close(&self) {
         // Announce closure before waiting for in-progress routing admissions.
         // A router may hold the read-side lease while an executor queue is
         // full; that blocked send selects on this watch and releases the lease
@@ -139,7 +139,7 @@ pub(super) async fn run_router(
     result
 }
 
-pub(super) async fn run_router_with_watcher<W>(
+pub(in crate::agent) async fn run_router_with_watcher<W>(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: String,
     mut watcher: W,

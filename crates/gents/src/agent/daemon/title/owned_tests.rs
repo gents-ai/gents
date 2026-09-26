@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use defra_node::EmbeddedNode;
@@ -17,20 +17,27 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
 
-use super::TitleTask;
+use super::{BehaviorDaemon, TitleTask};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
+use crate::agent::runtime::{run_router_with_watcher, RuntimeAdmissionGate, StartupBarrier};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{ResolvedBehavior, SamplingConfig};
 use crate::config_client::ConfigAccess;
+use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
 use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
 use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
 };
+use crate::prompt::LayeredPromptBuilder;
+use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::tool_surface::BehaviorToolConfig;
-use crate::watcher::AgentRequest;
+use crate::watcher::{AgentRequest, DefraWatcher};
 
 #[derive(Clone)]
 struct TitleProvider {
@@ -38,6 +45,20 @@ struct TitleProvider {
     stall: bool,
     calls: Arc<AtomicUsize>,
     entered: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Default)]
+struct TitleWarningCapture(Arc<Mutex<Vec<&'static str>>>);
+
+impl<S: tracing::Subscriber> Layer<S> for TitleWarningCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
+        let metadata = event.metadata();
+        if metadata.target() == "gents::agent::daemon::title"
+            && *metadata.level() == tracing::Level::WARN
+        {
+            self.0.lock().unwrap().push(metadata.name());
+        }
+    }
 }
 
 impl TitleProvider {
@@ -842,4 +863,205 @@ async fn missing_title_capture_fails_before_provider_dispatch() {
             Some(gents_protocol::output::TerminalOutput::NoMessage)
         )
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
+    let capture = TitleWarningCapture::default();
+    let warnings = capture.0.clone();
+    let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+    let (fields, outcome) = modeled_title_fields("title_reasoning_audit_complete_no_message");
+    for preexisting in [false, true] {
+        let mut fixture = TitleFixture::new().await;
+        fixture.terminalize_parent().await;
+        if !preexisting {
+            crate::request_admission::terminalize_pending_request_rejection(
+                fixture.node.as_ref(),
+                &fixture.title.doc_id,
+                &fixture.title.agent_did,
+                "retire setup title before live creation",
+                "test.title_live_creation_setup",
+            )
+            .await
+            .unwrap();
+        }
+
+        let provider = TitleProvider::new(provider_events(&fields, true), false);
+        let calls = provider.calls.clone();
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &fixture.behavior.system_prompt,
+            &fixture.behavior.behavior_id,
+            &[],
+            false,
+            &[],
+        );
+        let preamble = prompt_builder.preamble().to_string();
+        let (status_owner, status) = RuntimeStatusHandle::start_with_unbounded_test_clock(
+            fixture.node.clone(),
+            fixture.identity.did().to_owned(),
+        );
+        status.initialize_startup("general").await.unwrap();
+        status
+            .readiness()
+            .register_slot("general", 1)
+            .await
+            .unwrap();
+        let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
+        let snapshot = Arc::new(ActiveRuntimeSnapshot {
+            generation: 1,
+            principal: None,
+            local_did: String::new(),
+            default_behavior_id: "general".into(),
+            behaviors: Default::default(),
+            tool_surfaces: Default::default(),
+            backend_admission_configs: Default::default(),
+            unavailable_behaviors: Default::default(),
+            active_schedules: Default::default(),
+            unavailable_schedules: Default::default(),
+            active_event_triggers: Default::default(),
+            unavailable_event_triggers: Default::default(),
+            active_tasks: Default::default(),
+            dispatchers: std::collections::HashMap::from([("general".into(), dispatch)]),
+            behavior_executor_capacities: Default::default(),
+            behavior_executor_queue_capacities: Default::default(),
+        });
+        status
+            .readiness()
+            .publish_snapshot(snapshot.as_ref())
+            .await
+            .unwrap();
+        status
+            .set_process_state_durable(crate::agent::ProcessLifecycleState::Ready)
+            .await
+            .unwrap();
+        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut daemon = BehaviorDaemon::new(
+            fixture.node.clone(),
+            fixture.behavior.clone(),
+            None,
+            Arc::new(provider),
+            preamble,
+            Arc::new(Vec::new()),
+            prompt_builder,
+            FailurePolicy::default(),
+            Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(
+                    fixture.node.clone(),
+                ),
+            ),
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+            status.clone(),
+            1,
+            crate::request_admission::AgentRequestAdmissionVerifier::new(
+                fixture.node.clone(),
+                fixture.identity.clone(),
+                crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+            ),
+        )
+        .unwrap();
+        let daemon_rx = Arc::new(tokio::sync::Mutex::new(receiver));
+        let daemon_shutdown = shutdown_rx.clone();
+        let gate = RuntimeAdmissionGate::closed();
+        gate.open().await;
+        let router_gate = gate.clone();
+        let router_node = fixture.node.clone();
+        let router_did = fixture.identity.did().to_owned();
+        let router_task = tokio::spawn(async move {
+            run_router_with_watcher(
+                router_node.clone(),
+                router_did.clone(),
+                DefraWatcher::new(router_node, &router_did),
+                snapshot_rx,
+                shutdown_rx,
+                router_gate,
+                status,
+                None,
+            )
+            .await
+        });
+
+        if !preexisting {
+            daemon.spawn_conversation_title_generation(&fixture.parent);
+            let old_doc_id = fixture.title.doc_id.clone();
+            let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
+            let purpose = RequestPurpose::TitleAudit.as_str();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let response = ConfigAccess::Local(fixture.node.clone())
+                    .execute(&format!("{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"{purpose}\" }} }}) {{ _docID }} }}"))
+                    .await
+                    .unwrap();
+                let next = response["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|row| row["_docID"].as_str())
+                    .find(|doc_id| *doc_id != old_doc_id);
+                if let Some(doc_id) = next {
+                    fixture.title = crate::request_admission::load_request_for_admission_test(
+                        &fixture.node,
+                        doc_id,
+                    )
+                    .await
+                    .unwrap();
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "title creator did not persist a request"
+                );
+                tokio::task::yield_now().await;
+            }
+        }
+        if !preexisting {
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "creator dispatched before daemon"
+            );
+        }
+        let daemon_task = tokio::spawn(async move { daemon.run(daemon_rx, daemon_shutdown).await });
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if fixture.terminal_row().await.0 == RequestLifecycleState::Completed {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "watcher did not complete title audit"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "preexisting={preexisting}");
+        assert_title_audit(&fixture, &fields, outcome, 1, true).await;
+        assert_eq!(
+            fixture.terminal_row().await,
+            (
+                RequestLifecycleState::Completed,
+                Some(gents_protocol::output::TerminalOutput::NoMessage)
+            )
+        );
+        shutdown_tx.send(true).unwrap();
+        gate.close().await;
+        tokio::time::timeout(Duration::from_secs(5), router_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), daemon_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        status_owner.close().await.unwrap();
+        assert!(
+            warnings.lock().unwrap().is_empty(),
+            "title owner emitted WARN"
+        );
+    }
 }
