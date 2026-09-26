@@ -222,6 +222,38 @@ fn authoring_rejects_a_function_the_engine_cannot_provide() {
 }
 
 #[test]
+fn authoring_rejects_a_function_a_fire_would_only_reach_conditionally() {
+    for template in [
+        "{% if doc.urgent %}{{ now() }}{% endif %}",
+        "{% for row in doc.rows %}{{ uuid() }}{% endfor %}",
+        "{% if doc.urgent %}ok{% else %}{{ lipsum() }}{% endif %}",
+        "{% if doc.body is defined %}{{ cycler(1, 2) }}{% endif %}",
+    ] {
+        let error = check_template_vocabulary(template).expect_err(&format!("accepted {template}"));
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind, .. } if *kind == "function"),
+            "accepted {template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_accepts_a_called_name_the_template_binds_itself() {
+    // A call resolves through the frames the template itself binds, and through
+    // the globals the engine does provide: neither is an unknown name.
+    for template in [
+        "{% set f = args.formatter %}{{ f() }}",
+        "{% set f = args.formatter %}{% if doc.urgent %}{{ f() }}{% endif %}",
+        "{% with f = args.formatter %}{{ f() }}{% endwith %}",
+        "{% for f in group.docs %}{{ f() }}{% endfor %}",
+        "{% for row in group.docs recursive %}{{ loop(row.children) }}{% endfor %}",
+        "{{ range(3) | length }} {{ dict(a=1) }} {% set ns = namespace(n=0) %}{{ ns.n }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
 fn authoring_accepts_fields_configuration_cannot_enumerate() {
     // Document and argument fields are caller-defined, and strict undefined is a
     // fire-time outcome: neither may be an authoring rejection.
@@ -233,7 +265,7 @@ fn authoring_accepts_fields_configuration_cannot_enumerate() {
         "{% if doc.body is defined %}{{ doc.body | trim | replace('a', 'b') }}{% endif %}",
         "{{ group.count }} of {{ event.correlation }} ({{ group.complete }})",
         "{% set names = doc.people | join(', ') %}{{ names | length }}",
-        "{% raw %}{{ doc.x | tojson }}{% endraw %}",
+        "{% raw %}{{ doc.x | toyaml }}{% endraw %}",
     ] {
         check_template_vocabulary(template).expect(template);
     }
@@ -241,6 +273,18 @@ fn authoring_accepts_fields_configuration_cannot_enumerate() {
 
 #[test]
 fn authoring_reports_a_syntax_error_rather_than_a_missing_name() {
-    let error = check_template_vocabulary("{% if doc.message %}missing endif").unwrap_err();
-    assert!(matches!(error, TemplateError::Parse(_)), "{error}");
+    for template in [
+        "{% if doc.message %}missing endif",
+        // The walk reads one instruction stream. A block or a macro would
+        // compile into another, and the engine this workspace builds cannot
+        // parse either, so neither reaches the walk.
+        "{% block body %}{{ doc.x | toyaml }}{% endblock %}",
+        "{% macro shout(x) %}{{ x | toyaml }}{% endmacro %}",
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(error, TemplateError::Parse(_)),
+            "{template}: {error}"
+        );
+    }
 }
