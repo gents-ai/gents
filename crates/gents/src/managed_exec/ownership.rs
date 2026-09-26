@@ -1,4 +1,4 @@
-//! Host process ownership for managed background executions (#1858).
+//! Host process ownership for managed background executions.
 //!
 //! Lean: `ManagedExec.Ownership`. A managed child leads its own session and
 //! process group, so it survives the runtime. After a runtime loss the only
@@ -477,22 +477,43 @@ mod platform {
         })
     }
 
-    fn boot_id() -> String {
+    /// Start ticks restart at each boot, so a start identity without the boot
+    /// id cannot distinguish a process from a later boot's pid reuse.
+    fn boot_id() -> Option<String> {
         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
             .map(|id| id.trim().to_owned())
-            .unwrap_or_default()
+            .filter(|id| !id.is_empty())
     }
 
     pub(super) fn process_info(pid: i32) -> Option<ProcessInfo> {
+        process_info_with_boot_id(pid, boot_id())
+    }
+
+    pub(super) fn process_info_with_boot_id(
+        pid: i32,
+        boot_id: Option<String>,
+    ) -> Option<ProcessInfo> {
         if pid <= 0 {
             return None;
         }
+        let boot_id = boot_id?;
         let stat = stat(pid)?;
         Some(ProcessInfo {
             pgid: stat.pgrp,
-            start: format!("linux:{}:{}", boot_id(), stat.start_ticks),
+            start: format!("linux:{boot_id}:{}", stat.start_ticks),
             zombie: matches!(stat.state, 'Z' | 'X'),
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn unreadable_boot_id_proves_no_start_identity() {
+            let pid = std::process::id() as i32;
+            assert!(super::process_info_with_boot_id(pid, None).is_none());
+            assert!(super::process_info_with_boot_id(pid, Some("boot".into())).is_some());
+        }
     }
 
     pub(super) fn group_has_live_member(pgid: i32) -> Option<bool> {

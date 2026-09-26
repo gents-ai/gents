@@ -1,7 +1,7 @@
 import Proofs.Basic
 
 /-!
-# Host process ownership and verified stop (#1858)
+# Host process ownership and verified stop
 
 A managed child runs as the leader of its own session and process group
 (`setsid`), so host service managers do not reap it with the runtime. The

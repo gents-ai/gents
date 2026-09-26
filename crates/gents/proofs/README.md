@@ -755,7 +755,7 @@ process-tree termination, and bounded output drain for `list_files`, `glob`,
 `grep`, `bash`, and `bash_unrestricted`.
 
 `ManagedExec.Ownership` models host process ownership after the volatile
-worker is gone (#1858): a durable host record's pid and start identity prove
+worker is gone: a durable host record's pid and start identity prove
 ownership, a signal is admissible only for a proven-owned running group, and
 a cancellation is reported only for an observed stop. `process_stop_cases`
 carry every observation pair; the restart and orphan classifiers take the

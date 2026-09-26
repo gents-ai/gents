@@ -495,6 +495,14 @@ impl super::ToolCallLifecycle {
             // An unresolvable parent is an incomplete owner observation; it
             // licenses neither a signal nor a write.
             let Some(parent) = parent else {
+                if unresolved_parent_warning_due(&row.doc_id) {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
+                        "background tool's parent request is unresolved; leaving it running"
+                    );
+                }
                 continue;
             };
             let task_deleted = owner_task_deleted(node, agent_did, &parent).await?;
@@ -2776,6 +2784,26 @@ fn classify_running_tool_recovery(
     } else {
         parent.and_then(|parent| classify_terminal_parent_tool_recovery(row, parent))
     }
+}
+
+/// The orphan sweep runs every few seconds; warn about one row's unresolved
+/// parent at most once per interval.
+fn unresolved_parent_warning_due(doc_id: &str) -> bool {
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
+    static WARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    let mut warned = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = std::time::Instant::now();
+    warned.retain(|_, at| now.duration_since(*at) < INTERVAL);
+    if warned.contains_key(doc_id) {
+        return false;
+    }
+    warned.insert(doc_id.to_owned(), now);
+    true
 }
 
 /// Lean `orphanedBackgroundToolCause` for a row without a live worker whose

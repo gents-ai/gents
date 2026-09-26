@@ -405,7 +405,7 @@ structure ManagedExecLivenessCase where
   killSignalRequired : Bool
   deriving Repr
 
-/-- Host stop verdict witness (#1858): the owner's observation before and
+/-- Host stop verdict witness: the owner's observation before and
     after its signal, and the verdict, signal admissibility and cancel reply
     computed by `ManagedExec`. -/
 structure ProcessStopCase where
