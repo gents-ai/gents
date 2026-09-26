@@ -7,19 +7,9 @@ pub(super) struct TurnCapture {
     pub(super) started_tools: Vec<String>,
     pub(super) completed_tool_ids: Vec<String>,
     pub(super) completed_tools: Vec<String>,
-    pub(super) completed_collab_items: Vec<CompletedCollabItem>,
     pub(super) turn_completed_tool_ids: Vec<String>,
     pub(super) event_order: Vec<TurnStreamEvent>,
     pub(super) token_usage: Option<codex::ThreadTokenUsage>,
-}
-
-#[derive(Debug)]
-pub(super) struct CompletedCollabItem {
-    pub(super) tool: codex::CollabAgentTool,
-    pub(super) status: codex::CollabAgentToolCallStatus,
-    pub(super) receiver_thread_ids: Vec<String>,
-    pub(super) model: Option<String>,
-    pub(super) child_status: Option<codex::CollabAgentStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +31,6 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
     let mut started_tools = Vec::new();
     let mut completed_tool_ids = Vec::new();
     let mut completed_tools = Vec::new();
-    let mut completed_collab_items = Vec::new();
     let mut event_order = Vec::new();
     let mut token_usage = None;
     loop {
@@ -79,27 +68,6 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                             completed_tool_ids.push(id);
                             completed_tools.push(command);
                         }
-                        codex::ThreadItem::CollabAgentToolCall {
-                            tool,
-                            status,
-                            receiver_thread_ids,
-                            model,
-                            agents_states,
-                            ..
-                        } => {
-                            event_order.push(TurnStreamEvent::ToolCompleted);
-                            let child_status = receiver_thread_ids
-                                .first()
-                                .and_then(|thread_id| agents_states.get(thread_id))
-                                .map(|state| state.status.clone());
-                            completed_collab_items.push(CompletedCollabItem {
-                                tool,
-                                status,
-                                receiver_thread_ids,
-                                model,
-                                child_status,
-                            });
-                        }
                         _ => {}
                     },
                     codex::ServerNotification::TurnCompleted(completed) => {
@@ -110,7 +78,6 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                             started_tools,
                             completed_tool_ids,
                             completed_tools,
-                            completed_collab_items,
                             turn_completed_tool_ids,
                             event_order,
                             token_usage,

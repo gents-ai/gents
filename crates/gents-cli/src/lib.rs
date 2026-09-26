@@ -8,6 +8,7 @@ use gents::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+mod caused_sessions;
 mod cli;
 mod commands;
 mod config_bundle;
@@ -305,17 +306,6 @@ const SESSION_AFTER_HELP: &str = "\
 Fork a conversation into a new session seeded from a user-turn prefix \
 of the source. Child inherits principal; behavior can be swapped with \
 --behavior.";
-const SUBAGENT_AFTER_HELP: &str = "\
-Examples:
-  gents subagent list
-  gents subagent list --root REQUEST_ID
-  gents subagent list --root REQUEST_ID --depth 2
-  gents subagent list --root REQUEST_ID --output json
-  gents subagent cancel REQUEST_ID
-  gents subagent cancel REQUEST_ID --cascade=false
-  gents subagent cancel REQUEST_ID --wait --timeout 30s --output json";
-const SUBAGENT_LIST_AFTER_HELP: &str =
-    "Without --root, only requests that participate in subagent lineage are shown.";
 const DIAGNOSE_AFTER_HELP: &str = "\
 Examples:
   gents diagnose
@@ -449,7 +439,6 @@ async fn async_main() -> Result<()> {
         Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
-        Command::Subagent { command } => commands::subagent::dispatch(command).await,
         Command::Eval { command } => commands::eval::dispatch(command).await,
         Command::Optimization { command } => commands::optimization::dispatch(command).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),

@@ -2,10 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::{
-    graphql::escape_graphql_string, tool_call_lifecycle::CancelCause, ConfigAccess,
-    DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
-};
+use gents::{graphql::escape_graphql_string, tool_call_lifecycle::CancelCause, ConfigAccess};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
@@ -156,7 +153,6 @@ struct RequestShowSnapshot {
     backgrounded_tools: Vec<BackgroundedToolView>,
     native_executors_available: bool,
     native_executors: Vec<NativeExecutorView>,
-    descendant_edges: Vec<gents::DescendantEdge>,
     child_requests: Vec<ChildRequestView>,
 }
 
@@ -222,11 +218,7 @@ struct RequestToolCallView {
     status: String,
     state: String,
     await_mode: String,
-    cancel_policy: String,
-    child_terminal: String,
     cancel_cause: String,
-    cancel_initiated_at: Option<String>,
-    child_request_id: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
     deadline_at: Option<String>,
@@ -240,8 +232,6 @@ struct BackgroundedToolView {
     tool_name: String,
     state: String,
     await_mode: String,
-    cancel_policy: String,
-    child_request_id: Option<String>,
     started_at: Option<String>,
     active_tool_call: bool,
     active_native_executor_count: usize,
@@ -263,11 +253,12 @@ struct NativeExecutorView {
 #[derive(Debug, Clone, Serialize)]
 struct ChildRequestView {
     request_id: String,
+    agent_did: String,
+    session_id: String,
     state: String,
     behavior_id: String,
     created_at: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
 }
 
 async fn load_request_show_snapshot(
@@ -301,26 +292,21 @@ async fn load_request_show_snapshot(
     .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
+    let request_doc_id = canonical_request
+        .doc_id
+        .clone()
+        .context("request show missing physical identity")?;
     let access = ConfigAccess::Graphql(graphql.to_string());
-    let mut descendant_edges = Vec::new();
-    let mut after = None;
-    loop {
-        let descendants = gents::resolve_descendant_graph(
-            DescendantGraphAccess::Config(&access),
-            &DescendantQuery {
-                after: after.clone(),
-                limit: MAX_DESCENDANT_PAGE_LIMIT,
-                ..DescendantQuery::direct(request_id)
-            },
-        )
-        .await
-        .with_context(|| format!("loading canonical descendants for {request_id}"))?;
-        descendant_edges.extend(descendants.edges);
-        if !descendants.has_more {
-            break;
-        }
-        after = descendants.next_cursor;
-    }
+    let child_requests = gents::session_origin::load_session_origins(
+        gents::session_origin::OriginReader::Access(&access),
+        &[request_doc_id],
+        "",
+    )
+    .await
+    .with_context(|| format!("loading sessions started by {request_id}"))?
+    .iter()
+    .map(child_request_view)
+    .collect::<Vec<_>>();
 
     let request_terminal = canonical_request.is_terminal();
     let request_agent_did = canonical_request.agent_did.unwrap_or_default();
@@ -380,14 +366,10 @@ async fn load_request_show_snapshot(
             .map(native_executor_view)
             .collect()
     };
-    let cancel_cause = request_cancel_cause_view(&request_row, &tool_calls);
+    let cancel_cause = request_cancel_cause_view(&request_row);
     let terminal_cause = terminal_cause(&request_row, cancel_cause.as_ref());
     let transition_history = transition_history(&request_row, terminal_cause.as_deref());
     let request = request_header_view(&request_row, terminal_cause, transition_history)?;
-    let child_requests = descendant_edges
-        .iter()
-        .map(child_request_view)
-        .collect::<Vec<_>>();
 
     Ok(RequestShowSnapshot {
         request,
@@ -397,7 +379,6 @@ async fn load_request_show_snapshot(
         backgrounded_tools,
         native_executors_available,
         native_executors,
-        descendant_edges,
         child_requests,
     })
 }
@@ -525,14 +506,8 @@ fn request_show_tool_calls_query(
         "deadline_at",
         "completed_at",
         "await_mode",
-        "cancel_policy",
-        "child_request_id",
     ];
-    append_optional_fields(
-        &mut fields,
-        &schema.agent_tool_call,
-        &["child_terminal", "cancel_cause", "cancel_initiated_at"],
-    );
+    append_optional_fields(&mut fields, &schema.agent_tool_call, &["cancel_cause"]);
     let fields = fields.join("\n                ");
     Ok(format!(
         r#"{{
@@ -742,32 +717,13 @@ fn cause_suffix(cause: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn request_cancel_cause_view(
-    request: &Value,
-    tool_calls: &[RequestToolCallView],
-) -> Option<RequestCancelCauseView> {
+fn request_cancel_cause_view(request: &Value) -> Option<RequestCancelCauseView> {
     let request_cause = string_field(request, "cancel_cause");
     let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
     let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
         == Some(RequestLifecycleState::Interrupted);
-    let cascade_tool_cause = is_interrupted
-        .then(|| {
-            tool_calls
-                .iter()
-                .find(|tool| tool.cancel_policy == "cascade" && tool.cancel_cause != "unknown")
-                .map(|tool| tool.cancel_cause.clone())
-        })
-        .flatten();
-    let cascade_tool_cancel_at = is_interrupted
-        .then(|| {
-            tool_calls
-                .iter()
-                .find(|tool| tool.cancel_policy == "cascade")
-                .and_then(|tool| tool.cancel_initiated_at.clone())
-        })
-        .flatten();
     let was_cancelled = is_interrupted
         || request_cause.is_some()
         || request_cancel_at.is_some()
@@ -776,12 +732,8 @@ fn request_cancel_cause_view(
         return None;
     }
     Some(RequestCancelCauseView {
-        cause: request_cause
-            .or(cascade_tool_cause)
-            .unwrap_or_else(|| "unknown".to_string()),
-        cancel_initiated_at: request_cancel_at
-            .or(interrupt_at)
-            .or(cascade_tool_cancel_at),
+        cause: request_cause.unwrap_or_else(|| "unknown".to_string()),
+        cancel_initiated_at: request_cancel_at.or(interrupt_at),
     })
 }
 
@@ -809,11 +761,7 @@ fn tool_call_view(
             .or_else(|| string_field(row, "status"))
             .unwrap_or_else(|| "unknown".to_string()),
         await_mode: string_field_or_unknown(row, "await_mode"),
-        cancel_policy: string_field_or_unknown(row, "cancel_policy"),
-        child_terminal: string_field_or_unknown(row, "child_terminal"),
         cancel_cause: string_field_or_unknown(row, "cancel_cause"),
-        cancel_initiated_at: string_field(row, "cancel_initiated_at"),
-        child_request_id: string_field(row, "child_request_id"),
         started_at: string_field(row, "started_at"),
         completed_at: string_field(row, "completed_at"),
         deadline_at: string_field(row, "deadline_at"),
@@ -828,25 +776,21 @@ fn backgrounded_tool_view(tool: &RequestToolCallView) -> BackgroundedToolView {
         tool_name: tool.tool_name.clone(),
         state: tool.state.clone(),
         await_mode: tool.await_mode.clone(),
-        cancel_policy: tool.cancel_policy.clone(),
-        child_request_id: tool.child_request_id.clone(),
         started_at: tool.started_at.clone(),
         active_tool_call: tool.active_tool_call,
         active_native_executor_count: tool.active_native_executor_count,
     }
 }
 
-fn child_request_view(edge: &gents::DescendantEdge) -> ChildRequestView {
+fn child_request_view(row: &Value) -> ChildRequestView {
     ChildRequestView {
-        request_id: edge.child_request_id.clone(),
-        state: edge.lifecycle_state.clone(),
-        behavior_id: edge
-            .behavior_id
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        created_at: edge.created_at.clone(),
-        caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
-        caused_by_trigger_kind: Some("subagent".to_string()),
+        request_id: string_field_or_unknown(row, "request_id"),
+        agent_did: string_field_or_unknown(row, "agent_did"),
+        session_id: string_field_or_unknown(row, "session_id"),
+        state: string_field_or_unknown(row, "lifecycle_state"),
+        behavior_id: string_field_or_unknown(row, "behavior_id"),
+        created_at: string_field(row, "created_at"),
+        caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
     }
 }
 
@@ -1044,8 +988,6 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
                 tool.state, tool.status
             ));
             lines.push(format!("    await_mode: {}", tool.await_mode));
-            lines.push(format!("    cancel_policy: {}", tool.cancel_policy));
-            lines.push(format!("    child_terminal: {}", tool.child_terminal));
             lines.push(format!("    cancel_cause: {}", tool.cancel_cause));
             lines.push(format!(
                 "    started_at: {}",
@@ -1073,20 +1015,14 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     } else {
         for tool in &snapshot.backgrounded_tools {
             lines.push(format!(
-                "  - {} ({}) state={} await_mode={} cancel_policy={} active_tool_call={} active_native_executors={}",
+                "  - {} ({}) state={} await_mode={} active_tool_call={} active_native_executors={}",
                 tool.tool_call_id,
                 tool.tool_name,
                 tool.state,
                 tool.await_mode,
-                tool.cancel_policy,
                 yes_no(tool.active_tool_call),
                 tool.active_native_executor_count
             ));
-            push_option_line(
-                &mut lines,
-                "    child_request_id",
-                tool.child_request_id.as_deref(),
-            );
         }
     }
 
@@ -1113,8 +1049,8 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     } else {
         for child in &snapshot.child_requests {
             lines.push(format!(
-                "  - {} state={} behavior_id={}",
-                child.request_id, child.state, child.behavior_id
+                "  - {} state={} behavior_id={} agent_did={} session_id={}",
+                child.request_id, child.state, child.behavior_id, child.agent_did, child.session_id
             ));
             push_option_line(
                 &mut lines,
@@ -1735,94 +1671,35 @@ mod tests {
     }
 
     #[test]
-    fn request_cancel_cause_ignores_tool_causes_for_non_interrupted_requests() {
+    fn request_cancel_cause_is_absent_for_uncancelled_requests() {
         let request = json!({
             "lifecycle_state": "processing",
         });
-        let tool_calls = vec![request_tool_call(
-            "cascade",
-            "operator_interrupt",
-            Some("2026-05-20T10:00:02Z"),
-        )];
 
-        assert!(request_cancel_cause_view(&request, &tool_calls).is_none());
+        assert!(request_cancel_cause_view(&request).is_none());
     }
 
     #[test]
-    fn request_cancel_cause_only_falls_back_to_cascade_tool_on_interrupted_requests() {
+    fn request_cancel_cause_uses_request_fields_on_interrupted_requests() {
         let request = json!({
             "lifecycle_state": "interrupted",
         });
-
-        let independent_only = vec![request_tool_call(
-            "independent",
-            "independent_tool_timeout",
-            Some("2026-05-20T10:00:02Z"),
-        )];
-        let cancel = request_cancel_cause_view(&request, &independent_only)
+        let cancel = request_cancel_cause_view(&request)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "unknown");
         assert_eq!(cancel.cancel_initiated_at, None);
 
-        let cascade_time_only = vec![request_tool_call(
-            "cascade",
-            "unknown",
-            Some("2026-05-20T10:00:03Z"),
-        )];
-        let cancel = request_cancel_cause_view(&request, &cascade_time_only)
-            .expect("interrupted requests should render CancelCause");
-        assert_eq!(cancel.cause, "unknown");
-        assert_eq!(
-            cancel.cancel_initiated_at.as_deref(),
-            Some("2026-05-20T10:00:03Z")
-        );
-
-        let cascade_tool = vec![
-            request_tool_call(
-                "independent",
-                "independent_tool_timeout",
-                Some("2026-05-20T10:00:02Z"),
-            ),
-            request_tool_call(
-                "cascade",
-                "operator_interrupt",
-                Some("2026-05-20T10:00:03Z"),
-            ),
-        ];
-        let cancel = request_cancel_cause_view(&request, &cascade_tool)
+        let request = json!({
+            "lifecycle_state": "interrupted",
+            "cancel_cause": "operator_interrupt",
+            "interrupt_requested_at": "2026-05-20T10:00:03Z",
+        });
+        let cancel = request_cancel_cause_view(&request)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "operator_interrupt");
         assert_eq!(
             cancel.cancel_initiated_at.as_deref(),
             Some("2026-05-20T10:00:03Z")
         );
-    }
-
-    fn request_tool_call(
-        cancel_policy: &str,
-        cancel_cause: &str,
-        cancel_initiated_at: Option<&str>,
-    ) -> RequestToolCallView {
-        RequestToolCallView {
-            tool_call_key: "session:tool".to_string(),
-            request_id: "request".to_string(),
-            session_id: "session".to_string(),
-            message_sequence: Some(1),
-            tool_name: "spawn_subagent".to_string(),
-            tool_call_id: "tool".to_string(),
-            status: "called".to_string(),
-            state: "running".to_string(),
-            await_mode: "background".to_string(),
-            cancel_policy: cancel_policy.to_string(),
-            child_terminal: "unknown".to_string(),
-            cancel_cause: cancel_cause.to_string(),
-            cancel_initiated_at: cancel_initiated_at.map(ToOwned::to_owned),
-            child_request_id: None,
-            started_at: Some("2026-05-20T10:00:01Z".to_string()),
-            completed_at: None,
-            deadline_at: None,
-            active_tool_call: false,
-            active_native_executor_count: 0,
-        }
     }
 }

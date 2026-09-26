@@ -216,7 +216,7 @@ fn preamble_lists_allowed_subagent_targets() {
     let preamble = build_preamble_with_targets(
         "You are a coordinator.",
         "orchestrator",
-        &["spawn_subagent"],
+        &["create_session"],
         false,
         &targets,
     );
@@ -237,8 +237,8 @@ fn preamble_lists_allowed_subagent_targets() {
         "preamble should contain data-analyst description"
     );
     assert!(
-        preamble.contains("spawn_subagent"),
-        "preamble should reference the spawn_subagent tool"
+        preamble.contains("create_session"),
+        "preamble should reference the create_session tool"
     );
 }
 
@@ -253,11 +253,11 @@ fn preamble_no_targets_block_when_empty() {
     );
     // Should not contain any subagent section heading
     assert!(
-        !preamble.contains("Spawnable Sub-Agents"),
+        !preamble.contains("## Sub-Agents"),
         "preamble should have no subagent section when targets is empty"
     );
     assert!(
-        !preamble.contains("spawn_subagent"),
-        "preamble should not mention spawn_subagent when there are no targets"
+        !preamble.contains("create_session"),
+        "preamble should not mention create_session when there are no targets"
     );
 }

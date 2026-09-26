@@ -214,10 +214,11 @@ pub(crate) fn build_preamble_with_targets(
 
     if !allowed_targets.is_empty() {
         let mut lines = Vec::with_capacity(allowed_targets.len() + 3);
-        lines.push("## Spawnable Sub-Agents".to_string());
+        lines.push("## Sub-Agents".to_string());
         lines.push(
-            "You may spawn the following sub-agents by passing one of these names as the \
-             `spawn_subagent` tool's `name` argument:"
+            "You may start a session with one of the following sub-agents by passing its \
+             name as the `create_session` tool's `agent` argument. The session runs in the \
+             background and its result arrives later as a message in this session:"
                 .to_string(),
         );
         for (name, description) in allowed_targets {

@@ -52,8 +52,8 @@
     },
     {
       "behavior_id": "port-live-worker",
-      "display_name": "Live GLM foreground subagent worker",
-      "description": "Deterministic same-principal foreground subagent target for the live subagent edge.",
+      "display_name": "Live GLM subagent worker",
+      "description": "Deterministic same-principal subagent target for the live subagent edge.",
       "context_id": "port-live-worker-context",
       "inference_profile_id": "gents:inference-slot:worker"
     },
@@ -159,7 +159,7 @@
     },
     {
       "context_id": "port-live-worker-context",
-      "display_name": "Live GLM foreground subagent worker",
+      "display_name": "Live GLM subagent worker",
       "system_prompt": "./agent_behaviors/port_live_worker/system_prompt.md",
       "tools_id": "port-live-worker-tools",
       "compaction_id": "grok-port-compaction"
@@ -373,13 +373,12 @@
         "target_ids": [
           "port-live-tools:port-live-worker"
         ],
-        "spawn_enabled": true,
-        "default_await_mode": "foreground"
+        "enabled": true
       }
     },
     {
       "tools_id": "port-live-worker-tools",
-      "display_name": "Live worker: deterministic foreground subagent target, no shell/files/subagents"
+      "display_name": "Live worker: deterministic subagent target, no shell/files/subagents"
     },
     {
       "tools_id": "port-plan-skip-tools",
@@ -534,7 +533,7 @@
       "target_agent_did": "${GENTS_PACK_AGENT_DID}",
       "behavior_id": "port-live-worker",
       "name": "port-live-worker",
-      "description": "Deterministic one-sentence foreground subagent for the live subagent edge"
+      "description": "Deterministic one-sentence subagent for the live subagent edge"
     }
   ],
   "datastore_tool_surfaces": [

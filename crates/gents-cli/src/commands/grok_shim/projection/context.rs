@@ -10,7 +10,7 @@ pub(super) struct ContextSample {
     pub used: u64,
 }
 
-/// The turn/descendant owner supplies its authorized physical request.
+/// The turn owner supplies its authorized physical request.
 pub(super) async fn load(
     node: &EmbeddedNode,
     request: &AgentRequestRow,

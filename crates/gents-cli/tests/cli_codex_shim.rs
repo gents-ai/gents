@@ -179,8 +179,6 @@ mod server_lifecycle;
 mod skills_projection;
 #[path = "cli_codex_shim/skills_runtime.rs"]
 mod skills_runtime;
-#[path = "cli_codex_shim/subagents.rs"]
-mod subagents;
 #[path = "cli_codex_shim/thread_listing.rs"]
 mod thread_listing;
 #[path = "cli_codex_shim/thread_metadata.rs"]

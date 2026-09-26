@@ -455,6 +455,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let session_id = format!("show-session-{}", Uuid::new_v4().simple());
     let parent_request_id = format!("show-parent-{}", Uuid::new_v4().simple());
     let child_request_id = format!("show-child-{}", Uuid::new_v4().simple());
+    let child_session_id = format!("show-child-session-{}", Uuid::new_v4().simple());
     let tool_call_id = format!("show-tool-{}", Uuid::new_v4().simple());
     let tool_call_key = format!("{session_id}:{tool_call_id}");
     let parent_create = graphql_query(
@@ -466,7 +467,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     agent_did: "{agent_did}",
                     behavior_id: "parent-behavior",
                     session_id: "{session_id}",
-                    content: "parent request with a backgrounded cascade child",
+                    content: "parent request that started a session",
                     lifecycle_state: "processing",
                     backend_id: "studios-cluster",
                     execution_origin: "operatorCli",
@@ -492,16 +493,13 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     request_doc_id: "{parent_doc_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,
-                    tool_name: "spawn_subagent",
+                    tool_name: "create_session",
                     tool_call_id: "{tool_call_id}",
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "2026-05-20T10:00:02Z",
                     deadline_at: "2026-05-20T10:05:00Z",
-                    await_mode: "background",
-                    cancel_policy: "cascade",
-                    child_request_id: "{child_request_id}",
-                    spawn_target_did: "{agent_did}"
+                    await_mode: "background"
                 }}) {{ _docID }}
             }}"#,
             parent_doc_id = escape_graphql_string(&parent_doc_id),
@@ -517,8 +515,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     request_id: "{child_request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "child-behavior",
-                    session_id: "{session_id}",
-                    content: "child request spawned by backgrounded tool",
+                    session_id: "{child_session_id}",
+                    content: "request caused by the create_session tool call",
                     lifecycle_state: "processing",
                     created_at: "2026-05-20T10:00:03Z",
                     claimed_at: "2026-05-20T10:00:04Z",
@@ -527,8 +525,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     caused_by_parent_request_id: "{parent_request_id}",
                     caused_by_parent_request_doc_id: "{parent_doc_id}",
                     caused_by_parent_tool_call_id: "{tool_call_id}",
-                    caused_by_parent_tool_call_doc_id: "{tool_call_doc_id}",
-                    caused_by_trigger_kind: "subagent"
+                    caused_by_parent_tool_call_doc_id: "{tool_call_doc_id}"
                 }}) {{ _docID }}
             }}"#,
             parent_doc_id = escape_graphql_string(&parent_doc_id),
@@ -563,23 +560,10 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     );
     assert_eq!(
         json_output
-            .pointer("/tool_calls/0/cancel_policy")
-            .and_then(Value::as_str),
-        Some("cascade")
-    );
-    assert_eq!(
-        json_output
-            .pointer("/tool_calls/0/child_terminal")
-            .and_then(Value::as_str),
-        Some("unknown"),
-        "request show must render child_terminal as unknown when the schema has not landed yet"
-    );
-    assert_eq!(
-        json_output
             .pointer("/tool_calls/0/cancel_cause")
             .and_then(Value::as_str),
         Some("unknown"),
-        "request show must render cancel_cause as unknown when the schema has not landed yet"
+        "request show must render an absent cancel_cause as unknown"
     );
     assert_eq!(
         json_output
@@ -606,6 +590,18 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             .and_then(Value::as_str),
         Some("child-behavior")
     );
+    assert_eq!(
+        json_output
+            .pointer("/child_requests/0/session_id")
+            .and_then(Value::as_str),
+        Some(child_session_id.as_str())
+    );
+    assert_eq!(
+        json_output
+            .pointer("/child_requests/0/caused_by_parent_tool_call_id")
+            .and_then(Value::as_str),
+        Some(tool_call_id.as_str())
+    );
 
     let text_output = run_cli_text(
         &home_dir,
@@ -614,7 +610,6 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     assert!(text_output.contains("Transition history:"));
     assert!(text_output.contains("Backgrounded tools:"));
     assert!(text_output.contains("await_mode=background"));
-    assert!(text_output.contains("cancel_policy=cascade"));
     assert!(text_output.contains(&child_request_id));
 
     Ok(())

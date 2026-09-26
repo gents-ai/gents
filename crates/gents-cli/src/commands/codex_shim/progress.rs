@@ -7,7 +7,6 @@ use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
 use serde_json::{json, Value};
 
 use super::projection_state::ProjectionStatus;
-use super::subagent_projection::LinkedSubagentThread;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct GentsToolCallProgress {
@@ -19,7 +18,6 @@ pub(super) struct GentsToolCallProgress {
     pub(super) tool_name: String,
     pub(super) lifecycle_state: Option<String>,
     pub(super) await_mode: Option<String>,
-    pub(super) child_request_id: Option<String>,
     pub(super) args: String,
     pub(super) result: String,
     pub(super) selected_service_id: Option<String>,
@@ -30,7 +28,6 @@ pub(super) struct GentsToolCallProgress {
     pub(super) latency_ms: Option<i64>,
     pub(super) started_at: Option<String>,
     pub(super) completed_at: Option<String>,
-    pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
 /// The exact `_docID` request read carries no `order`: DefraDB plans an
@@ -75,7 +72,6 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 tool_name
                 lifecycle_state
                 await_mode
-                child_request_id
                 started_at
                 completed_at
                 selected_service_id
@@ -127,7 +123,6 @@ pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) 
                 tool_name
                 lifecycle_state
                 await_mode
-                child_request_id
                 started_at
                 completed_at
                 selected_service_id
@@ -159,11 +154,6 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
             .get("await_mode")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        child_request_id: row
-            .get("child_request_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned),
         // These are presentation fields, hydrated from canonical message and
         // output-segment owners after the row's exact physical identity is known.
         args: String::new(),
@@ -176,7 +166,6 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
         latency_ms: row.get("latency_ms").and_then(json_i64),
         started_at: optional_nonempty_string(row, "started_at"),
         completed_at: optional_nonempty_string(row, "completed_at"),
-        subagent_link: None,
     })
 }
 
@@ -665,10 +654,8 @@ mod tests {
             tool_name: tool_name.to_string(),
             lifecycle_state: Some(status.to_string()),
             await_mode: None,
-            child_request_id: None,
             args: args.to_string(),
             result: String::new(),
-            subagent_link: None,
             ..Default::default()
         }
     }

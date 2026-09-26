@@ -5,13 +5,11 @@ use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
+use super::caused_threads::{CausedThread, CausedThreadUpdateFilter};
 use super::progress::timestamp_millis;
 use super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed, timestamp_seconds,
     turn_value_with_timing,
-};
-use super::subagent_projection::{
-    load_authorized_subagent_threads_for_root, LinkedSubagentThread, SubagentProjectionUpdateFilter,
 };
 use super::thread_projection::CodexThreadRecord;
 use super::turn::{stream_gents_turn, TurnStreamOptions};
@@ -55,27 +53,24 @@ pub(super) async fn ensure_loaded_subagent_stream(
 async fn watch_loaded_subagent_thread(
     connection: &ConnectionState,
     state: &ShimState,
-    initial_link: LinkedSubagentThread,
+    mut link: CausedThread,
     baseline_turn: Option<codex::Turn>,
 ) -> Result<()> {
-    let child_thread_id = initial_link.session_id.clone();
-    let root_session_id = initial_link.root_session_id.clone();
-    let mut projected_request_id = initial_link.latest_request_id.clone();
-    if initial_link
-        .client_projection
-        .is_some_and(|head| head.is_active())
-    {
+    let child_thread_id = link.session_id.clone();
+    let root_session_id = link.root_session_id.clone();
+    let mut projected_request_id = link.latest_request_id.clone();
+    if link.client_projection.is_some_and(|head| head.is_active()) {
         let announce_turn = baseline_turn.is_none();
         let options = baseline_turn.map_or_else(
             || TurnStreamOptions::fresh_subagent(root_session_id.clone()),
             |turn| TurnStreamOptions::resumed_subagent(root_session_id.clone(), turn),
         );
-        project_child_request(connection, state, &initial_link, options, announce_turn).await?;
+        project_child_request(connection, state, &link, options, announce_turn).await?;
     }
 
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
-    let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
+    let caused_update_filter = CausedThreadUpdateFilter::from_state(state);
     let fallback_poll = Duration::from_millis(state.poll_interval.as_millis().max(250) as u64);
     loop {
         if !state.is_thread_loaded(&child_thread_id).await {
@@ -103,7 +98,7 @@ async fn watch_loaded_subagent_thread(
                             "Codex shim loaded-child update subscription dropped messages"
                         );
                     } else if !message.as_update().is_some_and(|update| {
-                        subagent_update_filter.affects_collection_id(&update.collection_id)
+                        caused_update_filter.affects_collection_id(&update.collection_id)
                     }) {
                         continue;
                     }
@@ -111,13 +106,7 @@ async fn watch_loaded_subagent_thread(
             }
         }
 
-        let Some(link) = load_authorized_subagent_threads_for_root(state, &root_session_id)
-            .await?
-            .into_iter()
-            .find(|link| link.session_id == child_thread_id)
-        else {
-            return Ok(());
-        };
+        link.refresh(state).await?;
         if link.latest_request_id == projected_request_id {
             continue;
         }
@@ -137,7 +126,7 @@ async fn watch_loaded_subagent_thread(
 async fn project_child_request(
     connection: &ConnectionState,
     state: &ShimState,
-    link: &LinkedSubagentThread,
+    link: &CausedThread,
     options: TurnStreamOptions,
     announce_turn: bool,
 ) -> Result<()> {

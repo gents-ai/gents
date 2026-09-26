@@ -164,7 +164,7 @@ barrier invokes the small triage reducer. Triage does not verify or patch. A
 root-cause reducer collapses consequence findings into remediation units;
 per-document triggers create contract reviewers, patch authors, validators,
 maintainer reviewers, and re-attackers, with group barriers only where a closed
-ledger must be joined. No model calls `spawn_subagent`; DefraDB documents and
+ledger must be joined. No model calls `create_session`; DefraDB documents and
 event triggers own the fan-out, counting, retries, and audit trail.
 
 The runner verifies the closed review-area/result ledger, declared scan counts,

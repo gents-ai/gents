@@ -1067,7 +1067,7 @@ def extract_subagent_lifecycle(
         elif (
             method == STANDARD_UPDATE_METHOD
             and kind == "tool_call"
-            and update.get("title") in ("task", "Task", "spawn_subagent")
+            and update.get("title") in ("task", "Task", "create_session")
             and lifecycle["task_tool_call"] is None
         ):
             lifecycle["task_tool_call"] = update
@@ -2434,12 +2434,12 @@ def probe_subagent(
     wait from the standard tool_call before the subagent lifecycle begins).
     """
     prompt_text = (
-        f"Use the spawn_subagent tool exactly once to spawn the subagent target named "
-        f"'{SUBAGENT_MARKER}' with await_mode foreground and the prompt: 'Reply with exactly "
-        f"one short sentence confirming the subagent worker ran.' Wait for the subagent to "
-        f"finish in the foreground, then reply on one line beginning exactly "
-        f"SUBAGENT_EDGE_DONE followed by the subagent's answer. Do not spawn more than one "
-        f"subagent and do not use any other tool."
+        f"Use the create_session tool exactly once with agent "
+        f"'{SUBAGENT_MARKER}' and the prompt: 'Reply with exactly "
+        f"one short sentence confirming the subagent worker ran.' When its completion "
+        f"notification arrives, reply on one line beginning exactly "
+        f"SUBAGENT_EDGE_DONE followed by the subagent's answer. Do not start more than one "
+        f"session and do not use any other tool."
     )
     prompt_id = str(uuid.uuid4())
     response, notifications = client.request(
@@ -2466,7 +2466,7 @@ def probe_subagent(
     task_call = lifecycle["task_tool_call"]
     require(
         task_call is not None,
-        "subagent turn emitted no standard-rail tool_call titled task/Task/spawn_subagent "
+        "subagent turn emitted no standard-rail tool_call titled task/Task/create_session "
         "(the pager-local foreground wait marker); observed standard updates: "
         f"{result['kinds']}",
     )
@@ -2689,7 +2689,7 @@ def matching_spawn_calls(
         row
         for row in documents.get("spawn_tool_calls", [])
         if isinstance(row, dict)
-        and row.get("tool_name") in ("spawn_subagent", "task", "Task")
+        and row.get("tool_name") in ("create_session", "task", "Task")
         and row.get("request_id") == child_row.get("caused_by_parent_request_id")
         and row.get("child_request_id") == child_row.get("request_id")
     ]

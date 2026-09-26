@@ -6,6 +6,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
+use super::super::caused_threads::CausedThread;
 use super::super::{trace, ConnectionState, ShimState, TurnStreamControl};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,24 +176,6 @@ pub(super) async fn next_steering_request_after(
         &rows,
         queued_after_request_id,
     ))
-}
-
-pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
-    state: &ShimState,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    thread_id: &str,
-    request_id: &str,
-) -> Result<String> {
-    let rows = load_thread_request_rows(state, agent_did, requester_did, thread_id).await?;
-    let by_id = rows
-        .iter()
-        .map(|row| (row.request_id.as_str(), row))
-        .collect::<BTreeMap<_, _>>();
-    let Some(request) = by_id.get(request_id).copied() else {
-        return Ok(request_id.to_string());
-    };
-    codex_turn_root_and_depth(request, &by_id).map(|(root_id, _)| root_id)
 }
 
 fn next_steering_request_after_from_rows(
@@ -392,6 +375,60 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     Ok(())
 }
 
+/// Interrupt the active request of a caused thread in its own scope. Only
+/// that thread stops: the thread that caused it and any sessions it started
+/// keep running.
+pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
+    connection: &ConnectionState,
+    state: &ShimState,
+    thread: &CausedThread,
+    turn_id: &str,
+) -> Result<()> {
+    let rows = load_thread_request_rows(
+        state,
+        &thread.agent_did,
+        thread.requester_did.as_deref(),
+        &thread.session_id,
+    )
+    .await?;
+    let Some(active) = active_codex_turn_from_rows(&rows, None)? else {
+        cancel_stream_control(connection, &thread.session_id, turn_id).await;
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_no_active_turn",
+            json!({ "thread_id": thread.session_id, "requested_turn_id": turn_id }),
+        );
+        return Ok(());
+    };
+    cancel_stream_control(connection, &thread.session_id, &active.turn_id).await;
+    if let Err(error) = gents::interrupt_request_by_doc_id(
+        state.node.as_ref(),
+        &active.interrupt_request_doc_id,
+        &thread.agent_did,
+        thread.requester_did.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(
+            %error,
+            request_id = active.interrupt_request_id,
+            thread_id = thread.session_id,
+            "Codex shim failed to forward GENTS interrupt for a caused thread"
+        );
+    } else {
+        trace::shim_event_fields(
+            &state.trace_path,
+            "turn_interrupt_latch_succeeded",
+            json!({
+                "thread_id": thread.session_id,
+                "turn_id": active.turn_id,
+                "request_id": active.interrupt_request_id,
+            }),
+        );
+    }
+    Ok(())
+}
+
 async fn cancel_stream_control(
     connection: &ConnectionState,
     thread_id: &str,
@@ -580,9 +617,13 @@ fn codex_turn_root_and_depth<'a>(
 
 fn steering_parent_id(row: &AgentRequestRow) -> Option<String> {
     let queue = row.input.as_ref()?.queue.as_ref()?;
-    (queue.source == gents_protocol::request_input::QueueSource::Steering)
-        .then(|| queue.queued_after_request_id.clone())
-        .flatten()
+    matches!(
+        queue.source,
+        gents_protocol::request_input::QueueSource::User
+            | gents_protocol::request_input::QueueSource::Steering
+    )
+    .then(|| queue.queued_after_request_id.clone())
+    .flatten()
 }
 
 /// Request-only projection per `Proofs/Client/Types.lean`: supersession

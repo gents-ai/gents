@@ -2387,7 +2387,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
             "edit".into(),
             "--behavior=working".into(),
             "--set".into(),
-            "subagents={\"target_ids\":[],\"spawn_enabled\":false}".into(),
+            "subagents={\"target_ids\":[],\"enabled\":false}".into(),
             "--set".into(),
             "remote={\"services\":[]}".into(),
         ],
@@ -2420,7 +2420,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     assert_eq!(working["behavior"]["tags"], json!(["ui:review"]));
     assert_eq!(working["context"]["system_prompt"], "Review carefully.");
     assert_eq!(
-        working["documents"]["Tools"]["subagents"]["spawn_enabled"],
+        working["documents"]["Tools"]["subagents"]["enabled"],
         false
     );
     assert!(working["documents"]["Tools"]["remote"]["services"].is_null());

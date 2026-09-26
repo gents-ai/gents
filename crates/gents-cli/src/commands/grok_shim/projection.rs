@@ -2,15 +2,14 @@
 //!
 //! The projection engine owns the connection-local side of the Grok shim: it
 //! turns durable Gents rows (`AgentMessage`, `AgentOutputSegment`,
-//! `AgentToolCall`, and runtime child `AgentRequest` rows)
+//! `AgentToolCall`, and the `AgentRequest` rows of caused sessions)
 //! into fresh Grok pager `session/update` notification payloads and stamps the
 //! per-connection event metadata (`_meta.eventId`, `_meta.promptId`,
 //! `_meta.totalTokens`) those payloads require.
 //!
 //! The engine is deliberately bounded and request-id-scoped:
 //! - every projection helper takes an explicit request id and queries only the
-//!   rows that request can own (one query per row family, no graph walks
-//!   beyond the direct children of the projected request);
+//!   rows that request can own, plus the sessions it caused;
 //! - projection is read-only: it never replays the session, never duplicates
 //!   durable materialization, and never writes a document;
 //! - every interpolated GraphQL value passes through
@@ -23,8 +22,8 @@
 //! - [`tools`]: tool-call lifecycle, command titles/status/content,
 //!   available-command updates, and the pager-style terminal `not supported`
 //!   stubs;
-//! - [`subagents`]: subagent spawned/progress/finished updates from runtime
-//!   child `AgentRequest` rows and the shaped not-found ext stubs.
+//! - [`caused_sessions`]: subagent spawned/progress/finished updates for the
+//!   sessions a request caused, and the subagent inspection ext methods.
 //!
 //! Static `Task` configuration rows are never treated as runtime state and no
 //! permission or terminal documents are ever fabricated here.
@@ -37,10 +36,10 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
+pub(crate) mod caused_sessions;
 mod child_output;
 mod context;
 pub(crate) mod messages;
-pub(crate) mod subagents;
 pub(crate) mod tools;
 
 /// Wire name of the ACP `session/update` notification every projection
@@ -856,8 +855,8 @@ impl ProjectionEngine {
             }
         }
 
-        // 2. Subagents (runtime child requests).
-        let subagents = subagents::project_subagents(
+        // 2. Subagents (sessions this request caused).
+        let subagents = caused_sessions::project_caused_sessions(
             &self.node,
             request,
             parent_prompt_id,
@@ -1090,20 +1089,21 @@ impl ProjectionEngine {
         // 6. Cross-family merge: emit in durable chronology order, never
         // family-batched. The primary key is the durable transcript position
         // each family shares (tool `message_sequence`, message `sequence`,
-        // and the subagent's spawn-tool `message_sequence` all allocate from
+        // and the `message_sequence` of the call that caused a subagent session
+        // all allocate from
         // the same session transcript sequence space), so a client replaying
         // the stream observes tool calls, subagent lifecycles, and message
         // chunks in the order the transcript recorded them. Ties break by
         // family rank: message chunks of an assistant turn precede the tool
         // call that turn issued (thought-before-text precedes the call), and
-        // a `subagent_spawned` follows its spawn tool call. Within a family,
+        // a `subagent_spawned` follows its causing tool call. Within a family,
         // equal positions break by the durable stable identity each family's
-        // decoded rows were sorted by (the tool call's stable id, the spawn
-        // row's tool call id, the child's request id), so the merged wire
+        // decoded rows were sorted by (the tool call's stable id, the caused
+        // session order), so the merged wire
         // order is a pure function of the durable rows and never of query
         // iteration order. Positionless events
         // (`available_commands_update`, rows without a sequence, and
-        // subagents without a spawn row) sort after every positioned event
+        // subagents without a causing tool row) sort after every positioned event
         // of their family, preserving each family's own emission order.
         merged.sort_by(|a, b| family_sort_key(a).cmp(&family_sort_key(b)));
         let events: Vec<NovelProjectionEvent> = merged.into_iter().map(|item| item.event).collect();
@@ -1123,7 +1123,7 @@ impl ProjectionEngine {
 
 /// Family ranks for the cross-family merge at equal chronology. Lower rank
 /// emits first: message chunks (reasoning precedes the assistant turn's tool
-/// call), then the tool call, then the subagent that spawn tool created.
+/// call), then the tool call, then the session that tool call caused.
 const FAMILY_RANK_MESSAGE: u8 = 0;
 const FAMILY_RANK_TOOL: u8 = 1;
 const FAMILY_RANK_SUBAGENT: u8 = 2;
@@ -2687,7 +2687,6 @@ mod tests {
         tool_call_id: &str,
         tool_name: &str,
         message_sequence: i64,
-        child_request_id: Option<&str>,
     ) -> String {
         let escaped_session = gents::graphql::escape_graphql_string(session_id);
         let escaped_request = gents::graphql::escape_graphql_string(request_id);
@@ -2701,14 +2700,6 @@ mod tests {
                 )
             })
             .unwrap_or_default();
-        let child_field = child_request_id
-            .map(|id| {
-                format!(
-                    r#"child_request_id: "{}""#,
-                    gents::graphql::escape_graphql_string(id)
-                )
-            })
-            .unwrap_or_else(|| r#"child_request_id: """#.to_string());
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
@@ -2722,7 +2713,6 @@ mod tests {
                     tool_name: "{escaped_name}"
                     lifecycle_state: "completed"
                     message_sequence: {message_sequence}
-                    {child_field}
                 }}) {{ _docID }}
             }}"#
         );
@@ -2767,7 +2757,7 @@ mod tests {
         let created_at = "2026-08-31T22:46:44Z";
         let mut blocks = Vec::new();
         for (block_index, (tool_doc_id, native_id, name)) in calls.iter().enumerate() {
-            let arguments = if *name == "spawn_subagent" {
+            let arguments = if *name == "create_session" {
                 r#"{"target":"child-chron"}"#
             } else {
                 r#"{"command":"true"}"#
@@ -2871,7 +2861,7 @@ mod tests {
         );
     }
 
-    /// Seed one runtime child `AgentRequest` row linked to the parent
+    /// Seed the first `AgentRequest` of a session caused by the parent
     /// request, with an explicit equal-time `created_at`.
     async fn seed_child_request_row(
         engine: &ProjectionEngine,
@@ -2934,10 +2924,8 @@ mod tests {
     ///   plus body text, streamed as two chunks);
     /// - two `AgentToolCall` rows at the *same* `message_sequence` 4, seeded
     ///   in reverse stable-identity order;
-    /// - a child `AgentRequest` created by the spawn tool `call-a` (the
-    ///   `call-a` row is a spawn row through its `child_request_id`), with an
-    ///   `created_at` equal to nothing else deciding order — its position is
-    ///   the spawn tool's sequence.
+    /// - the first `AgentRequest` of a session caused by the `call-a`
+    ///   `create_session` call, whose position is that call's sequence.
     ///
     /// The wire order must be exactly: thought, text, tool a, tool z,
     /// spawned, with the positionless `available_commands_update` last —
@@ -3049,9 +3037,7 @@ mod tests {
 
         // Two same-sequence tool calls seeded in REVERSE stable order: the
         // projection must emit `call-a` before `call-z` by identity. The
-        // first is the spawn tool (a recognized spawn verb via its recorded
-        // `child_request_id`, not the family-suppressed `task` name), so it
-        // keeps its rendered `tool_call` block and links the child.
+        // first is the `create_session` call that caused the child session.
         let bash_tool_doc_id = seed_tool_call_row(
             &engine,
             session_id,
@@ -3060,7 +3046,6 @@ mod tests {
             "call-z",
             "bash",
             4,
-            None,
         )
         .await;
         let spawn_tool_doc_id = seed_tool_call_row(
@@ -3069,9 +3054,8 @@ mod tests {
             request_id,
             Some(&parent_doc_id),
             "call-a",
-            "spawn_subagent",
+            "create_session",
             4,
-            Some("child-chron"),
         )
         .await;
         seed_canonical_tool_admission_header(
@@ -3079,15 +3063,11 @@ mod tests {
             &request,
             4,
             &[
-                (&spawn_tool_doc_id, "call-a", "spawn_subagent"),
+                (&spawn_tool_doc_id, "call-a", "create_session"),
                 (&bash_tool_doc_id, "call-z", "bash"),
             ],
         )
         .await;
-        // Equal-time children of the parent: the linked child plus an
-        // unlinked-by-tool child that shares its timestamp, both tied so
-        // only the durable sorts can decide order. Only the spawn-linked
-        // child projects (the query filter keeps the family scoped).
         seed_child_request_row(
             &engine,
             request_id,
@@ -3133,9 +3113,8 @@ mod tests {
             vec!["call-a", "call-z"],
             "same-sequence tools must emit in stable identity order"
         );
-        // The pager routes subagent lifecycle updates by the child session
-        // id (the id the ext controls address), never by the spawn tool
-        // call id; the payload key is the enum's snake_case field.
+        // The pager routes subagent lifecycle updates by the caused session
+        // id, never by the causing tool call id.
         let spawned = first
             .iter()
             .find(|event| event.payload["sessionUpdate"] == "subagent_spawned")

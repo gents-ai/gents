@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
@@ -14,24 +13,18 @@ use tokio::sync::watch;
 use super::super::background::spawn_background_tool_watcher;
 use super::super::bound_behavior::load_bound_context_window;
 use super::super::command_projection::{
-    observed_command_status, observed_mcp_status, observed_patch_status,
-    tool_projection_status_with_settled, update_running_background_tools, ToolProjectionStatus,
+    observed_command_status, observed_mcp_status, observed_patch_status, tool_projection_status,
+    update_running_background_tools, ToolProjectionStatus,
 };
 use super::super::compaction_projection::decode_gents_compaction_progress;
 use super::super::progress::{
     codex_turn_status, content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
     hydrate_gents_tool_call_progress, terminal_error_message, timestamp_millis,
 };
-use super::super::projection_state::{stabilize_projection_kind, ChildStatus, CollabProjection};
 use super::super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed,
 };
 use super::super::store::query_node_json;
-use super::super::subagent_projection::{
-    attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
-    observed_child_status, observed_collab_status, observed_collab_tool,
-    SubagentProjectionUpdateFilter,
-};
 use super::super::thread_projection::{
     latest_inference_usage_observation, projected_thread_status, submitted_token_usage,
     thread_token_usage,
@@ -40,8 +33,6 @@ use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
 use crate::{request_diagnostic_hint, SubmittedRequest};
-
-const SUBAGENT_LINK_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProgressMarker {
@@ -64,7 +55,6 @@ struct ToolProgressMarker {
     status: Option<String>,
     lifecycle_state: Option<String>,
     await_mode: Option<String>,
-    child_request_id: Option<String>,
     args_len: Option<usize>,
     result_len: Option<usize>,
     started_at: Option<String>,
@@ -199,10 +189,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
     let mut running_background_tools = BTreeSet::new();
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
-    let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
-    let mut subagent_links = Vec::new();
-    let mut subagent_links_dirty = true;
-    let mut subagent_link_settle_started_at = None;
     let mut latest_content_cursor = ContentCursor::default();
     let mut latest_reasoning_cursor = ReasoningCursor::default();
     let mut latest_error_message: Option<String> = None;
@@ -370,58 +356,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             known_inference_usage_call_id = Some(usage.call_id);
         }
 
-        let has_subagent_control = tool_rows.iter().any(|row| {
-            row.get("tool_name")
-                .and_then(Value::as_str)
-                .is_some_and(is_subagent_control_tool)
-        });
-        let subagent_tool_marker_changed = tool_rows.iter().any(|row| {
-            let marker = tool_progress_marker(row);
-            marker
-                .tool_name
-                .as_deref()
-                .is_some_and(is_subagent_control_tool)
-                && marker
-                    .tool_call_key
-                    .as_deref()
-                    .is_some_and(|tool_key| known_tool_markers.get(tool_key) != Some(&marker))
-        });
-        let settling_deferred_control = projection_settled
-            && known_tool_calls
-                .values()
-                .any(|status| status == &ToolProjectionStatus::DeferredCollab);
-        if subagent_tool_marker_changed || settling_deferred_control || updates_closed {
-            subagent_links_dirty = true;
-        }
-        let mut subagent_links_refreshed = false;
-        if has_subagent_control && subagent_links_dirty {
-            subagent_links = load_authorized_subagent_threads_for_root(
-                state,
-                &options.projection_root_session_id,
-            )
-            .await?;
-            subagent_links_dirty = false;
-            subagent_links_refreshed = true;
-        }
-        let unresolved_terminal_control = projection_settled
-            && tool_rows.iter().any(|row| {
-                let Some(mut tool) = decode_gents_tool_call_progress(row) else {
-                    return false;
-                };
-                attach_subagent_link(&mut tool, &subagent_links);
-                matches!(
-                    tool_projection_status_with_settled(&tool, false, false),
-                    ToolProjectionStatus::DeferredCollab
-                )
-            });
-        let link_settle_expired = observe_subagent_link_settle_window(
-            &mut subagent_link_settle_started_at,
-            unresolved_terminal_control,
-            tokio::time::Instant::now(),
-            SUBAGENT_LINK_SETTLE_TIMEOUT,
-        );
-        let waiting_for_subagent_links = unresolved_terminal_control && !link_settle_expired;
-
         if marker_changed && !projection_settled {
             if let Some(value) = presentation {
                 if let Some(source) = value.selected_source.as_ref() {
@@ -471,16 +405,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             let Some(tool_key) = tool_marker.tool_call_key.as_deref() else {
                 continue;
             };
-            let retry_subagent_projection = tool_marker
-                .tool_name
-                .as_deref()
-                .is_some_and(is_subagent_control_tool)
-                && subagent_links_refreshed;
-            if known_tool_markers.get(tool_key) == Some(&tool_marker) && !retry_subagent_projection
-            {
+            if known_tool_markers.get(tool_key) == Some(&tool_marker) {
                 continue;
             }
-            let mut tool = match hydrate_gents_tool_call_progress(
+            let tool = match hydrate_gents_tool_call_progress(
                 &ConfigAccess::Local(state.node.clone()),
                 row,
                 &current.agent_did,
@@ -497,14 +425,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     continue;
                 }
             };
-            if has_subagent_control {
-                attach_subagent_link(&mut tool, &subagent_links);
-            }
-            let observed_projection_status =
-                tool_projection_status_with_settled(&tool, projection_settled, link_settle_expired);
+            let projection_status = tool_projection_status(&tool);
             let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
-            let projection_status =
-                stabilize_projection_kind(previous_status.as_ref(), observed_projection_status);
             update_running_background_tools(
                 &mut running_background_tools,
                 &tool,
@@ -549,7 +471,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(|row| row.get("failure_reason"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if projection_settled && !waiting_for_subagent_links {
+        if projection_settled {
             // Terminal content comes only from the shared typed owner: it
             // classifies Loading/Denied/Conflicted/Invalid, distinguishes a
             // terminal NoMessage from missing dependencies, and never promotes
@@ -704,8 +626,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     known_tool_markers.clear();
                     known_compaction_states.clear();
                     known_inference_usage_call_id = None;
-                    subagent_links_dirty = true;
-                    subagent_link_settle_started_at = None;
                     latest_content_cursor.reset();
                     latest_reasoning_cursor.reset();
                     projection.reset_response_timing();
@@ -754,34 +674,15 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         }
 
         tokio::select! {
-            _ = tokio::time::sleep(state.poll_interval) => {
-                // Subscription delivery is an acceleration, not a correctness
-                // boundary. Periodically refresh linked child state so a
-                // dropped or backend-specific update cannot strand a parent
-                // CollabAgentToolCall in Running after the child settles.
-                if has_subagent_control {
-                    subagent_links_dirty = true;
-                }
-            }
+            _ = tokio::time::sleep(state.poll_interval) => {}
             msg = updates.recv(), if !updates_closed => {
-                match msg {
-                    Some(message) => {
-                        if message.as_update().is_some_and(|update| {
-                            subagent_update_filter.affects_collection_id(&update.collection_id)
-                        }) {
-                            subagent_links_dirty = true;
-                        }
-                    }
-                    None => {
-                        tracing::warn!("Codex shim embedded-node update subscription closed");
-                        updates_closed = true;
-                        subagent_links_dirty = true;
-                    }
+                if msg.is_none() {
+                    tracing::warn!("Codex shim embedded-node update subscription closed");
+                    updates_closed = true;
                 }
                 let dropped = updates.check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(dropped, "Codex shim update subscription dropped messages");
-                    subagent_links_dirty = true;
                 }
             }
             changed = cancel_rx.changed() => {
@@ -798,20 +699,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             }
         }
     }
-}
-
-fn observe_subagent_link_settle_window(
-    started_at: &mut Option<tokio::time::Instant>,
-    unresolved: bool,
-    now: tokio::time::Instant,
-    timeout: Duration,
-) -> bool {
-    if !unresolved {
-        *started_at = None;
-        return false;
-    }
-    let started_at = *started_at.get_or_insert(now);
-    now.duration_since(started_at) >= timeout
 }
 
 fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> {
@@ -946,33 +833,6 @@ fn prime_projection_from_turn(
                 known_tool_calls.insert(
                     id.clone(),
                     ToolProjectionStatus::FileChange(observed_patch_status(status)),
-                );
-            }
-            codex::ThreadItem::CollabAgentToolCall {
-                id,
-                tool,
-                status,
-                receiver_thread_ids,
-                model,
-                agents_states,
-                ..
-            } => {
-                let Some(receiver_thread_id) = receiver_thread_ids.first() else {
-                    continue;
-                };
-                let child = agents_states.get(receiver_thread_id);
-                known_tool_calls.insert(
-                    id.clone(),
-                    ToolProjectionStatus::Collab(CollabProjection {
-                        status: observed_collab_status(status),
-                        tool: observed_collab_tool(tool),
-                        receiver_thread_id: receiver_thread_id.clone(),
-                        child_model: model.clone(),
-                        child_status: child
-                            .map(|state| observed_child_status(&state.status))
-                            .unwrap_or(ChildStatus::NotFound),
-                        child_failure_reason: child.and_then(|state| state.message.clone()),
-                    }),
                 );
             }
             codex::ThreadItem::ContextCompaction { id } => {
@@ -1226,7 +1086,6 @@ fn tool_progress_marker(row: &Value) -> ToolProgressMarker {
         status: scalar_marker(Some(row), "status"),
         lifecycle_state: scalar_marker(Some(row), "lifecycle_state"),
         await_mode: scalar_marker(Some(row), "await_mode"),
-        child_request_id: scalar_marker(Some(row), "child_request_id"),
         args_len: string_len_marker(Some(row), "args"),
         result_len: string_len_marker(Some(row), "result"),
         started_at: scalar_marker(Some(row), "started_at"),
@@ -1398,9 +1257,8 @@ async fn steering_input_for_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_delta, content_delta_from_cursor, observe_subagent_link_settle_window,
-        progress_marker, suffix_prefix_overlap, ContentCursor, ReasoningCursor,
-        ReasoningObservation,
+        content_delta, content_delta_from_cursor, progress_marker, suffix_prefix_overlap,
+        ContentCursor, ReasoningCursor, ReasoningObservation,
     };
     use gents_codex_protocol as codex;
     use serde_json::json;
@@ -1525,39 +1383,6 @@ mod tests {
             }
         }
         assert_eq!(completed, vec![(first.item_id, durable_text)]);
-    }
-
-    #[test]
-    fn terminal_subagent_link_gets_a_bounded_replication_window() {
-        let start = tokio::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
-        let mut started_at = None;
-
-        assert!(!observe_subagent_link_settle_window(
-            &mut started_at,
-            true,
-            start,
-            timeout
-        ));
-        assert!(!observe_subagent_link_settle_window(
-            &mut started_at,
-            true,
-            start + std::time::Duration::from_secs(4),
-            timeout
-        ));
-        assert!(observe_subagent_link_settle_window(
-            &mut started_at,
-            true,
-            start + timeout,
-            timeout
-        ));
-        assert!(!observe_subagent_link_settle_window(
-            &mut started_at,
-            false,
-            start + timeout,
-            timeout
-        ));
-        assert!(started_at.is_none());
     }
 
     #[test]

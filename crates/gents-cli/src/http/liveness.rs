@@ -329,21 +329,21 @@ mod tests {
     }
 
     #[test]
-    fn subagent_bridge_tool_calls_carry_await_mode() {
+    fn background_tool_calls_carry_await_mode() {
         let requests = vec![request("req-parent", -10, 300)];
         let tools = vec![tool_call(
             "req-parent",
-            "tc-bridge",
-            "amy-rumination",
+            "tc-session",
+            "create_session",
             -5,
             None,
-            Some("bridge"),
+            Some("background"),
         )];
         let snapshot =
             compute_request_liveness_summary(now(), "did:test:local", requests, tools, Vec::new());
 
         let tc = &snapshot.active_tool_calls[0];
-        assert_eq!(tc.await_mode.as_deref(), Some("bridge"));
+        assert_eq!(tc.await_mode.as_deref(), Some("background"));
     }
 
     fn tool_activity(

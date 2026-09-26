@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
@@ -11,33 +10,16 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::progress::{
-    gents_tool_progress_query, hydrate_gents_tool_call_progress, tool_completed_at_ms,
-};
-use super::projection_state::ChildStatus;
+use super::caused_threads::CausedThreadUpdateFilter;
 use super::protocol::{
-    now_millis, send_notification, send_thread_status_changed, timestamp_seconds,
-    turn_value_with_timing,
+    send_notification, send_thread_status_changed, timestamp_seconds, turn_value_with_timing,
 };
 use super::store::query_node_json;
-use super::subagent_projection::{
-    attach_subagent_link, collab_agent_status, collab_projection, collab_tool_item,
-    load_authorized_subagent_threads_for_root, LinkedSubagentThread,
-    SubagentProjectionUpdateFilter,
-};
 use super::thread_projection::CodexThreadRecord;
-use super::turn::{
-    codex_turn_id_for_request, install_stream_control, stream_gents_turn, TurnStreamOptions,
-};
+use super::turn::{install_stream_control, stream_gents_turn, TurnStreamOptions};
 use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
 use crate::SubmittedRequest;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ChildLifecycleSignature {
-    status: ChildStatus,
-    failure_reason: Option<String>,
-}
 
 pub(super) async fn ensure_loaded_root_continuation_stream(
     connection: &ConnectionState,
@@ -97,30 +79,14 @@ async fn watch_loaded_root_continuations(
         .map(|turn| (turn.id.clone(), turn))
         .collect::<BTreeMap<_, _>>();
     let mut observed = BTreeSet::<String>::new();
-    let mut observed_children = BTreeMap::<String, ChildLifecycleSignature>::new();
     let mut initialized = false;
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
-    let update_filter = SubagentProjectionUpdateFilter::from_state(state);
+    let update_filter = CausedThreadUpdateFilter::from_state(state);
 
     loop {
         if !state.is_thread_loaded(thread_id).await || connection.outbound.is_closed() {
             return Ok(());
-        }
-
-        let links = load_authorized_subagent_threads_for_root(state, thread_id).await?;
-        for link in &links {
-            let signature = ChildLifecycleSignature {
-                status: collab_agent_status(link.client_projection),
-                failure_reason: link.failure_reason.clone(),
-            };
-            if signature.status == ChildStatus::NotFound {
-                continue;
-            }
-            let previous = observed_children.insert(link.session_id.clone(), signature.clone());
-            if initialized && previous.as_ref() != Some(&signature) {
-                project_child_lifecycle_update(connection, state, link, &links).await?;
-            }
         }
 
         let requests = load_background_continuation_requests(state, thread_id).await?;
@@ -199,74 +165,6 @@ async fn watch_loaded_root_continuations(
             }
         }
     }
-}
-
-async fn project_child_lifecycle_update(
-    connection: &ConnectionState,
-    state: &ShimState,
-    link: &LinkedSubagentThread,
-    links: &[LinkedSubagentThread],
-) -> Result<()> {
-    let turn_id = codex_turn_id_for_request(
-        state,
-        &link.parent_agent_did,
-        link.parent_requester_did.as_deref(),
-        &link.parent_session_id,
-        &link.parent_request_id,
-    )
-    .await?;
-    if connection
-        .has_turn_stream(&link.parent_session_id, &turn_id)
-        .await
-    {
-        return Ok(());
-    }
-
-    let response = query_node_json(
-        state.node.as_ref(),
-        &gents_tool_progress_query(&link.parent_request_doc_id, &link.parent_session_id),
-    )
-    .await?;
-    let Some(row) = response
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|row| {
-            row.get("tool_name").and_then(Value::as_str) == Some("spawn_subagent")
-                && row.get("child_request_id").and_then(Value::as_str)
-                    == Some(link.request_id.as_str())
-        })
-    else {
-        return Ok(());
-    };
-    let Some(mut tool) = hydrate_gents_tool_call_progress(
-        &ConfigAccess::Local(state.node.clone()),
-        row,
-        &link.parent_agent_did,
-        &link.parent_session_id,
-        link.parent_requester_did.as_deref(),
-        &link.parent_request_doc_id,
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    attach_subagent_link(&mut tool, links);
-    let Some(projection) = collab_projection(&tool) else {
-        return Ok(());
-    };
-    send_notification(
-        &connection.outbound,
-        state,
-        codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
-            item: collab_tool_item(&link.parent_session_id, &tool, &projection),
-            thread_id: link.parent_session_id.clone(),
-            turn_id,
-            completed_at_ms: tool_completed_at_ms(&tool).unwrap_or_else(now_millis),
-        }),
-    )
-    .await
 }
 
 async fn project_background_continuation(

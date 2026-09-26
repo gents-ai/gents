@@ -203,7 +203,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::commands::codex_shim::subagent_projection::LinkedSubagentThread;
+    use crate::commands::codex_shim::caused_threads::CausedThread;
 
     #[test]
     fn canonical_session_supplies_title_fork_and_dates_but_not_execution_authority() {
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_thread_serializes_codex_navigation_metadata() {
+    fn caused_thread_serializes_codex_navigation_metadata() {
         let root_session_id = uuid::Uuid::new_v4().to_string();
         let parent_session_id = root_session_id.clone();
         let child_session_id = uuid::Uuid::new_v4().to_string();
@@ -259,20 +259,13 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: Some(LinkedSubagentThread {
-                parent_request_doc_id: "test-parent-doc".into(),
-                parent_agent_did: "did:parent".into(),
-                parent_requester_did: None,
-                request_doc_id: "test-request-doc".into(),
+            subagent: Some(CausedThread {
                 latest_request_doc_id: "test-request-doc".into(),
                 requester_did: Some("did:parent".into()),
-                request_id: "child-request".to_string(),
                 latest_request_id: "child-request".to_string(),
                 latest_request_content: "Inspect the patch".to_string(),
                 latest_request_created_at: None,
                 session_id: child_session_id.clone(),
-                parent_request_id: "parent-request".to_string(),
-                parent_tool_call_id: "spawn-call".to_string(),
                 parent_session_id: parent_session_id.clone(),
                 root_session_id: root_session_id.clone(),
                 depth: 1,

@@ -2,10 +2,11 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::{graphql::escape_graphql_string, hook::BackgroundExecutionRegistry};
-use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+use crate::caused_sessions::{load_caused_sessions, SessionScope};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,31 +47,24 @@ pub(super) async fn kill(
         ));
     }
     // Stock child-pane actions use the top-level session ID. Resolve the
-    // tool's actual owner through that session's canonical descendants.
-    let edges =
-        super::projection::subagents::control::authorized_children(&node, principal, roots).await?;
-    for (child_session, (_, edge)) in edges {
-        if !edge.controllable() || (!parent_addressed && child_session != request.session_id) {
+    // tool's actual owner through the sessions it caused.
+    let scopes = roots
+        .iter()
+        .map(|session| SessionScope {
+            agent_did: principal.to_owned(),
+            session_id: session.clone(),
+            requester_did: Some(principal.to_owned()),
+        })
+        .collect::<Vec<_>>();
+    for caused in load_caused_sessions(&node, &scopes).await? {
+        if !parent_addressed && caused.scope.session_id != request.session_id {
             continue;
         }
-        let response = gents::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ request_id session_id agent_did requester_did }} }}"#, escape_graphql_string(&edge.child_request_id)), "Grok child process scope").await?;
-        let rows: Vec<AgentRequestRow> = serde_json::from_value(
-            response
-                .data
-                .as_ref()
-                .and_then(|v| v.get("AgentRequest"))
-                .cloned()
-                .context("missing child process scope")?,
-        )?;
-        if let [row] = rows.as_slice() {
-            if row.session_id.as_deref() == Some(&child_session)
-                && row.agent_did == edge.principal_did
-            {
-                if let Some(agent) = &row.agent_did {
-                    candidates.push((child_session, agent.clone(), row.requester_did.clone()));
-                }
-            }
-        }
+        candidates.push((
+            caused.scope.session_id,
+            caused.scope.agent_did,
+            caused.scope.requester_did,
+        ));
     }
     // Resolve before mutating. A task ID shared by two visible owners must
     // not cancel whichever one happens to appear first.

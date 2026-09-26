@@ -319,7 +319,7 @@ pub(super) fn codex_turn_input(
     }
 }
 
-pub(super) fn codex_steering_input(
+pub(super) fn codex_queued_user_input(
     cwd: &Path,
     queued_after_request_id: &str,
     selected_skill_ids: &[String],
@@ -327,7 +327,7 @@ pub(super) fn codex_steering_input(
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
     let mut input = codex_turn_input(cwd, selected_skill_ids, None);
     input.queue = Some(RequestQueue {
-        source: QueueSource::Steering,
+        source: QueueSource::User,
         policy: QueuePolicy::Append,
         key: None,
         queued_after_request_id: Some(queued_after_request_id.into()),
