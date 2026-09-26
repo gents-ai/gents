@@ -75,6 +75,28 @@ async fn run_canonical_spawn_turn_with_child_response(
     child_response: &'static str,
     backend_capacity: usize,
 ) -> AcceptedTurnRuntime {
+    let runtime = boot_canonical_spawn_turn(
+        fixture,
+        provider_call_id,
+        args,
+        child_response,
+        backend_capacity,
+    )
+    .await;
+    if let Err(reason) = wait_for_canonical_parent_terminal(fixture).await {
+        panic!("canonical spawn parent failed: {reason}");
+    }
+    runtime
+}
+
+/// Boot one spawn invocation without asserting how the parent terminates.
+async fn boot_canonical_spawn_turn(
+    fixture: &SpawnFixture,
+    provider_call_id: &str,
+    args: &str,
+    child_response: &'static str,
+    backend_capacity: usize,
+) -> AcceptedTurnRuntime {
     // The canonical runtime owns subagent-source reconciliation. Direct-hook
     // fixtures used a separate test source; running both creates duplicate
     // physical child requests for one accepted bridge.
@@ -85,7 +107,7 @@ async fn run_canonical_spawn_turn_with_child_response(
             .expect("legacy source mutex")
             .take(),
     );
-    run_canonical_tool_turn_with_child_response(
+    boot_canonical_tool_turn(
         fixture,
         provider_call_id,
         "spawn_subagent",
@@ -114,6 +136,29 @@ async fn run_canonical_tool_turn(
 }
 
 async fn run_canonical_tool_turn_with_child_response(
+    fixture: &SpawnFixture,
+    provider_call_id: &str,
+    tool_name: &str,
+    args: &str,
+    child_response: &'static str,
+    backend_capacity: usize,
+) -> AcceptedTurnRuntime {
+    let runtime = boot_canonical_tool_turn(
+        fixture,
+        provider_call_id,
+        tool_name,
+        args,
+        child_response,
+        backend_capacity,
+    )
+    .await;
+    if let Err(reason) = wait_for_canonical_parent_terminal(fixture).await {
+        panic!("canonical spawn parent failed: {reason}");
+    }
+    runtime
+}
+
+async fn boot_canonical_tool_turn(
     fixture: &SpawnFixture,
     provider_call_id: &str,
     tool_name: &str,
@@ -209,12 +254,17 @@ async fn run_canonical_tool_turn_with_child_response(
             .unwrap_or_else(ToolCeiling::meta_only),
         ..Default::default()
     };
-    let runtime = if backend_capacity == 1 {
+    if backend_capacity == 1 {
         boot_accepted_turn(&fixture.db, spec, options).await
     } else {
         boot_accepted_turn_with_backend_capacity(&fixture.db, spec, options, backend_capacity).await
-    };
+    }
+}
 
+/// Wait for the fixture parent to reach a terminal state; `Err` carries the
+/// failure reason of a parent the runtime refused or failed.
+async fn wait_for_canonical_parent_terminal(fixture: &SpawnFixture) -> Result<(), String> {
+    let request_id = escape_graphql_string(&fixture.request_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let response = fixture
@@ -230,23 +280,22 @@ async fn run_canonical_tool_turn_with_child_response(
                 .and_then(|rows| rows.first())
         });
         let state = row.and_then(|row| row["lifecycle_state"].as_str());
-        if state == Some("completed") {
-            break;
+        match state {
+            Some("completed") => return Ok(()),
+            Some("failed") => {
+                return Err(row
+                    .and_then(|row| row["failure_reason"].as_str())
+                    .unwrap_or("missing failure reason")
+                    .to_owned())
+            }
+            _ => {}
         }
-        assert_ne!(
-            state,
-            Some("failed"),
-            "canonical spawn parent failed: {}",
-            row.and_then(|row| row["failure_reason"].as_str())
-                .unwrap_or("missing failure reason")
-        );
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for canonical spawn parent; state={state:?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    runtime
 }
 
 async fn run_canonical_followup_tool_turn(

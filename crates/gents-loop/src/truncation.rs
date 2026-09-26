@@ -65,6 +65,17 @@ pub struct TextTruncation {
     pub returned_bytes: usize,
 }
 
+/// Byte ranges of the lines `str::lines` yields, each keeping any `\r`
+/// before its `\n`.
+fn line_spans(text: &str) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut start = 0;
+    text.split_inclusive('\n').map(move |line| {
+        let range = start..start + line.strip_suffix('\n').unwrap_or(line).len();
+        start += line.len();
+        range
+    })
+}
+
 pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> TextTruncation {
     let original_bytes = text.len();
     let lines: Vec<&str> = text.lines().collect();
@@ -114,34 +125,35 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
 
     let (truncated, returned_bytes) = match mode {
         TruncationMode::Head => {
-            let mut result = String::new();
+            // The shown text is a byte prefix of `text`, so a line keeps its
+            // `\r` before `\n`: composed presentations select that prefix
+            // from the committed output and must reproduce it exactly.
+            let mut shown = 0;
             let mut line_count = 0;
             let mut partial = None;
 
-            for line in &lines {
+            for line in line_spans(text) {
                 if line_count >= limits.max_lines {
                     break;
                 }
+                let line_text = &text[line.clone()];
                 let separator = usize::from(line_count > 0);
-                if result.len() + line.len() + 1 > limits.max_bytes {
+                if shown + line_text.len() + 1 > limits.max_bytes {
                     let available = limits
                         .max_bytes
-                        .saturating_sub(result.len() + separator)
-                        .min(line.len());
-                    let end = floor_char_boundary(line, available);
-                    if line_count > 0 && end > 0 && line.len() > limits.max_bytes {
-                        result.push('\n');
-                        result.push_str(&line[..end]);
-                        partial = Some((end, line.len()));
+                        .saturating_sub(shown + separator)
+                        .min(line_text.len());
+                    let end = floor_char_boundary(line_text, available);
+                    if line_count > 0 && end > 0 && line_text.len() > limits.max_bytes {
+                        shown = line.start + end;
+                        partial = Some((end, line_text.len()));
                     }
                     break;
                 }
-                if line_count > 0 {
-                    result.push('\n');
-                }
-                result.push_str(line);
+                shown = line.end;
                 line_count += 1;
             }
+            let result = &text[..shown];
 
             if line_count == 0 && exceeds_bytes && limits.max_lines > 0 {
                 let end = floor_char_boundary(text, limits.max_bytes.min(original_bytes));
@@ -601,5 +613,28 @@ mod tests {
         let (_, trigger, truncated) = truncate_text(&text, TruncationMode::Head, &limits);
         assert!(truncated);
         assert!(trigger.is_some());
+    }
+
+    #[test]
+    fn head_truncation_shows_an_exact_prefix_of_crlf_text() {
+        let text = "one\r\ntwo\r\nthree\r\n".repeat(20);
+        for max_bytes in [8, 12, 40, 100] {
+            let result = truncate(
+                &text,
+                TruncationMode::Head,
+                &TruncationLimits {
+                    max_bytes,
+                    max_lines: usize::MAX,
+                },
+            );
+            assert!(result.truncated);
+            let shown = &text[..result.returned_bytes];
+            assert!(result.returned_bytes <= max_bytes, "{max_bytes}");
+            assert!(
+                result.text.starts_with(shown),
+                "{max_bytes}: {:?}",
+                result.text
+            );
+        }
     }
 }
