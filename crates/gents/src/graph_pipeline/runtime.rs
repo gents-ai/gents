@@ -1037,7 +1037,7 @@ async fn planned_route_documents(
             let introspected = txn
                 .execute(&crate::trigger_engine::event_source::source_fields_query(
                     source_collection,
-                ))
+                )?)
                 .await?;
             // The plugin sees the source document's own fields, never a
             // secret-bearing one: the binding would refuse those anyway.
@@ -1074,7 +1074,6 @@ async fn planned_route_documents(
     };
     Ok(std::iter::once((crate::Collection::EventSource, source))
         .chain(delivered)
-        .into_iter()
         .map(|(collection, value)| DesiredStateApplyDocument {
             collection,
             add: value.clone(),

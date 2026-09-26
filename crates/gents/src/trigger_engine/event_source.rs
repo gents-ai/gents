@@ -151,6 +151,9 @@ struct DeliveryBuild {
     intents: Vec<FireIntent>,
     correlation_pending: bool,
     settled_trigger_ids: Vec<String>,
+    /// `(trigger_id, correlation_field)` of each delivery deferred because
+    /// the source document has not set its correlation field yet.
+    deferred: Vec<(String, String)>,
 }
 
 pub struct EventSource {
@@ -174,6 +177,7 @@ pub struct EventSource {
     // correlation-incomplete sibling. This prevents a ready sibling from
     // firing again when a follow-up update supplies the missing correlation.
     partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
+    pub(super) deferrals: super::deferred_delivery::DeferralWatch,
     pending_intents: Mutex<VecDeque<FireIntent>>,
     group_timers: Arc<Mutex<HashMap<GroupTrackingKey, GroupTimer>>>,
     group_due_cursor: usize,
@@ -226,7 +230,7 @@ impl SourceSchemaCache {
         }
         let response = crate::graphql::graphql_with_transaction_retry(
             node,
-            &source_fields_query(collection),
+            &source_fields_query(collection)?,
             "introspect",
         )
         .await
@@ -237,15 +241,19 @@ impl SourceSchemaCache {
     }
 }
 
-/// The introspection query for a collection's own fields.
-pub(crate) fn source_fields_query(collection: &str) -> String {
-    format!(
+/// The introspection query for a collection's own fields. `collection` names
+/// a live document collection, not an arbitrary string, so it is validated
+/// before being spliced in and escaped as the string literal it fills.
+pub(crate) fn source_fields_query(collection: &str) -> anyhow::Result<String> {
+    crate::graphql::validate_collection_identifier(collection)?;
+    Ok(format!(
         r#"query {{
-            __type(name: "{collection}") {{
+            __type(name: "{}") {{
                 fields {{ name }}
             }}
-        }}"#
-    )
+        }}"#,
+        crate::graphql::escape_graphql_string(collection)
+    ))
 }
 
 /// A collection's own fields from [`source_fields_query`]'s data: no system
@@ -317,6 +325,7 @@ impl EventSource {
             collection_id_to_name: HashMap::new(),
             seen_docs: HashMap::new(),
             partially_seen_triggers: HashMap::new(),
+            deferrals: Default::default(),
             pending_intents: Mutex::new(VecDeque::new()),
             group_timers: Arc::new(Mutex::new(HashMap::new())),
             group_due_cursor: 0,
@@ -769,7 +778,7 @@ impl EventSource {
             .collect())
     }
 
-    fn has_seen(&self, collection: &str, doc_id: &str) -> bool {
+    pub(super) fn has_seen(&self, collection: &str, doc_id: &str) -> bool {
         self.seen_docs
             .get(collection)
             .is_some_and(|docs| docs.contains(doc_id))
@@ -823,8 +832,16 @@ impl EventSource {
         build: &DeliveryBuild,
     ) {
         if build.correlation_pending {
+            for trigger_id in &build.settled_trigger_ids {
+                self.deferrals.settled(collection, doc_id, trigger_id);
+            }
+            for (trigger_id, field) in &build.deferred {
+                self.deferrals
+                    .deferred(collection, doc_id, trigger_id, field);
+            }
             self.mark_triggers_seen(collection, doc_id, build.settled_trigger_ids.clone());
         } else {
+            self.deferrals.settled_document(collection, doc_id);
             self.mark_seen(collection, doc_id);
         }
     }
@@ -1611,6 +1628,7 @@ impl EventSource {
             intents: Vec::with_capacity(candidates.len()),
             correlation_pending: false,
             settled_trigger_ids: Vec::with_capacity(candidates.len()),
+            deferred: Vec::new(),
         };
         for trigger in candidates {
             if self.has_seen_trigger(collection_name, source_doc_id, &trigger.trigger_id) {
@@ -1671,6 +1689,9 @@ impl EventSource {
                     Some(value) => Some(value.to_string()),
                     None => {
                         build.correlation_pending = true;
+                        build
+                            .deferred
+                            .push((trigger.trigger_id.clone(), field.to_owned()));
                         tracing::debug!(
                             trigger_id = %trigger.trigger_id,
                             %source_doc_id,
