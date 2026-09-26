@@ -325,7 +325,7 @@ def restartDispositionCases : List RestartDispositionCase :=
   [ restartDispositionCase
       "restart_native_background_live_parent_interrupted"
       .background .cascade false .live
-      "Recovery.native_background_tool_live_parent_interrupted_on_restart"
+      "Recovery.native_background_tool_resolvable_parent_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_unowned_process_lost"
       .background .cascade false .live
@@ -385,7 +385,7 @@ def restartDispositionCases : List RestartDispositionCase :=
   , restartDispositionCase
       "restart_foreground_interrupted_parent_cancelled"
       .foreground .cascade false .interrupted
-      "Recovery.leave_running_iff_preserved_shapes"
+      "Recovery.foreground_unlinked_interrupted_parent_terminalizes"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
       .foreground .cascade false .live

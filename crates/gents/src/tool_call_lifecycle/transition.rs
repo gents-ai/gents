@@ -101,7 +101,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    async fn sync_after_lost_mode_compare(
+    pub(crate) async fn sync_after_lost_mode_compare(
         &mut self,
         method: &'static str,
         target_mode: AwaitMode,
@@ -181,7 +181,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    fn resupply_unclaimed_deadline_fragment(&self) -> String {
+    pub(crate) fn resupply_unclaimed_deadline_fragment(&self) -> String {
         self.unclaimed_deadline_at
             .map(|deadline| {
                 let escaped_deadline = escape_graphql_string(

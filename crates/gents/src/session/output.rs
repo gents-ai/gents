@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
-use gents_protocol::output::{MessagePublication, PayloadRef};
+use gents_protocol::output::{MessagePublication, OutputWriter, PayloadRef};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::canonical_rows::{
@@ -156,6 +156,7 @@ pub(crate) async fn load_canonical_payload_from_node(
         requester_did,
         reference,
         None,
+        None,
     )
     .await
 }
@@ -167,6 +168,7 @@ pub(crate) async fn load_canonical_payload_in_txn(
     requester_did: Option<&str>,
     reference: &PayloadRef,
     expected_source: &gents_protocol::output::OutputSource,
+    expected_writer: &OutputWriter,
 ) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
     load_canonical_payload(
         ReadAccess::Txn(txn),
@@ -175,6 +177,7 @@ pub(crate) async fn load_canonical_payload_in_txn(
         requester_did,
         reference,
         Some(expected_source),
+        Some(expected_writer),
     )
     .await
 }
@@ -186,6 +189,7 @@ async fn load_canonical_payload(
     requester_did: Option<&str>,
     reference: &PayloadRef,
     expected_source: Option<&gents_protocol::output::OutputSource>,
+    expected_writer: Option<&OutputWriter>,
 ) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
@@ -209,9 +213,10 @@ async fn load_canonical_payload(
             rows.iter().any(|row| {
                 row.doc_id == reference.close_doc_id
                     && row.segment.source == *expected_source
+                    && expected_writer.is_none_or(|writer| row.segment.writer == *writer)
                     && row.segment.close.is_some()
             }),
-            "canonical payload close does not belong to the expected tool source"
+            "canonical payload close does not belong to the expected source and writer"
         );
     }
     let observed = rows
