@@ -1144,15 +1144,46 @@ async fn replay_capture_for_candidate(
     .await
     {
         Ok(verified) => Ok(verified),
+        Err(error)
+            if error
+                .downcast_ref::<crate::rendered_request::CaptureStoreReadError>()
+                .is_some() =>
+        {
+            Err(error)
+        }
         Err(error) => {
-            tracing::warn!(
-                capture_key = %capture_key,
-                error = %format!("{error:#}"),
-                "accepted turn capture is unverifiable; its reasoning is not replayed"
-            );
+            warn_unverifiable_replay_capture(&capture_key, &error);
             Ok(None)
         }
     }
+}
+
+/// A bad capture is re-read on every request of its session; one warning a
+/// minute, with the suppressed count, keeps it visible without flooding.
+fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
+    use crate::log_rate::{CallsiteRateLimiter, Decision, RateLimitConfig};
+    static LIMITER: std::sync::LazyLock<std::sync::Mutex<CallsiteRateLimiter<()>>> =
+        std::sync::LazyLock::new(|| {
+            std::sync::Mutex::new(CallsiteRateLimiter::new(RateLimitConfig {
+                max_per_window: 1,
+                window: std::time::Duration::from_secs(60),
+            }))
+        });
+    let decision = LIMITER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .check((), std::time::Instant::now());
+    let suppressed = match decision {
+        Decision::Suppress => return,
+        Decision::Allow => 0,
+        Decision::AllowWithSummary { suppressed } => suppressed,
+    };
+    tracing::warn!(
+        capture_key = %capture_key,
+        suppressed,
+        error = %format!("{error:#}"),
+        "accepted turn capture is unverifiable; its reasoning is not replayed"
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
