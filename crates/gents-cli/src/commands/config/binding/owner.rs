@@ -90,7 +90,8 @@ mod tests {
             "inference_profiles": [{"profile_id": "p", "agent_did": "did:test:source",
                 "backend_id": "backend", "model_name": "model"}],
             "graph_capabilities": [{"capability_id": "cap", "revision": "v1",
-                "agent_did": "did:test:source", "task_id": "task",
+                "agent_did": "did:test:source",
+                "target": {"kind": "task", "task_id": "task"},
                 "allowed_callers": ["did:test:source", "did:test:remote"]}]
         }))
         .unwrap();
