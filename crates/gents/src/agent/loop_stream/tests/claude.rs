@@ -94,7 +94,7 @@ async fn signed_claude_tool_round_trip_with_scope(
             lifecycle.request(),
             &request_commit_cid,
             "claude-sonnet-5".to_owned(),
-            None,
+            Some(crate::BackendProviderKind::ClaudeCliSubscription.as_str().to_owned()),
         ),
         Some(&capture_factory),
     )

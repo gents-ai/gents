@@ -278,6 +278,43 @@ mod replay_error_tests {
     }
 
     #[test]
+    fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
+        let reasoning = |text: &str| {
+            AssistantContent::Reasoning(gents_protocol::message::Reasoning::new_with_signature(
+                text,
+                Some(format!("sig-{text}")),
+            ))
+        };
+        let mut rows = vec![
+            TaggedMessage {
+                message: Message::Assistant {
+                    id: None,
+                    content: vec![
+                        reasoning("a"),
+                        AssistantContent::Text(Text {
+                            text: "visible".into(),
+                        }),
+                        reasoning("b"),
+                    ],
+                },
+                source: Some(provider_tag(0)),
+                physical_header: Some("header".into()),
+                block_indices: vec![0, 1, 2],
+            },
+            TaggedMessage::unassociated(Message::user("next")),
+        ];
+        strip_all_reasoning(&mut rows);
+        let Message::Assistant { content, .. } = &rows[0].message else {
+            panic!("assistant row")
+        };
+        assert!(
+            matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible")
+        );
+        assert_eq!(rows[0].block_indices, [1]);
+        assert_eq!(rows[1].message, Message::user("next"));
+    }
+
+    #[test]
     fn canonical_violation_retains_its_type_through_context() {
         let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
             .context("resolving required replay");
@@ -861,7 +898,7 @@ pub async fn assemble_provider_request<M: CompletionModel>(
     let history_len = history.len();
     let mut joined = std::mem::take(history);
     joined.append(new_messages);
-    let (indices, rows) = assistant_rows(&joined);
+    let (indices, mut rows) = assistant_rows(&joined);
     let has_reasoning = rows.iter().any(|row| {
         row.content
             .iter()
@@ -896,6 +933,21 @@ pub async fn assemble_provider_request<M: CompletionModel>(
             .map(|row| row.evidence.clone())
             .collect()
     };
+    // A turn accepted earlier in this loop carries its coordinate but not yet
+    // the physical header its consumer published. The unique canonical row for
+    // that coordinate supplies the sidecar; selection still requires the
+    // in-memory reasoning to equal that row's witness at the same positions.
+    for row in rows
+        .iter_mut()
+        .filter(|row| row.physical_header.is_none() && row.block_indices.is_empty())
+    {
+        if let Some(tag) = &row.source {
+            if let [evidence] = resolve(tag).as_slice() {
+                row.physical_header = Some(evidence.physical_header.clone());
+                row.block_indices = (0..row.content.len()).collect();
+            }
+        }
+    }
     apply_assistant_rows(
         &mut joined,
         &indices,

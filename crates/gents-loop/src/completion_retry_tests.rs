@@ -484,3 +484,56 @@ fn observed_retry_wake_is_deadline_bounded_and_inclusive() {
         None
     ));
 }
+
+#[test]
+fn failure_class_reasoning_rejections_are_their_own_class() {
+    for text in [
+        "400 invalid_request_error: messages.5.content.0: Invalid `signature` in `thinking` block",
+        "invalid_request_error: messages.3.content.0: Invalid `data` in `redacted_thinking` block",
+        "400 invalid_encrypted_content: The encrypted content for item rs_1 could not be verified.",
+        "Encrypted content could not be decrypted",
+    ] {
+        assert_eq!(
+            failure_class(
+                &InferenceError::PermanentFailure {
+                    reason: text.to_string()
+                },
+                text
+            ),
+            FailureClass::ReasoningRejected,
+            "{text}"
+        );
+    }
+    let unrelated = "400 invalid_request_error: max_tokens is too large";
+    assert_eq!(
+        failure_class(
+            &InferenceError::PermanentFailure {
+                reason: unrelated.to_string()
+            },
+            unrelated
+        ),
+        FailureClass::Permanent
+    );
+}
+
+#[test]
+fn reasoning_rejection_repairs_once_then_fails() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        transport_backoff: vec![Duration::from_secs(1)],
+        max_resample: 3,
+        allow_repair: true,
+    });
+    let error = InferenceError::PermanentFailure {
+        reason: "Invalid `signature` in `thinking` block".to_string(),
+    };
+    let text = error.to_string();
+    assert!(matches!(
+        state.on_pre_stream_failure(&error, &text, Utc::now(), None),
+        PreStreamDirective::Repair
+    ));
+    state.mark_repair_used();
+    assert!(matches!(
+        state.on_pre_stream_failure(&error, &text, Utc::now(), None),
+        PreStreamDirective::Fail { .. }
+    ));
+}
