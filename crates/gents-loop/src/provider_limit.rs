@@ -6,8 +6,10 @@
 //! window, which cannot succeed before its reset and must fail the request
 //! with that reset time. Only error text survives Rig's error boundary, so the
 //! native transport appends the relevant response headers to the rejected
-//! body as a marker ([`ProviderLimitHeaders::marker`]) and this classifier
-//! reads the marker and the provider body together.
+//! body as a marker ([`ProviderLimitHeaders::annotate`]) and this classifier
+//! reads the marker and the provider body together. The marker is transport
+//! metadata: [`persisted_failure_reason`] and [`strip_provider_limit_marker`]
+//! keep it out of recorded and displayed failure text.
 
 use std::fmt;
 use std::time::Duration;
@@ -20,6 +22,10 @@ use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 const MARKER_OPEN: &str = " [provider-limit";
+/// Replaces the marker token inside a provider body, so a body cannot forge
+/// header evidence.
+const MARKER_TOKEN: &str = "[provider-limit";
+const NEUTRALIZED_TOKEN: &str = "[provider limit";
 const USAGE_LIMIT_PREFIX: &str = "provider usage limit reached";
 const DETAIL_MAX_CHARS: usize = 300;
 
@@ -30,10 +36,9 @@ const DETAIL_MAX_CHARS: usize = 300;
 ///   and OpenAI's "exceeded your current quota" message for that code.
 /// - xAI: `subscription:free-usage-exhausted` on a 429
 ///   (grok-build xai-grok-pager/src/app/dispatch/billing.rs).
-/// - Anthropic subscription: "exceed your account's rate limit" on a 429
-///   `rate_limit_error` while the seat is capped (#1422 live repro), the same
-///   account-scoped wording oh-my-pi's `ACCOUNT_RATE_LIMIT_PATTERN` treats as
-///   quota exhaustion; and "credit balance" billing rejections.
+/// - Anthropic: "credit balance" billing rejections. Its 429 wording is the
+///   same for throttles and capped subscription seats, so a subscription cap
+///   is recognized only from the unified-limit headers.
 const USAGE_NEEDLES: &[&str] = &[
     "usage limit",
     "usage_limit",
@@ -42,7 +47,6 @@ const USAGE_NEEDLES: &[&str] = &[
     "exceeded your current quota",
     "quota exceeded",
     "free-usage-exhausted",
-    "account's rate limit",
     "billing hard limit",
     "credit balance",
 ];
@@ -77,8 +81,10 @@ pub struct ProviderLimitHeaders {
 impl ProviderLimitHeaders {
     /// Reads, besides `retry-after`:
     /// - Anthropic subscription unified limits: `anthropic-ratelimit-unified-status`
-    ///   and per-window `anthropic-ratelimit-unified-<window>-status` equal to
-    ///   `rejected`, each with a sibling `-reset` in epoch seconds.
+    ///   and the usage windows `anthropic-ratelimit-unified-<window>-status`
+    ///   (`5h`, `7d`, `7d_<model>`) equal to `rejected`, each with a sibling
+    ///   `-reset` in epoch seconds. `-overage-status` is excluded: seats without
+    ///   extra usage report it `rejected` on ordinary responses.
     /// - Codex: `x-codex-{primary,secondary}-used-percent` at or above 100 with
     ///   `x-codex-{primary,secondary}-reset-at` in epoch seconds
     ///   (codex-rs/codex-api/src/rate_limits.rs `parse_rate_limit_window`).
@@ -114,7 +120,11 @@ impl ProviderLimitHeaders {
             else {
                 continue;
             };
-            if value.eq_ignore_ascii_case("rejected") {
+            let usage_window = window.is_empty()
+                || window
+                    .strip_suffix('-')
+                    .is_some_and(|window| window.starts_with(|c: char| c.is_ascii_digit()));
+            if usage_window && value.eq_ignore_ascii_case("rejected") {
                 let reset = get(&format!("{UNIFIED}{window}reset")).and_then(epoch_seconds);
                 limits.exhaust(reset);
             }
@@ -135,8 +145,18 @@ impl ProviderLimitHeaders {
         self.reset_at = self.reset_at.max(reset);
     }
 
+    /// A rejected response body with the marker token neutralized, followed by
+    /// this marker.
+    pub fn annotate(&self, body: &str) -> String {
+        format!(
+            "{}{}",
+            body.replace(MARKER_TOKEN, NEUTRALIZED_TOKEN),
+            self.marker()
+        )
+    }
+
     /// Suffix for a rejected response body; empty when no header applied.
-    pub fn marker(&self) -> String {
+    fn marker(&self) -> String {
         if *self == Self::default() {
             return String::new();
         }
@@ -157,30 +177,56 @@ impl ProviderLimitHeaders {
         marker
     }
 
-    fn parse_marker(marker: &str) -> Self {
-        let fields = marker
-            .strip_prefix(MARKER_OPEN)
-            .and_then(|rest| rest.split(']').next())
-            .unwrap_or_default();
+    /// `None` unless `marker` is exactly one well-formed marker.
+    fn parse_marker(marker: &str) -> Option<Self> {
+        let fields = marker.strip_prefix(MARKER_OPEN)?.strip_suffix(']')?;
         let mut limits = Self::default();
         for field in fields.split_whitespace() {
             match field.split_once('=') {
-                Some(("retry-at", value)) => limits.retry_at = parse_rfc3339(value),
-                Some(("reset-at", value)) => limits.reset_at = parse_rfc3339(value),
+                Some(("retry-at", value)) => limits.retry_at = Some(parse_rfc3339(value)?),
+                Some(("reset-at", value)) => limits.reset_at = Some(parse_rfc3339(value)?),
                 None if field == "usage-exhausted" => limits.usage_exhausted = true,
-                _ => {}
+                _ => return None,
             }
         }
-        limits
+        Some(limits)
     }
 }
 
-/// Splits `text` into the provider body and its header marker (empty when
-/// absent), so a caller that bounds the body can reattach the marker intact.
+/// Splits `text` into the provider body and the transport's header marker.
+/// The marker is recognized only as the well-formed suffix of a rejected-status
+/// rendering; anywhere else it is provider text and stays in the body.
 pub fn split_provider_limit_marker(text: &str) -> (&str, &str) {
+    match split_annotated_body(text) {
+        (body, marker) if has_status(&body.to_ascii_lowercase(), None) => (body, marker),
+        _ => (text, ""),
+    }
+}
+
+/// Splits a body produced by [`ProviderLimitHeaders::annotate`] into the body
+/// and its well-formed marker suffix, so a caller that bounds the body can
+/// reattach the marker intact.
+pub fn split_annotated_body(text: &str) -> (&str, &str) {
     match text.rfind(MARKER_OPEN) {
-        Some(start) => (&text[..start], &text[start..]),
-        None => (text, ""),
+        Some(start) if ProviderLimitHeaders::parse_marker(&text[start..]).is_some() => {
+            text.split_at(start)
+        }
+        _ => (text, ""),
+    }
+}
+
+/// `text` without the transport's header marker.
+pub fn strip_provider_limit_marker(text: &str) -> &str {
+    split_provider_limit_marker(text).0
+}
+
+/// The failure text to record for a provider attempt: the rendered
+/// [`UsageLimit`] for an exhausted window, which the Goal reclassifies from the
+/// record, otherwise `text` without the header marker.
+pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
+    match classify_provider_limit(text, now) {
+        Some(ProviderLimit::UsageExhausted(limit)) => limit.to_string(),
+        _ => strip_provider_limit_marker(text).to_string(),
     }
 }
 
@@ -214,16 +260,17 @@ pub enum ProviderLimit {
 }
 
 /// Classifies a provider error text; `None` when it is not a rate limit.
-/// A bare 429 is a throttle: only usage evidence (body wording, rejected usage
-/// headers, or a wait beyond [`LONG_RATE_LIMIT_WAIT`]) makes it a usage limit.
+/// A bare 429 is a throttle. Usage evidence is body wording, or rejected usage
+/// headers or a wait beyond [`LONG_RATE_LIMIT_WAIT`] on a rate-limit rejection;
+/// usage headers on any other status (an overloaded 529, a 500) are ignored.
 pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
-    let headers = ProviderLimitHeaders::parse_marker(marker);
+    let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
     let lower = body.to_ascii_lowercase();
     let usage_text = USAGE_NEEDLES.iter().any(|needle| lower.contains(needle));
-    let throttle_text =
-        THROTTLE_NEEDLES.iter().any(|needle| lower.contains(needle)) || has_status_429(&lower);
-    if !(usage_text || throttle_text || headers.usage_exhausted) {
+    let throttle = THROTTLE_NEEDLES.iter().any(|needle| lower.contains(needle))
+        || has_status(&lower, Some("429"));
+    if !(usage_text || throttle) {
         return None;
     }
 
@@ -254,11 +301,15 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
     Some(ProviderLimit::Throttled { retry_after })
 }
 
-fn has_status_429(lower: &str) -> bool {
+/// A status rendering followed by a three-digit code (`code` when given).
+fn has_status(lower: &str, code: Option<&str>) -> bool {
     STATUS_PREFIXES.iter().any(|prefix| {
         lower.match_indices(prefix).any(|(at, _)| {
-            let rest = &lower[at + prefix.len()..];
-            rest.starts_with("429") && !rest[3..].starts_with(|c: char| c.is_ascii_digit())
+            let rest = lower[at + prefix.len()..].as_bytes();
+            rest.len() >= 3
+                && rest[..3].iter().all(u8::is_ascii_digit)
+                && !rest.get(3).is_some_and(u8::is_ascii_digit)
+                && code.is_none_or(|code| &rest[..3] == code.as_bytes())
         })
     })
 }

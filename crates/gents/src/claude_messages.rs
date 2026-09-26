@@ -505,7 +505,7 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
             if status.as_u16() == 401 {
                 bearer.invalidate().await;
             }
-            let (body, marker) = gents_loop::provider_limit::split_provider_limit_marker(&message);
+            let (body, marker) = gents_loop::provider_limit::split_annotated_body(&message);
             return Err(non_success_error(
                 status,
                 None,

@@ -182,3 +182,30 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
         other => panic!("expected usage limit, got {other:?}"),
     }
 }
+
+/// Seats without extra usage report overage `rejected` on ordinary responses;
+/// an overloaded 529 stays a transient transport failure.
+#[tokio::test]
+async fn overloaded_529_with_overage_rejected_stays_transient() {
+    let url = one_shot_server(
+        "529 Overloaded",
+        &[
+            ("anthropic-ratelimit-unified-status", "allowed"),
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
+        ],
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+    )
+    .await;
+    let error = ProviderHttpClient::default()
+        .send_streaming(post(&url))
+        .await
+        .err()
+        .expect("529");
+    match classify_http(error) {
+        InferenceError::TransientFailure { reason } => {
+            assert!(!reason.contains("provider-limit"), "{reason}");
+        }
+        other => panic!("expected transient failure, got {other:?}"),
+    }
+}

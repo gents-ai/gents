@@ -5,7 +5,7 @@
 
 use thiserror::Error;
 
-use crate::provider_limit::{classify_provider_limit, ProviderLimit};
+use crate::provider_limit::{classify_provider_limit, strip_provider_limit_marker, ProviderLimit};
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -131,7 +131,7 @@ pub enum HookError {
 }
 
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
-    let msg = error.to_string();
+    let msg = strip_provider_limit_marker(&error.to_string()).to_string();
 
     if msg.contains("context_length_exceeded") || msg.contains("maximum context length") {
         return InferenceError::ContextLengthExceeded { reason: msg };
@@ -155,6 +155,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     None => {}
                 }
             }
+            let reason = strip_provider_limit_marker(&reason).to_string();
             match completion_err {
                 rig::completion::CompletionError::HttpError(_) => {
                     if error_message_has_status(&reason, 400)

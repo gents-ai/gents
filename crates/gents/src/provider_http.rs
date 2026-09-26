@@ -18,8 +18,8 @@ use rig::wasm_compat::WasmCompatSend;
 /// Rig's own `HttpClientExt for reqwest::Client` turns a non-success status
 /// into `InvalidStatusCodeWithMessage(status, body)` before it copies headers,
 /// and only error text crosses Rig's provider and streaming boundaries. This
-/// client returns the same variant with
-/// [`ProviderLimitHeaders::marker`] appended to the body, so
+/// client returns the same variant with the body annotated by
+/// [`ProviderLimitHeaders::annotate`], so
 /// `gents_loop::provider_limit` can honor `Retry-After` and provider reset
 /// headers.
 #[derive(Clone, Debug, Default)]
@@ -43,14 +43,14 @@ pub(crate) fn rejected_response_error(
     headers: &HeaderMap,
     body: &str,
 ) -> http_client::Error {
-    let marker = ProviderLimitHeaders::from_headers(
+    let annotated = ProviderLimitHeaders::from_headers(
         headers
             .iter()
             .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?))),
         Utc::now(),
     )
-    .marker();
-    http_client::Error::InvalidStatusCodeWithMessage(status, format!("{body}{marker}"))
+    .annotate(body);
+    http_client::Error::InvalidStatusCodeWithMessage(status, annotated)
 }
 
 impl HttpClientExt for ProviderHttpClient {

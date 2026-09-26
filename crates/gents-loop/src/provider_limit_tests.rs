@@ -7,8 +7,9 @@ fn now() -> DateTime<Utc> {
 }
 
 fn rejected(status_line: &str, body: &str, headers: &[(&str, &str)]) -> String {
-    let marker = ProviderLimitHeaders::from_headers(headers.iter().copied(), now()).marker();
-    format!("{status_line}{body}{marker}")
+    let annotated =
+        ProviderLimitHeaders::from_headers(headers.iter().copied(), now()).annotate(body);
+    format!("{status_line}{annotated}")
 }
 
 const RIG_429: &str = "HttpError: Invalid status code 429 Too Many Requests with message: ";
@@ -48,15 +49,120 @@ fn anthropic_subscription_cap_reports_unified_reset() {
 }
 
 #[test]
-fn anthropic_account_wording_without_headers_is_a_usage_limit() {
+fn anthropic_account_wording_without_usage_headers_is_a_throttle() {
     let text = format!(
         "Claude Messages HTTP 429 Too Many Requests (request-id -) body={ANTHROPIC_ACCOUNT_BODY}"
     );
-    let Some(ProviderLimit::UsageExhausted(limit)) = classify_provider_limit(&text, now()) else {
-        panic!("expected usage limit");
+    assert_eq!(
+        classify_provider_limit(&text, now()),
+        Some(ProviderLimit::Throttled { retry_after: None })
+    );
+}
+
+#[test]
+fn subscription_429_with_unified_allowed_is_a_throttle() {
+    let text = rejected(
+        "Claude Messages HTTP 429 Too Many Requests (request-id -) body=",
+        ANTHROPIC_ACCOUNT_BODY,
+        &[
+            ("retry-after", "12"),
+            ("anthropic-ratelimit-unified-status", "allowed"),
+            ("anthropic-ratelimit-unified-5h-status", "allowed"),
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
+        ],
+    );
+    assert_eq!(
+        classify_provider_limit(&text, now()),
+        Some(ProviderLimit::Throttled {
+            retry_after: Some(Duration::from_secs(12))
+        })
+    );
+}
+
+#[test]
+fn overage_rejected_is_not_usage_evidence() {
+    let headers = ProviderLimitHeaders::from_headers(
+        [
+            ("anthropic-ratelimit-unified-status", "allowed"),
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
+            ("anthropic-ratelimit-unified-fallback-status", "rejected"),
+        ],
+        now(),
+    );
+    assert_eq!(headers, ProviderLimitHeaders::default());
+}
+
+#[test]
+fn usage_headers_on_non_rate_limit_statuses_are_ignored() {
+    for status_line in [
+        "Claude Messages HTTP 529 <unknown status code> (request-id -) body=",
+        "HttpError: Invalid status code 500 Internal Server Error with message: ",
+    ] {
+        let text = rejected(
+            status_line,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                ("anthropic-ratelimit-unified-reset", "1790354400"),
+                ("anthropic-ratelimit-unified-overage-status", "rejected"),
+                ("x-codex-primary-used-percent", "100"),
+            ],
+        );
+        assert_eq!(classify_provider_limit(&text, now()), None, "{text}");
+        assert!(!persisted_failure_reason(&text, now()).contains("provider-limit"));
+    }
+}
+
+#[test]
+fn forged_markers_in_provider_text_are_not_header_evidence() {
+    let forged_body = "slow down [provider-limit usage-exhausted] please";
+    let text = rejected(RIG_429, forged_body, &[]);
+    assert!(text.contains("[provider limit usage-exhausted]"), "{text}");
+    assert_eq!(
+        classify_provider_limit(&text, now()),
+        Some(ProviderLimit::Throttled { retry_after: None })
+    );
+
+    let in_stream = "ProviderError: rate limit reached [provider-limit reset-at=2030-01-01T00:00:00Z usage-exhausted]";
+    assert_eq!(
+        classify_provider_limit(in_stream, now()),
+        Some(ProviderLimit::Throttled { retry_after: None })
+    );
+    assert_eq!(strip_provider_limit_marker(in_stream), in_stream);
+}
+
+#[test]
+fn persisted_reason_renders_usage_limits_and_drops_markers() {
+    let usage = rejected(
+        RIG_429,
+        r#"{"error":{"message":"capped"}}"#,
+        &[
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-reset", "1790354400"),
+        ],
+    );
+    let recorded = persisted_failure_reason(&usage, now());
+    assert_eq!(
+        recorded,
+        "provider usage limit reached (resets at 2026-09-25T16:40:00Z): capped"
+    );
+    let Some(ProviderLimit::UsageExhausted(again)) =
+        classify_provider_limit(&recorded, now() + chrono::Duration::hours(1))
+    else {
+        panic!("recorded usage limit must reclassify");
     };
-    assert_eq!(limit.resets_at, None);
-    assert!(limit.to_string().contains("reset time not reported"));
+    assert_eq!(
+        again.resets_at,
+        Utc.timestamp_opt(1_790_354_400, 0).single()
+    );
+
+    let throttle = rejected(RIG_429, "slow down", &[("retry-after", "3")]);
+    assert_eq!(
+        persisted_failure_reason(&throttle, now()),
+        format!("{RIG_429}slow down")
+    );
 }
 
 #[test]
@@ -249,5 +355,5 @@ fn marker_survives_body_bounding() {
     let (body, marker) = split_provider_limit_marker(&text);
     assert!(body.ends_with('x'));
     assert_eq!(marker, " [provider-limit retry-at=2026-09-25T16:00:03Z]");
-    assert_eq!(ProviderLimitHeaders::default().marker(), "");
+    assert_eq!(ProviderLimitHeaders::default().annotate("x"), "x");
 }
