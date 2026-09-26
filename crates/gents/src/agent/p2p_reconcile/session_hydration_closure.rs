@@ -628,7 +628,11 @@ mod tests {
                 }]),
                 sessions: BTreeSet::from([SessionOwner {
                     session_id: request.session_id.clone(),
-                    requester_did: request.requester_did.clone(),
+                    requester_did: if case.owner_requester_matches {
+                        request.requester_did.clone()
+                    } else {
+                        request.agent_did.clone()
+                    },
                     agent_did: request.agent_did.clone(),
                 }]),
                 documents: closure.iter().cloned().collect(),

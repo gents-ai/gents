@@ -13,14 +13,15 @@ use chrono::{DateTime, Utc};
 use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
 use gents_desktop_core::client::{
     load_peer_records, project_sync_health, ClientCore, ClientSyncStateSnapshot, DesktopPaths,
-    P2PHealth, PairingCollectionStatus, SyncHealth,
+    P2PHealth, PairingCollectionStatus, SessionTranscriptDenial, SyncHealth,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 
 use super::state::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, P2PHealthView,
-    PairingCollectionStatusView, SavedPeerView, SessionHydrationView, SyncHealthView,
+    PairingCollectionStatusView, SavedPeerView, SessionHydrationView, SessionTranscriptDenialView,
+    SyncHealthView,
 };
 use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
 
@@ -56,6 +57,24 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
         merged_count: progress.merged_count,
         covered_count: progress.covered_count,
         served_count: progress.served_count,
+    }
+}
+
+pub(crate) fn to_transcript_denial_view(
+    denial: SessionTranscriptDenial,
+    session_requester_did: Option<&str>,
+    attempted_requester_did: Option<&str>,
+) -> SessionTranscriptDenialView {
+    SessionTranscriptDenialView {
+        reason: match denial {
+            SessionTranscriptDenial::AgentOwnedWithoutOperatorAccess => {
+                "agent_owned_without_operator_access"
+            }
+            SessionTranscriptDenial::RequesterScopeMismatch => "requester_scope_mismatch",
+        }
+        .to_string(),
+        session_requester_did: session_requester_did.map(str::to_owned),
+        attempted_requester_did: attempted_requester_did.map(str::to_owned),
     }
 }
 

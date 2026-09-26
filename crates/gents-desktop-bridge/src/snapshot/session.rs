@@ -262,6 +262,7 @@ fn build_hydration_only_session_snapshot(
         ),
         timeline_items: Vec::new(),
         hydration: Some(hydration),
+        transcript_denial: None,
         timeline_page: None,
         projection_revision: None,
         messages: Vec::new(),

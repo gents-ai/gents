@@ -5,13 +5,16 @@ use gents::agent::p2p_reconcile::session_hydration::{
 };
 use gents_desktop_core::client::{
     project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
-    P2pSyncStatusSnapshot, PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
+    P2pSyncStatusSnapshot, PairingCollectionStatus, SessionTranscriptDenial, SyncHealthState,
+    STUCK_THRESHOLD_ATTEMPTS,
 };
 use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
 
 use crate::contract::EVENT_REASONS;
-use crate::snapshot::{to_hydration_view, to_pairing_collection_view, to_sync_health_view};
+use crate::snapshot::{
+    to_hydration_view, to_pairing_collection_view, to_sync_health_view, to_transcript_denial_view,
+};
 use crate::types::ClientUpdateEvent;
 
 fn t(secs: u64) -> SystemTime {
@@ -97,4 +100,30 @@ fn client_update_event_serializes_store_reason_for_projection_wakes() {
     );
     assert!(EVENT_REASONS.contains(&"store"));
     assert!(!EVENT_REASONS.contains(&"hydration"));
+}
+
+#[test]
+fn transcript_denial_view_keeps_stable_reason_codes_and_both_scopes() {
+    let agent_owned = to_transcript_denial_view(
+        SessionTranscriptDenial::AgentOwnedWithoutOperatorAccess,
+        Some("did:test:agent"),
+        Some("did:test:desktop"),
+    );
+    assert_eq!(agent_owned.reason, "agent_owned_without_operator_access");
+    assert_eq!(
+        agent_owned.session_requester_did.as_deref(),
+        Some("did:test:agent")
+    );
+    assert_eq!(
+        agent_owned.attempted_requester_did.as_deref(),
+        Some("did:test:desktop")
+    );
+
+    let mismatch = to_transcript_denial_view(
+        SessionTranscriptDenial::RequesterScopeMismatch,
+        None,
+        Some("did:test:desktop"),
+    );
+    assert_eq!(mismatch.reason, "requester_scope_mismatch");
+    assert_eq!(mismatch.session_requester_did, None);
 }

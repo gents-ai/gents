@@ -460,6 +460,19 @@ pub struct SessionHydrationView {
     pub served_count: Option<usize>,
 }
 
+/// One session's transcript cannot be read under any requester scope this
+/// client can present, as decided by
+/// `gents_desktop_core::client::session_transcript_denial` from the session
+/// document itself. Presence here is the runtime's statement that an empty
+/// transcript is a scope refusal; the presentation layer owns any wording.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTranscriptDenialView {
+    pub reason: String,
+    pub session_requester_did: Option<String>,
+    pub attempted_requester_did: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
@@ -480,6 +493,9 @@ pub struct DesktopSessionSnapshot {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub hydration: Option<SessionHydrationView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub transcript_denial: Option<SessionTranscriptDenialView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub timeline_page: Option<SessionTimelinePageView>,

@@ -14,6 +14,11 @@ structure SessionHydrationDecisionCase where
   activeMember : Bool
   membershipNetworkMatches : Bool
   ownsSession : Bool
+  /-- Whether the present session document records the request's own requester.
+  A subagent an agent admits for itself records the agent as its requester, so
+  a session document can exist for the requested label and still belong to a
+  different requester. -/
+  ownerRequesterMatches : Bool := true
 
 def hydrationRequest : SessionHydration.Request :=
   { key := "peer-1:session-1"
@@ -54,7 +59,11 @@ def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catal
   , verifiedActiveMemberships := if w.activeMember then
       [{ network := if w.membershipNetworkMatches then "network-1" else "network-2"
        , member := hydrationRequest.requester }].toFinset else ∅
-  , sessions := if w.ownsSession then [SessionHydration.ownedSession hydrationRequest].toFinset else ∅
+  , sessions := if w.ownsSession then
+      [{ SessionHydration.ownedSession hydrationRequest with
+         requester := if w.ownerRequesterMatches then hydrationRequest.requester
+           else hydrationRequest.agent }].toFinset
+      else ∅
   , closureInputs := [hydrationClosureInput] }
 
 def hydrationTwin : SessionHydration.Request :=
@@ -176,7 +185,11 @@ def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
       membershipNetworkMatches := false, ownsSession := true }
   , { name := "unowned_session", paired := true,
       pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
-      membershipNetworkMatches := true, ownsSession := false } ]
+      membershipNetworkMatches := true, ownsSession := false }
+  , { name := "session_owned_by_its_agent", paired := true,
+      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
+      membershipNetworkMatches := true, ownsSession := true,
+      ownerRequesterMatches := false } ]
 
 /-- Same logical session, but a different peer/request key cannot reuse the
 closure admitted for the original hydration request. -/
@@ -198,6 +211,7 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
     ++ "\"active_member\":" ++ boolString w.activeMember ++ ","
     ++ "\"membership_network_matches\":" ++ boolString w.membershipNetworkMatches ++ ","
     ++ "\"owns_session\":" ++ boolString w.ownsSession ++ ","
+    ++ "\"owner_requester_matches\":" ++ boolString w.ownerRequesterMatches ++ ","
     ++ "\"expected_admit\":" ++ boolString (SessionHydration.decideAdmits cat hydrationRequest) ++ ","
     ++ "\"expected_selected_count\":" ++
       toString ((SessionHydration.selectedDocuments cat hydrationRequest).getD ∅).card ++ ","

@@ -672,6 +672,7 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) active_member: bool,
     pub(crate) membership_network_matches: bool,
     pub(crate) owns_session: bool,
+    pub(crate) owner_requester_matches: bool,
     pub(crate) expected_admit: bool,
     pub(crate) expected_selected_count: usize,
     pub(crate) closure_input: LeanSessionHydrationClosureInput,

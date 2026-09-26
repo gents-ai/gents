@@ -78,7 +78,7 @@ pub async fn desktop_session_snapshot(
         .as_deref()
         .and_then(|agent_did| core.operator_graphql(agent_did))
         .map(gents::config_client::ConfigAccess::Graphql);
-    let requester_scope = {
+    let (requester_scope, transcript_denial) = {
         let store = core.store().snapshot();
         let session = agent_did.as_deref().and_then(|agent_did| {
             store
@@ -86,12 +86,27 @@ pub async fn desktop_session_snapshot(
                 .iter()
                 .find(|row| row.session_id == session_id && row.agent_did == agent_did)
         });
-        gents_desktop_core::client::session_transcript_requester_scope(
+        let operator = operator_access.is_some();
+        let scope = gents_desktop_core::client::session_transcript_requester_scope(
             session,
             agent_did.as_deref(),
             principal_scope.as_deref(),
-            operator_access.is_some(),
+            operator,
+        );
+        let denial = gents_desktop_core::client::session_transcript_denial(
+            session,
+            agent_did.as_deref(),
+            principal_scope.as_deref(),
+            operator,
         )
+        .map(|denial| {
+            crate::snapshot::to_transcript_denial_view(
+                denial,
+                session.and_then(|row| row.requester_did.as_deref()),
+                scope.as_deref(),
+            )
+        });
+        (scope, denial)
     };
     let page_read = async {
         match operator_access.as_ref() {
@@ -178,6 +193,7 @@ pub async fn desktop_session_snapshot(
     )
     .await;
     if let Some(snapshot) = snapshot.as_mut() {
+        snapshot.transcript_denial = transcript_denial;
         apply_session_timeline_page_with_query(
             snapshot,
             timeline_before_item_key.as_deref(),

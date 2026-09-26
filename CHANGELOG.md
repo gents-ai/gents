@@ -228,6 +228,10 @@ source consistency checks, not a separate runtime compatibility version.
   but a subagent the agent spawns for itself is requested by the agent, so the
   read matched nothing; the agent's operator now reads such a session under
   its own scope (#1537).
+- Desktop: a session the client cannot read under any requester scope it
+  can present now carries that refusal and its reason, so an empty panel is
+  no longer indistinguishable from a session with no activity. The runtime
+  decides it from the session document, never from an empty read (#1537).
 - Desktop: a subagent session shows the parent work that spawned it, also
   after the parent moves on or completes. Its lineage is rooted at the exact
   request document its provenance names, through the agent-scoped lineage

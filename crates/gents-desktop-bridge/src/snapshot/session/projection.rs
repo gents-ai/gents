@@ -757,6 +757,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         context,
         timeline_items,
         hydration: None,
+        transcript_denial: None,
         timeline_page: None,
         projection_revision: None,
         messages,

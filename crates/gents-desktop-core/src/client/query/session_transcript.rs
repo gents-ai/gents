@@ -392,6 +392,47 @@ pub fn session_transcript_requester_scope(
     principal_scope.map(str::to_owned)
 }
 
+/// Why no scope this client can present reads one session's transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionTranscriptDenial {
+    /// The session records its own agent as requester, as work the agent
+    /// admitted for itself does, and this client holds no operator authority
+    /// over that runtime.
+    AgentOwnedWithoutOperatorAccess,
+    /// The session records a requester scope other than the one this client
+    /// can present.
+    RequesterScopeMismatch,
+}
+
+/// Whether the scope [`session_transcript_requester_scope`] chose can return
+/// this session's rows at all, and if not, why.
+///
+/// Transcript rows carry their session's own requester scope, so reading under
+/// any other scope is empty because the scopes differ and not because the
+/// session has no activity. `None` means the chosen scope is the session's own,
+/// so an empty read there is an empty session. A denial is stated only from the
+/// session document itself, never from the size of a read result.
+pub fn session_transcript_denial(
+    session: Option<&AgentSession>,
+    agent_did: Option<&str>,
+    principal_scope: Option<&str>,
+    operator: bool,
+) -> Option<SessionTranscriptDenial> {
+    let session = session?;
+    let scope =
+        session_transcript_requester_scope(Some(session), agent_did, principal_scope, operator);
+    if session.requester_did.as_deref() == scope.as_deref() {
+        return None;
+    }
+    Some(
+        if agent_did.is_some() && session.requester_did.as_deref() == agent_did {
+            SessionTranscriptDenial::AgentOwnedWithoutOperatorAccess
+        } else {
+            SessionTranscriptDenial::RequesterScopeMismatch
+        },
+    )
+}
+
 /// Query a bounded transcript window directly from DefraDB. The cursor is a
 /// bridge item key, but is resolved to the durable sequence space before the
 /// page query so inserts at the tip cannot shift an older page. Messages and
