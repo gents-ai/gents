@@ -61,6 +61,11 @@ source consistency checks, not a separate runtime compatibility version.
   bound, matching what cancellation reaches (#1764).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
+- The desktop transcript shows tool commands, arguments and output as they
+  ran. It no longer hides text that mentions a credential-like word (such as
+  `password` or `Authorization`) behind "Command hidden" or "Hidden because it
+  looks like it contains a credential"; the stored transcript was never
+  redacted (#1620).
 
 ### Fixed
 

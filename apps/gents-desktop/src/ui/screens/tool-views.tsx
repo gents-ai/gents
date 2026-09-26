@@ -19,7 +19,6 @@ import {
   diffText,
   duration,
   isAbsolutePath,
-  isRedacted,
   lineCount,
   toolSummary,
 } from "./tool-summary";
@@ -73,17 +72,6 @@ function Payload({
   counted?: boolean;
 }) {
   if (!value?.trim()) return null;
-  if (isRedacted(value))
-    return (
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-          {label}
-        </span>
-        <p className="font-sans text-xs text-muted-foreground">
-          Hidden because it looks like it contains a credential.
-        </p>
-      </div>
-    );
   const text = pretty(value);
   const lines = counted ? lineCount(text) : 0;
   return (
