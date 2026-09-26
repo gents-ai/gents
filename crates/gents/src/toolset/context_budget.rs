@@ -416,6 +416,7 @@ mod tests {
             r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "request-context",
+                    purpose: "normal",
                     agent_did: "did:key:z-context",
                     session_id: "session-context",
                     lifecycle_state: "completed",
@@ -452,6 +453,7 @@ mod tests {
                     retained_suffix_json: "null",
                     pair_closed: true,
                     checkpoint_messages_json: "null",
+                    replay_associations_json: "{\"required\":[],\"prefix_sources\":[],\"retained_sources\":[]}",
                     summary: "provider checkpoint",
                     messages_compacted: 1,
                     original_tokens: 700,

@@ -30,6 +30,7 @@ fn canonical_headers_and_segments_render_in_sequence() {
     let mut rows = ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
             agent_did: Some("did:test:amy".into()),
@@ -71,6 +72,7 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let rows = ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("steering-doc-1".into()),
             request_id: "steering-request-1".into(),
             agent_did: Some("did:test:amy".into()),
@@ -105,6 +107,7 @@ fn missing_segment_remains_loading_in_the_timeline() {
     let mut rows = ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
             agent_did: Some("did:test:amy".into()),
@@ -224,6 +227,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
 #[test]
 fn terminal_request_does_not_create_a_mutable_live_tail() {
     let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
         request_id: "req-1".into(),
         agent_did: Some("did:test:amy".into()),
@@ -254,6 +258,7 @@ fn terminal_request_does_not_create_a_mutable_live_tail() {
 #[test]
 fn session_snapshot_consumes_generated_live_overlay_cases() {
     let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
         request_id: "req-1".into(),
         agent_did: Some("did:test:amy".into()),
@@ -725,6 +730,7 @@ fn active_store() -> ClientStore {
     ClientStore::from_rows(ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
             agent_did: Some("did:test:amy".into()),

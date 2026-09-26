@@ -125,6 +125,9 @@ pub(crate) async fn verify_request_at_claim_boundary(
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<ResolvedBehavior>,
+    provider_family: Option<String>,
+    replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+    compaction_provider_family: Option<String>,
     model: Arc<M>,
     preamble: String,
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -156,6 +159,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<ResolvedBehavior>,
+        provider_family: Option<String>,
         model: Arc<M>,
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -187,6 +191,9 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         Ok(Self {
             node,
             behavior,
+            provider_family: provider_family.clone(),
+            replay_issuer: None,
+            compaction_provider_family: provider_family,
             model,
             preamble,
             loop_tools,
@@ -208,8 +215,21 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         })
     }
 
-    pub(super) fn with_compactor(mut self, compactor: Arc<dyn ReductionEngine>) -> Self {
+    pub(super) fn with_compactor(
+        mut self,
+        compactor: Arc<dyn ReductionEngine>,
+        provider_family: String,
+    ) -> Self {
         self.compactor = compactor;
+        self.compaction_provider_family = Some(provider_family);
+        self
+    }
+
+    pub(super) fn with_replay_issuer(
+        mut self,
+        issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+    ) -> Self {
+        self.replay_issuer = issuer;
         self
     }
 
@@ -324,6 +344,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     }
                 }
             };
+
+            if request.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+                self.spawn_title_audit_request(request, shutdown.clone());
+                continue;
+            }
 
             let trace_attrs = RequestTraceAttrs::from_request(&request);
             let behavior_id = self.behavior.behavior_id.clone();

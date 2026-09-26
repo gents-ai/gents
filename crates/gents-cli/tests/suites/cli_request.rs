@@ -461,7 +461,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         &graphql,
         &format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{parent_request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "parent-behavior",
@@ -513,7 +513,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         &graphql,
         &format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{child_request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "child-behavior",

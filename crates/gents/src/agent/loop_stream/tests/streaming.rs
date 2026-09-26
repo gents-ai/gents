@@ -9,7 +9,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
     let stream = run_loop_stream(
         model,
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -64,11 +64,12 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
                 },
             }],
         ),
-    ) as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
+    )
+        as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("do the work"),
+        TaggedMessage::unassociated(Message::user("do the work")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -110,7 +111,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     let stream = run_loop_stream(
         model,
         None::<gents_loop::session_hook::NoopSessionHook>,
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         config(0),
@@ -172,7 +173,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
@@ -193,6 +194,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
             &hook,
             &writer,
             &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
         )),
     )
     .await;
@@ -243,7 +245,7 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("go"),
+        TaggedMessage::unassociated(Message::user("go")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         config(4),

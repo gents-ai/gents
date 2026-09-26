@@ -70,7 +70,9 @@ theorem committed_dispatch_is_running (before after : World) (actor : Gate.Actor
     physicalRunning after permit.call = true := by
   obtain ⟨execution, heval, rfl⟩ := Gate.commit_reads_current_world
     before after actor now (.dispatch generation permit) hcommit
-  have hdispatch := mapError_success Gate.Error.execution _ _ heval
+  have hcore := Gate.evaluate_success_core (.dispatch generation permit)
+    (Gate.atTime before now) execution heval
+  have hdispatch := mapError_success Gate.Error.execution _ _ hcore
   exact (dispatch_requires_committed_intent_and_marks_running
     (Gate.atTime before now) execution generation permit hdispatch).1
 

@@ -69,6 +69,14 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
 }
 
 pub trait StreamWriter: Send + Sync {
+    /// Schedule private metadata without exposing it as visible reasoning.
+    fn mark_pending_output(
+        &self,
+        _doc_id: &str,
+    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
+        std::future::ready(Ok(true))
+    }
+
     fn write_tokens(
         &self,
         doc_id: &str,

@@ -76,7 +76,7 @@ async fn expired_child(
     let response = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{child_request_id}", agent_did: "{agent_did}",
+        request_id: "{child_request_id}", purpose: "normal", agent_did: "{agent_did}",
         behavior_id: "general", session_id: "session-{child_request_id}",
         retry_parent_request: "", retry_root_request: "{child_request_id}",
         superseded_by_request: "", content: "expired child",

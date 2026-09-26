@@ -67,6 +67,7 @@ fn root_response() -> Value {
                 {
                     "_docID": "doc-root",
                     "request_id": "req-root",
+                    "purpose": "normal",
                     "session_id": "sess-root",
                     "agent_did": "deployment-a",
                     "behavior_id": "amy-general",
@@ -94,6 +95,7 @@ fn canonical_root_response(
         "data": { "AgentRequest": [{
             "_docID": doc_id,
             "request_id": request_id,
+            "purpose": "normal",
             "agent_did": agent_did,
             "requester_did": null,
             "behavior_id": behavior_id,
@@ -164,6 +166,7 @@ fn canonical_child_row(
     json!({
         "_docID": doc_id,
         "request_id": request_id,
+        "purpose": "normal",
         "agent_did": agent_did,
         "requester_did": null,
         "behavior_id": behavior_id,
@@ -479,6 +482,7 @@ async fn create_root_request(
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
+                    purpose: "normal",
                     agent_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
                     session_id: "{session_id}",

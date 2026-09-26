@@ -12,7 +12,7 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 
 use crate::backend_provider::BackendProviderKind;
-use crate::loop_stream::{run_loop_to_text, LoopConfig};
+use crate::loop_stream::{run_loop_to_text, LoopConfig, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::SessionHook;
@@ -257,6 +257,7 @@ fn scripted_tool_call() -> RawStreamingChoice<()> {
 
 fn test_loop_config() -> LoopConfig {
     LoopConfig {
+        replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,
             OpenAiWireApi::ChatCompletions,
@@ -371,6 +372,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
                     behavior_id: "general".into(),
                     session_id: "dispatch-session".into(),
                     model_name: "scripted".into(),
+                    provider_family: None,
                 },
                 Arc::new(|_| Box::pin(async { Ok(()) })),
             );
@@ -380,7 +382,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
                 let stream = crate::loop_stream::run_loop_stream(
                     model,
                     Some(hook),
-                    Message::user("echo hi"),
+                    TaggedMessage::unassociated(Message::user("echo hi")),
                     Vec::new(),
                     tools,
                     config,

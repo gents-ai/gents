@@ -97,6 +97,7 @@ fn request_row(
     serde_json::from_value(serde_json::json!({
         "_docID": request_id,
         "request_id": request_id,
+        "purpose": "normal",
         "agent_did": "did:agent:1",
         "behavior_id": "default",
         "session_id": "session-1",
@@ -106,6 +107,81 @@ fn request_row(
         "created_at": created_at
     }))
     .expect("request row")
+}
+
+#[test]
+fn generated_title_selection_keeps_only_the_normal_public_head() {
+    let snapshot: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("Lean session selection cases");
+    let selections = snapshot["session_document_cases"]["selection"]
+        .as_array()
+        .expect("modeled selections");
+    for name in [
+        "newer_title_preserves_normal_head",
+        "title_only_has_no_public_head",
+    ] {
+        let case = selections
+            .iter()
+            .find(|case| case["name"] == name)
+            .expect("modeled title selection");
+        let agent = case["agent"].as_u64().expect("modeled agent");
+        let session = case["session"].as_u64().expect("modeled session");
+        let agent_did = format!("did:model:{agent}");
+        let session_id = format!("session-{session}");
+        let requests = case["requests"]
+            .as_array()
+            .expect("modeled request rows")
+            .iter()
+            .map(|row| {
+                let purpose = row["purpose"].as_str().expect("signed modeled purpose");
+                let scope = &row["scope"];
+                let created_at = row["created_at"].as_u64().expect("modeled time");
+                let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    1_700_000_000 + i64::try_from(created_at).unwrap(),
+                    0,
+                )
+                .unwrap()
+                .to_rfc3339();
+                let requester_did = scope["requester"]
+                    .as_u64()
+                    .map(|id| format!("did:model:{id}"));
+                serde_json::from_value::<AgentRequestRow>(serde_json::json!({
+                    "_docID": format!("doc-{}", row["doc_id"].as_u64().unwrap()),
+                    "request_id": format!("request-{}", row["request_id"].as_u64().unwrap()),
+                    "purpose": purpose,
+                    "agent_did": format!("did:model:{}", scope["agent"].as_u64().unwrap()),
+                    "requester_did": requester_did,
+                    "behavior_id": format!("behavior-{}", row["behavior"].as_u64().unwrap()),
+                    "session_id": format!("session-{}", scope["session"].as_u64().unwrap()),
+                    "content": "modeled request",
+                    "lifecycle_state": row["state"],
+                    "execution_origin": "interactive",
+                    "created_at": created_at,
+                }))
+                .expect("modeled request maps to desktop row")
+            })
+            .collect::<Vec<_>>();
+        let store = ClientStore::from_rows(ClientStoreRows {
+            requests,
+            ..ClientStoreRows::default()
+        });
+        let expected = case["selected"]["request_id"]
+            .as_u64()
+            .map(|id| format!("request-{id}"));
+        assert_eq!(
+            store.latest_request_id_for_session_for_agent(&session_id, &agent_did),
+            expected,
+            "{name}: public head differs from the Lean owner"
+        );
+        assert_eq!(
+            store.latest_request_id_for_session(&session_id),
+            expected,
+            "{name}: unscoped public head differs from the Lean owner"
+        );
+        assert!(store.requests.iter().all(|row| {
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+        }));
+    }
 }
 
 #[test]

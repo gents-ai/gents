@@ -147,6 +147,7 @@ async fn run_ghost_target_turn(fixture: &SpawnFixture, tool_call_id: &str, args:
     });
     crate::support::create_session_document(fixture.db.node.as_ref(), &session).await;
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         &fixture.request_id,
         &fixture.agent_did,
         &fixture.agent_did,
@@ -543,7 +544,7 @@ async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let (boundary_request_id, boundary_session_id) = loop {
         let response = fixture.db.node.execute(&format!(
-            "{{ AgentRequest(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: {}) {{ _docID request_id session_id lifecycle_state failure_reason subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id }} }}",
+            "{{ AgentRequest(filter: {{ agent_did: {{ _eq: \"{}\" }}, purpose: {{ _eq: \"normal\" }} }}, limit: {}) {{ _docID request_id session_id lifecycle_state failure_reason subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id }} }}",
             escape_graphql_string(&fixture.agent_did),
             (MAX_SUBAGENT_DEPTH + 1) * 3,
         )).await;
@@ -683,7 +684,7 @@ async fn spawn_subagent_rejects_depth_ceiling_without_child_request() {
     assert_eq!(error["max_subagent_depth"], json!(MAX_SUBAGENT_DEPTH));
 
     let response = fixture.db.node.execute(&format!(
-        "{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: \"{escaped_boundary}\" }} }}, limit: 1) {{ _docID }} }}"
+        "{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: \"{escaped_boundary}\" }}, purpose: {{ _eq: \"normal\" }} }}, limit: 1) {{ _docID }} }}"
     )).await;
     let children = response
         .data

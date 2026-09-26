@@ -11,19 +11,26 @@ use gents_protocol::message::{
 
 use super::summary::dedupe_paths;
 use super::FileActivity;
+use crate::provider_input::ProviderInputProfile;
 
 #[derive(Debug)]
 pub struct SourcedMessage {
     pub source_index: usize,
+    /// Positions in the original assistant row, carried through shaping.
+    pub block_indices: Vec<usize>,
     pub message: Message,
 }
 
-fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
+pub(crate) fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
     messages
         .into_iter()
         .enumerate()
         .map(|(source_index, message)| SourcedMessage {
             source_index,
+            block_indices: match &message {
+                Message::Assistant { content, .. } => (0..content.len()).collect(),
+                _ => Vec::new(),
+            },
             message,
         })
         .collect()
@@ -47,6 +54,7 @@ pub fn strip_tool_results_sourced(
 
     for SourcedMessage {
         source_index,
+        block_indices,
         message,
     } in messages
     {
@@ -72,6 +80,7 @@ pub fn strip_tool_results_sourced(
 
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::Assistant { id, content },
                 });
             }
@@ -88,12 +97,14 @@ pub fn strip_tool_results_sourced(
 
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::User { content: items },
                 });
             }
             Message::System { content } => {
                 stripped_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::System { content },
                 });
             }
@@ -154,6 +165,7 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
     for (index, sourced) in messages.into_iter().enumerate() {
         let SourcedMessage {
             source_index,
+            block_indices,
             message,
         } = sourced;
         match message {
@@ -166,25 +178,37 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
                 // first occurrence of each key and drop the rest.
                 let mut announced: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
+                let mut kept_indices = Vec::new();
                 let kept: Vec<AssistantContent> = content
                     .into_iter()
-                    .filter(|item| match item {
-                        AssistantContent::ToolCall(tool_call) => {
-                            let key = tool_call_key(tool_call);
-                            resolved.contains(&key) && announced.insert(key)
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        let keep = match &item {
+                            AssistantContent::ToolCall(tool_call) => {
+                                let key = tool_call_key(tool_call);
+                                resolved.contains(&key) && announced.insert(key)
+                            }
+                            _ => true,
+                        };
+                        if keep {
+                            kept_indices.extend(block_indices.get(index).copied());
+                            Some(item)
+                        } else {
+                            None
                         }
-                        _ => true,
                     })
                     .collect();
                 if !kept.is_empty() {
                     kept_messages.push(SourcedMessage {
                         source_index,
+                        block_indices: kept_indices,
                         message: Message::Assistant { id, content: kept },
                     });
                 }
             }
             other => kept_messages.push(SourcedMessage {
                 source_index,
+                block_indices,
                 message: other,
             }),
         }
@@ -203,6 +227,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     let mut kept_messages = Vec::with_capacity(messages.len());
     for SourcedMessage {
         source_index,
+        block_indices,
         message,
     } in messages
     {
@@ -216,6 +241,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 }
                 kept_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: Message::Assistant { id, content },
                 });
             }
@@ -238,6 +264,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 if !kept.is_empty() {
                     kept_messages.push(SourcedMessage {
                         source_index,
+                        block_indices,
                         message: Message::User { content: kept },
                     });
                 }
@@ -246,6 +273,7 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
                 pending_calls.clear();
                 kept_messages.push(SourcedMessage {
                     source_index,
+                    block_indices,
                     message: other,
                 });
             }
@@ -254,47 +282,61 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     kept_messages
 }
 
-/// Normalize assistant content to the canonical provider order — text, then
-/// reasoning (and any other non-call content), then tool calls — at the
-/// provider-send boundary.
+/// Select the provider's assistant content order at the send boundary.
+/// Grouped providers require text, then reasoning (and any other non-call
+/// content), then tool calls; Claude retains the exact native block order.
 ///
-/// `AssistantTurnAccumulator::build_message` writes this order for newly
+/// `AssistantTurnAccumulator::build_message` writes grouped order for newly
 /// persisted turns, but transcripts persisted before the ordering fix can carry
-/// text *after* tool calls, which strict providers reject on reload. Like
+/// text *after* tool calls, which grouped strict providers reject on reload. Like
 /// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
 /// provider format at the request-build boundary; the stored messages and the
 /// conformance-fenced reducers are untouched. Relative order within each
 /// category is preserved.
-pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
-    messages_only(normalize_assistant_content_order_sourced(source_messages(
-        messages,
-    )))
+pub fn normalize_assistant_content_order(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    messages_only(normalize_assistant_content_order_sourced(
+        profile,
+        source_messages(messages),
+    ))
 }
 
 pub fn normalize_assistant_content_order_sourced(
+    profile: ProviderInputProfile,
     messages: Vec<SourcedMessage>,
 ) -> Vec<SourcedMessage> {
+    // Claude continuation replays native blocks in their original order.
+    // Signatures do not select this branch; the configured provider wire does.
+    if profile == ProviderInputProfile::ClaudeMessages {
+        return messages;
+    }
     messages
         .into_iter()
         .map(|sourced| {
             let SourcedMessage {
                 source_index,
+                block_indices,
                 message,
             } = sourced;
+            let mut block_indices = block_indices;
             let message = match message {
                 Message::Assistant { id, content } => {
                     let mut text = Vec::new();
                     let mut middle = Vec::new();
                     let mut calls = Vec::new();
-                    for item in content.into_iter() {
+                    for (index, item) in content.into_iter().enumerate() {
+                        let position = block_indices.get(index).copied();
                         match item {
-                            AssistantContent::Text(_) => text.push(item),
-                            AssistantContent::ToolCall(_) => calls.push(item),
-                            other => middle.push(other),
+                            item @ AssistantContent::Text(_) => text.push((position, item)),
+                            item @ AssistantContent::ToolCall(_) => calls.push((position, item)),
+                            other => middle.push((position, other)),
                         }
                     }
-                    let ordered: Vec<AssistantContent> =
-                        text.into_iter().chain(middle).chain(calls).collect();
+                    let ordered: Vec<_> = text.into_iter().chain(middle).chain(calls).collect();
+                    block_indices = ordered.iter().filter_map(|(index, _)| *index).collect();
+                    let ordered = ordered.into_iter().map(|(_, item)| item).collect();
                     Message::Assistant {
                         id,
                         content: ordered,
@@ -304,6 +346,7 @@ pub fn normalize_assistant_content_order_sourced(
             };
             SourcedMessage {
                 source_index,
+                block_indices,
                 message,
             }
         })
@@ -343,7 +386,22 @@ pub fn split_messages_for_summary_with_counter(
     keep_recent_tokens: usize,
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
+    split_messages_for_summary_with_counter_bounded(messages, keep_recent_tokens, counter, None)
+}
+
+/// The bound is an index in this exact provider-view list. A required replay
+/// row at that index cannot be summarized, even when the token target would
+/// otherwise choose a later split.
+pub fn split_messages_for_summary_with_counter_bounded(
+    messages: Vec<Message>,
+    keep_recent_tokens: usize,
+    counter: &crate::provider_input::ProviderInputCounter,
+    max_compacted_prefix_messages: Option<usize>,
+) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     if messages.len() <= 1 {
+        if max_compacted_prefix_messages.is_some() {
+            return Err(super::ReductionError::CannotFit.into());
+        }
         return Ok((Vec::new(), messages));
     }
 
@@ -385,6 +443,11 @@ pub fn split_messages_for_summary_with_counter(
     let raw_split_index = split_index;
     let mut split_index = pair_safe_boundary(&messages, raw_split_index);
 
+    if let Some(max_prefix) = max_compacted_prefix_messages {
+        split_index = protected_pair_safe_split_index(&messages, raw_split_index, max_prefix)
+            .ok_or(super::ReductionError::CannotFit)?;
+    }
+
     // The raw budget can land inside an assistant ToolCall / user ToolResult
     // pair. Retreating keeps the pair valid, but an exceptionally large
     // reasoning-bearing assistant turn can make that atomic tail exceed the
@@ -404,7 +467,8 @@ pub fn split_messages_for_summary_with_counter(
     // compact its history. The full-list check then refuses to end on a tool
     // call still awaiting its result.
     let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
-    if split_index < raw_split_index
+    if max_compacted_prefix_messages.is_none()
+        && split_index < raw_split_index
         && retained_tokens > keep_recent_tokens
         && pair_safe_boundary(&messages, messages.len()) == messages.len()
     {
@@ -418,6 +482,19 @@ pub fn split_messages_for_summary_with_counter(
     let old_messages = messages[..split_index].to_vec();
     let recent_messages = messages[split_index..].to_vec();
     Ok((old_messages, recent_messages))
+}
+
+/// Select a nonempty pair-closed prefix no later than the first required
+/// continuation row. The retention target selects `raw_split_index` but does
+/// not establish whether the retained suffix fits the full context window.
+pub fn protected_pair_safe_split_index(
+    messages: &[Message],
+    raw_split_index: usize,
+    max_prefix: usize,
+) -> Option<usize> {
+    let split =
+        pair_safe_boundary(messages, raw_split_index).min(pair_safe_boundary(messages, max_prefix));
+    (split > 0).then_some(split)
 }
 
 // Not `#[cfg(test)]`: gents' own compaction test suite calls this test-only

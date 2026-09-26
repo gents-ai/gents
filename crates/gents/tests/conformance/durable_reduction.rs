@@ -1,3 +1,4 @@
+use super::ReplayAssociations;
 use crate::lean_vocab_test::lean_durable_reduction_cases;
 use defra_node::EmbeddedNode;
 use gents::llm::message::{
@@ -10,6 +11,17 @@ use gents::provider_context_reduction::{
 };
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
 use serde_json::Value;
+
+fn unassociated(prefix: &[Message], suffix: &[Message]) -> ReplayAssociations {
+    let tagged = |messages: &[Message]| {
+        messages
+            .iter()
+            .cloned()
+            .map(gents_loop::loop_stream::TaggedMessage::unassociated)
+            .collect::<Vec<_>>()
+    };
+    ReplayAssociations::from_tagged_split(vec![], &tagged(prefix), &tagged(suffix))
+}
 
 fn checkpoint(value: u64) -> Vec<Message> {
     vec![Message::user(format!("checkpoint:{value}"))]
@@ -85,6 +97,8 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let predecessor_claim = case.claim_commit.saturating_sub(1);
             let predecessor_boundary = boundary(&request_doc_id, predecessor_claim);
             let predecessor_checkpoint = checkpoint(case.checkpoint.saturating_sub(1));
+            let predecessor_associations =
+                unassociated(&[Message::user("older")], &predecessor_checkpoint);
             let predecessor = persist(
                 &node,
                 NewProviderContextReduction {
@@ -102,6 +116,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                     compacted_prefix: &[Message::user("older")],
                     retained_suffix: &predecessor_checkpoint,
                     checkpoint_messages: &predecessor_checkpoint,
+                    replay_associations: &predecessor_associations,
                     summary: "",
                     original_tokens: 120,
                     compacted_tokens: 30,
@@ -117,6 +132,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let prior_claim = case.prior_claim_commit.unwrap_or(case.claim_commit);
             let prior_messages = checkpoint(prior_checkpoint);
             let prior_boundary = boundary(&request_doc_id, prior_claim);
+            let prior_associations = unassociated(&[Message::user("old")], &prior_messages);
             let row = persist(
                 &node,
                 NewProviderContextReduction {
@@ -134,6 +150,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                     compacted_prefix: &[Message::user("old")],
                     retained_suffix: &prior_messages,
                     checkpoint_messages: &prior_messages,
+                    replay_associations: &prior_associations,
                     summary: "",
                     original_tokens: 100,
                     compacted_tokens: 20,
@@ -157,6 +174,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         };
         let intended_boundary = boundary(&request_doc_id, case.claim_commit);
         let request_commit_cid = format!("claim-cid-{}", case.claim_commit);
+        let associations = unassociated(&prefix, &suffix);
         let result = persist(
             &node,
             NewProviderContextReduction {
@@ -174,6 +192,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &intended_checkpoint,
+                replay_associations: &associations,
                 summary: "",
                 original_tokens: 100,
                 compacted_tokens: 20,

@@ -1070,6 +1070,7 @@ mod tests {
         label: &str,
     ) -> crate::watcher::AgentRequest {
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             format!("agent-request-{label}"),
             target.did(),
             member.did(),

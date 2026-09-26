@@ -76,6 +76,9 @@ pub struct RenderedRequestContext {
     /// The behavior's configured model. Used only when the captured body names
     /// no `model`.
     pub model_name: String,
+    /// Canonical family of the client branch already built for this run.
+    /// None only for a supplied synthetic CompletionModel with no built client.
+    pub provider_family: Option<String>,
 }
 
 /// The JSON pieces extracted from one captured provider body. Grouped so the
@@ -180,6 +183,7 @@ pub fn build_rendered_completion_request(
     capture_scope: &str,
     source: RenderedRequestSource,
     provider_endpoint: Option<String>,
+    provider_route_path_sha256: Option<String>,
     turn_index: usize,
     attempt: u32,
     assembly_trace: AssemblyTrace,
@@ -207,7 +211,8 @@ pub fn build_rendered_completion_request(
         provider_endpoint,
         admission_join,
         assembly_trace.clone(),
-    );
+    )
+    .with_provider_route(context.provider_family.clone(), provider_route_path_sha256);
     let provenance_json = canonical_json(
         &serde_json::to_value(&manifest).context("encoding rendered-request provenance")?,
     );

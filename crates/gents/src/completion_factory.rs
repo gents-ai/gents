@@ -78,6 +78,7 @@ pub(crate) fn loop_config(
     capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
     LoopConfig {
+        replay: Default::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 behavior.backend_provider_kind,
@@ -393,7 +394,12 @@ pub(crate) async fn build_compaction_engine(
     behavior: &ResolvedBehavior,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,
-) -> anyhow::Result<Option<std::sync::Arc<dyn crate::compaction::ReductionEngine>>> {
+) -> anyhow::Result<
+    Option<(
+        std::sync::Arc<dyn crate::compaction::ReductionEngine>,
+        String,
+    )>,
+> {
     let Some(inference) = &behavior.compaction_inference else {
         anyhow::ensure!(
             matches!(
@@ -446,6 +452,7 @@ pub(crate) async fn build_compaction_engine(
     let client =
         crate::llm::backend_client::build_backend_client(node, &summary, &api_key, build_timeout)
             .await?;
+    let provider_family = client.provider_family().to_owned();
     let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
         behavior.backend_provider_kind,
         behavior.openai_wire_api,
@@ -464,5 +471,5 @@ pub(crate) async fn build_compaction_engine(
             backend_id,
         ) as std::sync::Arc<dyn crate::compaction::ReductionEngine>
     });
-    Ok(Some(engine))
+    Ok(Some((engine, provider_family)))
 }

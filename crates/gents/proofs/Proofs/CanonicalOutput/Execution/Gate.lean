@@ -20,6 +20,7 @@ abbrev Actor := Nat
 inductive Operation where
   | renew (generation : Generation) (expectedDeadline : Time)
   | append (generation : Generation) (record : Segment)
+  | closeAuxiliary (generation : Generation) (closing : Segment)
   | retract (generation : Generation) (record : Segment)
   | accept (generation : Generation) (closing : Segment)
       (message : MessageEnvelope) (targets : List RemoteTarget)
@@ -56,13 +57,87 @@ inductive Error where
   | execution (error : Execution.Error)
   | delivery (error : ToolDelivery.Error)
   | compactionRejected
+  | purposeRejected
   deriving DecidableEq, Repr
 
-def evaluate (operation : Operation) (world : World) : Except Error World :=
+def titleSource : Source → Bool
+  | .auxiliary .title _ _ _ => true
+  | _ => false
+
+def titleRecord (world : World) (record : Segment) : Bool :=
+  record.coordinate.request == world.requestId && titleSource record.coordinate.source
+
+def titleRecoveryItem (world : World) (item : RecoveryItem) : Bool :=
+  titleRecord world item.closing && item.message.isNone
+
+/-- Ordinary title terminalization cannot strand an observed audit source. A
+corrupt source still has the separate policy-revocation escape, which must not
+invent or overwrite its bytes. -/
+def titleSourcesDecided (world : World) : Bool :=
+  (requestCoordinates world).all fun coordinate =>
+    if coordinate.request != world.requestId || !titleSource coordinate.source then true
+    else
+      match (closures world.segments coordinate).dedup with
+      | [closing] =>
+          match closing.close with
+          | some (.closed .complete count _)
+          | some (.closed .«partial» count _) =>
+              validateClosingRecord
+                (extent world.segments coordinate count ++ [closing]) closing
+          | some .retracted =>
+              sourceIdentitiesValid world.segments coordinate &&
+                closing.flush.isNone && writerMatchesSource coordinate closing.writer &&
+                  match validateOpenPrefix world.segments coordinate closing.writer with
+                  | .ok _ => true
+                  | .error _ => false
+          | none => false
+      | _ => false
+
+/-- A normal request cannot create a title-source record. Existing records do
+not poison renewal or recovery of unrelated sources; each new write is checked
+at its own operation boundary. -/
+def normalOperationAllowed (_world : World) (operation : Operation) : Bool :=
+  match operation with
+    | .append _ record => !titleSource record.coordinate.source
+    | .retract _ record => !titleSource record.coordinate.source
+    | .closeAuxiliary _ closing => !titleSource closing.coordinate.source
+    | .closePartial _ item => !titleSource item.closing.coordinate.source
+    | .recover _ _ _ _ items =>
+        items.all (fun item => !titleSource item.closing.coordinate.source)
+    | .recoverTerminal _ _ _ _ items =>
+        items.all (fun item => !titleSource item.closing.coordinate.source)
+    | _ => true
+
+/-- Title requests may write only their own headerless audit source under the
+existing request lease. No ordinary provider, tool, transcript, goal or wake
+publication can be introduced by this gate. -/
+def titleOperationAllowed (world : World) : Operation → Bool
+  | .renew .. => true
+  | .append _ record => titleRecord world record
+  | .closeAuxiliary _ closing => titleRecord world closing
+  | .retract _ record => titleRecord world record
+  | .closePartial _ item => titleRecoveryItem world item
+  | .recover _ _ _ _ items => items.all (titleRecoveryItem world)
+  | .recoverTerminal _ _ _ selection items =>
+      selection == .noMessage && items.all (titleRecoveryItem world)
+  | .revoke _ _ _ selection => selection == .noMessage
+  | .terminalize generation outcome selection =>
+      selection == .noMessage &&
+        (terminalReplayPresent world generation outcome selection || titleSourcesDecided world)
+  | _ => false
+
+def purposeAllows (world : World) (operation : Operation) : Bool :=
+  match world.purpose with
+  | .normal => normalOperationAllowed world operation
+  | .titleAudit => titleOperationAllowed world operation
+
+def evaluateCore (operation : Operation) (world : World) : Except Error World :=
   match operation with
   | .renew generation expectedDeadline =>
       (Execution.renew world generation expectedDeadline).mapError .execution
   | .append generation record => (appendRaw world generation record).mapError .execution
+  | .closeAuxiliary generation closing =>
+      (Execution.closeAuxiliary world generation closing).mapError .execution
   | .retract generation record =>
       (retractBeforeRetry world generation record).mapError .execution
   | .accept generation closing message targets admissions =>
@@ -103,10 +178,35 @@ def evaluate (operation : Operation) (world : World) : Except Error World :=
   | .terminalize generation outcome selection =>
       (Execution.terminalize world generation outcome selection).mapError .execution
 
+def evaluate (operation : Operation) (world : World) : Except Error World :=
+  if purposeAllows world operation then evaluateCore operation world
+  else .error .purposeRejected
+
+theorem evaluate_success_core (operation : Operation) (before after : World)
+    (h : evaluate operation before = .ok after) :
+    evaluateCore operation before = .ok after := by
+  unfold evaluate at h
+  split at h <;> try contradiction
+  exact h
+
+theorem title_rejects_publication (world : World) (generation : Generation)
+    (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission) (h : world.purpose = .titleAudit) :
+    evaluate (.accept generation closing message targets admissions) world =
+      .error .purposeRejected := by
+  simp [evaluate, purposeAllows, titleOperationAllowed, h]
+
+theorem normal_cannot_append_title_source (world : World) (generation : Generation)
+    (record : Segment) (hpurpose : world.purpose = .normal)
+    (hsource : titleSource record.coordinate.source = true) :
+    evaluate (.append generation record) world = .error .purposeRejected := by
+  simp [evaluate, purposeAllows, normalOperationAllowed, hpurpose, hsource]
+
 theorem evaluate_nextSequence_monotone (operation : Operation) (before after : World)
     (h : evaluate operation before = .ok after) :
     before.transcript.nextSeq ≤ after.transcript.nextSeq := by
-  unfold evaluate at h
+  have h := evaluate_success_core operation before after h
+  unfold evaluateCore at h
   cases operation with
   | renew generation deadline =>
       have h' := mapError_success Error.execution _ _ h
@@ -114,6 +214,9 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | append generation record =>
       have h' := mapError_success Error.execution _ _ h
       rw [appendRaw_preserves_nextSeq before after generation record h']
+  | closeAuxiliary generation closing =>
+      rcases closeAuxiliary_success_effect before after generation closing
+        (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> simp
   | retract generation record =>
       have h' := mapError_success Error.execution _ _ h
       rw [retractBeforeRetry_preserves_nextSeq before after generation record h']
@@ -339,7 +442,8 @@ Only the separate handover owner changes the active request identity. -/
 theorem evaluate_preserves_request_identity (operation : Operation) (before after : World)
     (h : evaluate operation before = .ok after) :
     after.requestId = before.requestId ∧ after.sessionId = before.sessionId := by
-  cases operation <;> simp only [evaluate] at h
+  replace h := evaluate_success_core operation before after h
+  cases operation <;> simp only [evaluateCore] at h
   all_goals first
     | exact ToolDelivery.tool_write_preserves_request_identity
         (mapError_success Error.delivery _ _ h)
@@ -357,6 +461,9 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
     replace hcore := checked_core_success _ _ _ hcore
     rcases acceptAndPublishCore_success_effect before after generation closing message targets
       admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+  case closeAuxiliary generation closing =>
+    rcases closeAuxiliary_success_effect before after generation closing
+      (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> exact ⟨rfl, rfl⟩
   case toolComplete document authority record message =>
     have hcomposed := mapError_success Error.delivery _ _ h
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success

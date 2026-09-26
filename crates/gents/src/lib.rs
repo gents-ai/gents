@@ -69,6 +69,7 @@ pub mod pack_store;
 pub mod plugin;
 pub mod provider_http;
 pub(crate) mod provider_input;
+pub use gents_loop::provider_input::ProviderInputProfile;
 /// Exact provider context-window budget policy shared by compaction,
 /// diagnostics, and the final dispatch gate.
 pub mod provider_budget {

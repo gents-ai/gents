@@ -1,4 +1,572 @@
 use super::*;
+use crate::claude_messages_body::{
+    prepare_replay_checkpoint, replay_stage, select_replay, ReplayCheckpointError, ReplayTag,
+    ResolvedReplayEvidence, TaggedAssistantRow,
+};
+use crate::provider_input::ProviderInputProfile;
+
+pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
+    rows.iter().map(|row| row.message.clone()).collect()
+}
+
+/// Translate the checkpoint owner's independently required assistant sources
+/// into the reducer's exact provider-view row coordinates. No native payload
+/// equality or provider-assigned message ID participates in this association.
+pub fn replay_compaction_prefix_bound(
+    rows: &[TaggedMessage],
+    required: &[ReplayTag],
+) -> Result<Option<usize>, ReplayCheckpointError> {
+    let mut assistants = Vec::new();
+    for row in rows {
+        match &row.message {
+            Message::Assistant { id, content } => assistants.push(TaggedAssistantRow {
+                source: row.source.clone(),
+                physical_header: row.physical_header.clone(),
+                block_indices: row.block_indices.clone(),
+                id: id.clone(),
+                content: content.clone(),
+            }),
+            _ if row.source.is_some() => return Err(ReplayCheckpointError::InvalidAssociation),
+            _ => {}
+        }
+    }
+    prepare_replay_checkpoint(required.to_vec(), assistants, 0)?;
+    Ok(rows.iter().position(|row| {
+        row.source
+            .as_ref()
+            .is_some_and(|tag| required.contains(tag))
+    }))
+}
+
+fn replay_input_error(message: impl Into<String>) -> StreamingError {
+    StreamingError::Completion(CompletionError::RequestError(Box::new(
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into()),
+    )))
+}
+
+/// Resolution happens outside provider attempt retry handling. Invalid
+/// provenance remains typed permanent input failure; infrastructure errors
+/// terminate this invocation without being presented as malformed input.
+pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
+    match error.downcast::<ReplayEvidenceViolation>() {
+        Ok(violation) => {
+            StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
+        }
+        Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
+            "loading canonical Claude replay evidence failed: {error:#}",
+        ))),
+    }
+}
+
+pub(super) async fn resolve_replay_evidence(
+    replay: &LoopReplayInput,
+    requested: &[ReplayTag],
+) -> Result<Vec<ReplayEvidenceRow>, StreamingError> {
+    let mut distinct = Vec::new();
+    for tag in requested {
+        if !distinct.contains(tag) {
+            distinct.push(tag.clone());
+        }
+    }
+    if distinct.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolve = replay
+        .resolve
+        .as_ref()
+        .ok_or_else(|| replay_input_error("reasoning replay has no canonical evidence resolver"))?;
+    let evidence = resolve(distinct.clone())
+        .await
+        .map_err(replay_resolution_error)?;
+    if evidence.iter().any(|row| !distinct.contains(&row.tag)) {
+        return Err(replay_input_error(
+            "canonical resolver returned an unrequested replay source",
+        ));
+    }
+    Ok(evidence)
+}
+
+#[cfg(test)]
+mod replay_error_tests {
+    use super::*;
+    use gents_protocol::message::Text;
+
+    fn provider_tag(turn_index: u32) -> ReplayTag {
+        ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index,
+                attempt: 0,
+            },
+        }
+    }
+
+    fn associated_assistant(tag: &ReplayTag) -> TaggedMessage {
+        TaggedMessage {
+            message: Message::assistant("native assistant row"),
+            source: Some(tag.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn replay_prefix_bound_uses_full_provider_view_row_index() {
+        let earlier = provider_tag(0);
+        let required = provider_tag(1);
+        let rows = vec![
+            TaggedMessage::unassociated(Message::system("preamble")),
+            TaggedMessage::unassociated(Message::user("first")),
+            associated_assistant(&earlier),
+            TaggedMessage::unassociated(Message::user("second")),
+            TaggedMessage::unassociated(Message::assistant("authored history")),
+            associated_assistant(&required),
+        ];
+        assert_eq!(
+            replay_compaction_prefix_bound(&rows, &[required]).unwrap(),
+            Some(5),
+            "the bound is the whole provider-view index, not assistant ordinal 2"
+        );
+    }
+
+    #[test]
+    fn replay_prefix_bound_without_required_sources_is_unbounded() {
+        let rows = vec![
+            TaggedMessage::unassociated(Message::user("input")),
+            associated_assistant(&provider_tag(0)),
+        ];
+        assert_eq!(replay_compaction_prefix_bound(&rows, &[]), Ok(None));
+    }
+
+    #[test]
+    fn replay_prefix_bound_reuses_checkpoint_missing_and_duplicate_errors() {
+        let required = provider_tag(1);
+        let other = provider_tag(0);
+        let missing = vec![associated_assistant(&other)];
+        assert_eq!(
+            replay_compaction_prefix_bound(&missing, &[required.clone()]),
+            Err(ReplayCheckpointError::MissingRequired)
+        );
+
+        let duplicated = vec![
+            associated_assistant(&required),
+            associated_assistant(&required),
+        ];
+        assert_eq!(
+            replay_compaction_prefix_bound(&duplicated, &[required]),
+            Err(ReplayCheckpointError::DuplicateAssociation)
+        );
+    }
+
+    #[test]
+    fn replay_prefix_bound_rejects_tagged_non_assistant() {
+        let required = provider_tag(0);
+        let rows = vec![TaggedMessage {
+            message: Message::user("input"),
+            source: Some(required.clone()),
+            physical_header: None,
+            block_indices: Vec::new(),
+        }];
+        assert_eq!(
+            replay_compaction_prefix_bound(&rows, &[required]),
+            Err(ReplayCheckpointError::InvalidAssociation)
+        );
+    }
+
+    #[test]
+    fn provider_projection_composes_original_physical_block_indices() {
+        let tag = provider_tag(0);
+        let originals = vec![TaggedMessage {
+            message: Message::Assistant {
+                id: None,
+                content: vec![
+                    AssistantContent::Text(Text {
+                        text: "first".into(),
+                    }),
+                    AssistantContent::Text(Text {
+                        text: "second".into(),
+                    }),
+                ],
+            },
+            source: Some(tag.clone()),
+            physical_header: Some("physical-header".into()),
+            block_indices: vec![2, 4],
+        }];
+        let shaped = vec![crate::compaction::history::SourcedMessage {
+            source_index: 0,
+            block_indices: vec![1],
+            message: Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::Text(Text {
+                    text: "second".into(),
+                })],
+            },
+        }];
+        let actual = tagged_from_sourced(&originals, shaped).expect("source-index mapping");
+        assert_eq!(actual[0].source, Some(tag));
+        assert_eq!(
+            actual[0].physical_header.as_deref(),
+            Some("physical-header")
+        );
+        assert_eq!(actual[0].block_indices, [4]);
+    }
+
+    #[test]
+    fn non_claude_reordering_carries_emitted_order_without_dropping_ordinary_text() {
+        let original = TaggedMessage {
+            message: Message::Assistant {
+                id: None,
+                content: vec![
+                    AssistantContent::Reasoning(gents_protocol::message::Reasoning {
+                        id: None,
+                        content: vec![gents_protocol::message::ReasoningContent::Summary(
+                            "summary".into(),
+                        )],
+                    }),
+                    AssistantContent::Text(Text {
+                        text: "visible".into(),
+                    }),
+                ],
+            },
+            source: Some(provider_tag(0)),
+            physical_header: Some("physical-header".into()),
+            block_indices: vec![2, 4],
+        };
+        let sourced = crate::compaction::history::normalize_assistant_content_order_sourced(
+            ProviderInputProfile::OpenAiResponsesNormalized,
+            vec![crate::compaction::history::SourcedMessage {
+                source_index: 0,
+                block_indices: vec![0, 1],
+                message: original.message.clone(),
+            }],
+        );
+        let projected = tagged_from_sourced(&[original], sourced).expect("indexed projection");
+        assert_eq!(projected[0].block_indices, [4, 2]);
+        let Message::Assistant { content, .. } = &projected[0].message else {
+            panic!("assistant projection")
+        };
+        assert!(matches!(&content[0], AssistantContent::Text(text) if text.text == "visible"));
+    }
+
+    #[tokio::test]
+    async fn repeated_sources_are_resolved_once_per_selection() {
+        let tag = ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let expected = vec![tag.clone()];
+        let replay = LoopReplayInput {
+            resolve: Some(Arc::new(move |requested| {
+                assert_eq!(requested, expected);
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async { Ok(Vec::new()) })
+            })),
+            ..LoopReplayInput::default()
+        };
+        assert!(resolve_replay_evidence(&replay, &[tag.clone(), tag])
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
+        let reasoning = |text: &str| {
+            AssistantContent::Reasoning(gents_protocol::message::Reasoning::new_with_signature(
+                text,
+                Some(format!("sig-{text}")),
+            ))
+        };
+        let mut rows = vec![
+            TaggedMessage {
+                message: Message::Assistant {
+                    id: None,
+                    content: vec![
+                        reasoning("a"),
+                        AssistantContent::Text(Text {
+                            text: "visible".into(),
+                        }),
+                        reasoning("b"),
+                    ],
+                },
+                source: Some(provider_tag(0)),
+                physical_header: Some("header".into()),
+                block_indices: vec![0, 1, 2],
+            },
+            TaggedMessage::unassociated(Message::user("next")),
+        ];
+        strip_all_reasoning(&mut rows);
+        let Message::Assistant { content, .. } = &rows[0].message else {
+            panic!("assistant row")
+        };
+        assert!(
+            matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "visible")
+        );
+        assert_eq!(rows[0].block_indices, [1]);
+        assert_eq!(rows[1].message, Message::user("next"));
+    }
+
+    #[test]
+    fn canonical_violation_retains_its_type_through_context() {
+        let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
+            .context("resolving required replay");
+        let StreamingError::Completion(CompletionError::RequestError(error)) =
+            replay_resolution_error(error)
+        else {
+            panic!("canonical violation must remain a typed local input failure");
+        };
+        assert!(error.downcast_ref::<ReplayEvidenceViolation>().is_some());
+    }
+
+    #[test]
+    fn storage_error_is_not_reclassified_by_message_text() {
+        let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+        assert!(matches!(
+            replay_resolution_error(error),
+            StreamingError::Completion(CompletionError::ProviderError(_))
+        ));
+    }
+}
+
+/// Select source blocks whose original physical indices are retained. This
+/// preserves source order even if the retained-index input is reordered or
+/// duplicated; actual upstream reordering is carried separately below.
+pub fn select_tagged_assistant_blocks(
+    source: &TaggedMessage,
+    retained_original_indices: &[usize],
+) -> Result<TaggedMessage, ReplayCheckpointError> {
+    let Message::Assistant { id, content } = &source.message else {
+        return Err(ReplayCheckpointError::InvalidAssociation);
+    };
+    if source.block_indices.len() != content.len()
+        || source
+            .block_indices
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(ReplayCheckpointError::InvalidAssociation);
+    }
+    let (block_indices, selected): (Vec<_>, Vec<_>) = source
+        .block_indices
+        .iter()
+        .copied()
+        .zip(content)
+        .filter(|(index, _)| retained_original_indices.contains(index))
+        .map(|(index, block)| (index, block.clone()))
+        .unzip();
+    Ok(TaggedMessage {
+        message: Message::Assistant {
+            id: id.clone(),
+            content: selected,
+        },
+        source: source.source.clone(),
+        physical_header: source.physical_header.clone(),
+        block_indices,
+    })
+}
+
+fn tagged_from_sourced(
+    originals: &[TaggedMessage],
+    sourced: Vec<crate::compaction::history::SourcedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    if originals
+        .iter()
+        .any(|row| row.source.is_some() && !matches!(row.message, Message::Assistant { .. }))
+    {
+        return Err(replay_input_error(
+            "canonical provider source was attached to a non-assistant row",
+        ));
+    }
+    let mut previous_source = None;
+    sourced
+        .into_iter()
+        .map(|item| {
+            if previous_source.is_some_and(|previous| item.source_index <= previous) {
+                return Err(replay_input_error(
+                    "provider projection reordered or duplicated a source row",
+                ));
+            }
+            previous_source = Some(item.source_index);
+            let original = originals.get(item.source_index).ok_or_else(|| {
+                replay_input_error("provider projection emitted an out-of-range source index")
+            })?;
+            if original.source.is_some() && !matches!(item.message, Message::Assistant { .. }) {
+                return Err(replay_input_error(
+                    "canonical provider source was attached to a non-assistant row",
+                ));
+            }
+            if let Message::Assistant { content, .. } = &item.message {
+                if item.block_indices.len() != content.len() {
+                    return Err(replay_input_error(
+                        "provider projection misaligned assistant block indices",
+                    ));
+                }
+                let mut selected = if original.physical_header.is_none()
+                    && original.block_indices.is_empty()
+                {
+                    TaggedMessage {
+                        message: original.message.clone(),
+                        source: original.source.clone(),
+                        physical_header: None,
+                        block_indices: Vec::new(),
+                    }
+                } else {
+                    let original_indices = item.block_indices.iter().map(|position| {
+                        original.block_indices.get(*position).copied().ok_or_else(|| {
+                            replay_input_error("provider projection emitted an out-of-range assistant block index")
+                        })
+                    }).collect::<Result<Vec<_>, _>>()?;
+                    let mut selected = select_tagged_assistant_blocks(original, &original_indices).map_err(|error| {
+                        replay_input_error(format!("provider projection: {error}"))
+                    })?;
+                    // A shaper may emit a different order than the source.
+                    // Keep its actual physical order so replay rejects an
+                    // unauthenticated/reordered reasoning run.
+                    selected.block_indices = original_indices;
+                    selected
+                };
+                selected.message = item.message;
+                Ok(selected)
+            } else {
+                Ok(TaggedMessage {
+                    message: item.message,
+                    source: original.source.clone(),
+                    physical_header: original.physical_header.clone(),
+                    block_indices: Vec::new(),
+                })
+            }
+        })
+        .collect()
+}
+
+pub fn sanitize_tagged_history(
+    profile: ProviderInputProfile,
+    rows: Vec<TaggedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    let messages = rows.iter().map(|row| row.message.clone()).collect();
+    tagged_from_sourced(
+        &rows,
+        crate::compaction::sanitize_history_with_sources(profile, messages),
+    )
+}
+
+pub fn provider_view_tagged(
+    profile: ProviderInputProfile,
+    rows: Vec<TaggedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    let messages = rows.iter().map(|row| row.message.clone()).collect();
+    let (sourced, _) = crate::compaction::provider_view_with_sources(profile, messages);
+    tagged_from_sourced(&rows, sourced)
+}
+
+fn assistant_rows(rows: &[TaggedMessage]) -> (Vec<usize>, Vec<TaggedAssistantRow>) {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| match &row.message {
+            Message::Assistant { id, content } => Some((
+                index,
+                TaggedAssistantRow {
+                    source: row.source.clone(),
+                    physical_header: row.physical_header.clone(),
+                    block_indices: row.block_indices.clone(),
+                    id: id.clone(),
+                    content: content.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .unzip()
+}
+
+fn apply_assistant_rows(
+    rows: &mut [TaggedMessage],
+    indices: &[usize],
+    selected: Vec<TaggedAssistantRow>,
+) -> Result<(), StreamingError> {
+    if selected.len() != indices.len() {
+        return Err(replay_input_error(
+            "reasoning replay changed assistant row cardinality",
+        ));
+    }
+    for (index, selected) in indices.iter().zip(selected) {
+        let row = &mut rows[*index];
+        if row.source != selected.source {
+            return Err(replay_input_error(
+                "reasoning replay changed assistant source association",
+            ));
+        }
+        let Message::Assistant { content, .. } = &mut row.message else {
+            unreachable!("indices name assistant rows")
+        };
+        *content = selected.content;
+        row.block_indices = selected.block_indices;
+        row.physical_header = selected.physical_header;
+    }
+    Ok(())
+}
+
+/// Removing every reasoning block is always a leading run, so the result is
+/// accepted under preserved thinking whatever the history holds.
+pub(super) fn strip_all_reasoning(rows: &mut [TaggedMessage]) {
+    for row in rows {
+        let Message::Assistant { content, .. } = &mut row.message else {
+            continue;
+        };
+        let mut indices = row.block_indices.iter();
+        let mut kept_indices = Vec::new();
+        content.retain(|block| {
+            let index = indices.next();
+            let keep = !matches!(block, AssistantContent::Reasoning(_));
+            if keep {
+                kept_indices.extend(index.copied());
+            }
+            keep
+        });
+        if !row.block_indices.is_empty() {
+            row.block_indices = kept_indices;
+        }
+    }
+}
+
+fn split_joined(
+    mut joined: Vec<TaggedMessage>,
+    history_len: usize,
+) -> (Vec<TaggedMessage>, Vec<TaggedMessage>) {
+    let new_messages = joined.split_off(history_len);
+    (joined, new_messages)
+}
+
+async fn build_core<M: CompletionModel>(
+    model: &M,
+    history: &[TaggedMessage],
+    new_messages: &[TaggedMessage],
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+) -> Result<CompletionRequest, StreamingError> {
+    let prompt = new_messages
+        .last()
+        .expect("new messages retain a prompt")
+        .message
+        .clone();
+    let prior = message_values(&new_messages[..new_messages.len() - 1]);
+    build_request(
+        model,
+        prompt,
+        &message_values(history),
+        &prior,
+        tools,
+        config,
+    )
+    .await
+}
 
 /// Assemble the per-request message tail: an optional runtime context message
 /// rides immediately before the prompt, which is always last for rig.
@@ -7,10 +575,13 @@ use super::*;
 /// workspace context. Its local ordering is fenced by
 /// `assembles_context_immediately_before_prompt`; the generated Lean layer
 /// cases exercise the canonical prompt tail without it.
-pub fn assemble_new_messages(context_message: Option<Message>, prompt: Message) -> Vec<Message> {
-    let mut new_messages: Vec<Message> = Vec::with_capacity(2);
+pub fn assemble_new_messages(
+    context_message: Option<Message>,
+    prompt: TaggedMessage,
+) -> Vec<TaggedMessage> {
+    let mut new_messages: Vec<TaggedMessage> = Vec::with_capacity(2);
     if let Some(context_message) = context_message {
-        new_messages.push(context_message);
+        new_messages.push(TaggedMessage::unassociated(context_message));
     }
     new_messages.push(prompt);
     new_messages
@@ -47,8 +618,9 @@ pub fn is_request_context_message(message: &Message) -> bool {
 struct ProviderInputRepairError;
 
 pub fn repair_provider_input(
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    profile: crate::provider_input::ProviderInputProfile,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
 ) -> Result<(), StreamingError> {
     // A restored checkpoint may split one closed tool-call/result pair across
     // rig's history and prompt carriers. Repair and sanitize the canonical
@@ -56,7 +628,7 @@ pub fn repair_provider_input(
     let mut provider_messages = std::mem::take(history);
     provider_messages.append(new_messages);
     repair_messages(&mut provider_messages);
-    let mut provider_messages = crate::compaction::sanitize_history_for_provider(provider_messages);
+    let mut provider_messages = sanitize_tagged_history(profile, provider_messages)?;
     let prompt = provider_messages.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             ProviderInputRepairError,
@@ -67,9 +639,9 @@ pub fn repair_provider_input(
     Ok(())
 }
 
-fn repair_messages(messages: &mut [Message]) {
-    for message in messages.iter_mut() {
-        let Message::Assistant { content, .. } = message else {
+fn repair_messages(messages: &mut [TaggedMessage]) {
+    for row in messages.iter_mut() {
+        let Message::Assistant { content, .. } = &mut row.message else {
             continue;
         };
         for item in content {
@@ -127,8 +699,11 @@ pub fn completion_request_input_components(
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> Result<crate::provider_input::ProviderInputProjection, StreamingError> {
     counter.project_request(request).map_err(|error| {
-        StreamingError::Completion(CompletionError::ProviderError(format!(
-            "provider_input_projection_failed: {error:#}"
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("provider_input_projection_failed: {error:#}"),
+            ),
         )))
     })
 }
@@ -138,8 +713,11 @@ fn completion_request_input_tokens(
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> Result<usize, StreamingError> {
     counter.estimate_request(request).map_err(|error| {
-        StreamingError::Completion(CompletionError::ProviderError(format!(
-            "provider_input_projection_failed: {error:#}"
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("provider_input_projection_failed: {error:#}"),
+            ),
         )))
     })
 }
@@ -297,23 +875,116 @@ pub fn ensure_context_can_dispatch(
     )))
 }
 
+/// The owned loop's single provider-input assembly owner. Replays the model's
+/// own reasoning per Lean `ClaudeMap.restoreHistoricalReasoningSuffix`: the
+/// provenance-valid turns are assembled once, located in that actual body, and
+/// judged against their accepted captures; the selected rows then replace the
+/// chat history of the same built request. Without a proven issuer and wire,
+/// no reasoning is replayed.
+pub async fn assemble_provider_request<M: CompletionModel>(
+    model: &M,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    replay: &LoopReplayInput,
+) -> Result<CompletionRequest, StreamingError> {
+    let profile_wire = config.provider_input_counter.profile().replay_wire();
+    if replay.wire.is_some() && replay.wire != profile_wire {
+        return Err(replay_input_error(
+            "replay wire differs from built provider profile",
+        ));
+    }
+    let history_len = history.len();
+    let mut joined = std::mem::take(history);
+    joined.append(new_messages);
+    let (indices, mut rows) = assistant_rows(&joined);
+    let has_reasoning = rows.iter().any(|row| {
+        row.content
+            .iter()
+            .any(|block| matches!(block, AssistantContent::Reasoning(_)))
+    });
+    let selection = match (has_reasoning, profile_wire, replay.issuer.as_ref()) {
+        (false, ..) => None,
+        (true, Some(wire), Some(issuer)) if replay.wire == Some(wire) => Some((wire, issuer)),
+        (true, ..) => {
+            strip_all_reasoning(&mut joined);
+            None
+        }
+    };
+    let Some((wire, issuer)) = selection else {
+        (*history, *new_messages) = split_joined(joined, history_len);
+        return build_core(model, history, new_messages, tools, config).await;
+    };
+    let tags = rows
+        .iter()
+        .filter(|row| {
+            row.content
+                .iter()
+                .any(|block| matches!(block, AssistantContent::Reasoning(_)))
+        })
+        .filter_map(|row| row.source.clone())
+        .collect::<Vec<_>>();
+    let evidence = resolve_replay_evidence(replay, &tags).await?;
+    let resolve = |tag: &ReplayTag| -> Vec<ResolvedReplayEvidence> {
+        evidence
+            .iter()
+            .filter(|row| row.tag == *tag)
+            .map(|row| row.evidence.clone())
+            .collect()
+    };
+    // A turn accepted earlier in this loop carries its coordinate but not yet
+    // the physical header its consumer published. The unique canonical row for
+    // that coordinate supplies the sidecar; selection still requires the
+    // in-memory reasoning to equal that row's witness at the same positions.
+    for row in rows
+        .iter_mut()
+        .filter(|row| row.physical_header.is_none() && row.block_indices.is_empty())
+    {
+        if let Some(tag) = &row.source {
+            if let [evidence] = resolve(tag).as_slice() {
+                row.physical_header = Some(evidence.physical_header.clone());
+                row.block_indices = (0..row.content.len()).collect();
+            }
+        }
+    }
+    apply_assistant_rows(
+        &mut joined,
+        &indices,
+        replay_stage(&rows, issuer, wire, resolve),
+    )?;
+    let (stage_history, stage_new) = split_joined(joined.clone(), history_len);
+    let mut core = build_core(model, &stage_history, &stage_new, tools, config).await?;
+    let body = config
+        .provider_input_counter
+        .project_body(&core)
+        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+    let stage_body = crate::provider_input::replay_frontier::flatten(&body, wire)
+        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+    apply_assistant_rows(
+        &mut joined,
+        &indices,
+        select_replay(&rows, issuer, wire, resolve, &stage_body),
+    )?;
+    (*history, *new_messages) = split_joined(joined, history_len);
+    super::replace_core_chat_history(&mut core, config, history, new_messages);
+    Ok(core)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
+    replay: &mut LoopReplayInput,
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
 ) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
-    let current_prompt = new_messages
-        .last()
-        .cloned()
-        .expect("new_messages always retains at least the initial prompt");
-    let prior = &new_messages[..new_messages.len() - 1];
-    let request = build_request(model, current_prompt, history, prior, tools, config).await?;
+    let request =
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
@@ -347,12 +1018,23 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         .collect::<Vec<_>>();
     let outcome = compactor(TurnCompactionRequest {
         messages: provider_messages,
+        required: replay.required.clone(),
         admission,
         turn_index,
         prior_reduction_keys: reduction_chain_keys.clone(),
     })
     .await
     .map_err(|error| {
+        if matches!(
+            error.downcast_ref::<crate::compaction::ReductionError>(),
+            Some(crate::compaction::ReductionError::CannotFit)
+        ) || error.is::<ReplayCheckpointError>()
+            || error.is::<ReplayEvidenceViolation>()
+        {
+            return StreamingError::Completion(CompletionError::RequestError(
+                error.into_boxed_dyn_error(),
+            ));
+        }
         aggregate_token_budget_exhaustion_message(&error).map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -383,9 +1065,12 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         }
     };
     let compacted_prompt = compacted.pop().ok_or_else(|| {
-        StreamingError::Completion(CompletionError::ProviderError(
-            "per-turn provider-input compaction returned no prompt".to_string(),
-        ))
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "per-turn provider-input compaction returned no prompt",
+            ),
+        )))
     })?;
     *history = compacted;
     *new_messages = vec![compacted_prompt.clone()];
@@ -395,7 +1080,8 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         active_reduction_keys.push(reduction_key);
     }
 
-    let rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    let rebuilt =
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
     let rebuilt_projection =
         completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
     let after_tokens = rebuilt_projection.estimated_input_tokens;
@@ -450,28 +1136,25 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
 }
 
 /// Apply the one lossy repair and rebuild the complete assembled request. The
-/// returned request is deliberately not projected or clamped here; the next
+/// repair also removes every reasoning block for the rest of this request: the
+/// rejection may be a replayed signature or ciphertext, and edited arguments
+/// invalidate every later block. The accepted retry's capture then carries no
+/// earlier reasoning, which makes it the durable replay frontier. The returned
+/// request is deliberately not projected or clamped here; the next
 /// provider-attempt iteration must pass through `prepare_dispatch_attempt`.
 pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
     model: &M,
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
 ) -> Result<CompletionRequest, StreamingError> {
-    repair_provider_input(history, new_messages)?;
-    let repaired_prompt = new_messages
-        .last()
-        .cloned()
-        .expect("successful repair restores one prompt");
-    let repaired_prior = &new_messages[..new_messages.len() - 1];
-    build_request(
-        model,
-        repaired_prompt,
+    repair_provider_input(
+        config.provider_input_counter.profile(),
         history,
-        repaired_prior,
-        tools,
-        config,
-    )
-    .await
+        new_messages,
+    )?;
+    strip_all_reasoning(history);
+    strip_all_reasoning(new_messages);
+    build_core(model, history, new_messages, tools, config).await
 }

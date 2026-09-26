@@ -7,6 +7,7 @@ use super::canonical_output::{
     LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec, LeanTerminalSelection,
 };
 use super::request_execution_lease::LeanRequestExecutionWorld;
+use super::{required_nullable, LeanRequestPurpose};
 
 pub(crate) type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -113,6 +114,7 @@ pub(crate) enum LeanCanonicalExecutionCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalExecutionSeed {
+    pub(crate) purpose: LeanRequestPurpose,
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
     pub(crate) principal: u64,
@@ -335,6 +337,18 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         item: LeanCanonicalRecoveryItem,
     },
+    CloseAuxiliary {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: LeanCanonicalSegment,
+    },
+    RetractBeforeRetry {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: LeanCanonicalSegment,
+    },
     /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
     RenewLease {
         actor: u64,
@@ -442,6 +456,8 @@ impl LeanCanonicalExecutionOperation {
             | Self::RecoverExpiredGeneration { actor, now, .. }
             | Self::RecoverExpiredTerminal { actor, now, .. }
             | Self::ClosePartial { actor, now, .. }
+            | Self::CloseAuxiliary { actor, now, .. }
+            | Self::RetractBeforeRetry { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
             | Self::AppendToolOutput { actor, now, .. }
@@ -465,6 +481,8 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) generation: Option<u64>,
     pub(crate) terminal_generation: Option<u64>,
     pub(crate) request_state: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) terminal_selection: Option<LeanTerminalSelection>,
     pub(crate) tool_state: Option<String>,
     pub(crate) tool_stuck_since: Option<u64>,
     pub(crate) tool_cancel_intent_at: Option<u64>,

@@ -5,7 +5,7 @@ use gents::agent::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
-use gents::error::InferenceError;
+use gents::error::{classify_completion_error, InferenceError};
 
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        18,
+        24,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -46,12 +46,21 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "retry_wake_past_deadline_is_exhausted",
             "repair_issue_consumes_its_only_capability",
             "second_repair_issue_is_rejected",
+            "local_request_build_fails_permanently_without_retry",
+            "retryable_transport_still_requires_retraction",
+            "provider_stream_malformed_requires_retraction",
+            "provider_reasoning_rejection_requires_retraction",
+            "reasoning_rejection_moves_directly_to_repair",
+            "reasoning_rejection_after_repair_is_exhausted",
         ]),
         "CompletionRetry witness names drifted"
     );
 
     for case in cases {
         assert_eq!(case.domain, "completionRetry");
+        if let Some(origin) = case.failure_origin.as_deref() {
+            assert_failure_origin_bridge(case, origin);
+        }
         if case.name == "retry_wake_past_deadline_is_exhausted" {
             assert!(case.legal);
             assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
@@ -94,6 +103,136 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     assert_permanent_class_cannot_backoff(native);
 }
 
+fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
+    let error = match origin {
+        "local_request_build" => rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::RequestError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "malformed local request",
+            ))),
+        ),
+        "retryable_transport" => rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError("connection reset".into()),
+        ),
+        "provider_stream_malformed" => {
+            use gents::claude_messages::{
+                parse_messages_sse, parse_messages_sse_typed, MessagesParseError,
+                ThinkingParseCause,
+            };
+            let sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n";
+            assert_eq!(
+                parse_messages_sse_typed(sse, &Default::default())
+                    .expect_err("open provider thinking must fail at EOF"),
+                MessagesParseError::MalformedThinking {
+                    cause: ThinkingParseCause::IncompleteBlock,
+                },
+            );
+            let completion = parse_messages_sse(sse, &Default::default())
+                .expect_err("provider truncation must reach the Rig boundary");
+            assert!(
+                matches!(
+                    &completion,
+                    rig::completion::CompletionError::ResponseError(_)
+                ),
+                "provider stream parse failure must not be a local RequestError: {completion}"
+            );
+            rig::agent::StreamingError::Completion(completion)
+        }
+        "provider_reasoning_rejected" => {
+            rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+                "400 invalid_request_error: messages.5.content.0: Invalid `signature` in \
+                 `thinking` block. The block is bound to a different conversation."
+                    .into(),
+            ))
+        }
+        other => panic!("unknown modeled failure origin {other}"),
+    };
+    let classified = classify_completion_error(&error);
+    let class = failure_class(&classified, &error.to_string());
+    assert_eq!(
+        class_name(class),
+        case.classified_failure
+            .as_deref()
+            .expect("modeled failure class"),
+        "{}",
+        case.name
+    );
+    let mut state = CompletionRetryState::new(scheduled_like_policy());
+    let directive = state.on_pre_stream_failure(&classified, &error.to_string(), now(), None);
+    match case.expected_phase.as_deref() {
+        Some("failed_permanent") => {
+            assert!(
+                matches!(&directive, PreStreamDirective::Fail { .. }),
+                "{}",
+                case.name
+            );
+            assert_eq!(state.retry_count(), 0, "{}", case.name);
+        }
+        Some("retract_required") if origin == "provider_reasoning_rejected" => {
+            assert!(
+                matches!(&directive, PreStreamDirective::Repair),
+                "{}: a rejected replay goes straight to the one repair: {directive:?}",
+                case.name
+            );
+            state.mark_repair_used();
+            assert!(
+                matches!(
+                    state.on_pre_stream_failure(&classified, &error.to_string(), now(), None),
+                    PreStreamDirective::Fail { .. }
+                ),
+                "{}: a second rejection after the repair fails",
+                case.name
+            );
+        }
+        Some("retract_required") => {
+            assert!(
+                matches!(
+                    &directive,
+                    PreStreamDirective::RetryAfter {
+                        kind: RetryKind::Transport,
+                        ..
+                    }
+                ),
+                "{}: {directive:?}",
+                case.name
+            );
+            if origin == "provider_stream_malformed" {
+                // A preview item before EOF takes the native mid-stream
+                // branch. Lean's `.streaming` means an in-flight attempt,
+                // not a claim that an item has already been observed.
+                let mut parser = gents::claude_messages::MessagesSseState::new(Default::default());
+                let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
+                let mut saw_preview = false;
+                for line in preview_sse.lines() {
+                    for event in parser.push_line(line).expect("provider preview") {
+                        saw_preview |= matches!(
+                            event,
+                            rig::streaming::RawStreamingChoice::ReasoningDelta { .. }
+                        );
+                    }
+                }
+                assert!(
+                    saw_preview,
+                    "the mid-stream branch needs a real preview item"
+                );
+                let eof = parser
+                    .finish()
+                    .expect_err("provider truncated after preview");
+                assert!(
+                    matches!(&eof, rig::completion::CompletionError::ResponseError(_)),
+                    "truncated provider stream must stay transient after a preview: {eof}"
+                );
+                let mut state = CompletionRetryState::new(scheduled_like_policy());
+                assert!(matches!(
+                    state.on_mid_stream_failure(false, now(), None),
+                    MidStreamDirective::RetractAndResample { .. }
+                ));
+            }
+        }
+        other => panic!("unexpected modeled phase for {}: {other:?}", case.name),
+    }
+}
+
 fn assert_failure_class_bridge_matches_vocabulary() {
     let parse_text = parse_400_text("bridge");
     let observed = [
@@ -101,12 +240,26 @@ fn assert_failure_class_bridge_matches_vocabulary() {
         class_name(failure_class(&transient(&parse_text), &parse_text)),
         class_name(failure_class(
             &InferenceError::PermanentFailure {
+                reason: "Invalid `signature` in `thinking` block".to_string(),
+            },
+            "Invalid `signature` in `thinking` block",
+        )),
+        class_name(failure_class(
+            &InferenceError::PermanentFailure {
                 reason: "bad request".to_string(),
             },
             "bad request",
         )),
     ];
-    assert_eq!(observed, ["transport", "parse_bad_request", "permanent"]);
+    assert_eq!(
+        observed,
+        [
+            "transport",
+            "parse_bad_request",
+            "reasoning_rejected",
+            "permanent"
+        ]
+    );
     assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
         domain: "CompletionRetryFailureClass",
         rust_source: "failure_class observations",
@@ -335,6 +488,7 @@ fn class_name(class: FailureClass) -> &'static str {
     match class {
         FailureClass::Transport => "transport",
         FailureClass::ParseBadRequest => "parse_bad_request",
+        FailureClass::ReasoningRejected => "reasoning_rejected",
         FailureClass::Permanent => "permanent",
     }
 }

@@ -289,7 +289,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         ("two", "Disk 82%, Docker unavailable", "updated"),
     ] {
         let result = node.execute(&format!(
-            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\", behavior_id: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
+            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", purpose: \"normal\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\", behavior_id: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
         )).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         let args = MailboxContentArgs {
@@ -382,7 +382,7 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
 async fn provenance_keeps_execution_owner_resolved_selection() {
     let node = tests::test_node().await;
     let context = tests::context("did:test:owner");
-    let response = node.execute("mutation { create_AgentRequest(input: {request_id: \"default-selection\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\"}) {_docID} }").await;
+    let response = node.execute("mutation { create_AgentRequest(input: {request_id: \"default-selection\", purpose: \"normal\", agent_did: \"did:test:agent\", requester_did: \"did:test:owner\"}) {_docID} }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     // The execution owner may resolve the default behavior and create a session.
     notification::request_provenance(&node, "default-selection", &context)

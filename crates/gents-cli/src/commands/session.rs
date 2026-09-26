@@ -189,9 +189,11 @@ async fn request_counts_by_session(
         return Ok(BTreeMap::new());
     }
     let sessions = graphql_string_list_literal(session_ids);
+    let scope =
+        gents::session::public_request_filter(&format!("session_id: {{ _in: {sessions} }}"));
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ session_id: {{ _in: {sessions} }} }}) {{
+            AgentRequest(filter: {{ {scope} }}) {{
                 session_id
             }}
         }}"#

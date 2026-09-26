@@ -5,6 +5,14 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+pub(crate) fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 pub(crate) type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
 
 #[derive(Debug, Clone, Copy)]
@@ -102,6 +110,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
+    pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
+    pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
+    pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
+    pub(crate) title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -197,6 +209,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) delegated_child_resolution_cases: Vec<LeanDelegatedChildResolutionCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
+    pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
+    pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
+    pub(crate) auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
@@ -208,6 +223,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
+    pub(crate) prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
+    pub(crate) prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
@@ -217,6 +234,15 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
+    pub(crate) prompt_assembly_claude_thinking_stream_cases:
+        Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
+    pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
+    pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
+    pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
+    pub(crate) prompt_assembly_reasoning_suffix_cases: Vec<LeanPromptAssemblyReasoningSuffixCase>,
+    pub(crate) prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
+    pub(crate) prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
+    pub(crate) protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -1049,6 +1075,8 @@ mod slot_persistence_health;
 mod spawn_claim_fence;
 #[path = "task_hooks.rs"]
 mod task_hooks;
+#[path = "title.rs"]
+mod title;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -1080,6 +1108,7 @@ pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use spawn_claim_fence::*;
 pub(crate) use task_hooks::*;
+pub(crate) use title::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -1610,6 +1639,18 @@ pub(crate) fn lean_canonical_output_projection_cases(
     &lean_contract_snapshot().canonical_output_projection_cases
 }
 
+pub(crate) fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
+    &lean_contract_snapshot().reasoning_audit_cases
+}
+
+pub(crate) fn lean_reasoning_signature_cases() -> &'static [LeanReasoningSignatureCase] {
+    &lean_contract_snapshot().reasoning_signature_cases
+}
+
+pub(crate) fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
+    &lean_contract_snapshot().auxiliary_output_cases
+}
+
 pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
@@ -1853,6 +1894,16 @@ pub(crate) fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssem
     &lean_contract_snapshot().prompt_assembly_sanitize_cases
 }
 
+pub(crate) fn lean_prompt_assembly_assistant_order_cases(
+) -> &'static [LeanPromptAssemblyAssistantOrderCase] {
+    &lean_contract_snapshot().prompt_assembly_assistant_order_cases
+}
+
+pub(crate) fn lean_prompt_assembly_mode_sanitize_cases(
+) -> &'static [LeanPromptAssemblyModeSanitizeCase] {
+    &lean_contract_snapshot().prompt_assembly_mode_sanitize_cases
+}
+
 pub(crate) fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
     &lean_contract_snapshot().prompt_assembly_layer_cases
 }
@@ -1887,6 +1938,46 @@ pub(crate) fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAs
 pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_thinking_stream_cases(
+) -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_wire_start_cases(
+) -> &'static [LeanPromptAssemblyClaudeWireStartCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_wire_start_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_replay_cases(
+) -> &'static [LeanPromptAssemblyClaudeReplayCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_replay_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_checkpoint_cases(
+) -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
+}
+
+pub(crate) fn lean_prompt_assembly_reasoning_suffix_cases(
+) -> &'static [LeanPromptAssemblyReasoningSuffixCase] {
+    &lean_contract_snapshot().prompt_assembly_reasoning_suffix_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_shape_cases(
+) -> &'static [LeanPromptAssemblyReplayShapeCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_shape_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_prefix_cases(
+) -> &'static [LeanPromptAssemblyReplayPrefixCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_prefix_cases
+}
+
+pub(crate) fn lean_protected_replay_compaction_cases(
+) -> &'static [LeanProtectedReplayCompactionCase] {
+    &lean_contract_snapshot().protected_replay_compaction_cases
 }
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
@@ -2130,6 +2221,23 @@ pub(crate) fn lean_enrollment_digest_cases() -> &'static [LeanEnrollmentDigestCa
 
 pub(crate) fn lean_agent_request_admission_cases() -> &'static [LeanAgentRequestAdmissionCase] {
     &lean_contract_snapshot().agent_request_admission_cases
+}
+
+pub(crate) fn lean_title_request_admission_cases() -> &'static [LeanTitleRequestAdmissionCase] {
+    &lean_contract_snapshot().title_request_admission_cases
+}
+
+pub(crate) fn lean_title_request_purpose_wire_cases() -> &'static [LeanTitleRequestPurposeWireCase]
+{
+    &lean_contract_snapshot().title_request_purpose_wire_cases
+}
+
+pub(crate) fn lean_title_usage_cases() -> &'static [LeanTitleUsageCase] {
+    &lean_contract_snapshot().title_usage_cases
+}
+
+pub(crate) fn lean_title_admission_join_cases() -> &'static [LeanTitleAdmissionJoinCase] {
+    &lean_contract_snapshot().title_admission_join_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

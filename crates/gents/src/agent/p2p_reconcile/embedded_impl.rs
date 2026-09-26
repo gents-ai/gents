@@ -703,6 +703,7 @@ mod tests {
         BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls)),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -859,6 +860,7 @@ mod tests {
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
+                    purpose: "normal",
                     agent_did: "{agent_did}",
                     {requester_did_field}
                     behavior_id: "{behavior_id}",
@@ -1332,6 +1334,7 @@ mod tests {
             .execute(&format!(
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "{parent_request_id}", agent_did: "{coordinator_did}",
+                    purpose: "normal",
                     requester_did: "{coordinator_did}", behavior_id: "parent-behavior",
                     session_id: "remote-session", retry_root_request: "{parent_request_id}",
                     content: "remote parent", lifecycle_state: "pending",

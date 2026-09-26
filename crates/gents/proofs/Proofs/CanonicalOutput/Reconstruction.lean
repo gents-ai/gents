@@ -154,13 +154,38 @@ theorem flushAt_order_independent (left right : List Segment) (writer : Writer)
 
 abbrev Streams := List (Declaration × List UInt8)
 
-/-- Native declaration positions use lexicographic `(block, part)` order. Run
-arrival need not follow this order. -/
+/-- Signature bytes occupy a separate field at the native reasoning part.
+Within each field, body declarations still have one unique position. -/
+def declarationField (declaration : Declaration) : Nat :=
+  if declaration.kind == .signature then 1 else 0
+
+/-- Native declaration positions use lexicographic `(block, part, field)` order.
+Run arrival need not follow this order. -/
 def declarationBefore (left right : Declaration) : Bool :=
-  left.block < right.block || (left.block == right.block && left.part < right.part)
+  left.block < right.block ||
+    (left.block == right.block &&
+      (left.part < right.part ||
+        (left.part == right.part && declarationField left < declarationField right)))
 
 def sameDeclarationPosition (left right : Declaration) : Bool :=
-  left.block == right.block && left.part == right.part
+  left.block == right.block && left.part == right.part &&
+    declarationField left == declarationField right
+
+theorem body_and_signature_positions_are_distinct (body : Declaration)
+    (h : body.kind ≠ .signature) :
+    sameDeclarationPosition body { body with kind := .signature } = false := by
+  simp [sameDeclarationPosition, declarationField, h]
+
+theorem body_kinds_share_position (body : Declaration) (kind : PayloadKind)
+    (hbody : body.kind ≠ .signature) (hkind : kind ≠ .signature) :
+    sameDeclarationPosition body { body with kind := kind } = true := by
+  simp [sameDeclarationPosition, declarationField, hbody, hkind]
+
+theorem signature_kinds_share_position (signature : Declaration)
+    (h : signature.kind = .signature) :
+    sameDeclarationPosition signature
+      { signature with kind := .signature } = true := by
+  simp [sameDeclarationPosition, declarationField, h]
 
 def declarationPositionFresh (streams : Streams) (declaration : Declaration) : Bool :=
   streams.all fun existing => !sameDeclarationPosition existing.1 declaration
@@ -206,6 +231,7 @@ existing owner. -/
 def writerMatchesSource (coordinate : Coordinate) (writer : Writer) : Bool :=
   match coordinate.source, writer with
   | .provider _ _ _, .request _ => true
+  | .auxiliary _ _ _ _, .request _ => true
   | .tool sourceCall, .tool writerCall => sourceCall == writerCall
   | .authored _, .request _ => true
   | .authored _, .tool _ => true
@@ -387,10 +413,12 @@ theorem recovery_no_text_no_header (streams : List (Nat × Declaration))
   rfl
 
 theorem recovery_rejects_duplicate_position
-    (stream : Nat) (declaration : Declaration) :
+    (stream : Nat) (declaration : Declaration)
+    (h : declaration.kind ≠ .signature) :
     recoveryText [(stream, declaration), (stream + 1, { declaration with kind := .text })] =
       .error .malformedRuns := by
-  simp [recoveryText, recoveryDeclarationsValid, sameDeclarationPosition]
+  simp [recoveryText, recoveryDeclarationsValid, sameDeclarationPosition,
+    declarationField, h]
 
 inductive MessageRole where
   | system

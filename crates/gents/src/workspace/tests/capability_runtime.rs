@@ -58,6 +58,7 @@ async fn runtime_seal_case(unowned: bool) {
         query(&node, &mutation).await;
     }
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "runtime-capability-writer",
         did,
         did,

@@ -19,6 +19,7 @@ struct Scope {
 }
 #[derive(Clone, Debug, Deserialize)]
 struct ModelRow {
+    purpose: gents_protocol::request_admission::RequestPurpose,
     doc: u64,
     request: u64,
     owner: u64,
@@ -40,6 +41,7 @@ struct Case {
 
 fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
     AgentRequestRow {
+        purpose: Some(create.purpose),
         doc_id: Some(format!("physical-{doc}")),
         request_id: create.request_id.clone(),
         agent_did: Some(create.agent_did.clone()),
@@ -139,6 +141,7 @@ impl Fixture<'_> {
                 } else {
                     let identity = self.identity(model.owner);
                     let base = AgentRequestCreate::base(
+                        gents_protocol::request_admission::RequestPurpose::Normal,
                         self.base_id(parent_request),
                         identity.did(),
                         identity.did(),
@@ -170,6 +173,7 @@ impl Fixture<'_> {
             } else {
                 let identity = self.identity(model.owner);
                 let mut base = AgentRequestCreate::base(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
                     self.base_id(model.request),
                     identity.did(),
                     identity.did(),
@@ -195,6 +199,7 @@ impl Fixture<'_> {
                     None
                 };
             }
+            create.purpose = model.purpose;
             if !model.deterministic_identity {
                 create.request_id.push_str("-wrong-identity");
             }
@@ -220,7 +225,7 @@ impl Fixture<'_> {
 #[tokio::test]
 async fn generated_goal_request_head_cases_drive_signed_row_selector() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.goal_request_head_cases.len(), 15);
+    assert_eq!(snapshot.goal_request_head_cases.len(), 17);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),

@@ -7,6 +7,7 @@ import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
+import Proofs.TitleAdmission
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.AgentSession
@@ -18,6 +19,9 @@ import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases
 import Proofs.Transcript
 import Proofs.CanonicalOutput
+import Proofs.StreamingResponse.ReasoningAudit
+import Proofs.CanonicalOutput.Execution.AuxiliaryCases
+import Proofs.PromptAssembly.ClaudeWire
 import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture

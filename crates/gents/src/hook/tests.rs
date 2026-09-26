@@ -8,6 +8,7 @@ use crate::llm::message::{
     UserContent,
 };
 use crate::llm::{HookAction, ToolCallHookAction};
+use gents_loop::provider_input::ProviderInputProfile;
 use serde_json::json;
 
 use super::*;
@@ -1141,6 +1142,7 @@ async fn create_interruptible_request_with_fields(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "general",
                 session_id: "{session_id}",
@@ -1326,7 +1328,13 @@ async fn publish_claimed_authored_input(
     let HookExecutionFixture {
         lifecycle, writer, ..
     } = fixture;
-    let mut processor = StreamProcessor::new(hook, writer, lifecycle, &request_doc_id);
+    let mut processor = StreamProcessor::new(
+        hook,
+        writer,
+        lifecycle,
+        &request_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady { context, prompt }))
         .await

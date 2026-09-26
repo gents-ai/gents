@@ -113,7 +113,11 @@ pub(crate) async fn authorized_children(
         // session without owning the earlier request's child graph. Inspect
         // every physically scoped request admitted for this principal's
         // session; choosing only the latest loses still-live descendants.
-        let scope = gents::session::session_scope_filter(principal, session, Some(principal));
+        let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
+            principal,
+            session,
+            Some(principal),
+        ));
         let response = gents::graphql::graphql_with_transaction_retry(
             node,
             &format!("{{ AgentRequest(filter: {{ {scope} }}) {{ request_id }} }}"),

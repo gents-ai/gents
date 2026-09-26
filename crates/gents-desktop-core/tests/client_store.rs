@@ -24,6 +24,7 @@ fn request_lifecycle_is_the_only_turn_state_owner() {
             agent_did: Some("did:test:amy".into()),
             session_id: Some("session".into()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             ..Default::default()
         }],
         ..Default::default()
@@ -47,7 +48,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
         .execute(
             r#"mutation {
         request: create_AgentRequest(input: {
-            request_id: "request-1", agent_did: "did:test:amy", behavior_id: "default",
+            purpose: "normal", request_id: "request-1", agent_did: "did:test:amy", behavior_id: "default",
             session_id: "session-1", content: "run it", lifecycle_state: "processing",
             created_at: "2026-08-21T18:07:35Z"
         }) { _docID }
@@ -142,7 +143,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
                     enabled: true
                 }) { _docID }
                 create_AgentRequest(input: {
-                    request_id: "request-terminal-config"
+                    purpose: "normal", request_id: "request-terminal-config"
                     agent_did: "did:test:amy"
                     behavior_id: "did:test:amy:default"
                     session_id: "session-terminal-config"

@@ -1066,6 +1066,7 @@ async fn seed_preexisting_hydration_history(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did_gql}",
                 requester_did: "{requester_did_gql}",
                 behavior_id: "{behavior_id}",

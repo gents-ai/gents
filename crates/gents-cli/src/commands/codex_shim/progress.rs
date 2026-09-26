@@ -33,12 +33,14 @@ pub(super) struct GentsToolCallProgress {
     pub(super) subagent_link: Option<LinkedSubagentThread>,
 }
 
+/// The exact `_docID` request read carries no `order`: DefraDB plans an
+/// ordered read as a `created_at` index scan and applies `limit` before the
+/// `_docID` filter, so later rows in the collection would hide this request.
 pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) -> String {
     format!(
         r#"{{
             AgentRequest(
                 filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }},
-                order: {{ created_at: DESC }},
                 limit: 2
             ) {{
                 _docID
@@ -438,6 +440,51 @@ fn preview_compact_text(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn turn_progress_finds_request_older_than_later_requests() {
+        let temp = tempfile::tempdir().expect("progress directory");
+        let state =
+            super::super::turn_projection::tests::notification_test_state(temp.path()).await;
+        let agent_did = escape_graphql_string(state.agent_did.as_ref());
+        let behavior_id = escape_graphql_string(state.behavior_id.as_ref());
+        for (id, purpose, created_at) in [
+            ("turn", "normal", "2026-09-25T00:00:00Z"),
+            ("title", "title-audit", "2026-09-25T00:00:01Z"),
+            ("steer", "normal", "2026-09-25T00:00:02Z"),
+        ] {
+            let mutation = format!(
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "{behavior_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#,
+                id = escape_graphql_string(id),
+                purpose = escape_graphql_string(purpose),
+                created_at = escape_graphql_string(created_at),
+            );
+            ConfigAccess::write_local(&state.node, "codex.progress.test_request", &mutation)
+                .await
+                .expect("create request");
+        }
+        let turn = super::super::store::query_node_json(
+            &state.node,
+            r#"{ AgentRequest(filter: { request_id: {_eq: "turn"} }) {_docID} }"#,
+        )
+        .await
+        .expect("turn doc id");
+        let turn_doc_id = turn["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .expect("turn doc id");
+
+        let response = super::super::store::query_node_json(
+            &state.node,
+            &gents_turn_progress_query(turn_doc_id, "thread"),
+        )
+        .await
+        .expect("progress query");
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .expect("request rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["request_id"], "turn");
+    }
 
     #[test]
     fn lifecycle_state_overrides_failure_metadata() {

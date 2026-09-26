@@ -104,7 +104,11 @@ pub(crate) fn prepare_goal_continuation(
         }),
         input,
         retry_key: Some(continuation.retry_key),
-        ..RequestSpec::new(identity, admission)
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            identity,
+            admission,
+        )
     };
     build_request(spec)
 }

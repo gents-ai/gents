@@ -77,6 +77,12 @@ theorem tool_write_preserves_request_identity {before after : World}
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl⟩
 
+theorem tool_write_preserves_purpose_principal {before after : World}
+    {result : Except Error ToolWrite} (h : ToolWrite.lift before result = .ok after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
+  exact ⟨rfl, rfl⟩
+
 theorem tool_write_preserves_composed_control {before after : World}
     {result : Except Error ToolWrite} (h : ToolWrite.lift before result = .ok after) :
     after.queue = before.queue ∧ after.claimed = before.claimed ∧
@@ -981,6 +987,14 @@ theorem wake_notification_preserves_composed_control
   unfold publishWakeNotification publishBackgroundNotificationWith at h
   obtain ⟨write, _, rfl⟩ := ToolWrite.lift_success h
   exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+theorem wake_notification_preserves_purpose_principal
+    (before after : World) (document : DocId) (binding : WakeDocumentBinding)
+    (message : MessageEnvelope)
+    (h : publishWakeNotification before document binding message = .ok after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  unfold publishWakeNotification publishBackgroundNotificationWith at h
+  exact tool_write_preserves_purpose_principal h
 
 theorem goal_notification_preserves_parent_lease
     (before after : World) (document : DocId) (binding : GoalNotificationBinding)

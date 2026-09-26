@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Delegation
+import Proofs.Request.State
 import Proofs.RequestExecutionLease
 import Proofs.Transcript
 import Proofs.ToolExecution.Executable
@@ -43,10 +44,30 @@ structure GoalChildReceipt where
   authenticated : Bool
   deriving DecidableEq, Repr
 
+/-- Exact signed title admission projected into the local gate. The parent
+identities are provenance, not authority over the title's lease or output. -/
+structure TitleBinding where
+  physicalRequest : DocId
+  logicalRequest : RequestId
+  parentPhysical : DocId
+  parentLogical : RequestId
+  agent : Nat
+  session : SessionId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure TitleActivation where
+  binding : TitleBinding
+  generation : Generation
+  duration : Time
+  deadline : Time
+  deriving DecidableEq, Repr
+
 inductive ClaimEvidence where
   | backgroundWake (snapshot : BackgroundCompletion.WakeAttemptSnapshot)
   | ordinary
   | goalChild (receipt : GoalChildReceipt)
+  | titleAudit (binding : TitleBinding)
   deriving DecidableEq, Repr
 
 structure Activation where
@@ -146,6 +167,7 @@ structure GoalNotificationBinding where
 structure World where
   requestId : DocId
   sessionId : SessionId
+  purpose : RequestPurpose
   /-- Authenticated coordinator principal supplied by existing DID/ACP ownership
   at the local gate. It is not inferred from a source or remote target. -/
   principal : Nat

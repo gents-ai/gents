@@ -35,6 +35,7 @@ pub(super) async fn signed_invocation_fixture(
     .await
     .unwrap();
     let mut root = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "graph-logical-root",
         identity.did(),
         identity.did(),
@@ -152,6 +153,7 @@ pub(super) async fn prepare_signed_child(
         child.caused_by_parent_request_doc_id = Some("unrelated-physical-document".into());
     } else if variant == "unrelated_same_correlation" {
         child = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "unrelated-request",
             identity.did(),
             identity.did(),
@@ -913,6 +915,7 @@ async fn signed_foreign_graph_roots_cannot_change_invocation_or_failure() {
     ] {
         let trigger = root.caused_by_trigger_id.as_deref().unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             name,
             signer.did(),
             signer.did(),
@@ -975,6 +978,7 @@ async fn signed_foreign_graph_roots_cannot_change_invocation_or_failure() {
 async fn unrelated_interactive_head_preserves_graph_goal_obligation() {
     let (node, run, _goal, identity, _temp) = signed_invocation_fixture(3).await;
     let mut interactive = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "later-interactive",
         identity.did(),
         identity.did(),
@@ -1003,6 +1007,7 @@ async fn unrelated_interactive_head_preserves_graph_goal_obligation() {
 async fn malformed_reserved_graph_trigger_cannot_publish() {
     let (node, run, _goal, identity, _temp) = signed_invocation_fixture(3).await;
     let mut create = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "malformed-route",
         identity.did(),
         identity.did(),
@@ -1102,6 +1107,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     .await;
     let behavior = task["Task"][0]["behavior_id"].as_str().unwrap();
     let mut request = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "bundled-root",
         identity.did(),
         identity.did(),
@@ -1173,6 +1179,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
 async fn replacement_goal_on_other_authenticated_chain_does_not_attach_to_old_root() {
     let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
     let mut parent = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "other-goal-parent",
         identity.did(),
         identity.did(),
@@ -1246,6 +1253,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             execute(&node, &format!(r#"mutation {{ update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "test-behavior" }} }}, input: {{ agent_did: "{}" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(foreign.did()))).await;
         }
         let mut request = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "foreign-root",
             foreign.did(),
             foreign.did(),

@@ -208,10 +208,11 @@ async fn descendant_owners(
             .map(|id| format!("\"{}\"", escape_graphql_string(id)))
             .collect::<Vec<_>>()
             .join(",");
+        let scope = gents::session::public_request_filter(&format!("request_id: {{_in: [{ids}]}}"));
         let response = graphql_with_transaction_retry(
             node,
             &format!(
-                r#"{{ AgentRequest(filter: {{request_id: {{_in: [{ids}]}}}}) {{
+                r#"{{ AgentRequest(filter: {{ {scope} }}) {{
             request_id agent_did requester_did session_id
         }} }}"#
             ),
@@ -346,7 +347,7 @@ mod tests {
             };
             let response = node
                 .execute(&format!(
-                    r#"mutation {{create_AgentRequest(input: {{
+                    r#"mutation {{create_AgentRequest(input: {{purpose: "normal", 
                 request_id:"{id}", agent_did:"did:test:child", requester_did:{requester},
                 session_id:"child-session"
             }}) {{_docID}}}}"#
@@ -359,7 +360,7 @@ mod tests {
         for principal in ["did:test:first", "did:test:second", "did:test:third"] {
             let response = node
                 .execute(&format!(
-                    r#"mutation {{create_AgentRequest(input: {{
+                    r#"mutation {{create_AgentRequest(input: {{purpose: "normal", 
                 request_id:"ambiguous-child", agent_did:"{principal}", session_id:"other-session"
             }}) {{_docID}}}}"#
                 ))

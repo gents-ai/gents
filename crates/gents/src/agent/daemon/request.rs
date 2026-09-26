@@ -7,21 +7,25 @@ use crate::compaction;
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
+use gents_loop::loop_stream::{provider_view_tagged, TaggedMessage};
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
-    /// Estimate the exact first-turn provider request for session-compaction
-    /// admission. The owned loop rebuilds it and remains the sole final
-    /// legality/dispatch authority.
+    /// Size the exact first-turn provider request for session-compaction
+    /// admission through the owned loop's assembly owner, including its
+    /// reasoning replay selection. The loop rebuilds the request at dispatch
+    /// and remains the sole final legality authority.
+    #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
         request: &crate::watcher::AgentRequest,
         preamble: String,
-        history: &[crate::llm::message::Message],
+        history: &[TaggedMessage],
         skill_reminders: &[crate::llm::message::Message],
         request_context_message: Option<&crate::llm::message::Message>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+        replay: &gents_loop::loop_stream::LoopReplayInput,
     ) -> Result<usize> {
         let config = crate::completion_factory::loop_config_for_request(
             &self.behavior,
@@ -30,22 +34,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             aggregate_token_budget,
             self.loop_tools.len(),
         )?;
-        let provider_history = skill_reminders
+        let mut provider_history = skill_reminders
             .iter()
             .cloned()
+            .map(TaggedMessage::unassociated)
             .chain(history.iter().cloned())
             .collect::<Vec<_>>();
-        let context = request_context_message
-            .cloned()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let provider_request = crate::agent::loop_stream::build_request(
+        let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
+            request_context_message.cloned(),
+            TaggedMessage::unassociated(crate::llm::message::Message::user(
+                request.content.clone(),
+            )),
+        );
+        let provider_request = gents_loop::loop_stream::assemble_provider_request(
             self.model.as_ref(),
-            crate::llm::message::Message::user(request.content.clone()),
-            &provider_history,
-            &context,
+            &mut provider_history,
+            &mut new_messages,
             self.loop_tools.as_ref(),
             &config,
+            replay,
         )
         .await
         .map_err(anyhow::Error::new)?;
@@ -87,7 +94,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             lifecycle.behavior_id(),
             lifecycle.backend_id(),
         );
-        let title_admission_context = admission_context.clone();
         // One capture scope for the whole request, installed here rather than
         // around `run_inference`.
         //
@@ -106,27 +112,57 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // It must stay a single scope instance: the per-kind sequence that
         // keeps the inference loop, the summarizer, and the summarizer's JSON
         // fallback from colliding on `(turn 0, attempt 0)` lives in the scope.
-        let request_commit_cid = lifecycle.request_commit_cid().ok_or_else(|| {
-            anyhow::anyhow!(
-                "claimed AgentRequest {} has no exact DefraDB commit CID",
-                request.doc_id
-            )
-        })?;
+        let request_commit_cid = lifecycle
+            .request_commit_cid()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "claimed AgentRequest {} has no exact DefraDB commit CID",
+                    request.doc_id
+                )
+            })?
+            .to_string();
         let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
-            request_commit_cid,
+            &request_commit_cid,
             self.behavior.model_name.clone(),
+            self.provider_family.clone(),
         );
-        let capture_scope = crate::rendered_request::scope_from_factory(
+        let mut capture_scope = crate::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
+        if let Some(scope) = capture_scope.as_mut() {
+            let scope = std::sync::Arc::get_mut(scope)
+                .context("fresh request capture scope unexpectedly shared")?;
+            if let Some(family) = &self.compaction_provider_family {
+                scope.set_compaction_provider_family(family.clone());
+            }
+            scope.set_auxiliary_output_sink(stream_writer.auxiliary_output_sink(
+                request.clone(),
+                lifecycle.execution_generation()?.to_owned(),
+                crate::provider_input::ProviderInputProfile::resolve(
+                    self.behavior.backend_provider_kind,
+                    self.behavior.openai_wire_api,
+                ),
+            ));
+        }
         let handled = admission::scope_request(admission_context, async {
-            self.spawn_conversation_title_generation(
-                &request,
-                title_admission_context,
-                capture_context,
-            );
+            // Prompt preparation may call a compaction provider; its output
+            // requires the same Processing fence as the main inference turn.
+            let response_behavior_id = lifecycle.behavior_id().to_string();
+            lifecycle
+                .begin_owned_execution(stream_writer)
+                .instrument(tracing::info_span!(
+                    "request.begin_response",
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %request.agent_did,
+                    behavior_id = %response_behavior_id,
+                    subagent_depth = trace_attrs.subagent_depth,
+                    is_subagent = trace_attrs.is_subagent,
+                ))
+                .await?;
+            self.spawn_conversation_title_generation(&request, shutdown.clone());
 
             let selected_skill_ids = &request.input.selected_skill_ids;
             let skill_reminders = self
@@ -162,7 +198,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     crate::workspace::request_workspace_cwd(&request),
                 ),
             };
-            let mut built = async {
+            let (mut built, replay) = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
                         lifecycle.background_completion_input_through_sequence();
@@ -188,11 +224,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let total_compacted_messages = compaction_state.total_messages_compacted;
                     let compaction_generation = compaction_state.generation.clone();
                     let compaction_generation_is_latest = compaction_state.is_latest_generation;
+                    let provider_profile = crate::provider_input::ProviderInputProfile::resolve(
+                        self.behavior.backend_provider_kind,
+                        self.behavior.openai_wire_api,
+                    );
                     let sequenced_history = session::load_sequenced_history_for_request(
                         &self.node,
                         &request,
                         background_cutoff,
                         prior_cursor,
+                        provider_profile,
                     )
                     .instrument(tracing::info_span!(
                         "request.load_active_history",
@@ -214,12 +255,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // tail. The projected view is intentionally a fixpoint;
                     // checking only that view would make this gate vacuous.
                     let canonical_prefix_is_stable =
-                        compaction::safe_to_reduce(&durable_history);
-                    // One canonical reduction, shared with the compaction writer:
-                    // `messages_compacted` is measured against this list, so the
-                    // prefix drop below must index the same one (#993).
-                    let (provider_history, file_activity) =
-                        compaction::provider_view(durable_history);
+                        compaction::safe_to_reduce(provider_profile, &durable_history);
+                    // The sourced projection below performs this same file
+                    // activity extraction before stripping tool results.
+                    let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(
                             behavior_id = %self.behavior.behavior_id,
@@ -229,6 +268,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             "files referenced in stripped history"
                         );
                     }
+                    // One canonical reduction, shared with the compaction writer:
+                    // `messages_compacted` is measured against this list, so the
+                    // prefix drop below must index the same one (#993).
+                    let mut replay = crate::provider_input::replay::owned_replay_input(
+                        self.node.clone(), request.clone(), request_commit_cid.clone(),
+                        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                        self.replay_issuer.clone(), provider_profile,
+                    );
+                    let tagged = crate::provider_input::replay::tag_canonical_history(
+                        &sequenced_history,
+                    );
+                    let provider_history = provider_view_tagged(provider_profile, tagged)?;
 
                     // The database query already excludes the exact raw prefix
                     // named by the required compaction cursor.
@@ -260,6 +311,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             &skill_reminders,
                             request_context_message.as_ref(),
                             aggregate_token_budget.clone(),
+                            &replay,
                         )
                         .await?;
                     let reduction_admission = compaction::ReductionAdmission::for_input(
@@ -290,16 +342,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             aggregate_token_budget.clone(),
                             effective_seed,
                         );
+                        let projected = provider_view_tagged(provider_profile, history)?;
+                        options.max_compacted_prefix_messages =
+                            crate::agent::loop_stream::replay_compaction_prefix_bound(
+                                &projected, &replay.required,
+                            )?;
+                        let projected_native = projected.iter().map(|row| row.message.clone()).collect::<Vec<_>>();
                         options.keep_recent_tokens = self.compactor.retention_target(
                             options.keep_recent_tokens,
-                            &history,
+                            &projected_native,
                             admission,
                         )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
                             1,
                             self.compactor.reduce(
-                                history,
+                                projected_native.clone(),
                                 self.behavior.context_window,
                                 &options,
                                 admission,
@@ -307,7 +365,24 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         )
                         .await?;
 
-                        history = result.provider_messages()?.to_vec();
+                        // The reducer exposes an exact split of its input; use
+                        // that split to carry associations, never a byte search.
+                        history = if let Some(exact) = result.exact_reduction() {
+                            anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
+                                "session reduction changed its exact provider source");
+                            let (prefix, suffix) = projected.split_at(exact.compacted_prefix.len());
+                            let associations = crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                                replay.required.clone(), prefix, suffix,
+                            );
+                            crate::provider_context_reduction::validate_replay_associations(
+                                &associations, exact.compacted_prefix, exact.retained_suffix, &request.doc_id,
+                            )?;
+                            suffix.to_vec()
+                        } else {
+                            anyhow::ensure!(projected_native == result.provider_messages()?,
+                                "provider repair changed its sourced projection");
+                            projected
+                        };
                         if let Some(exact) = result.exact_reduction() {
                             let summary = exact.checkpoint;
                             let sequence_rows = sequenced_history
@@ -316,6 +391,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 .collect::<Vec<_>>();
                             let compacted_through_sequence =
                                 compaction::session_cursor_for_reduction(
+                                    provider_profile,
                                     &sequence_rows,
                                     prior_provider_prefix,
                                     exact,
@@ -412,7 +488,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             .await?;
                     }
 
-                    return Ok::<_, anyhow::Error>(built);
+                    return Ok::<_, anyhow::Error>((built, replay));
                 }
                 unreachable!("bounded prompt assembly retry returns")
             }
@@ -432,24 +508,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .await?;
 
             if !skill_reminders.is_empty() {
-                let mut reminders = skill_reminders;
+                let mut reminders = skill_reminders
+                    .into_iter()
+                    .map(TaggedMessage::unassociated)
+                    .collect::<Vec<_>>();
                 reminders.append(&mut built.messages);
                 built.messages = reminders;
             }
 
-            let response_behavior_id = lifecycle.behavior_id().to_string();
-            lifecycle
-                .begin_owned_execution(stream_writer)
-                .instrument(tracing::info_span!(
-                    "request.begin_response",
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    agent_did = %request.agent_did,
-                    behavior_id = %response_behavior_id,
-                    subagent_depth = trace_attrs.subagent_depth,
-                    is_subagent = trace_attrs.is_subagent,
-                ))
-                .await?;
             let doc_id = lifecycle.request().doc_id.clone();
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();
@@ -459,6 +525,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     &request,
                     &doc_id,
                     &built.messages,
+                    replay,
                     lifecycle,
                     stream_writer,
                     &mut shutdown,

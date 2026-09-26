@@ -622,6 +622,7 @@ mod tests {
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "activity-request"
+                        purpose: "normal"
                         agent_did: "did:test:agent"
                         behavior_id: "review"
                         session_id: "activity-session"
@@ -711,6 +712,7 @@ mod tests {
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-timeline"
+                        purpose: "normal"
                         agent_did: "did:test:agent"
                         behavior_id: "general"
                         session_id: "session-timeline"
@@ -793,6 +795,7 @@ mod tests {
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-goal-history"
+                        purpose: "normal"
                         agent_did: "did:test:agent"
                         behavior_id: "general"
                         session_id: "session-goal-history"

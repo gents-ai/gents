@@ -22,7 +22,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -81,7 +81,7 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         let stream = run_loop_stream(
             model.clone(),
             None::<crate::hook::DefraSessionHook>,
-            Message::user("hi"),
+            TaggedMessage::unassociated(Message::user("hi")),
             Vec::new(),
             Arc::new(Vec::new()),
             loop_config,
@@ -182,7 +182,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         loop_config,
@@ -279,7 +279,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poll_result = collect_scripted_stream(run_loop_stream(
         poll_model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("repair the first poll"),
+        TaggedMessage::unassociated(Message::user("repair the first poll")),
         Vec::new(),
         Arc::new(Vec::new()),
         poll_config,
@@ -358,7 +358,7 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         loop_config,
@@ -413,7 +413,7 @@ async fn capture_trace_retains_ephemeral_request_context() {
     let collected = collect_scripted_stream(run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -464,7 +464,7 @@ async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch()
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -526,6 +526,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             behavior_id: "general".to_string(),
             session_id: session_id.to_string(),
             model_name: "model".to_string(),
+            provider_family: None,
         };
         let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
         let scope = test_scope(context, sink);
@@ -541,7 +542,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             let stream = run_loop_stream(
                 model.clone(),
                 None::<crate::hook::DefraSessionHook>,
-                Message::user("hi"),
+                TaggedMessage::unassociated(Message::user("hi")),
                 Vec::new(),
                 Arc::new(Vec::new()),
                 loop_config.clone(),

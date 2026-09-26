@@ -72,10 +72,11 @@ pub(super) async fn load_thread_turns(
         .map(|link| (link.agent_did.as_str(), link.requester_did.as_deref()))
         .unwrap_or((state.agent_did.as_ref(), Some(state.local_requester_did())));
     let session_scope = gents::session::session_scope_filter(owner, &record.session_id, requester);
+    let request_scope = gents::session::public_request_filter(&session_scope);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ {session_scope} }},
+                filter: {{ {request_scope} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID

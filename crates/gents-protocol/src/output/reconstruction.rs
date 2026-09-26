@@ -173,6 +173,9 @@ fn reference_allowed_by_publication(
     message: &TranscriptMessage,
     closing: ObservedSegment<'_>,
 ) -> bool {
+    if closing.segment.source.is_auxiliary_audit() {
+        return false;
+    }
     match &message.publication {
         MessagePublication::RequestExecution {
             execution_generation,
@@ -239,12 +242,12 @@ fn validate_reference_source(
     }
 }
 
-pub fn reconstruct_stream(
+fn reconstruct_extent_streams(
     records: &[ObservedSegment<'_>],
     denied: &[String],
     dependency_denials: &[DependencyDenial],
     reference: &PayloadRef,
-) -> Result<ReconstructedStream, ReconstructionError> {
+) -> Result<Vec<ReconstructedStream>, ReconstructionError> {
     let closing = closing_for_reference(records, denied, dependency_denials, reference)?;
     let Some(SourceClose::Closed {
         segments: count,
@@ -354,7 +357,11 @@ pub fn reconstruct_stream(
                 .ok_or_else(malformed)?;
             if let Some(declaration) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((declaration.block_index, declaration.part_index))
+                    || !positions.insert((
+                        declaration.block_index,
+                        declaration.part_index,
+                        matches!(declaration.payload, StreamPayload::ReasoningSignature),
+                    ))
                 {
                     return Err(malformed());
                 }
@@ -383,7 +390,21 @@ pub fn reconstruct_stream(
     {
         return Err(malformed());
     }
-    Ok(streams.swap_remove(reference.stream as usize))
+    Ok(streams)
+}
+
+pub fn reconstruct_stream(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    reference: &PayloadRef,
+) -> Result<ReconstructedStream, ReconstructionError> {
+    reconstruct_extent_streams(records, denied, dependency_denials, reference)?
+        .get(reference.stream as usize)
+        .cloned()
+        .ok_or_else(|| ReconstructionError::InvalidReference {
+            reference: reference.clone(),
+        })
 }
 
 fn expect_payload(
@@ -421,8 +442,11 @@ fn is_tool_output(payload: &StreamPayload) -> bool {
 fn is_reasoning(payload: &StreamPayload) -> bool {
     matches!(payload, StreamPayload::Reasoning)
 }
-fn is_reasoning_opaque(payload: &StreamPayload) -> bool {
-    matches!(payload, StreamPayload::ReasoningOpaque)
+fn is_reasoning_encrypted(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ReasoningEncrypted)
+}
+fn is_reasoning_redacted(payload: &StreamPayload) -> bool {
+    matches!(payload, StreamPayload::ReasoningRedacted)
 }
 fn is_reasoning_summary(payload: &StreamPayload) -> bool {
     matches!(payload, StreamPayload::ReasoningSummary)
@@ -580,6 +604,46 @@ fn validate_native_shape(message: &TranscriptMessage) -> Result<(), Reconstructi
                 return Err(ReconstructionError::InvalidStructure { detail: "invalid fork provenance".to_owned() });
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_reasoning_signature(
+    records: &[ObservedSegment<'_>],
+    denied: &[String],
+    dependency_denials: &[DependencyDenial],
+    body_reference: &PayloadRef,
+    signature: Option<&str>,
+) -> Result<(), ReconstructionError> {
+    let streams = reconstruct_extent_streams(records, denied, dependency_denials, body_reference)?;
+    let body = &streams[body_reference.stream as usize];
+    let mut signatures = streams.iter().filter(|stream| {
+        stream.declaration.block_index == body.declaration.block_index
+            && stream.declaration.part_index == body.declaration.part_index
+            && matches!(
+                stream.declaration.payload,
+                StreamPayload::ReasoningSignature
+            )
+    });
+    let Some(stream) = signatures.next() else {
+        if signature.is_none()
+            || matches!(
+                closing_for_reference(records, denied, dependency_denials, body_reference)?
+                    .segment
+                    .source,
+                OutputSource::Authored { .. }
+            )
+        {
+            return Ok(());
+        }
+        return Err(ReconstructionError::InvalidStructure {
+            detail: "reasoning signature has no retained stream".to_owned(),
+        });
+    };
+    if signatures.next().is_some() || signature != Some(stream.text.as_str()) {
+        return Err(ReconstructionError::InvalidStructure {
+            detail: "reasoning signature disagrees with its retained stream".to_owned(),
+        });
     }
     Ok(())
 }
@@ -768,6 +832,13 @@ pub fn reconstruct_message(
                             .iter()
                             .map(|part| match part {
                                 ReasoningPart::Text { text, signature } => {
+                                    validate_reasoning_signature(
+                                        records,
+                                        denied,
+                                        dependency_denials,
+                                        text,
+                                        signature.as_deref(),
+                                    )?;
                                     Ok(ReasoningContent::Text {
                                         text: resolve_full(
                                             records,
@@ -786,7 +857,7 @@ pub fn reconstruct_message(
                                         denied,
                                         dependency_denials,
                                         data,
-                                        &[is_reasoning_opaque],
+                                        &[is_reasoning_encrypted],
                                         false,
                                     )?))
                                 }
@@ -797,7 +868,7 @@ pub fn reconstruct_message(
                                             denied,
                                             dependency_denials,
                                             data,
-                                            &[is_reasoning_opaque],
+                                            &[is_reasoning_redacted],
                                             false,
                                         )?,
                                     })
@@ -1845,6 +1916,163 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_fields_keep_native_kind_and_validate_retained_signature() {
+        let declaration = |part_index, payload| StreamDeclaration {
+            block_index: 0,
+            part_index,
+            payload,
+        };
+        let records = vec![segment(
+            "close-reasoning",
+            Some(0),
+            vec![
+                run(0, 5, Some(declaration(0, StreamPayload::Reasoning))),
+                run(
+                    1,
+                    3,
+                    Some(declaration(0, StreamPayload::ReasoningSignature)),
+                ),
+                run(
+                    2,
+                    3,
+                    Some(declaration(1, StreamPayload::ReasoningEncrypted)),
+                ),
+                run(3, 3, Some(declaration(2, StreamPayload::ReasoningRedacted))),
+            ],
+            "thinksigENCRED",
+            closed(1, vec![5, 3, 3, 3]),
+        )];
+        let parts = vec![
+            ReasoningPart::Text {
+                text: reference("close-reasoning", 0),
+                signature: Some("sig".to_owned()),
+            },
+            ReasoningPart::Encrypted {
+                data: reference("close-reasoning", 2),
+            },
+            ReasoningPart::Redacted {
+                data: reference("close-reasoning", 3),
+            },
+        ];
+        let message = provider_message(vec![MessageBlock::Reasoning {
+            id: None,
+            parts: parts.clone(),
+        }]);
+        assert_eq!(
+            reconstruct_message(&observations(&records), &[], &[], &message),
+            Ok(Message::Assistant {
+                id: Some("native-1".to_owned()),
+                content: vec![AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![
+                        ReasoningContent::Text {
+                            text: "think".to_owned(),
+                            signature: Some("sig".to_owned()),
+                        },
+                        ReasoningContent::Encrypted("ENC".to_owned()),
+                        ReasoningContent::Redacted {
+                            data: "RED".to_owned(),
+                        },
+                    ],
+                })],
+            })
+        );
+
+        for signature in [None, Some("different".to_owned())] {
+            let mut wrong = message.clone();
+            wrong.blocks = vec![MessageBlock::Reasoning {
+                id: None,
+                parts: vec![ReasoningPart::Text {
+                    text: reference("close-reasoning", 0),
+                    signature,
+                }],
+            }];
+            assert!(matches!(
+                reconstruct_message(&observations(&records), &[], &[], &wrong),
+                Err(ReconstructionError::InvalidStructure { .. })
+            ));
+        }
+
+        let mut wrong_kind = message;
+        wrong_kind.blocks = vec![MessageBlock::Reasoning {
+            id: None,
+            parts: vec![
+                parts[0].clone(),
+                ReasoningPart::Redacted {
+                    data: reference("close-reasoning", 2),
+                },
+            ],
+        }];
+        assert!(matches!(
+            reconstruct_message(&observations(&records), &[], &[], &wrong_kind),
+            Err(ReconstructionError::ExtentMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn authored_reasoning_text_without_signature_stream_remains_valid() {
+        let mut records = vec![segment(
+            "close-reasoning",
+            Some(0),
+            vec![run(
+                0,
+                5,
+                Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Reasoning,
+                }),
+            )],
+            "think",
+            closed(1, vec![5]),
+        )];
+        records[0].1.source = OutputSource::Authored {
+            key: "authored-reasoning".to_owned(),
+        };
+        let message = provider_message(vec![MessageBlock::Reasoning {
+            id: None,
+            parts: vec![ReasoningPart::Text {
+                text: reference("close-reasoning", 0),
+                signature: Some("inline-only".to_owned()),
+            }],
+        }]);
+        assert!(reconstruct_message(&observations(&records), &[], &[], &message).is_ok());
+    }
+
+    #[test]
+    fn declaration_conflicts_remain_field_specific() {
+        let declaration = |payload| StreamDeclaration {
+            block_index: 0,
+            part_index: 0,
+            payload,
+        };
+        for second in [
+            StreamPayload::ReasoningSummary,
+            StreamPayload::ReasoningSignature,
+        ] {
+            let first = if second == StreamPayload::ReasoningSignature {
+                StreamPayload::ReasoningSignature
+            } else {
+                StreamPayload::Reasoning
+            };
+            let records = vec![segment(
+                "close-conflict",
+                Some(0),
+                vec![
+                    run(0, 1, Some(declaration(first))),
+                    run(1, 1, Some(declaration(second))),
+                ],
+                "ab",
+                closed(1, vec![1, 1]),
+            )];
+            assert!(matches!(
+                reconstruct(&records, &reference("close-conflict", 0)),
+                Err(ReconstructionError::ExtentMismatch { .. })
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_provider_payload_at_a_rewritten_native_position() {
         let records = hello_source();
         let message = provider_message(vec![
@@ -2013,7 +2241,6 @@ mod tests {
             Err(ReconstructionError::InvalidStructure { .. })
         ));
     }
-
     #[test]
     fn media_payload_kind_must_match_native_media_block() {
         let records = vec![segment(

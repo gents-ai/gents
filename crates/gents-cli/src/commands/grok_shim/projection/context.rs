@@ -56,7 +56,7 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node).await.unwrap();
         let mut requests = Vec::new();
         for content in ["first", "second"] {
-            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "same-label", agent_did: "owner", requester_did: "requester", session_id: "session", behavior_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
+            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", agent_did: "owner", requester_did: "requester", session_id: "session", behavior_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed physical context request").unwrap();
             let doc = gents_protocol::graphql::extract_mutation_doc_id(
                 &json!({"data":response.data}),

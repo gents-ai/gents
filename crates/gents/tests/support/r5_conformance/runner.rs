@@ -1365,10 +1365,17 @@ impl Harness {
                 }
             }
         }
+        // Detached title requests are runtime work outside the R5 model; the
+        // sweep may also recover one left by the crash. The crashed runtime
+        // changes nothing concurrently, so count exactly the title rows whose
+        // state or generation the sweep changed.
+        let titles_before = self.title_request_states().await?;
         let report = RequestLifecycle::recover_all(self.b.db.node.as_ref(), self.b.did()).await?;
+        let titles_after = self.title_request_states().await?;
+        let titles_recovered = titles_before.difference(&titles_after).count();
         anyhow::ensure!(
-            report.requests_recovered == candidates.len(),
-            "R5 real request recovery count differs from modeled expired children: {report:?}, expected {}",
+            report.requests_recovered == candidates.len() + titles_recovered,
+            "R5 real request recovery count differs from modeled expired children: {report:?}, expected {} children and {titles_recovered} title requests",
             candidates.len()
         );
         for (symbolic_child, physical_child, generation) in live_children {
@@ -1416,6 +1423,39 @@ impl Harness {
             );
         }
         Ok(())
+    }
+
+    async fn title_request_states(&self) -> anyhow::Result<std::collections::BTreeSet<String>> {
+        let agent_did = gents::graphql::escape_graphql_string(self.b.did());
+        let response = self
+            .b
+            .db
+            .node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, purpose: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state execution_generation }} }}"#,
+                gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str()
+            ))
+            .await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "R5 title request query: {:?}",
+            response.errors
+        );
+        Ok(response
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentRequest"].as_array())
+            .into_iter()
+            .flatten()
+            .map(|row| {
+                format!(
+                    "{}|{}|{}",
+                    row["_docID"].as_str().unwrap_or_default(),
+                    row["lifecycle_state"].as_str().unwrap_or_default(),
+                    row["execution_generation"].as_str().unwrap_or_default()
+                )
+            })
+            .collect())
     }
 
     fn record_cancel_ack_outcomes(&mut self, outcomes: Vec<CancelAckOutcome>) {

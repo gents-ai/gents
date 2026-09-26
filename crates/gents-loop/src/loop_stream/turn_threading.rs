@@ -13,9 +13,10 @@ pub(super) fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {
 }
 
 pub(super) fn close_streaming_turn<R>(
-    new_messages: &mut Vec<Message>,
+    new_messages: &mut Vec<TaggedMessage>,
     accumulator: &mut AssistantTurnAccumulator,
     message_id: Option<String>,
+    assistant_source: Option<crate::claude_messages_body::ReplayTag>,
     pending_results: Vec<(ToolCall, String, String)>,
 ) -> Vec<LoopStreamItem<R>> {
     // Thread the assistant turn (text + reasoning + tool calls) ahead of its
@@ -28,7 +29,12 @@ pub(super) fn close_streaming_turn<R>(
         if let Message::Assistant { id, .. } = &mut assistant_message {
             *id = message_id;
         }
-        new_messages.push(assistant_message);
+        new_messages.push(TaggedMessage {
+            message: assistant_message,
+            source: assistant_source,
+            physical_header: None,
+            block_indices: Vec::new(),
+        });
     }
 
     pending_results
@@ -43,9 +49,9 @@ pub(super) fn close_streaming_turn<R>(
                 ),
                 None => UserContent::tool_result(tool_call.id.clone(), content.clone()),
             };
-            new_messages.push(Message::User {
+            new_messages.push(TaggedMessage::unassociated(Message::User {
                 content: vec![user_content],
-            });
+            }));
 
             let tool_result = ToolResult {
                 id: tool_call.id.clone(),

@@ -470,7 +470,7 @@ async fn create_subagent_request_inner(
                     }),
                     input,
                     valid_until: deadline,
-                    ..RequestSpec::new(identity, admission)
+                    ..RequestSpec::new(gents_protocol::request_admission::RequestPurpose::Normal, identity, admission)
                 };
                 let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
                 let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -893,6 +893,7 @@ mod pin_tests {
         // `create_subagent_request_inner`'s DTO-construction statements
         // directly.
         let spec = crate::lifecycle::materialize::RequestSpec {
+            purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             identity: crate::lifecycle::materialize::RequestIdentity {
                 requester_did: None,
                 request_id: request_id.clone(),
@@ -940,7 +941,7 @@ mod pin_tests {
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(
             fields,
-            "request_id: \"subagent-request-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-subagent-1\", retry_root_request: \"subagent-request-1\", content: \"spawn a subagent to help\", execution_origin: \"interactive\", caused_by_trigger_id: \"subagent-parent-tool-call-1\", caused_by_trigger_kind: \"subagent\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, valid_until: \"2030-06-01T00:00:00Z\", subagent_depth: 2, caused_by_parent_request_id: \"subagent-parent-request-1\", caused_by_parent_request_doc_id: \"subagent-parent-request-doc-1\", caused_by_parent_tool_call_id: \"subagent-parent-tool-call-1\", caused_by_parent_tool_call_doc_id: \"subagent-parent-tool-call-doc-1\", workspace_id: \"ws-subagent-1\", workspace_owner_agent_did: \"did:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-subagent-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"5dhmnXUEutnJJsHwRanzGE4RUrtQJY9Vg1cDgghFtB8W6zHJcTKJLbWEuPngrTcvYPVzhp3XcTwi9Mpx1mmdZzUY\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"subagent-parent-request-1\", runtime_source_kind: \"local-child\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"subagent-request-1\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-subagent-1\", retry_root_request: \"subagent-request-1\", content: \"spawn a subagent to help\", execution_origin: \"interactive\", caused_by_trigger_id: \"subagent-parent-tool-call-1\", caused_by_trigger_kind: \"subagent\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, valid_until: \"2030-06-01T00:00:00Z\", subagent_depth: 2, caused_by_parent_request_id: \"subagent-parent-request-1\", caused_by_parent_request_doc_id: \"subagent-parent-request-doc-1\", caused_by_parent_tool_call_id: \"subagent-parent-tool-call-1\", caused_by_parent_tool_call_doc_id: \"subagent-parent-tool-call-doc-1\", workspace_id: \"ws-subagent-1\", workspace_owner_agent_did: \"did:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-subagent-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"33pvN4ygs2AErF1RJvSrwzDacEBMvaJERAPHViZ79Nb7pS31VoiMTdaDZgqLJbWU3c2tkfkJVykxmD5fTQDrKNgZ\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"subagent-parent-request-1\", runtime_source_kind: \"local-child\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

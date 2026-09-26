@@ -1,5 +1,8 @@
 use super::*;
 
+const GROUPED_PROFILE: gents_loop::provider_input::ProviderInputProfile =
+    gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions;
+
 pub(super) fn generated_compaction_reducer_cases_pin_contract() {
     let cases = lean_compaction_reducer_cases();
     assert_eq!(cases.len(), 17);
@@ -66,20 +69,24 @@ fn generated_compaction_cursor_cases_pin_contract() {
     ];
     for case in cases {
         let expected_sequence = case.expected_cursor.map(|split| rows[split - 1].0);
-        let actual = gents::compaction::compacted_through_sequence(&rows, case.compacted);
+        let actual =
+            gents::compaction::compacted_through_sequence(GROUPED_PROFILE, &rows, case.compacted);
         assert_eq!(actual, expected_sequence, "{}: canonical cursor", case.name);
 
         if let Some(cursor) = actual {
             let (full, _) = gents::compaction::provider_view(
+                GROUPED_PROFILE,
                 rows.iter().map(|(_, message)| message.clone()).collect(),
             );
             let (filtered, _) = gents::compaction::provider_view(
+                GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence > cursor)
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
             let (prefix, _) = gents::compaction::provider_view(
+                GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence <= cursor)
                     .map(|(_, message)| message.clone())
@@ -188,7 +195,7 @@ fn apply_compaction_reducer(
     match case.reducer.as_str() {
         "identity" => input,
         "strip" => gents::compaction::strip_tool_results(input).0,
-        "provider_view" => gents::compaction::provider_view(input).0,
+        "provider_view" => gents::compaction::provider_view(GROUPED_PROFILE, input).0,
         other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
     }
 }
@@ -204,7 +211,7 @@ fn check_summarize_gate_and_split(
     // predicate on `Message` values: it lives in the durable header-loading
     // path. This summary fixture does not exercise that loader or establish
     // publication readiness; it pins the structural components only.
-    let production_gate_open = gents::compaction::safe_to_reduce(&input);
+    let production_gate_open = gents::compaction::safe_to_reduce(GROUPED_PROFILE, &input);
     assert_eq!(
         production_gate_open,
         case.turn_boundary && case.provider_fixpoint,
@@ -281,7 +288,11 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 }
 
 fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {
-    match case.pre_message_count {
+    compaction_messages_for_count(case.pre_message_count)
+}
+
+pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {
+    match count {
         0 => Vec::new(),
         1 => vec![compaction_tool_result_message(
             "call-1",
@@ -302,10 +313,7 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
             compaction_tool_result_message("call-1", "large tool payload"),
             compaction_text_message("assistant", "reply"),
         ],
-        other => panic!(
-            "unsupported compaction pre_message_count {other} for {}",
-            case.name
-        ),
+        other => panic!("unsupported compaction message_count {other}"),
     }
 }
 

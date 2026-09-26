@@ -663,6 +663,7 @@ impl GoalSource {
                     filter: {{
                         agent_did: {{ _eq: "{agent_did}" }},
                         session_id: {{ _eq: "{session_id}" }},
+                        purpose: {{ _eq: "normal" }},
                         caused_by_trigger_id: {{ _eq: "{goal_id}" }},
                         caused_by_trigger_kind: {{ _eq: "goal" }},
                         caused_by_parent_request_id: {{ _eq: "{parent_request_id}" }}

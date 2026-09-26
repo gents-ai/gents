@@ -67,6 +67,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
             r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "invalid-origin-route-request"
+                    purpose: "normal"
                     agent_did: "did:test:invalid-origin-route"
                     behavior_id: "general"
                     session_id: "invalid-origin-route-session"

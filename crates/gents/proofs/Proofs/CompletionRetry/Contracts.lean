@@ -7,12 +7,19 @@ namespace CompletionRetry.Contracts
 open Conformance.Contracts
 
 def failureClassVocabulary : List String :=
-  ["transport", "parse_bad_request", "permanent"]
+  ["transport", "parse_bad_request", "reasoning_rejected", "permanent"]
 
 def failureClassName : FailureClass → String
   | .transport => "transport"
   | .parseBadRequest => "parse_bad_request"
+  | .reasoningRejected => "reasoning_rejected"
   | .permanent => "permanent"
+
+def failureOriginName : FailureOrigin → String
+  | .localRequestBuild => "local_request_build"
+  | .retryableTransport => "retryable_transport"
+  | .providerStreamMalformed => "provider_stream_malformed"
+  | .providerReasoningRejected => "provider_reasoning_rejected"
 
 def phaseName : Phase → String
   | .issuing => "issuing"
@@ -56,6 +63,10 @@ def RetryCase.toJson (c : RetryCase) : String :=
     ++ "\"name\":" ++ jsonString c.name ++ ","
     ++ "\"domain\":\"completionRetry\","
     ++ "\"action\":" ++ jsonString (actionName c.action) ++ ","
+    ++ "\"failure_origin\":" ++
+      (c.origin.map (jsonString ∘ failureOriginName)).getD "null" ++ ","
+    ++ "\"classified_failure\":" ++
+      (c.origin.map (jsonString ∘ failureClassName ∘ FailureOrigin.class)).getD "null" ++ ","
     ++ "\"legal\":" ++ boolJson c.post.isSome ++ ","
     ++ "\"pre_phase\":" ++ jsonString (phaseName c.pre.phase) ++ ","
     ++ "\"pre_now\":" ++ toString c.pre.now ++ ","

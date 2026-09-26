@@ -6,6 +6,7 @@ use crate::llm::message::{
     UserContent,
 };
 use crate::llm::HookAction;
+use gents_loop::provider_input::ProviderInputProfile;
 use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -16,6 +17,81 @@ use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
+
+#[test]
+fn claude_signed_final_seals_preview_without_duplicating_bytes() {
+    use crate::llm::message::ReasoningContent;
+
+    let mut accumulator = AssistantTurnAccumulator::default();
+    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "考");
+    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "慮");
+    accumulator
+        .push_provider_reasoning(
+            ProviderInputProfile::ClaudeMessages,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "考慮".into(),
+                    signature: Some("署名".into()),
+                }],
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        accumulator.take_message(),
+        Some(Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "考慮".into(),
+                    signature: Some("署名".into()),
+                }],
+            })],
+        })
+    );
+
+    let mut mismatch = AssistantTurnAccumulator::default();
+    mismatch.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "prefix");
+    assert!(mismatch
+        .push_provider_reasoning(
+            ProviderInputProfile::ClaudeMessages,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "rewritten".into(),
+                    signature: Some("sig".into()),
+                }],
+            }
+        )
+        .is_err());
+
+    let mut other = AssistantTurnAccumulator::default();
+    other.push_provider_reasoning_delta(ProviderInputProfile::OpenAiChatCompletions, None, "first");
+    other
+        .push_provider_reasoning(
+            ProviderInputProfile::OpenAiChatCompletions,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "last".into(),
+                    signature: None,
+                }],
+            },
+        )
+        .unwrap();
+    let Some(Message::Assistant { content, .. }) = other.take_message() else {
+        panic!("other provider reasoning turn");
+    };
+    let AssistantContent::Reasoning(reasoning) = &content[0] else {
+        panic!("reasoning content");
+    };
+    assert_eq!(
+        reasoning.content.len(),
+        2,
+        "non-Claude final remains append-only"
+    );
+}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -33,6 +109,7 @@ fn fixture_agent_request(
     content: &str,
 ) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id: request_id.to_string(),
         agent_did: "did:test:test".to_string(),
@@ -108,7 +185,13 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
@@ -232,7 +315,13 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     for (attempt, will_retry, error) in [
         (
@@ -288,7 +377,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
 }
 
 #[tokio::test]
-async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_bytes() {
+async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_bytes() {
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -344,8 +433,13 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::ClaudeMessages,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -356,19 +450,102 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
         .await
         .unwrap();
 
-    processor.assistant_turn.push_reasoning(
-        Reasoning::new("Need to inspect directory structure first")
-            .with_id("rs_partial".to_string()),
-    );
+    use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind, ProviderAuditObservation};
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+            ProviderAuditObservation {
+                capture_scope: "inference.1".parse().unwrap(),
+                turn: 0,
+                attempt: 0,
+                event: ClaudeAuditEvent::BlockStart {
+                    index: 0,
+                    kind: ClaudeBlockKind::Text,
+                },
+            },
+        )))
+        .await
+        .unwrap();
     processor
         .assistant_turn
         .push_text("I started by checking the repo layout.");
+    for event in [
+        ClaudeAuditEvent::BlockStop { index: 0 },
+        ClaudeAuditEvent::BlockStart {
+            index: 1,
+            kind: ClaudeBlockKind::Thinking,
+        },
+        ClaudeAuditEvent::ThinkingText {
+            index: 1,
+            fragment: "Need to inspect directory structure first".into(),
+        },
+        ClaudeAuditEvent::Signature {
+            index: 1,
+            fragment: "partial-".into(),
+        },
+    ] {
+        processor
+            .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+                ProviderAuditObservation {
+                    capture_scope: "inference.1".parse().unwrap(),
+                    turn: 0,
+                    attempt: 0,
+                    event,
+                },
+            )))
+            .await
+            .unwrap();
+    }
 
     assert!(processor.has_observable_activity());
-    assert!(processor
-        .persist_partial_turn("persist errored assistant turn")
-        .await
-        .unwrap());
+    use crate::rendered_request::scope::{
+        arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
+    };
+    use crate::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    };
+    let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = Arc::new(RequestCaptureScope::new(
+        RenderedRequestContext {
+            request_doc_id: response_doc_id.clone(),
+            request_commit_cid: "bafy-test-capture".into(),
+            request_id: request_id.clone(),
+            agent_did: "did:test:test".into(),
+            requester_did: String::new(),
+            behavior_id: "general".into(),
+            session_id: session_id.clone(),
+            model_name: "claude".into(),
+            provider_family: None,
+        },
+        capture_sink,
+    ));
+    scope_request(scope, async {
+        let label = arm(
+            crate::rendered_request::CaptureScopeKind::Inference,
+            0,
+            0,
+            AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+        )
+        .expect("arm exact inference capture");
+        assert_eq!(label, "inference.1");
+        claim_pending().expect("claim exact inference capture");
+        let sender = current_audit_sender().expect("claimed audit sender");
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 1,
+                fragment: "signature".into(),
+            })
+            .unwrap();
+        drop(reservation);
+        let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(5);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(chrono::Utc::now() >= deadline);
+        assert!(processor
+            .persist_received_partial_turn("persist deadline-expired assistant turn")
+            .await
+            .unwrap());
+    })
+    .await;
 
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
@@ -440,7 +617,7 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
     else {
         panic!("expected a partial closure: {:?}", closing.segment.close);
     };
-    assert_eq!(stream_bytes.len(), 2);
+    assert_eq!(stream_bytes.len(), 3);
     let facts = records
         .iter()
         .map(|row| ObservedSegment {
@@ -448,7 +625,7 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
             segment: &row.segment,
         })
         .collect::<Vec<_>>();
-    let streams = (0..2)
+    let streams = (0..3)
         .map(|stream| {
             reconstruct_stream(
                 &facts,
@@ -462,13 +639,18 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
             .expect("partial extent must reconstruct exactly")
         })
         .collect::<Vec<_>>();
-    assert_eq!(streams.len(), 2);
+    assert_eq!(streams.len(), 3);
     assert!(streams
         .iter()
         .any(|stream| stream.text == "I started by checking the repo layout."));
     assert!(streams
         .iter()
         .any(|stream| stream.text == "Need to inspect directory structure first"));
+    assert!(streams.iter().any(|stream| {
+        stream.text == "partial-signature"
+            && stream.declaration.payload
+                == gents_protocol::output::StreamPayload::ReasoningSignature
+    }));
 
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
@@ -526,7 +708,13 @@ async fn failed_spawn_preplan_closes_owned_prefix_before_propagating_error() {
         None,
     )
     .await;
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
@@ -647,7 +835,13 @@ async fn failed_spawn_preplan_closes_owned_prefix_before_propagating_error() {
     // A second rejected turn exercises the same path after the fixture loses
     // its lease. Its committed prefix may remain open for recovery, but the
     // old owner must not write a closure, header, or tool admission.
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
@@ -808,6 +1002,7 @@ async fn create_pending_request_with_input(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "did:test:test",
                 behavior_id: "general",
                 session_id: "{session_id}",
@@ -1073,8 +1268,13 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .start_provider_attempt(&response_doc_id, 0, 0, "inference.1".parse().unwrap())
         .await;
 
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     let stored_call_id = "OaoTQYzCdoptKiK_mdhBA";
     let model_result_id = "c6b8bdeb-ab92-4481-b763-bdafbd463904";
@@ -1261,8 +1461,13 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
     let notification_request = lifecycle.request().clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -1472,8 +1677,13 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {
@@ -1634,8 +1844,13 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
 
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     hook.set_active_request_lineage(Some(request_id.clone()), None)
         .await
@@ -1792,8 +2007,13 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -1976,8 +2196,13 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {

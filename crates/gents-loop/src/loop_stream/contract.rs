@@ -1,5 +1,68 @@
 use super::*;
 
+use crate::claude_messages_body::{ReplayIssuer, ReplayTag, ReplayWire, ResolvedReplayEvidence};
+
+/// One native row and its independently established canonical provider source.
+/// The tag follows this row through provider-view projection by the projection's
+/// emitted source index, never by provider-generated IDs or equal content.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaggedMessage {
+    pub message: Message,
+    pub source: Option<ReplayTag>,
+    /// Canonical physical header, carried independently of native content.
+    pub physical_header: Option<String>,
+    /// Original physical assistant block positions after provider-view shaping.
+    pub block_indices: Vec<usize>,
+}
+
+impl TaggedMessage {
+    pub fn unassociated(message: Message) -> Self {
+        Self {
+            message,
+            source: None,
+            physical_header: None,
+            block_indices: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplayEvidenceRow {
+    pub tag: ReplayTag,
+    pub evidence: ResolvedReplayEvidence,
+}
+
+/// A deterministic violation of canonical replay provenance. Native owners
+/// preserve this type through contextual errors; storage failures must not be
+/// relabeled as invalid provider input.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ReplayEvidenceViolation(pub String);
+
+/// A native canonical lookup. The returned list deliberately retains zero or
+/// multiple matches so the replay owner can reject missing/ambiguous evidence.
+pub type ReplayEvidenceResolver = Arc<
+    dyn Fn(
+            Vec<ReplayTag>,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ReplayEvidenceRow>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Default)]
+pub struct LoopReplayInput {
+    /// Present only for a persisted request with a real canonical owner.
+    pub request_doc_id: Option<String>,
+    /// Exact built-client route, absent when endpoint identity is unproven.
+    pub issuer: Option<ReplayIssuer>,
+    /// Wire selected by the running loop's actual provider profile.
+    pub wire: Option<ReplayWire>,
+    /// The pending tool round's sources, which a reduction must not
+    /// summarize. Replay selection does not read them.
+    pub required: Vec<ReplayTag>,
+    pub resolve: Option<ReplayEvidenceResolver>,
+}
+
 /// `(turn_index, attempt, request, assembly_trace)`.
 ///
 /// The trace rides alongside the request because the assembled
@@ -21,7 +84,10 @@ pub type RenderedRequestSink = Arc<
 
 #[derive(Clone, Debug)]
 pub struct TurnCompactionRequest {
-    pub messages: Vec<Message>,
+    pub messages: Vec<TaggedMessage>,
+    /// Independent required-current coordinates, checked before persisting
+    /// any reduced provider checkpoint.
+    pub required: Vec<ReplayTag>,
     pub admission: crate::compaction::ReductionAdmission,
     pub turn_index: usize,
     pub prior_reduction_keys: Vec<String>,
@@ -30,10 +96,10 @@ pub struct TurnCompactionRequest {
 #[derive(Clone, Debug)]
 pub enum TurnCompactionOutcome {
     ProviderViewRepaired {
-        messages: Vec<Message>,
+        messages: Vec<TaggedMessage>,
     },
     Reduced {
-        messages: Vec<Message>,
+        messages: Vec<TaggedMessage>,
         reduction_key: String,
     },
     CannotFit,
@@ -97,6 +163,7 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 #[allow(dead_code)]
 pub enum LoopStreamItem<R> {
     Item(MultiTurnStreamItem<R>),
+    ProviderAudit(crate::provider_audit::ProviderAuditObservation),
     ProviderAttemptStarted {
         turn: usize,
         attempt: u32,
@@ -141,6 +208,7 @@ pub struct LoopConfig {
     /// One backend/wire-selected provider projection shared by every budget
     /// decision in this completion loop and its nested compactor.
     pub provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
+    pub replay: LoopReplayInput,
     pub preamble: Option<String>,
     pub context_message: Option<Message>,
     pub temperature: Option<f64>,

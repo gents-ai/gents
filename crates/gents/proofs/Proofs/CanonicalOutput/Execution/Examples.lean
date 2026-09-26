@@ -13,7 +13,7 @@ def transcript : Transcript.TranscriptState :=
   { sessionId := 1, nextSeq := 0, messages := [], toolCalls := [], inFlight := ∅ }
 
 def world (now : Time := 5) (segments : List Segment := []) : World :=
-  { requestId := 10, sessionId := 1, principal := 1, remoteRoutes := [],
+  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1, remoteRoutes := [],
     lease := lease now, segments := segments,
     messages := [], transcript := transcript, delegatedCalls := [], terminalSelection := none }
 

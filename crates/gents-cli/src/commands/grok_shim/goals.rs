@@ -445,7 +445,7 @@ mod tests {
         // the canonical Goal row or depending on a Goal document event.
         for mutation in [
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
-            r#"mutation {create_AgentRequest(input:{request_id:"usage-request",agent_did:"principal",session_id:"session"}) {_docID}}"#,
+            r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",agent_did:"principal",session_id:"session"}) {_docID}}"#,
             r#"mutation {create_InferenceCall(input:{call_id:"usage-call",request_id:"usage-request",agent_did:"principal",prompt_tokens:20,completion_tokens:3}) {_docID}}"#,
         ] {
             ensure_no_errors(&node.execute(mutation).await, "seed completed usage").unwrap();

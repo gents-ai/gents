@@ -758,6 +758,16 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases"
       "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_request_admission_cases"
+      "TitleRequestAdmissionCases"
+      "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_request_purpose_wire_cases"
+      "TitleRequestPurposeWireCases"
+      "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
@@ -917,6 +927,11 @@ def caseCoverage : List CoverageEntry :=
       "inference_registry_cases"
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_usage_cases"
+      "TitleUsageCases"
+      "Model-derived physical-call and historical title-claim inputs cover normal-public versus parent-inclusive totals, late usage after parent terminal, duplicate-call idempotence, conflicting catalog rejection, missing facts, invalid self-binding, and valid foreign-parent exclusion. Native request-purpose, claim provenance and inference-row joins are not bound; no native accounting consumer is claimed.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1534,6 +1549,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases"
       "agent::loop_stream::tests::policy_rejection_settles_pending_call_without_dispatch_election")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage
+      "title_admission_join_cases"
+      "TitleAdmissionJoinCases"
+      "Model-derived row observation and independent title-world inputs exercise admitted direct own-lease claim, exact physical/logical row binding, active normal queue preservation, unavailable retry and invalid preclaim facts. The executable join calls the existing title activation/claim owner and checks non-vacuity, but its exported projections do not serialize a full application trace or bind native materialization, renewal, recovery or output capture.")
+      "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"
@@ -1578,10 +1598,52 @@ def caseCoverage : List CoverageEntry :=
       "gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview"
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "reasoning_audit_cases"
+      "ReasoningAuditCases"
+      "native_output_reconstruction::generated_reasoning_audit_cases_drive_exact_native_prefix"
+      "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "reasoning_signature_cases"
+      "ReasoningSignatureCases"
+      "native_output_reconstruction::generated_reasoning_signature_cases_drive_native_header_validation"
+      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. Invalid UTF-8 is rejected at the byte-to-String adapter boundary because native OutputSegment payload is typed String; this does not establish provider-event capture, durable write admission, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_owned_begin_close_and_publication_guards"
+      "Generated compaction/fallback cases bind claimed append denial, own begin/append, Complete or Partial exact close, stale-writer close replay denial, and nonempty auxiliary publication denial to native request/output owners. Empty-assistant publication is Lean-only because the native encoder rejects that shape. This does not cover title ownership, recovery after crash, or every provider cancellation path.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication"
+      "Generated compaction/fallback cases drive the non-Claude auxiliary sink with typed reasoning, signature, encrypted and redacted observations, then compare durable bytes, exact closure, private audit reconstruction and absent public live/message output to Lean. This does not cover crash durability before sink acknowledgement, title ownership, recovery after crash, or every provider cancellation path.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "native_output_reconstruction::generated_auxiliary_cases_drive_native_audit_and_public_projection"
+      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_claude_wire_start_cases"
+      "PromptAssemblyClaudeWireStartCases"
+      "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
+      "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
       "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
+      "compaction" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "protected_replay_compaction_cases"
+      "ProtectedReplayCompactionCases"
+      "conformance::prompt_assembly::generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint"
+      "Native selection and checkpoint validation retain every independently required signed Claude row before summary. A long required chain may still end in CannotFit at the rebuilt full-request guard; retirement of older requirements is deferred to #1693, not inferred from the retention target. The generated cases do not themselves invoke the summary provider.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "compaction_cursor_cases"
@@ -1638,6 +1700,60 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeThinkingStreamCases"
+      "conformance::prompt_assembly::generated_claude_thinking_stream_cases_drive_native_sse_parser"
+      "Drives the native Claude Messages SSE parser and compares cumulative provisional text and sealed signed/redacted content. The owned loop's persistence and provider continuation are not exercised here.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeThinkingStreamCases"
+      "conformance::prompt_assembly::generated_claude_initial_thinking_text_seals_in_native_accumulator"
+      "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeReplayCases"
+      "conformance::prompt_assembly::generated_claude_replay_cases_drive_native_messages_body"
+      "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyReasoningSuffixCases"
+      "conformance::prompt_assembly::generated_reasoning_suffix_cases_bind_native_selection"
+      "Binds native two-phase selection (provenance suffix, stage assembly, turn location and capture-derived admissible suffix) over the model's row cases and every step of the replay scenarios (compaction, repair, strip-and-retry, tool and issuer changes, interruption, restart, Claude signatures and redaction, Responses ciphertext). Native flattening of real provider bodies is bound by gents-loop replay_frontier tests, not by these cases.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayShapeCases"
+      "conformance::prompt_assembly::generated_replay_shape_cases_bind_source_index_projection"
+      "Binds original-index block shaping and misaligned-sidecar rejection. Complete compaction-history carriage is exercised through native request assembly tests.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyReplayPrefixCases"
+      "conformance::prompt_assembly::generated_replay_prefix_cases_bind_acceptance_checks"
+      "Binds the two capture checks and their agreement with leading-reasoning removal on flat items. Provider acceptance itself is an external premise documented on ReplayFrontier.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeCheckpointCases"
+      "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
+      "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyAssistantOrderCases"
+      "conformance::prompt_assembly::generated_assistant_order_cases_bind_selected_provider_order"
+      "Checks the mode-selected native assistant-content ordering helper. It does not establish that every provider dispatch selects the correct mode.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyModeSanitizeCases"
+      "conformance::prompt_assembly::generated_mode_sanitize_cases_bind_composed_provider_view"
+      "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses. General native reachability and arbitrary transcript premises remain outside this fence.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "rendered_capture_cases"

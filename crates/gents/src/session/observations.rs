@@ -81,7 +81,7 @@ fn scoped_request_filter(
         r#", requester_did: { _eq: null }"#.to_string()
     };
     format!(
-        r#"filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}{requester_filter} }}"#
+        r#"filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
     )
 }
 
@@ -319,7 +319,8 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
             AgentRequest(
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
-                    request_id: {{ _eq: "{escaped_request_id}" }}
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    purpose: {{ _eq: "normal" }}
                 }},
                 limit: 2
             ) {{
@@ -599,7 +600,7 @@ mod observation_refresh_tests {
                 ] {
                     txn.execute_with_variables(
                         "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"request_id": id, "agent_did": agent,
+                        &serde_json::json!({"input": {"request_id": id, "purpose": "normal", "agent_did": agent,
                             "requester_did": requester, "session_id": "head-session", "behavior_id": "head-behavior",
                             "content": "prompt", "created_at": time, "lifecycle_state": "pending"}}),
                     ).await?;
@@ -629,7 +630,7 @@ mod observation_refresh_tests {
             .execute(
                 r#"mutation {
             create_AgentRequest(input: {
-                request_id: "refresh-request", agent_did: "did:test:refresh",
+                request_id: "refresh-request", purpose: "normal", agent_did: "did:test:refresh",
                 session_id: "refresh-session", behavior_id: "refresh-behavior",
                 content: "prompt", created_at: "2030-01-01T00:00:00Z",
                 lifecycle_state: "processing"
@@ -684,6 +685,7 @@ mod observation_refresh_tests {
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                     &serde_json::json!({"input": {
                         "request_id": "refresh-request",
+                        "purpose": "normal",
                         "agent_did": "did:test:refresh",
                         "session_id": "other-session",
                         "behavior_id": "refresh-behavior",

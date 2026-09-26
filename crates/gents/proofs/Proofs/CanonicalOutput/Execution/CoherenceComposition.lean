@@ -10,12 +10,16 @@ namespace CanonicalOutput.Execution
 theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operation)
     (before after : World) (coherent : toolProjectionCoherent before = true)
     (h : Gate.evaluate operation before = .ok after) : toolProjectionCoherent after = true := by
+  have h := Gate.evaluate_success_core operation before after h
   cases operation with
   | renew generation deadline =>
     exact renew_preserves_toolProjectionCoherent before after generation deadline coherent
       (mapError_success Gate.Error.execution _ _ h)
   | append generation record =>
     exact appendRaw_preserves_toolProjectionCoherent before after generation record coherent
+      (mapError_success Gate.Error.execution _ _ h)
+  | closeAuxiliary generation closing =>
+    exact closeAuxiliary_preserves_toolProjectionCoherent before after generation closing coherent
       (mapError_success Gate.Error.execution _ _ h)
   | retract generation record =>
     exact retractBeforeRetry_preserves_toolProjectionCoherent before after generation record coherent
@@ -60,7 +64,7 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
     exact ToolDelivery.publishBackgroundReceipt_success_toolProjectionCoherent before after document closing message
       (mapError_success Gate.Error.delivery _ _ h)
   | compact cursor =>
-    unfold Gate.evaluate at h
+    unfold Gate.evaluateCore at h
     cases hc : Compaction.advanceCursor? before cursor with
     | none => simp [hc] at h
     | some post =>
@@ -161,6 +165,16 @@ theorem Trace.toolProjectionCoherent {before after : World} (trace : Trace befor
       simp [hc] at h
       cases h
       rw [Handover.successful_claim_frame before world actor now activation hc]
+      exact coherent
+  | activateTitle actor now activation scope budget deadline h =>
+    rename_i before after
+    unfold SessionComposition.activateTitle at h
+    cases hc : Handover.claimTitle before actor now activation with
+    | none => simp [hc] at h
+    | some world =>
+      simp [hc] at h
+      cases h
+      rw [Handover.successful_title_claim_frame before world actor now activation hc]
       exact coherent
   | finish actor acknowledged h =>
     rename_i before after

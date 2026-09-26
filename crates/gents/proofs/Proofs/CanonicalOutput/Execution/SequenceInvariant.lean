@@ -72,6 +72,13 @@ theorem appendRaw_preserves_sequenceBound (before after : World) (generation : G
     | (solve | cases hcore; exact hbound)
     | split at hcore
 
+theorem closeAuxiliary_preserves_sequenceBound (before after : World)
+    (generation : Generation) (closing : Segment) (hbound : SequenceBound before)
+    (h : closeAuxiliary before generation closing = .ok after) : SequenceBound after := by
+  rcases closeAuxiliary_success_effect before after generation closing h with rfl | ⟨_, rfl⟩
+  · exact hbound
+  · exact hbound
+
 theorem acceptAndPublish_preserves_sequenceBound
     (before after : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (targets : List RemoteTarget) (admissions : List ToolAdmission)
@@ -417,13 +424,17 @@ theorem Compaction.advanceCursor_preserves_sequenceBound
 theorem Gate.evaluate_preserves_sequenceBound
     (operation : Operation) (before after : World) (hbound : SequenceBound before)
     (h : evaluate operation before = .ok after) : SequenceBound after := by
-  unfold evaluate at h
+  have h := evaluate_success_core operation before after h
+  unfold evaluateCore at h
   cases operation with
   | renew generation deadline =>
       exact renew_preserves_sequenceBound before after generation deadline hbound
         (mapError_success Error.execution _ _ h)
   | append generation record =>
       exact appendRaw_preserves_sequenceBound before after generation record hbound
+        (mapError_success Error.execution _ _ h)
+  | closeAuxiliary generation closing =>
+      exact closeAuxiliary_preserves_sequenceBound before after generation closing hbound
         (mapError_success Error.execution _ _ h)
   | retract generation record =>
       exact retractBeforeRetry_preserves_sequenceBound before after generation record hbound

@@ -143,7 +143,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
         r#"mutation {
-            create_AgentRequest(input: {
+            create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-background",
                 agent_did: "did:test:test",
                 behavior_id: "default",
@@ -156,7 +156,7 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
                 deadline: "2024-01-01T11:30:00Z",
                 retry_count: 0
             }) { _docID }
-            create_AgentRequest(input: {
+            create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-other",
                 agent_did: "did:test:test",
                 behavior_id: "default",

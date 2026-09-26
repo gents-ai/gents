@@ -4,18 +4,25 @@ use gents::session::canonical_rows::{
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
-/// Fetch the rows for a specific set of `(collection, doc_id)` pairs and
-/// return them as a single-collection `ClientStore` patch suitable for
-/// `ObservedStore::merge_snapshot`. Empty `doc_ids` returns an empty store.
-/// Unknown `collection_name` errors so callers can fall back to a scoped
-/// reload.
+pub struct DocumentPatch {
+    pub store: ClientStore,
+    /// Existing auxiliary requests may be intentionally absent from the public
+    /// store; that is not evidence of a deleted document.
+    pub observed_documents: usize,
+}
+
+/// Preserve document existence separately from public projection so auxiliary
+/// facts cannot trigger the observer's authoritative-deletion fallback.
 pub async fn fetch_doc_patch(
     node: &EmbeddedNode,
     collection_name: &str,
     doc_ids: &[&str],
-) -> Result<ClientStore> {
+) -> Result<DocumentPatch> {
     if doc_ids.is_empty() {
-        return Ok(ClientStore::default());
+        return Ok(DocumentPatch {
+            store: ClientStore::default(),
+            observed_documents: 0,
+        });
     }
 
     let in_clause = doc_ids
@@ -196,7 +203,17 @@ pub async fn fetch_doc_patch(
         }
         other => bail!("fetch_doc_patch: unknown collection {other}"),
     }
-    Ok(ClientStore::from_rows(rows))
+    let request_count = rows.requests.len();
+    let store = ClientStore::from_rows(rows);
+    let observed_documents = if collection_name == AGENT_REQUEST_NAME {
+        request_count
+    } else {
+        store.row_count()
+    };
+    Ok(DocumentPatch {
+        store,
+        observed_documents,
+    })
 }
 
 pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {

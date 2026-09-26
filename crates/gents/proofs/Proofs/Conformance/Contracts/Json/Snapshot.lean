@@ -33,6 +33,8 @@ import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
+import Proofs.Conformance.TitleUsage
+import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -225,6 +227,14 @@ def snapshotJson : String :=
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
+    ++ "\"title_request_admission_cases\":"
+      ++ titleRequestAdmissionCasesJson ++ ","
+    ++ "\"title_request_purpose_wire_cases\":"
+      ++ titlePurposeWireCasesJson ++ ","
+    ++ "\"title_usage_cases\":"
+      ++ Conformance.TitleUsage.casesJson ++ ","
+    ++ "\"title_admission_join_cases\":"
+      ++ Conformance.TitleAdmission.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
@@ -451,9 +461,21 @@ def snapshotJson : String :=
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
+    ++ "\"reasoning_audit_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
+    ++ "\"reasoning_signature_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
+    ++ "\"auxiliary_output_cases\":" ++ jsonArray
+      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
+    ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
+      promptAssemblyClaudeWireStartCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
+    ++ "\"prompt_assembly_assistant_order_cases\":"
+      ++ promptAssemblyAssistantOrderCasesJson ++ ","
+    ++ "\"prompt_assembly_mode_sanitize_cases\":"
+      ++ promptAssemblyModeSanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_layer_cases\":"
       ++ promptAssemblyLayerCasesJson ++ ","
     ++ "\"prompt_assembly_repair_cases\":"
@@ -470,6 +492,20 @@ def snapshotJson : String :=
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
     ++ "\"prompt_assembly_claude_stream_cases\":"
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
+      ++ promptAssemblyClaudeThinkingStreamCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_replay_cases\":"
+      ++ promptAssemblyClaudeReplayCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_checkpoint_cases\":"
+    ++ promptAssemblyClaudeCheckpointCasesJson ++ ","
+    ++ "\"prompt_assembly_reasoning_suffix_cases\":"
+    ++ promptAssemblyReasoningSuffixCasesJson ++ ","
+    ++ "\"prompt_assembly_replay_shape_cases\":"
+    ++ promptAssemblyReplayShapeCasesJson ++ ","
+    ++ "\"prompt_assembly_replay_prefix_cases\":"
+    ++ promptAssemblyReplayPrefixCasesJson ++ ","
+    ++ "\"protected_replay_compaction_cases\":"
+    ++ protectedReplayCompactionCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
     ++ "\"rendered_capture_storage_cases\":"

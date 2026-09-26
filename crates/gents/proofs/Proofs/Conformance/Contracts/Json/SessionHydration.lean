@@ -90,6 +90,14 @@ def sourceJson : CanonicalOutput.Source → String
   | .provider scope turn attempt =>
       "{\"kind\":\"provider\",\"scope\":" ++ toString scope ++
         ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
+  | .auxiliary kind scope turn attempt =>
+      "{\"kind\":\"auxiliary\",\"auxiliary_kind\":" ++
+        jsonString (match kind with
+          | .compaction => "compaction"
+          | .compactionFallback => "compaction_fallback"
+          | .title => "title") ++
+        ",\"scope\":" ++ toString scope ++
+        ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
   | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
   | .authored key => "{\"kind\":\"authored\",\"owner\":" ++ toString key ++ "}"
 

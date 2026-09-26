@@ -284,6 +284,7 @@ fn base_request() -> AgentRequest {
 
 fn request(request_id: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),
         agent_did: "did:key:z123".into(),
@@ -350,6 +351,7 @@ async fn insert_incoherent_agent_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{escaped_agent_did}",
                 session_id: "sess-incoherent",
                 behavior_id: "behavior",
@@ -409,6 +411,7 @@ async fn insert_agent_request_row(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
@@ -458,6 +461,7 @@ async fn insert_malformed_agent_request_without_request_id(
 ) -> String {
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
+        purpose: "normal",
         agent_did: "{}", session_id: "{}", content: "malformed",
         lifecycle_state: "pending",
         execution_origin: "interactive", created_at: "2026-03-12T00:00:00Z"
@@ -830,6 +834,7 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "req-owned",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 session_id: "sess-owned",
                 retry_parent_request: "",
@@ -886,6 +891,7 @@ fn canonical_request_row_with_depth(depth: i64) -> gents_protocol::row::AgentReq
     gents_protocol::row::AgentRequestRow {
         doc_id: Some("doc-depth".to_string()),
         request_id: "req-depth".to_string(),
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         agent_did: Some("did:key:z-depth".to_string()),
         session_id: Some("session-depth".to_string()),
         behavior_id: Some("behavior".to_string()),
@@ -911,6 +917,7 @@ fn canonical_request_row_with_lease_secs(
     gents_protocol::row::AgentRequestRow {
         doc_id: Some("doc-lease".to_string()),
         request_id: "req-lease".to_string(),
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         agent_did: Some("did:key:z-lease".to_string()),
         session_id: Some("session-lease".to_string()),
         behavior_id: Some("behavior".to_string()),

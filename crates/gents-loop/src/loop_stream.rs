@@ -27,6 +27,7 @@ use futures::{Stream, StreamExt};
 use gents_protocol::message::{
     AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
+use gents_protocol::output::OutputSource;
 use rig::agent::{MultiTurnStreamItem, StreamingError};
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
@@ -37,6 +38,7 @@ use crate::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::output_obligation::OutputObligationCheck;
+use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
 use crate::stream_processor::AssistantTurnAccumulator;
 use crate::tool_call_lifecycle::runtime::{
@@ -56,12 +58,19 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    LoopConfig, LoopStreamItem, RenderedRequestSink, StructuredOutputConfig, TurnCompactionOutcome,
-    TurnCompactionRequest,
+    LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
+    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
+    TurnCompactionOutcome, TurnCompactionRequest,
 };
-pub use one_shot::{run_loop_to_text, run_loop_to_typed};
+pub use one_shot::{
+    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotProviderFailure,
+};
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
+pub use request_assembly::{
+    assemble_provider_request, provider_view_tagged, replay_compaction_prefix_bound,
+    sanitize_tagged_history, select_tagged_assistant_blocks,
+};
 // Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
 // agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
 // directly, and a cfg(test) item in this crate is invisible to a dependent
@@ -76,8 +85,8 @@ pub use tool_dispatch::dispatch_tool;
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::{
-    build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
-    repair_and_rebuild_request,
+    build_budgeted_request, context_accounting_for_request, message_values,
+    prepare_dispatch_attempt, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
 use turn_threading::{add_usage_saturating, close_streaming_turn};
@@ -97,8 +106,8 @@ pub use aggregate_budget::{
 pub fn run_loop_stream<M, H>(
     model: M,
     hook: Option<H>,
-    prompt: Message,
-    history: Vec<Message>,
+    prompt: TaggedMessage,
+    history: Vec<TaggedMessage>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
 ) -> impl Stream<Item = Result<LoopStreamItem<M::StreamingResponse>, StreamingError>>
@@ -108,33 +117,37 @@ where
     H: SessionHook + 'static,
 {
     try_stream! {
+        let provider_profile = config.provider_input_counter.profile();
+        let mut replay = config.replay.clone();
         // A recovered durable checkpoint is one exact provider projection even
         // though rig's loop API carries its final message separately as the
         // prompt. Sanitize the joined projection before splitting it again so
         // a tool call in history remains paired with a tool result prompt.
         let mut entry_projection = history;
         entry_projection.push(prompt);
-        let mut entry_projection =
-            crate::compaction::sanitize_history_for_provider(entry_projection);
+        let mut entry_projection = sanitize_tagged_history(provider_profile, entry_projection)?;
         let prompt = entry_projection.pop().ok_or_else(|| {
-            StreamingError::Completion(CompletionError::ProviderError(
-                "provider-bound loop entry has no prompt after sanitization".to_string(),
-            ))
+            StreamingError::Completion(CompletionError::RequestError(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "provider-bound loop entry has no prompt after sanitization",
+                ),
+            )))
         })?;
         let history = entry_projection;
         // Prior requests' per-request context rows must not re-enter provider
         // history. The current context is assembled into `new_messages`.
         // Repair may rewrite both vectors in place after provider rejection.
-        let mut history: Vec<Message> = history
+        let mut history: Vec<TaggedMessage> = history
             .into_iter()
-            .filter(|message| !is_request_context_message(message))
+            .filter(|row| !is_request_context_message(&row.message))
             .collect();
         // The running set of messages produced this request. The last element
         // is always the "prompt" for the next turn (rig semantics): initially
         // the user message, later the trailing tool-result user message. The
         // optional per-request context message rides immediately before the
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
-        let mut new_messages: Vec<Message> =
+        let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
@@ -147,7 +160,9 @@ where
         // context, reduction, or repair can make transcript reconstruction
         // differ from the provider input.
         let mut retain_effective_messages_oracle =
-            config.context_message.is_some() || !config.active_reduction_keys.is_empty();
+            config.context_message.is_some()
+                || !config.active_reduction_keys.is_empty()
+                || provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages;
         let mut active_reduction_keys = config.active_reduction_keys.clone();
         let mut reduction_chain_keys = config.reduction_chain_keys.clone();
 
@@ -155,7 +170,7 @@ where
             if current_turn > config.max_turns + 1 {
                 let prompt = new_messages
                     .last()
-                    .cloned()
+                    .map(|row| row.message.clone())
                     .expect("new_messages always retains at least the initial prompt");
                 let chat_history = rig_compat::to_rig_messages(&error_chat_history(
                     &history,
@@ -176,6 +191,7 @@ where
                 &mut new_messages,
                 tools.as_slice(),
                 &config,
+                &mut replay,
                 turn_index,
                 &mut reduction_chain_keys,
                 &mut active_reduction_keys,
@@ -192,13 +208,13 @@ where
 
             let current_prompt = new_messages
                 .last()
-                .cloned()
+                .map(|row| row.message.clone())
                 .expect("new_messages always retains at least the initial prompt");
-            let prior = &new_messages[..new_messages.len() - 1];
+            let prior = message_values(&new_messages[..new_messages.len() - 1]);
 
             if let Some(hook) = hook.as_ref() {
                 let history_snapshot: Vec<Message> =
-                    history.iter().chain(prior.iter()).cloned().collect();
+                    history.iter().map(|row| row.message.clone()).chain(prior.iter().cloned()).collect();
                 if let HookAction::Terminate { reason } =
                     hook.on_completion_call_with_context(
                         &current_prompt,
@@ -234,7 +250,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity) = loop {
+                let (mut stream, activity, mut audit_receiver) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -246,8 +262,11 @@ where
                         // message list: post sanitization, post request-context
                         // filtering, and post any per-turn compaction (which
                         // rewrote both vectors in place).
-                        let effective_messages =
-                            history.iter().chain(new_messages.iter()).cloned().collect();
+                        let effective_messages = history
+                            .iter()
+                            .chain(new_messages.iter())
+                            .map(|row| row.message.clone())
+                            .collect();
                         let assembly_trace = if retain_effective_messages_oracle {
                             AssemblyTrace::from_effective_messages(build_path, effective_messages)
                         } else {
@@ -278,6 +297,8 @@ where
                                 )))
                             })?;
                     }
+                    let audit_receiver =
+                        crate::rendered_request::scope::take_audit_receiver(turn_index, attempt);
 
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
@@ -290,7 +311,7 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity),
+                        Ok(stream) => break (stream, activity, audit_receiver),
                         Err(failure) => {
                             let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
@@ -366,19 +387,21 @@ where
                     }
                 };
 
-            if let Some(scope) = crate::rendered_request::scope::armed_capture_scope(
+            let attempt_capture_scope = if let Some(scope) = crate::rendered_request::scope::armed_capture_scope(
                 turn_index,
                 attempt,
             ) {
+                let capture_scope = scope.parse().map_err(|error| {
+                    StreamingError::Completion(CompletionError::ProviderError(
+                        format!("invalid rendered-request capture scope: {error}"),
+                    ))
+                })?;
                 yield LoopStreamItem::ProviderAttemptStarted {
                     turn: turn_index,
                     attempt,
-                    capture_scope: scope.parse().map_err(|error| {
-                        StreamingError::Completion(CompletionError::ProviderError(
-                            format!("invalid rendered-request capture scope: {error}"),
-                        ))
-                    })?,
+                    capture_scope,
                 };
+                Some(capture_scope)
             } else if hook.is_some() {
                 // Canonical persistence requires the exact input/output join.
                 // Standalone non-persisting loops have no request authority or
@@ -386,7 +409,10 @@ where
                 Err(StreamingError::Completion(CompletionError::ProviderError(
                     "provider attempt has no exact rendered-request capture scope".into(),
                 )))?;
-            }
+                unreachable!("missing capture scope ends the stream")
+            } else {
+                None
+            };
 
             // Accumulate assistant content twice over: `accumulator` builds the
             // assistant message we thread back into `new_messages` for the next
@@ -401,16 +427,64 @@ where
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
-            while let Some(item) = within_provider_idle(
-                stream.next(),
-                config.provider_idle_timeout,
-                activity.as_deref(),
-                !saw_stream_item,
-            )
-            .await
-            .map_or_else(|stall| Some(Err(stall)), |next| {
-                next.map(|item| item.map_err(ProviderAttemptFailure::Completion))
-            }) {
+            loop {
+                let item = loop {
+                    let next_item = within_provider_idle(
+                        stream.next(),
+                        config.provider_idle_timeout,
+                        activity.as_deref(),
+                        !saw_stream_item,
+                    );
+                    tokio::pin!(next_item);
+                    let next = if let Some(receiver) = audit_receiver.as_ref() {
+                        tokio::select! {
+                            biased;
+                            audit = crate::provider_audit::recv_one(receiver) => (Some(audit), None),
+                            item = &mut next_item => (None, Some(item)),
+                        }
+                    } else {
+                        (None, Some(next_item.await))
+                    };
+                    match next {
+                        (Some(Some(observation)), _) => {
+                            if !saw_stream_item {
+                                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            }
+                            saw_stream_item = true;
+                            if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
+                                accumulator.begin_provider_block(index, kind)
+                                    .map_err(|error| StreamingError::Completion(
+                                        CompletionError::ProviderError(error.to_string())
+                                    ))?;
+                            }
+                            yield LoopStreamItem::ProviderAudit(observation);
+                        }
+                        (Some(None), _) => audit_receiver = None,
+                        (_, Some(item)) => break item.map_or_else(
+                            |stall| Some(Err(stall)),
+                            |next| next.map(|item| item.map_err(ProviderAttemptFailure::Completion)),
+                        ),
+                        _ => unreachable!("one selected provider item"),
+                    };
+                };
+                if let Some(receiver) = audit_receiver.as_ref() {
+                    while let Some(observation) =
+                        crate::provider_audit::try_recv_one(receiver)
+                    {
+                        if !saw_stream_item {
+                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                        }
+                        saw_stream_item = true;
+                        if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
+                            accumulator.begin_provider_block(index, kind)
+                                .map_err(|error| StreamingError::Completion(
+                                    CompletionError::ProviderError(error.to_string())
+                                ))?;
+                        }
+                        yield LoopStreamItem::ProviderAudit(observation);
+                    }
+                }
+                let Some(item) = item else { break; };
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
@@ -564,11 +638,21 @@ where
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
+                        accumulator
+                            .push_provider_reasoning(
+                                provider_profile,
+                                rig_compat::from_rig_reasoning(&reasoning),
+                            )
+                            .map_err(|error| StreamingError::Completion(
+                                CompletionError::RequestError(Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,
+                                    error.to_string(),
+                                ))),
+                            ))?;
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning)));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        accumulator.push_reasoning_delta(id.clone(), &reasoning);
+                        accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
@@ -640,6 +724,7 @@ where
                     &mut new_messages,
                     &mut accumulator,
                     stream.message_id.clone(),
+                    None,
                     pending_results,
                 ) {
                     yield item;
@@ -650,7 +735,7 @@ where
 
             if crate::execution_policy::provider_eof_is_failure(saw_final_usage_event) {
                 for item in close_streaming_turn(
-                    &mut new_messages, &mut accumulator, stream.message_id.clone(), pending_results,
+                    &mut new_messages, &mut accumulator, stream.message_id.clone(), None, pending_results,
                 ) {
                     yield item;
                 }
@@ -682,6 +767,7 @@ where
                     &mut new_messages,
                     &mut accumulator,
                     stream.message_id.clone(),
+                    None,
                     pending_results,
                 ) {
                     yield item;
@@ -788,11 +874,52 @@ where
             if let Message::Assistant { id, .. } = &mut accepted_message {
                 *id = stream.message_id.clone();
             }
+            let accepted_reasoning = match &accepted_message {
+                Message::Assistant { content, .. } =>
+                    crate::claude_messages_body::reasoning_witness(content),
+                _ => Vec::new(),
+            };
             yield LoopStreamItem::ProviderTurnReady {
                 turn: turn_index,
                 attempt,
                 message: accepted_message,
             };
+            // The consumer has now accepted the provider turn. Only then may
+            // its exact physical capture coordinate enter the next provider
+            // input. Evidence is read from the canonical owner, not from the
+            // mutable accumulator whose content is about to be threaded.
+            let accepted_source = match (hook.is_some(), replay.request_doc_id.as_ref(), attempt_capture_scope) {
+                (true, Some(request_doc_id), Some(scope)) => {
+                    let turn_index = u32::try_from(turn_index).map_err(|_| {
+                        StreamingError::Completion(CompletionError::RequestError(Box::new(
+                            std::io::Error::new(std::io::ErrorKind::InvalidInput, "provider turn index exceeds canonical coordinate"),
+                        )))
+                    })?;
+                    Some(crate::claude_messages_body::ReplayTag {
+                        request_doc_id: request_doc_id.clone(),
+                        source: OutputSource::ProviderTurn { scope, turn_index, attempt },
+                    })
+                }
+                (false, _, _) => None,
+                _ if provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages => {
+                    Err(StreamingError::Completion(CompletionError::RequestError(Box::new(
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "persisted Claude provider turn lacks a canonical replay coordinate"),
+                    ))))?
+                }
+                _ => None,
+            };
+            if provider_profile == crate::provider_input::ProviderInputProfile::ClaudeMessages
+                && !pending_calls.is_empty()
+                && !accepted_reasoning.is_empty()
+            {
+                let tag = accepted_source.as_ref().ok_or_else(|| {
+                    StreamingError::Completion(CompletionError::RequestError(Box::new(
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput,
+                            "documentless Claude thinking cannot continue to another provider turn"),
+                    )))
+                })?;
+                replay.required.push(tag.clone());
+            }
 
             for (tool_call, internal_call_id) in pending_calls {
                 let tool_name = tool_call.function.name.clone();
@@ -803,6 +930,7 @@ where
                         &mut new_messages,
                         &mut accumulator,
                         stream.message_id.clone(),
+                        accepted_source.clone(),
                         pending_results,
                     ) {
                         yield item;
@@ -859,6 +987,7 @@ where
                             &mut new_messages,
                             &mut accumulator,
                             stream.message_id.clone(),
+                            accepted_source.clone(),
                             pending_results,
                         ) {
                             yield item;
@@ -975,6 +1104,7 @@ where
                         &mut new_messages,
                         &mut accumulator,
                         stream.message_id.clone(),
+                        accepted_source.clone(),
                         pending_results,
                     ) {
                         yield item;
@@ -998,12 +1128,17 @@ where
                             if let Message::Assistant { id, .. } = &mut assistant_message {
                                 *id = stream.message_id.clone();
                             }
-                            new_messages.push(assistant_message);
+                            new_messages.push(TaggedMessage {
+                                message: assistant_message,
+                                source: accepted_source.clone(),
+                                physical_header: None,
+                                block_indices: Vec::new(),
+                            });
                         }
                         let reminder = Message::user(
                             crate::output_obligation::continuation_message(&unmet),
                         );
-                        new_messages.push(reminder.clone());
+                        new_messages.push(TaggedMessage::unassociated(reminder.clone()));
                         yield LoopStreamItem::OutputObligationPending { reminder };
                         continue 'turns;
                     }
@@ -1016,6 +1151,7 @@ where
                 &mut new_messages,
                 &mut accumulator,
                 stream.message_id.clone(),
+                accepted_source,
                 pending_results,
             ) {
                 yield item;
@@ -1058,8 +1194,12 @@ fn terminal_pre_stream_retry_reason(
     }
 }
 
-fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
-    history.iter().chain(new_messages.iter()).cloned().collect()
+fn error_chat_history(history: &[TaggedMessage], new_messages: &[TaggedMessage]) -> Vec<Message> {
+    history
+        .iter()
+        .chain(new_messages.iter())
+        .map(|row| row.message.clone())
+        .collect()
 }
 
 fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) -> String {
@@ -1105,17 +1245,11 @@ pub async fn build_request<M: CompletionModel>(
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let chat_history: Vec<rig::completion::Message> = config
-        .preamble
-        .as_ref()
-        .map(|preamble| rig::completion::Message::system(preamble.clone()))
-        .into_iter()
-        .chain(history.iter().map(rig_compat::to_rig_message))
-        .chain(prior.iter().map(rig_compat::to_rig_message))
-        .collect();
+    let mut chat_history = assemble_rig_chat_history(config, &prompt, history, prior);
+    let rig_prompt = chat_history.pop().expect("assembled prompt is last");
 
     let mut builder = model
-        .completion_request(rig_compat::to_rig_message(&prompt))
+        .completion_request(rig_prompt)
         .messages(chat_history)
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
@@ -1133,4 +1267,45 @@ pub async fn build_request<M: CompletionModel>(
     }
 
     Ok(builder.build())
+}
+
+fn assemble_rig_chat_history(
+    config: &LoopConfig,
+    prompt: &Message,
+    history: &[Message],
+    prior: &[Message],
+) -> Vec<rig::completion::Message> {
+    config
+        .preamble
+        .as_ref()
+        .map(|preamble| rig::completion::Message::system(preamble.clone()))
+        .into_iter()
+        .chain(history.iter().map(rig_compat::to_rig_message))
+        .chain(prior.iter().map(rig_compat::to_rig_message))
+        .chain(std::iter::once(rig_compat::to_rig_message(prompt)))
+        .collect()
+}
+
+fn replace_core_chat_history(
+    request: &mut CompletionRequest,
+    config: &LoopConfig,
+    history: &[TaggedMessage],
+    new_messages: &[TaggedMessage],
+) {
+    let prompt = &new_messages
+        .last()
+        .expect("new messages retain a prompt")
+        .message;
+    let prior = new_messages[..new_messages.len() - 1]
+        .iter()
+        .map(|row| row.message.clone())
+        .collect::<Vec<_>>();
+    let history = history
+        .iter()
+        .map(|row| row.message.clone())
+        .collect::<Vec<_>>();
+    request.chat_history = rig::one_or_many::OneOrMany::many(assemble_rig_chat_history(
+        config, prompt, &history, &prior,
+    ))
+    .expect("assembled prompt makes chat history nonempty");
 }

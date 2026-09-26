@@ -15,6 +15,7 @@ fn context() -> RenderedRequestContext {
         behavior_id: "behavior".to_string(),
         session_id: "session".to_string(),
         model_name: "test-model".to_string(),
+        provider_family: None,
     }
 }
 
@@ -46,6 +47,7 @@ fn build(
         "inference.1",
         RenderedRequestSource::OpenAiChatCompletions,
         Some("https://api.example.test".to_string()),
+        None,
         turn_index,
         attempt,
         trace,

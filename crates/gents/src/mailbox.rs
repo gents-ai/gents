@@ -1229,7 +1229,7 @@ mod tests {
         .unwrap();
         let event_child = format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "mailbox-observer-child", agent_did: "did:test:agent",
+                request_id: "mailbox-observer-child", purpose: "normal", agent_did: "did:test:agent",
                 requester_did: "did:test:owner", behavior_id: "operator",
                 session_id: "session-1", content: "observe",
                 lifecycle_state: "pending", execution_origin: "scheduled",
@@ -1261,7 +1261,7 @@ mod tests {
             .unwrap();
         let create_request = format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "mailbox-request", agent_did: "did:test:agent",
+                request_id: "mailbox-request", purpose: "normal", agent_did: "did:test:agent",
                 requester_did: "did:test:owner", behavior_id: "operator",
                 session_id: "session-1", content: "continue",
                 lifecycle_state: "pending", execution_origin: "interactive",
@@ -1288,6 +1288,7 @@ mod tests {
         .unwrap();
         let unrelated_request = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "transport-only",
+                purpose: "normal",
                 agent_did: "did:test:agent", requester_did: "did:test:owner",
                 behavior_id: "operator", session_id: "session-1", content: "draft",
                 caused_by_source_doc_id: "{}", created_at: "{}" }}) {{ _docID }} }}"#,

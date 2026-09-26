@@ -167,6 +167,7 @@ impl Fixture {
         )
         .await;
         let mut request = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             id,
             self.identity.did(),
             self.identity.did(),

@@ -841,7 +841,7 @@ mod tests {
 
     async fn published_parent_bridge(node: &std::sync::Arc<EmbeddedNode>) -> (String, String) {
         let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", retry_parent_request: "", retry_root_request: "parent", superseded_by_request: "", content: "Parent request", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "parent", purpose: "normal", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", retry_parent_request: "", retry_root_request: "parent", superseded_by_request: "", content: "Parent request", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node
             .execute(&format!(

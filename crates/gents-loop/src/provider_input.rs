@@ -19,6 +19,8 @@ use crate::openai_wire::OpenAiWireApi;
 #[path = "provider_input_budget.rs"]
 pub mod budget;
 
+pub mod replay_frontier;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderInputProfile {
     OpenAiChatCompletions,
@@ -32,6 +34,19 @@ pub enum ProviderInputProfile {
 }
 
 impl ProviderInputProfile {
+    /// The wire on which this profile replays reasoning; Chat Completions
+    /// carries none.
+    pub fn replay_wire(self) -> Option<crate::claude_messages_body::ReplayWire> {
+        use crate::claude_messages_body::ReplayWire;
+        match self {
+            Self::ClaudeMessages => Some(ReplayWire::ClaudeMessages),
+            Self::OpenAiResponsesNormalized | Self::ChatGptCodexResponses | Self::XaiResponses => {
+                Some(ReplayWire::Responses)
+            }
+            Self::OpenAiChatCompletions | Self::OpenRouterChatCompletions => None,
+        }
+    }
+
     pub fn resolve(provider: BackendProviderKind, wire: OpenAiWireApi) -> Self {
         match (provider, wire) {
             (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions)
@@ -153,7 +168,7 @@ impl ProviderInputCounter {
                 rewrite_bytes(body, crate::provider_patches::patch_store_false)?
             }
             ProviderInputProfile::ClaudeMessages => {
-                crate::claude_messages_body::build_messages_body(&self.model, request)
+                crate::claude_messages_body::build_messages_body(&self.model, request)?
             }
         };
         Ok(body)
@@ -170,10 +185,7 @@ impl ProviderInputCounter {
     #[cfg(not(feature = "native"))]
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
-            return Ok(crate::claude_messages_body::build_messages_body(
-                &self.model,
-                request,
-            ));
+            return crate::claude_messages_body::build_messages_body(&self.model, request);
         }
         let mut body = serde_json::json!({
             "model": request.model.clone().unwrap_or_else(|| self.model.clone()),

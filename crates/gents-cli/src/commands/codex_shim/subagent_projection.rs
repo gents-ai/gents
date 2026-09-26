@@ -477,20 +477,19 @@ fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -
             )
         })
         .unwrap_or_default();
+    let scope = gents::session::public_request_filter(&format!(
+        r#"agent_did: {{ _eq: "{}" }}, behavior_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, execution_origin: {{ _eq: "interactive" }}{session_filter}"#,
+        escape_graphql_string(&state.agent_did),
+        escape_graphql_string(&state.behavior_id),
+        escape_graphql_string(&state.agent_did),
+    ));
     format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    behavior_id: {{ _eq: "{behavior_id}" }},
-                    requester_did: {{ _eq: "{agent_did}" }},
-                    execution_origin: {{ _eq: "interactive" }}{session_filter}
-                }},
+                filter: {{ {scope} }},
                 order: {{ created_at: ASC }}
             ) {{ {REQUEST_ROW_FIELDS} }}
         }}"#,
-        agent_did = escape_graphql_string(&state.agent_did),
-        behavior_id = escape_graphql_string(&state.behavior_id),
     )
 }
 
@@ -500,11 +499,11 @@ fn requests_for_sessions_query(scopes: &[RequestContextKey]) -> String {
         .map(|scope| {
             format!(
                 "{{{}}}",
-                gents::session::session_scope_filter(
+                gents::session::public_request_filter(&gents::session::session_scope_filter(
                     &scope.agent_did,
                     &scope.session_id,
                     scope.requester_did.as_deref()
-                )
+                ))
             )
         })
         .collect::<Vec<_>>()
@@ -1047,6 +1046,7 @@ mod tests {
         let did = identity.did().to_owned();
         let create = gents::build_signed_request(
             gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "local-root".into(),
                     agent_did: did.clone(),

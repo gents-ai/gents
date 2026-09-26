@@ -96,7 +96,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        prompt.clone(),
+        TaggedMessage::unassociated(prompt.clone()),
         Vec::new(),
         Arc::new(Vec::new()),
         owned_config(0),
@@ -115,8 +115,14 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     let (collected, ()) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(
             async {
-                let collected =
-                    collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+                let collected = collect_owned_scripted_stream(
+                    stream,
+                    &hook,
+                    &writer,
+                    &mut lifecycle,
+                    gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+                )
+                .await;
                 assert_eq!(collected.error, None, "{}", case.name);
                 assert!(
                     !model.seen_requests().await.is_empty(),
@@ -207,8 +213,11 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        result,
-        vec![call],
+        TaggedMessage::unassociated(result),
+        (vec![call])
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect(),
         Arc::new(Vec::new()),
         config(0),
     ))
@@ -326,7 +335,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("run the tools"),
+        TaggedMessage::unassociated(Message::user("run the tools")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         config(4),
@@ -407,8 +416,11 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("continue"),
-        dirty_history,
+        TaggedMessage::unassociated(Message::user("continue")),
+        (dirty_history)
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect(),
         Arc::new(Vec::new()),
         config(1),
     );
@@ -451,16 +463,64 @@ fn assembles_context_immediately_before_prompt() {
     let context = Message::user("<context>\nseat: x\n</context>");
     let prompt = Message::user("hello");
 
-    let with_context = super::assemble_new_messages(Some(context.clone()), prompt.clone());
+    let with_context = super::assemble_new_messages(
+        Some(context.clone()),
+        TaggedMessage::unassociated(prompt.clone()),
+    );
     assert_eq!(with_context.len(), 2);
-    assert!(super::is_request_context_message(&with_context[0]));
-    assert_eq!(with_context[1], prompt);
+    assert!(super::is_request_context_message(&with_context[0].message));
+    assert_eq!(with_context[1].message, prompt);
+    assert!(with_context.iter().all(|row| row.source.is_none()));
     // Context is the immediately-preceding entry before the prompt.
-    assert_eq!(&with_context[with_context.len() - 2], &context);
+    assert_eq!(&with_context[with_context.len() - 2].message, &context);
 
     // Without a context message, the prompt is the sole (last) entry.
-    let without = super::assemble_new_messages(None, prompt.clone());
-    assert_eq!(without, vec![prompt]);
+    let without = super::assemble_new_messages(None, TaggedMessage::unassociated(prompt.clone()));
+    assert_eq!(without, vec![TaggedMessage::unassociated(prompt)]);
+}
+
+#[test]
+fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
+    use gents_loop::claude_messages_body::ReplayTag;
+    use gents_protocol::output::OutputSource;
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let tag = |seq| ReplayTag {
+        request_doc_id: "request-doc".to_string(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq,
+            },
+            turn_index: seq as u32,
+            attempt: 0,
+        },
+    };
+    let first = tag(1);
+    let second = tag(2);
+    let identical = Message::assistant("same native bytes");
+    let projected = super::provider_view_tagged(
+        crate::provider_input::ProviderInputProfile::ClaudeMessages,
+        vec![
+            TaggedMessage {
+                message: identical.clone(),
+                source: Some(first.clone()),
+                physical_header: None,
+                block_indices: Vec::new(),
+            },
+            TaggedMessage::unassociated(Message::user("between")),
+            TaggedMessage {
+                message: identical,
+                source: Some(second.clone()),
+                physical_header: None,
+                block_indices: Vec::new(),
+            },
+        ],
+    )
+    .expect("source-indexed projection");
+    assert_eq!(projected[0].source.as_ref(), Some(&first));
+    assert_eq!(projected[2].source.as_ref(), Some(&second));
+    assert_eq!(projected[0].message, projected[2].message);
 }
 
 #[test]
@@ -531,12 +591,19 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        Message::user("describe list_hosts"),
+        TaggedMessage::unassociated(Message::user("describe list_hosts")),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
 
     // (a) The intended call ran: salvage recovered `tool_name: list_hosts`.
@@ -608,12 +675,19 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        Message::user("describe"),
+        TaggedMessage::unassociated(Message::user("describe")),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(
         collected.error.is_none(),
         "non-object args must be notified, not raised: {:?}",
@@ -716,8 +790,11 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
-        history,
+        TaggedMessage::unassociated(Message::user("hi")),
+        (history)
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect(),
         Arc::new(Vec::new()),
         config(0),
     );
@@ -818,7 +895,9 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
             LayeredPromptBuilder::for_behavior("system prompt", "fence", &["bash"], false, &[]);
 
         let conversation = (0..case.conversation_len)
-            .map(|index| Message::user(format!("conversation-{index}")))
+            .map(|index| {
+                TaggedMessage::unassociated(Message::user(format!("conversation-{index}")))
+            })
             .collect::<Vec<_>>();
         let summaries = (0..case.summary_count)
             .map(|index| format!("summary-{index}"))
@@ -832,9 +911,15 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
             .await
             .expect("build layered prompt");
 
-        let mut assembled = skill_reminders;
+        let mut assembled = skill_reminders
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect::<Vec<_>>();
         assembled.extend(built.messages);
-        assembled.extend(super::assemble_new_messages(None, Message::user("prompt")));
+        assembled.extend(super::assemble_new_messages(
+            None,
+            TaggedMessage::unassociated(Message::user("prompt")),
+        ));
 
         // The preamble is a field on the completion request, not a message.
         assert!(
@@ -846,7 +931,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
         let assembled_len = assembled.len();
         for (position, message) in assembled.iter().enumerate() {
             slots.push(classify_slot(
-                message,
+                &message.message,
                 position + 1 == assembled_len,
                 &mut conversation_index,
             ));
@@ -931,11 +1016,21 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
             })],
         },
     ];
+    let mut history = history
+        .into_iter()
+        .map(TaggedMessage::unassociated)
+        .collect();
     let mut new_messages = Vec::new();
-    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
+    super::repair_provider_input(
+        crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        &mut history,
+        &mut new_messages,
+    )
+    .unwrap();
     let repaired = history
         .iter()
         .chain(new_messages.iter())
+        .map(|row| &row.message)
         .collect::<Vec<_>>();
     let [Message::Assistant { content, .. }, Message::User { .. }] = repaired.as_slice() else {
         panic!("repair must rewrite payloads only, never rows: {repaired:?}");
@@ -970,18 +1065,46 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
             })],
         })],
     }];
+    let mut history = history
+        .into_iter()
+        .map(TaggedMessage::unassociated)
+        .collect();
+    let mut new_messages = new_messages
+        .into_iter()
+        .map(TaggedMessage::unassociated)
+        .collect();
 
-    super::repair_provider_input(&mut history, &mut new_messages).unwrap();
+    super::repair_provider_input(
+        crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        &mut history,
+        &mut new_messages,
+    )
+    .unwrap();
 
-    assert!(matches!(history.as_slice(), [Message::Assistant { .. }]));
-    assert!(matches!(new_messages.as_slice(), [Message::User { .. }]));
+    assert!(matches!(
+        history.as_slice(),
+        [TaggedMessage {
+            message: Message::Assistant { .. },
+            ..
+        }]
+    ));
+    assert!(matches!(
+        new_messages.as_slice(),
+        [TaggedMessage {
+            message: Message::User { .. },
+            ..
+        }]
+    ));
     let joined = history
         .iter()
         .chain(new_messages.iter())
-        .cloned()
+        .map(|row| row.message.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        crate::compaction::sanitize_history_for_provider(joined.clone()),
+        crate::compaction::sanitize_history_for_provider(
+            crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+            joined.clone(),
+        ),
         joined,
         "repair must retain the closed pair across rig's carrier boundary"
     );

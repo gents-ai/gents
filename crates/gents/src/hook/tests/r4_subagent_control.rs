@@ -172,6 +172,7 @@ async fn seed_signed_child_queue_request(
 
     let did = db.node_identity.did();
     let mut request = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         did,
         did,

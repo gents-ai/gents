@@ -132,6 +132,7 @@ async fn fixture_with_http(
         content: "active".into(),
         max_total_tokens: None,
         input: Default::default(),
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         execution_origin: Some("interactive".into()),
         created_at: "2026-09-01T00:00:00Z".into(),
         deadline: None,

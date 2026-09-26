@@ -65,7 +65,7 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
         .await
         .expect("fetch_doc_patch");
     assert_eq!(
-        patch.transcript_messages.len(),
+        patch.store.transcript_messages.len(),
         1,
         "expected exactly one row"
     );
@@ -191,8 +191,8 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
     let patch = fetch_doc_patch(node.as_ref(), MAILBOX_ITEM_NAME, &[doc_id])
         .await
         .expect("mailbox patch");
-    assert_eq!(patch.mailbox_items.len(), 1);
-    assert_eq!(patch.mailbox_items[0].title, "Live item");
+    assert_eq!(patch.store.mailbox_items.len(), 1);
+    assert_eq!(patch.store.mailbox_items[0].title, "Live item");
     assert!(supports_doc_patch_collection(MAILBOX_ITEM_NAME));
 }
 
@@ -206,6 +206,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     let mutation = r#"mutation {
         first_request: create_AgentRequest(input: {
             request_id: "req-selected",
+            purpose: "normal",
             agent_did: "did:test:agent",
             behavior_id: "default",
             session_id: "sess-selected",
@@ -216,6 +217,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         }) { _docID }
         second_request: create_AgentRequest(input: {
             request_id: "req-unrelated",
+            purpose: "normal",
             agent_did: "did:test:agent",
             behavior_id: "default",
             session_id: "sess-unrelated",
@@ -266,4 +268,82 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .await
         .expect("terminal selected chat patch");
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
+}
+
+#[tokio::test]
+async fn title_request_patch_preserves_existence_without_public_projection() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = gents::ConfigAccess::Local(node.clone());
+    access
+        .write(
+            "test.title_request_patch",
+            r#"mutation {
+                normal: create_AgentRequest(input: {
+                    request_id: "patch-normal",
+                    purpose: "normal",
+                    agent_did: "did:test:agent",
+                    behavior_id: "default",
+                    session_id: "patch-session",
+                    content: "normal request",
+                    lifecycle_state: "completed",
+                    execution_origin: "interactive",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+                title: create_AgentRequest(input: {
+                    request_id: "patch-title",
+                    purpose: "title-audit",
+                    agent_did: "did:test:agent",
+                    behavior_id: "default",
+                    session_id: "patch-session",
+                    content: "title audit",
+                    lifecycle_state: "completed",
+                    execution_origin: "interactive",
+                    created_at: "2026-07-24T00:00:01Z"
+                }) { _docID }
+            }"#,
+        )
+        .await
+        .expect("seed title and normal request rows");
+    let rows = access
+        .execute("{ AgentRequest(filter: {session_id: {_eq: \"patch-session\"}}) { _docID request_id purpose } }")
+        .await
+        .expect("read exact request identities");
+    let rows = rows["data"]["AgentRequest"].as_array().unwrap();
+    let id = |request_id: &str| {
+        rows.iter()
+            .find(|row| row["request_id"] == request_id)
+            .and_then(|row| row["_docID"].as_str())
+            .expect("created request physical ID")
+    };
+    let normal_id = id("patch-normal");
+    let title_id = id("patch-title");
+    let title_only = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[title_id])
+        .await
+        .expect("title-only patch");
+    assert_eq!(title_only.observed_documents, 1);
+    assert!(title_only.store.requests.is_empty());
+
+    let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
+        .await
+        .expect("mixed patch");
+    assert_eq!(mixed.observed_documents, 2);
+    assert_eq!(mixed.store.requests.len(), 1);
+    assert_eq!(mixed.store.requests[0].request_id, "patch-normal");
+
+    let missing = fetch_doc_patch(
+        node.as_ref(),
+        AGENT_REQUEST_NAME,
+        &[title_id, "physically-absent-request"],
+    )
+    .await
+    .expect("mixed present/missing patch");
+    assert_eq!(missing.observed_documents, 1);
+    assert!(missing.store.requests.is_empty());
+    assert!(
+        missing.observed_documents < 2,
+        "the observer's missing-document predicate must distinguish this batch"
+    );
 }

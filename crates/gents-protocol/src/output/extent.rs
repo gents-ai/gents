@@ -3,7 +3,7 @@
 //! fail rather than yielding a shorter prefix. Closure authority and uniqueness
 //! remain with the caller; this validator accounts for the complete data extent.
 use super::reconstruction::{ObservedSegment, ReconstructedStream};
-use super::{OutputSource, OutputWriter, ReconstructionError};
+use super::{OutputSource, OutputWriter, ReconstructionError, StreamPayload};
 use chrono::DateTime;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,7 +128,11 @@ pub fn inspect_open_source(
                 .ok_or_else(|| bad("runs split UTF-8 or exceed payload"))?;
             if let Some(decl) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((decl.block_index, decl.part_index))
+                    || !positions.insert((
+                        decl.block_index,
+                        decl.part_index,
+                        matches!(decl.payload, StreamPayload::ReasoningSignature),
+                    ))
                 {
                     return Err(bad(
                         "stream declarations are not dense or positions conflict",

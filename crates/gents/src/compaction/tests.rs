@@ -13,8 +13,11 @@ use super::*;
 use crate::ensure_runtime_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::provider_input::budget::can_dispatch;
+use crate::provider_input::ProviderInputProfile;
 use crate::session;
 use crate::test_support::first_content;
+
+const GROUPED_PROFILE: ProviderInputProfile = ProviderInputProfile::OpenAiChatCompletions;
 
 fn text_msg(role: &str, text: &str) -> Message {
     match role {
@@ -149,6 +152,7 @@ fn generated_reduction_engine_cases_drive_shared_decision_outcome() {
 /// accidentally supply behavior that the constructor is meant to own.
 fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -285,7 +289,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
         tool_result_msg("call-A", "A-result"),
     ];
 
-    let out = super::history::normalize_assistant_content_order(messages);
+    let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages);
 
     let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
         Message::Assistant { id, content } => (
@@ -348,7 +352,7 @@ fn normalize_assistant_content_order_is_identity_when_already_ordered() {
         },
         tool_result_msg("call-A", "A-result"),
     ];
-    let out = super::history::normalize_assistant_content_order(messages.clone());
+    let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages.clone());
     assert_eq!(out, messages);
 }
 
@@ -472,7 +476,7 @@ fn sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call() {
         tool_result_msg("call-A", "late result"),
     ];
 
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert_eq!(
         out,
         vec![text_msg("assistant", "No tool result arrived.")],
@@ -496,7 +500,7 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
         },
         tool_result_msg("call-A", "A-result"),
     ];
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert_eq!(
         out.len(),
         2,
@@ -519,7 +523,7 @@ fn sanitize_repairs_result_preceding_its_call() {
             content: vec![tool_call_content("call-A")],
         },
     ];
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert!(
         out.is_empty(),
         "result-before-call must sanitize to empty (orphan and unpaired both dropped); got {out:?}"
@@ -1270,7 +1274,7 @@ async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
     ];
     let counter = config.provider_input_counter.as_ref();
     let original_tokens = counter.estimate_message_request(&messages).unwrap();
-    let stripped_messages = provider_view(messages.clone()).0;
+    let stripped_messages = provider_view(GROUPED_PROFILE, messages.clone()).0;
     let stripped_tokens = counter
         .estimate_message_request(&stripped_messages)
         .unwrap();
@@ -1600,8 +1604,55 @@ fn summary_worthy_messages() -> Vec<Message> {
         .collect()
 }
 
+#[test]
+fn protected_split_does_not_treat_retention_target_as_context_ceiling() {
+    let messages = summary_worthy_messages();
+    let counter = crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    );
+    let (old, recent) =
+        gents_loop::compaction::history::split_messages_for_summary_with_counter_bounded(
+            messages,
+            0,
+            &counter,
+            Some(1),
+        )
+        .expect("nonempty protected historical prefix is still summarizable");
+    assert_eq!(old.len(), 1);
+    assert_eq!(recent.len(), 23);
+    assert!(counter.estimate_message_request(&recent).unwrap() > 0);
+}
+
+#[tokio::test]
+async fn protected_zero_prefix_rejects_before_summary_provider_call() {
+    let model = CountingFailModel::new();
+    let calls = model.calls();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), scheduled_origin_config());
+    let error = compactor
+        .reduce(
+            summary_worthy_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 50,
+                mode: ReductionMode::Summarize,
+                max_compacted_prefix_messages: Some(0),
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect_err("required first row leaves no summarizable historical prefix");
+    assert!(error
+        .downcast_ref::<ReductionError>()
+        .is_some_and(|error| matches!(error, ReductionError::CannotFit)));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -1900,10 +1951,14 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 /// its own capture scope so their rendered-request keys remain distinct.
 #[tokio::test(start_paused = true)]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
+    use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::rendered_request::scope::{
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
-    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+    use crate::rendered_request::RenderedRequestCaptureSink;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
 
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::malformed_summary_turn(),
@@ -1921,20 +1976,88 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     ));
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let keys = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(keys.path().join("compaction.key"), None).unwrap();
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        uuid::Uuid::new_v4().to_string(),
+        identity.did(),
+        identity.did(),
+        "general",
+        uuid::Uuid::new_v4().to_string(),
+        "compaction scope fixture",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    let created = crate::config_client::ConfigAccess::write_local_response(
+        node.as_ref(),
+        "test.compaction.capture_scope_request",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let loaded = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ),
+        "load compaction capture fixture",
+    )
+    .await
+    .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&loaded, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        identity.did(),
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        identity.did(),
+        std::time::Duration::from_millis(1),
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
-    let scope = test_scope(
-        RenderedRequestContext {
-            request_doc_id: "doc-1".to_string(),
-            request_commit_cid: "bafy-request-commit".to_string(),
-            request_id: "req-1".to_string(),
-            agent_did: "did:key:agent".to_string(),
-            requester_did: String::new(),
-            behavior_id: "behavior".to_string(),
-            session_id: "session-1".to_string(),
-            model_name: "model".to_string(),
-        },
+    let mut scope = test_scope(
+        crate::rendered_request::context_for_claimed_request(
+            lifecycle.request(),
+            lifecycle.request_commit_cid().unwrap(),
+            "model".to_string(),
+            None,
+        ),
         sink,
     );
+    Arc::get_mut(&mut scope)
+        .unwrap()
+        .set_auxiliary_output_sink(writer.auxiliary_output_sink(
+            lifecycle.request().clone(),
+            lifecycle.execution_generation().unwrap().to_owned(),
+            GROUPED_PROFILE,
+        ));
 
     let labels = scope_request(scope, async move {
         compactor
@@ -2536,8 +2659,8 @@ fn provider_view_is_idempotent() {
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
     ];
-    let (once, _) = provider_view(history);
-    let (twice, _) = provider_view(once.clone());
+    let (once, _) = provider_view(GROUPED_PROFILE, history);
+    let (twice, _) = provider_view(GROUPED_PROFILE, once.clone());
     assert_eq!(once, twice);
 }
 
@@ -2556,7 +2679,7 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
         text_msg("user", "second turn"),
     ];
 
-    let (view, _) = provider_view(history.clone());
+    let (view, _) = provider_view(GROUPED_PROFILE, history.clone());
     assert_eq!(
         view.len(),
         5,
@@ -2575,7 +2698,7 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
 
     // The next request rebuilds the view from the same durable history and
     // drops the same count. It must land on exactly the retained rows.
-    let (reread, _) = provider_view(history.clone());
+    let (reread, _) = provider_view(GROUPED_PROFILE, history.clone());
     assert_eq!(
         reread.into_iter().skip(compacted).collect::<Vec<_>>(),
         retained
@@ -2587,8 +2710,10 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
     // summarized turn, so "first real turn" survives verbatim alongside its own
     // summary.
     let (stripped, _) = strip_tool_results(history);
-    let old_order =
-        sanitize_history_for_provider(stripped.into_iter().skip(compacted).collect::<Vec<_>>());
+    let old_order = sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        stripped.into_iter().skip(compacted).collect::<Vec<_>>(),
+    );
     assert_eq!(
         old_order.len(),
         retained.len() + 1,
@@ -2615,7 +2740,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
         tool_result_msg("call-1", "fn main() {}"),
         text_msg("assistant", "done"),
     ];
-    let (view, _) = provider_view(history);
+    let (view, _) = provider_view(GROUPED_PROFILE, history);
 
     // A noncanonical count of 2 lands between the call and its result.
     let noncanonical = 2usize;
@@ -2631,7 +2756,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
         "dropping at a noncanonical boundary orphans the result"
     );
 
-    let repaired = sanitize_history_for_provider(dropped);
+    let repaired = sanitize_history_for_provider(GROUPED_PROFILE, dropped);
     assert!(
         pair_closed_messages(&repaired),
         "re-narrowing after the drop must remove the orphan"
@@ -2641,7 +2766,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
     let safe = super::history::pair_safe_boundary(&view, noncanonical);
     let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
     assert_eq!(
-        sanitize_history_for_provider(safe_tail.clone()),
+        sanitize_history_for_provider(GROUPED_PROFILE, safe_tail.clone()),
         safe_tail,
         "Compaction.sanitize_drop_noop: free for counts this runtime writes"
     );
@@ -2699,10 +2824,10 @@ fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
         tool_result_msg("call-1", "b"),
     ];
 
-    let (short_view, _) = provider_view(prefix.clone());
+    let (short_view, _) = provider_view(GROUPED_PROFILE, prefix.clone());
     let mut whole = prefix;
     whole.extend(suffix);
-    let (long_view, _) = provider_view(whole);
+    let (long_view, _) = provider_view(GROUPED_PROFILE, whole);
 
     assert_eq!(
         short_view.len(),
@@ -2733,7 +2858,7 @@ fn safe_to_reduce_accepts_reused_provider_ids_across_complete_turns() {
         tool_result_msg("call-1", "pub fn library() {}"),
         text_msg("assistant", "second turn complete"),
     ];
-    assert!(safe_to_reduce(&messages));
+    assert!(safe_to_reduce(GROUPED_PROFILE, &messages));
 }
 
 #[test]
@@ -2742,15 +2867,15 @@ fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
     ];
-    assert!(!safe_to_reduce(&incomplete_turn));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &incomplete_turn));
 
     let unstable = vec![
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         text_msg("assistant", "ordinary boundary after an unpaired call"),
     ];
-    assert!(!safe_to_reduce(&unstable));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &unstable));
 
-    assert!(!safe_to_reduce(&[]));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &[]));
 }
 
 #[tokio::test]
@@ -2778,6 +2903,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .to_string(),
     );
     let config = crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -2819,7 +2945,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         let request_id = crate::graphql::escape_graphql_string("request-compaction-test");
         let session_id = crate::graphql::escape_graphql_string("session-1");
         let agent_did = crate::graphql::escape_graphql_string(agent_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -2935,7 +3061,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .await
         .unwrap();
     let durable_before = history.clone();
-    let (provider_history, _) = provider_view(history);
+    let (provider_history, _) = provider_view(GROUPED_PROFILE, history);
     let result = compactor
         .reduce(
             provider_history,
@@ -2958,9 +3084,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .enumerate()
         .map(|(index, message)| ((index + 1) as u32, message))
         .collect::<Vec<_>>();
-    let compacted_through_sequence = session_cursor_for_reduction(&sequence_rows, 0, reduction)
-        .unwrap()
-        .expect("exact reduction must resolve to a durable cursor");
+    let compacted_through_sequence =
+        session_cursor_for_reduction(GROUPED_PROFILE, &sequence_rows, 0, reduction)
+            .unwrap()
+            .expect("exact reduction must resolve to a durable cursor");
     session::save_compaction_entry(
         &node,
         "session-1",
@@ -2999,7 +3126,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     // Read side: rebuild the same provider view and drop the same count. This
     // is the write/read correspondence — the count was measured against
     // `provider_view` above, so it must be applied to `provider_view` here.
-    let (resumed_history, _) = provider_view(resumed_history);
+    let (resumed_history, _) = provider_view(GROUPED_PROFILE, resumed_history);
     let compacted_count = entries
         .iter()
         .map(|entry| entry.messages_compacted as usize)
@@ -3022,11 +3149,18 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .map(|entry| entry.summary.clone())
         .collect::<Vec<_>>();
     let built = prompt_builder
-        .build(&resumed_history, &summaries)
+        .build(
+            &resumed_history
+                .iter()
+                .cloned()
+                .map(crate::agent::loop_stream::TaggedMessage::unassociated)
+                .collect::<Vec<_>>(),
+            &summaries,
+        )
         .await
         .unwrap();
 
-    if let Message::User { content } = &built.messages[0] {
+    if let Message::User { content } = &built.messages[0].message {
         if let UserContent::Text(text) = first_content(content) {
             assert!(text.text.contains("inspected the source files"));
             assert!(text
@@ -3039,7 +3173,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         panic!("expected summary reminder");
     }
 
-    assert_eq!(built.messages[1..], resumed_history[..]);
+    assert_eq!(
+        built.messages[1..]
+            .iter()
+            .map(|row| &row.message)
+            .collect::<Vec<_>>(),
+        resumed_history.iter().collect::<Vec<_>>()
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -3104,14 +3244,17 @@ fn count_calls_and_results(messages: &[Message]) -> (usize, usize) {
 /// a single result while `drop_unpaired_tool_calls` kept both calls.
 #[test]
 fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1"), scoped_call("c1")],
-        },
-        scoped_result("c1"),
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1"), scoped_call("c1")],
+            },
+            scoped_result("c1"),
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3136,7 +3279,7 @@ fn call_key_reuse_across_turns_survives() {
         scoped_result("c1"),
     ];
     assert_eq!(
-        super::sanitize_history_for_provider(history.clone()),
+        super::sanitize_history_for_provider(GROUPED_PROFILE, history.clone()),
         history,
         "per-turn key reuse must be preserved"
     );
@@ -3148,17 +3291,20 @@ fn call_key_reuse_across_turns_survives() {
 /// provider input.
 #[test]
 fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        scoped_result("c1"),
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            scoped_result("c1"),
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3171,14 +3317,17 @@ fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
 /// A valid call/result pair separated by one must survive intact.
 #[test]
 fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        Message::User { content: vec![] },
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            Message::User { content: vec![] },
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3195,14 +3344,17 @@ fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
 /// it is orphaned and both it and its now-unpaired call go.
 #[test]
 fn plain_message_between_a_call_and_its_result_ends_the_turn() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        text_msg("user", "moved on"),
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            text_msg("user", "moved on"),
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (0, 0),
@@ -3313,11 +3465,15 @@ fn canonical_cursor_projects_the_same_sparse_active_suffix() {
         (50, tool_result_msg("call-1", "result")),
         (90, text_msg("assistant", "active")),
     ];
-    let cursor = compacted_through_sequence(&rows, 1).expect("proven raw cursor");
+    let cursor = compacted_through_sequence(GROUPED_PROFILE, &rows, 1).expect("proven raw cursor");
     assert_eq!(cursor, 20, "the orphan and first real turn are skipped");
 
-    let (full_view, _) = provider_view(rows.iter().map(|(_, message)| message.clone()).collect());
+    let (full_view, _) = provider_view(
+        GROUPED_PROFILE,
+        rows.iter().map(|(_, message)| message.clone()).collect(),
+    );
     let (filtered_view, _) = provider_view(
+        GROUPED_PROFILE,
         rows.iter()
             .filter(|(sequence, _)| *sequence > cursor)
             .map(|(_, message)| message.clone())
@@ -3333,9 +3489,15 @@ fn canonical_cursor_rejects_a_split_inside_a_tool_pair() {
         (2, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
         (3, tool_result_msg("call-1", "result")),
     ];
-    assert_eq!(compacted_through_sequence(&rows, 1), Some(1));
-    assert_eq!(compacted_through_sequence(&rows, 2), None);
-    assert_eq!(compacted_through_sequence(&rows, 3), Some(3));
+    assert_eq!(
+        compacted_through_sequence(GROUPED_PROFILE, &rows, 1),
+        Some(1)
+    );
+    assert_eq!(compacted_through_sequence(GROUPED_PROFILE, &rows, 2), None);
+    assert_eq!(
+        compacted_through_sequence(GROUPED_PROFILE, &rows, 3),
+        Some(3)
+    );
 }
 
 #[test]

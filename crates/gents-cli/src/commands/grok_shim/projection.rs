@@ -2667,7 +2667,7 @@ mod tests {
         session: &str,
         request_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
         ensure_no_errors(&result, "seed projection request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":result.data}),
@@ -2890,7 +2890,7 @@ mod tests {
         let escaped_created = gents::graphql::escape_graphql_string(created_at);
         let mutation = format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{escaped_child}"
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
@@ -2946,7 +2946,7 @@ mod tests {
     #[tokio::test]
     async fn persisted_context_hydrates_metadata_without_a_response_token_counter() {
         let (_dir, engine) = embedded_engine().await;
-        let response = engine.node.execute(r#"mutation { create_AgentRequest(input: {
+        let response = engine.node.execute(r#"mutation { create_AgentRequest(input: {purpose: "normal", 
             request_id: "context-owner", session_id: "context-session", agent_did: "did:test:grok-shim",
             requester_did: "did:test:requester", lifecycle_state: "processing"
         }) {_docID} }"#).await;

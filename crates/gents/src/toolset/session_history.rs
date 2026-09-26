@@ -68,6 +68,7 @@ pub struct SessionInvestigationSnapshot {
     pub requests: Vec<SessionRequestEvent>,
     pub tool_calls: SessionToolCallStats,
     pub token_usage: SessionTokenUsage,
+    pub parent_inclusive_audit_usage: Vec<super::ParentAuditUsageObservation>,
     pub compactions: Vec<SessionCompactionEvent>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
     pub compaction_strategy: crate::compaction::CompactionStrategy,
@@ -150,7 +151,7 @@ pub async fn load_request_context_observation(
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let response = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{
-        request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
+        purpose: {{_eq: "normal"}}, request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
     }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did)), "context request ownership").await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
@@ -194,7 +195,7 @@ pub async fn load_pinned_request_context_observation(
         owner.session_id.as_deref().unwrap(),
         owner.requester_did.as_deref(),
     );
-    let selected = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id)), "physical context request ownership").await?;
+    let selected = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{_eq: "normal"}}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id)), "physical context request ownership").await?;
     let rows = selected
         .data
         .as_ref()
@@ -256,7 +257,7 @@ pub async fn load_session_inference_observation(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{
-        agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
+        purpose: {{_eq: "normal"}}, agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
     }}) {{_docID request_id}} }}"#,
             escape_graphql_string(agent_did),
             escape_graphql_string(session_id)
@@ -674,9 +675,25 @@ pub async fn load_session_investigation(
     let calls: InvestigationCallsEnvelope =
         decode(response.data.as_ref(), "session investigation calls")?;
 
-    Ok(build_session_investigation(
-        agent_did, session_id, envelope, calls,
-    )?)
+    let mut audit_usage = Vec::with_capacity(envelope.requests.len());
+    for request in &envelope.requests {
+        let observation = match super::title_audit_usage::load_parent_inclusive_audit_usage(
+            node, request,
+        )
+        .await
+        {
+            Ok(usage) => super::ParentAuditUsageObservation::Available { usage },
+            Err(error) => super::ParentAuditUsageObservation::Unavailable {
+                parent_request_doc_id: request.doc_id.clone(),
+                parent_request_id: request.request_id.clone(),
+                error: format!("{error:#}"),
+            },
+        };
+        audit_usage.push(observation);
+    }
+    let mut snapshot = build_session_investigation(agent_did, session_id, envelope, calls)?;
+    snapshot.parent_inclusive_audit_usage = audit_usage;
+    Ok(snapshot)
 }
 
 fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
@@ -693,6 +710,7 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             }}
             AgentRequest(
                 filter: {{ _and: [
+                    {{ purpose: {{ _eq: "normal" }} }},
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
@@ -700,6 +718,10 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             ) {{
                 _docID
                 request_id
+                purpose
+                agent_did
+                requester_did
+                behavior_id
                 session_id
                 lifecycle_state
                 created_at
@@ -786,7 +808,7 @@ fn session_investigation_calls_query(agent_did: &str, request_doc_ids: &[String]
                 {INFERENCE_DETAIL_FIELDS}
             }}
             AgentRequest(
-                filter: {{ caused_by_parent_request_doc_id: {{ _in: [{request_doc_ids}] }} }},
+                filter: {{ purpose: {{ _eq: "normal" }}, caused_by_parent_request_doc_id: {{ _in: [{request_doc_ids}] }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -905,6 +927,7 @@ fn build_session_investigation(
         requests,
         tool_calls,
         token_usage,
+        parent_inclusive_audit_usage: Vec::new(),
         compactions,
         latest_context: latest_context.clone(),
         compaction_strategy: compaction
@@ -1078,7 +1101,7 @@ fn request_scan_query(agent_did: &str) -> String {
     let agent_did = escape_graphql_string(agent_did);
     format!(
         r#"{{
-            AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {REQUEST_SCAN_LIMIT}) {{
+            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {REQUEST_SCAN_LIMIT}) {{
                 request_id
                 session_id
             }}
@@ -1104,6 +1127,7 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
             }}
             AgentRequest(
                 filter: {{ _and: [
+                    {{ purpose: {{ _eq: "normal" }} }},
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _in: [{list}] }} }}
                 ] }},
@@ -1330,6 +1354,8 @@ where
 mod tests {
     use std::sync::Arc;
 
+    use crate::identity::{AgentIdentity, KeyIdentity};
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::llm::tool::Tool;
     use crate::session::canonical_rows::{
         decode_transcript_message_row, output_segment_create_variables,
@@ -1420,11 +1446,16 @@ mod tests {
     async fn seeded_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let identities = tempfile::tempdir().unwrap();
+        let agent_identity = pin_fixed_signing_identity(identities.path());
+        let other_identity =
+            KeyIdentity::load_or_create(identities.path().join("other.key"), None).unwrap();
+        assert_eq!(agent_identity.did(), PIN_FIXED_DID);
 
         for mutation in [
             r#"mutation {
                 create_InferenceProfile(input: {
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     profile_id: "profile-a",
                     backend_id: "backend-a",
                     model_name: "model-a",
@@ -1434,7 +1465,7 @@ mod tests {
             r#"mutation {
                 create_CompactionConfig(input: {
                     compaction_id: "compaction-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     strategy: "StripThenSummarize",
                     threshold: 0.9
                 }) { _docID }
@@ -1442,14 +1473,14 @@ mod tests {
             r#"mutation {
                 create_AgentContext(input: {
                     context_id: "context-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     compaction_id: "compaction-a"
                 }) { _docID }
             }"#,
             r#"mutation {
                 create_AgentBehavior(input: {
                     behavior_id: "behavior-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     inference_profile_id: "profile-a",
                     context_id: "context-a",
                     enabled: true
@@ -1458,7 +1489,7 @@ mod tests {
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "session-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     behavior_id: "behavior-a",
                     title: {text: "OpenAI Agent", source: "user"},
                     tags: ["review"],
@@ -1468,7 +1499,7 @@ mod tests {
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "session-b",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     behavior_id: "behavior-b",
                     title: {text: "OpenAI Agent", source: "user"},
                     created_at: "2026-06-03T10:55:00Z",
@@ -1476,50 +1507,10 @@ mod tests {
                 }) { _docID }
             }"#,
             r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "request-a-old",
-                    agent_did: "did:key:z-sessions",
-                    behavior_id: "behavior-a",
-                    session_id: "session-a",
-                    lifecycle_state: "completed",
-                    created_at: "2026-06-03T10:00:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "request-a-new",
-                    agent_did: "did:key:z-sessions",
-                    behavior_id: "behavior-a",
-                    session_id: "session-a",
-                    lifecycle_state: "processing",
-                    created_at: "2026-06-03T10:05:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "request-b-new",
-                    agent_did: "did:key:z-sessions",
-                    behavior_id: "behavior-b",
-                    session_id: "session-b",
-                    lifecycle_state: "completed",
-                    created_at: "2026-06-03T11:00:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "request-other-agent",
-                    agent_did: "did:key:z-other",
-                    behavior_id: "behavior-c",
-                    session_id: "session-c",
-                    lifecycle_state: "completed",
-                    created_at: "2026-06-03T12:00:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
                 create_CompactionEntry(input: {
                     compaction_key: "session-a:1",
                     session_id: "session-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     sequence: 1,
                     original_tokens: 800,
                     compacted_tokens: 400,
@@ -1531,7 +1522,7 @@ mod tests {
                     tool_call_key: "session-a:tool:1",
                     request_id: "request-a-new",
                     session_id: "session-a",
-                    agent_did: "did:key:z-sessions",
+                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     tool_name: "read_file",
                     status: "completed",
                     lifecycle_state: "completed",
@@ -1552,6 +1543,87 @@ mod tests {
         ] {
             let response = node.execute(mutation).await;
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        }
+
+        for (request_id, signer, behavior, session, state, created_at) in [
+            (
+                "request-a-old",
+                &agent_identity,
+                "behavior-a",
+                "session-a",
+                "completed",
+                "2026-06-03T10:00:00Z",
+            ),
+            (
+                "request-a-new",
+                &agent_identity,
+                "behavior-a",
+                "session-a",
+                "processing",
+                "2026-06-03T10:05:00Z",
+            ),
+            (
+                "request-b-new",
+                &agent_identity,
+                "behavior-b",
+                "session-b",
+                "completed",
+                "2026-06-03T11:00:00Z",
+            ),
+            (
+                "request-other-agent",
+                &other_identity,
+                "behavior-c",
+                "session-c",
+                "completed",
+                "2026-06-03T12:00:00Z",
+            ),
+        ] {
+            let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                signer.did(),
+                signer.did(),
+                behavior,
+                session,
+                "session history fixture",
+                "interactive",
+                created_at,
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    signer.did(),
+                ),
+            );
+            crate::sign_agent_request_create(signer, &mut create)
+                .await
+                .unwrap();
+            let response = crate::config_client::ConfigAccess::write_local_response(
+                node.as_ref(),
+                "test.session_history.signed_request",
+                &create.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+            let doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap();
+            let doc_id = escape_graphql_string(doc_id);
+            let transition = format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#
+            );
+            let response = crate::config_client::ConfigAccess::write_local_response(
+                node.as_ref(),
+                "test.session_history.request_state",
+                &transition,
+            )
+            .await
+            .unwrap();
+            assert!(
+                crate::graphql::single_mutation_document(&response, "update_AgentRequest")
+                    .unwrap()
+                    .is_some()
+            );
         }
 
         let response = node
@@ -1581,7 +1653,7 @@ mod tests {
         // one provider-turn assistant header, each over a closed source. The
         // document travels as a typed GraphQL variable through the native
         // retry API; the pinned create response key is add_<Collection>.
-        let agent_did: &str = "did:key:z-sessions";
+        let agent_did: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
         let canonical_messages = [
             (
                 "session-a:1",
@@ -1766,8 +1838,10 @@ mod tests {
                 call_id: "session-a:call:1"
                 request_id: "request-a-new"
                 request_doc_id: "{request_doc_id}"
-                agent_did: "did:key:z-sessions"
+                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
+                backend_id: "backend-a"
+                call_state: "completed"
                 call_seq: 1
                 queued_at: "2026-06-03T10:05:30Z"
                 prompt_tokens: 100
@@ -1791,12 +1865,16 @@ mod tests {
     #[tokio::test]
     async fn captured_context_details_require_exact_owner_and_admission_identity() {
         let node = seeded_node().await;
-        let mut context =
-            load_session_inference_observation(&node, "did:key:z-sessions", None, "session-a")
-                .await
-                .unwrap()
-                .latest_context
-                .unwrap();
+        let mut context = load_session_inference_observation(
+            &node,
+            PIN_FIXED_DID,
+            Some(PIN_FIXED_DID),
+            "session-a",
+        )
+        .await
+        .unwrap()
+        .latest_context
+        .unwrap();
         context.accounting.estimator = "openai_chat_wire_json_bytes_div_4_v1".into();
         context.accounting.components.documents = 0;
         let body = json!({"messages":[{"role":"system","content":"private system"},{"role":"user","content":"hello"}],"tools":[{"type":"function"}]});
@@ -1811,7 +1889,7 @@ mod tests {
         let mutation = format!(
             r#"mutation {{create_RenderedRequest(input: {{
             capture_key:"context-details", request_doc_id:"{}", request_id:"misleading-alias",
-            agent_did:"did:key:z-sessions", session_id:"session-a", capture_scope:"inference.1",
+            agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a", capture_scope:"inference.1",
             turn_index:{}, attempt:{}, capture_version:1, source:"openai_chat_completions",
             request_json:"{}", provenance_json:"{}"
         }}) {{_docID}}}}"#,
@@ -1823,18 +1901,27 @@ mod tests {
         );
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
-        let details =
-            load_session_context_details(&node, "did:key:z-sessions", None, "session-a", &context)
-                .await
-                .unwrap()
-                .unwrap();
+        let details = load_session_context_details(
+            &node,
+            PIN_FIXED_DID,
+            Some(PIN_FIXED_DID),
+            "session-a",
+            &context,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(details.tool_definitions_count, 1);
         assert_eq!(details.message_count, 1);
         assert!(details.system_prompt_tokens > 0);
         for (agent, requester, session) in [
-            ("did:key:foreign", None, "session-a"),
-            ("did:key:z-sessions", Some("did:key:foreign"), "session-a"),
-            ("did:key:z-sessions", None, "session-b"),
+            ("did:key:foreign", Some(PIN_FIXED_DID), "session-a"),
+            (
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                Some("did:key:foreign"),
+                "session-a",
+            ),
+            (PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-b"),
         ] {
             assert!(
                 load_session_context_details(&node, agent, requester, session, &context)
@@ -1854,7 +1941,7 @@ mod tests {
                     "doc_id": "missing-context-details-base",
                     "field_commit_cid": "missing-cid",
                     "depth": 0,
-                    "agent_did": "did:key:z-sessions",
+                    "agent_did": "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     "requester_did": "",
                     "session_id": "session-a",
                     "source": "openai_chat_completions",
@@ -1872,7 +1959,7 @@ mod tests {
         let mutation = format!(
             r#"mutation {{create_RenderedRequest(input: {{
                 capture_key:"context-details-missing-base", request_doc_id:"{}",
-                request_id:"missing-base", agent_did:"did:key:z-sessions",
+                request_id:"missing-base", agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                 session_id:"session-a", capture_scope:"inference.1",
                 turn_index:{}, attempt:{}, capture_version:2,
                 source:"openai_chat_completions", request_json:"{}", provenance_json:"{}"
@@ -1887,8 +1974,8 @@ mod tests {
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         assert!(load_session_context_details(
             &node,
-            "did:key:z-sessions",
-            None,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            Some(PIN_FIXED_DID),
             "session-a",
             &missing_base_context
         )
@@ -1914,7 +2001,7 @@ mod tests {
             let mutation = format!(
                 r#"mutation {{create_RenderedRequest(input: {{
                     capture_key:"{key}", request_doc_id:"{}", request_id:"{key}",
-                    agent_did:"did:key:z-sessions", session_id:"session-a",
+                    agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a",
                     capture_scope:"inference.1", turn_index:{}, attempt:{},
                     capture_version:1, source:"openai_chat_completions",
                     request_json:"{}", provenance_json:"{}"
@@ -1929,8 +2016,8 @@ mod tests {
             assert!(!inserted.has_errors(), "{:?}", inserted.errors);
             assert!(load_session_context_details(
                 &node,
-                "did:key:z-sessions",
-                None,
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                Some(PIN_FIXED_DID),
                 "session-a",
                 &malformed_context
             )
@@ -1941,8 +2028,8 @@ mod tests {
         context.call_id = "foreign-call".into();
         assert!(load_session_context_details(
             &node,
-            "did:key:z-sessions",
-            None,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            Some(PIN_FIXED_DID),
             "session-a",
             &context
         )
@@ -1954,7 +2041,10 @@ mod tests {
     #[tokio::test]
     async fn session_history_snapshot_reports_recent_agent_sessions() {
         let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
+        let tool = SessionHistoryTool::new(
+            node,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        );
 
         let output = Tool::call(
             &tool,
@@ -1968,7 +2058,10 @@ mod tests {
         .unwrap();
         let snapshot: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
 
-        assert_eq!(snapshot.agent_did, "did:key:z-sessions");
+        assert_eq!(
+            snapshot.agent_did,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
+        );
         assert_eq!(snapshot.limit, 2);
         assert_eq!(snapshot.request_scan_limit, REQUEST_SCAN_LIMIT);
         assert_eq!(
@@ -2031,10 +2124,14 @@ mod tests {
     #[tokio::test]
     async fn ui_accounting_separates_compaction_usage_from_current_context() {
         let node = seeded_node().await;
-        let before =
-            load_session_inference_observation(&node, "did:key:z-sessions", None, "session-a")
-                .await
-                .unwrap();
+        let before = load_session_inference_observation(
+            &node,
+            PIN_FIXED_DID,
+            Some(PIN_FIXED_DID),
+            "session-a",
+        )
+        .await
+        .unwrap();
         let response = node
             .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "request-a-new"}}) {_docID} }"#)
             .await;
@@ -2049,15 +2146,19 @@ mod tests {
             accounting.estimated_input_tokens = input;
             let encoded = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
             let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
-                call_id: "{id}", call_kind: "{kind}", call_seq: {sequence}, request_id: "request-a-new",
-                request_doc_id: "{}", agent_did: "did:key:z-sessions", queued_at: "2026-06-04T12:00:00Z",
+                call_id: "{id}", call_kind: "{kind}", backend_id: "backend-a", call_state: "completed", call_seq: {sequence}, request_id: "request-a-new",
+                request_doc_id: "{}", agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
                 prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
             crate::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
-            let observed =
-                load_session_inference_observation(&node, "did:key:z-sessions", None, "session-a")
-                    .await
-                    .unwrap();
+            let observed = load_session_inference_observation(
+                &node,
+                PIN_FIXED_DID,
+                Some(PIN_FIXED_DID),
+                "session-a",
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 observed
                     .latest_context
@@ -2076,8 +2177,16 @@ mod tests {
         let node = seeded_node().await;
         for (agent, session, request) in [
             (" ", "session-a", "request-a-new"),
-            ("did:key:z-sessions", "", "request-a-new"),
-            ("did:key:z-sessions", "session-a", "\t"),
+            (
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "",
+                "request-a-new",
+            ),
+            (
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                "session-a",
+                "\t",
+            ),
         ] {
             assert!(
                 load_request_context_observation(&node, agent, None, session, request)
@@ -2085,10 +2194,14 @@ mod tests {
                     .is_err()
             );
         }
-        let baseline =
-            load_session_inference_observation(&node, "did:key:z-sessions", None, "session-a")
-                .await
-                .unwrap();
+        let baseline = load_session_inference_observation(
+            &node,
+            PIN_FIXED_DID,
+            Some(PIN_FIXED_DID),
+            "session-a",
+        )
+        .await
+        .unwrap();
         assert_eq!(baseline.token_usage.input_tokens, Some(100));
         assert_eq!(
             baseline
@@ -2103,8 +2216,8 @@ mod tests {
         assert_eq!(baseline.inference_turns, Some(1));
         let live = load_request_context_observation(
             &node,
-            "did:key:z-sessions",
-            None,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            Some(PIN_FIXED_DID),
             "session-a",
             "request-a-new",
         )
@@ -2115,7 +2228,7 @@ mod tests {
         assert_eq!(live.completion_tokens, Some(20));
         assert!(load_request_context_observation(
             &node,
-            "did:key:z-sessions",
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some("not-an-owner"),
             "session-a",
             "request-a-new"
@@ -2124,10 +2237,34 @@ mod tests {
         .unwrap()
         .is_none());
 
-        let response = node.execute(r#"mutation { create_AgentRequest(input: {
-            request_id: "foreign-requester", agent_did: "did:key:z-sessions", session_id: "session-a",
-            requester_did: "did:foreign", lifecycle_state: "completed"
-        }) {_docID} }"#).await;
+        let identities = tempfile::tempdir().unwrap();
+        let foreign_identity =
+            KeyIdentity::load_or_create(identities.path().join("foreign.key"), None).unwrap();
+        let foreign_did = foreign_identity.did().to_owned();
+        let mut foreign_request = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "foreign-requester",
+            PIN_FIXED_DID,
+            &foreign_did,
+            "behavior-a",
+            "session-a",
+            "foreign requester fixture",
+            "interactive",
+            "2026-06-04T11:59:00Z",
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &foreign_did,
+            ),
+        );
+        crate::sign_agent_request_create(&foreign_identity, &mut foreign_request)
+            .await
+            .unwrap();
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            node.as_ref(),
+            "test.session_history.foreign_request",
+            &foreign_request.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
         crate::graphql::ensure_no_errors(&response, "foreign requester fixture").unwrap();
         let response = node
             .execute(
@@ -2140,22 +2277,27 @@ mod tests {
         // Deliberately reuse an authorized logical alias: only the physical
         // owner may contribute this call to usage.
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
-            call_id: "foreign-usage", call_seq: 1, call_kind: "inference", agent_did: "did:key:z-sessions", request_id: "request-a-new",
-            request_doc_id: "{}", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,
+            call_id: "foreign-usage", call_seq: 1, call_kind: "inference", agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
+            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,
             queued_at: "2026-06-04T12:00:00Z"
         }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         crate::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
         assert_eq!(
-            load_session_inference_observation(&node, "did:key:z-sessions", None, "session-a")
-                .await
-                .unwrap(),
+            load_session_inference_observation(
+                &node,
+                PIN_FIXED_DID,
+                Some(PIN_FIXED_DID),
+                "session-a"
+            )
+            .await
+            .unwrap(),
             baseline
         );
         assert_eq!(
             load_request_context_observation(
                 &node,
-                "did:key:z-sessions",
-                None,
+                "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                Some(PIN_FIXED_DID),
                 "session-a",
                 "request-a-new"
             )
@@ -2166,8 +2308,8 @@ mod tests {
         );
         let foreign = load_session_inference_observation(
             &node,
-            "did:key:z-sessions",
-            Some("did:foreign"),
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            Some(&foreign_did),
             "session-a",
         )
         .await
@@ -2176,7 +2318,7 @@ mod tests {
         assert!(foreign.latest_context.is_none());
         let absent = load_session_inference_observation(
             &node,
-            "did:key:z-sessions",
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some("not-an-owner"),
             "session-a",
         )
@@ -2189,7 +2331,10 @@ mod tests {
     #[tokio::test]
     async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
         let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
+        let tool = SessionHistoryTool::new(
+            node,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        );
 
         let output = Tool::call(
             &tool,
@@ -2250,8 +2395,10 @@ mod tests {
                 call_id: "session-a:partial"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z-sessions"
+                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
+                backend_id: "backend-a"
+                call_state: "completed"
                 call_seq: 2
                 queued_at: "2026-06-03T10:05:31Z"
                 prompt_tokens: 999
@@ -2269,8 +2416,10 @@ mod tests {
                 call_id: "session-a:invalid-cache"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z-sessions"
+                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
+                backend_id: "backend-a"
+                call_state: "completed"
                 call_seq: 3
                 queued_at: "2026-06-03T10:05:32Z"
                 prompt_tokens: 100
@@ -2286,39 +2435,60 @@ mod tests {
             response.errors
         );
 
-        let snapshot = load_session_investigation(&node, "did:key:z-sessions", "session-a")
-            .await
-            .unwrap();
+        let snapshot = load_session_investigation(
+            &node,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "session-a",
+        )
+        .await
+        .unwrap();
         assert_eq!(snapshot.token_usage.model_calls, 3);
         assert_eq!(snapshot.token_usage.calls_with_usage, 1);
         assert_eq!(snapshot.token_usage.input_tokens, Some(100));
         assert_eq!(snapshot.token_usage.output_tokens, Some(20));
         assert_eq!(snapshot.token_usage.charged_tokens, None);
         assert!(snapshot.token_usage.incomplete);
+        assert!(snapshot
+            .parent_inclusive_audit_usage
+            .iter()
+            .any(|observation| {
+                matches!(observation, super::super::ParentAuditUsageObservation::Unavailable {
+                parent_request_id, error, ..
+            } if parent_request_id == "request-a-new"
+                && error.contains("only one persisted token component"))
+            }));
     }
 
     #[tokio::test]
     async fn sessions_get_does_not_join_duplicate_logical_request_ids() {
         let node = seeded_node().await;
-        let response = node
-            .execute(
-                r#"mutation {
-                    create_AgentRequest(input: {
-                        request_id: "request-a-new"
-                        agent_did: "did:key:z-sessions"
-                        behavior_id: "behavior-b"
-                        session_id: "session-b"
-                        lifecycle_state: "completed"
-                        created_at: "2026-06-03T11:05:00Z"
-                    }) { _docID }
-                }"#,
-            )
-            .await;
-        assert!(
-            !response.has_errors(),
-            "duplicate-label request: {:?}",
-            response.errors
+        let identities = tempfile::tempdir().unwrap();
+        let identity = pin_fixed_signing_identity(identities.path());
+        let mut duplicate = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "request-a-new",
+            PIN_FIXED_DID,
+            PIN_FIXED_DID,
+            "behavior-b",
+            "session-b",
+            "duplicate-label request fixture",
+            "interactive",
+            "2026-06-03T11:05:00Z",
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                PIN_FIXED_DID,
+            ),
         );
+        crate::sign_agent_request_create(&identity, &mut duplicate)
+            .await
+            .unwrap();
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            node.as_ref(),
+            "test.session_history.duplicate_request",
+            &duplicate.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+        crate::graphql::ensure_no_errors(&response, "duplicate-label request").unwrap();
         let response = node
             .execute(
                 r#"{
@@ -2348,8 +2518,10 @@ mod tests {
                 call_id: "session-b:duplicate-label-call"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z-sessions"
+                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
+                backend_id: "backend-a"
+                call_state: "completed"
                 call_seq: 1
                 queued_at: "2026-06-03T11:05:01Z"
                 prompt_tokens: 900
@@ -2364,9 +2536,13 @@ mod tests {
             response.errors
         );
 
-        let snapshot = load_session_investigation(&node, "did:key:z-sessions", "session-a")
-            .await
-            .unwrap();
+        let snapshot = load_session_investigation(
+            &node,
+            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+            "session-a",
+        )
+        .await
+        .unwrap();
         assert_eq!(snapshot.token_usage.model_calls, 1);
         assert_eq!(snapshot.token_usage.input_tokens, Some(100));
         assert_eq!(snapshot.token_usage.charged_tokens, Some(120));

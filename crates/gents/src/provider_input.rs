@@ -6,6 +6,8 @@
 //! (`chatgpt_codex`, `xai_grok_oauth`, `inference_http`) stay here, native.
 pub use gents_loop::provider_input::*;
 
+pub(crate) mod replay;
+
 // Glue for the test suite below, which reaches these bare through
 // `use super::*` the way it did before the move (gents-loop's own
 // `provider_input` module imports them privately, so they do not ride the

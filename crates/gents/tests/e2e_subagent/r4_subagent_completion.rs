@@ -48,7 +48,7 @@ struct ToolCallRow {
     await_mode: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 struct MessageRow {
     sequence: u32,
     role: String,
@@ -1580,7 +1580,7 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
     assert_eq!(wakes.len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_hook_sequence_does_not_overwrite_background_notification() {
     let (db, session_id, _parent_request_id) =
         setup_runtime_fixture("background_completion_hook_sequence").await;

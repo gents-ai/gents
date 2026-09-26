@@ -5,9 +5,9 @@ use crate::lean_vocab_test::{
     lean_canonical_spawned_target_rejection_cases, lean_canonical_worker_capacity_cases,
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
-    lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,
-    lean_task_goal_recovery_cases, lean_terminal_diagnostic_presentation_cases,
-    lean_terminal_diagnostic_replay_cases,
+    lean_goal_submission_cases, lean_goal_transition_cases, lean_protected_replay_compaction_cases,
+    lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
+    lean_terminal_diagnostic_presentation_cases, lean_terminal_diagnostic_replay_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
@@ -463,6 +463,32 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     // establish native consumption; only registered consumers and the ledger's
     // consumer entries may make that claim.
     let mut emitted = BTreeSet::new();
+    for (category, domain, present) in [
+        (
+            "reasoning_audit_cases",
+            "ReasoningAuditCases",
+            !snapshot.reasoning_audit_cases.is_empty(),
+        ),
+        (
+            "reasoning_signature_cases",
+            "ReasoningSignatureCases",
+            !snapshot.reasoning_signature_cases.is_empty(),
+        ),
+        (
+            "auxiliary_output_cases",
+            "AuxiliaryOutputCases",
+            !snapshot.auxiliary_output_cases.is_empty(),
+        ),
+        (
+            "prompt_assembly_claude_wire_start_cases",
+            "PromptAssemblyClaudeWireStartCases",
+            !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
+        ),
+    ] {
+        if present {
+            emitted.insert((category.to_owned(), domain.to_owned()));
+        }
+    }
     let boundary_ids = snapshot
         .boundaries
         .iter()
@@ -1027,6 +1053,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CompactionReducerCases".to_string(),
         ));
     }
+    if !lean_protected_replay_compaction_cases().is_empty() {
+        emitted.insert((
+            "protected_replay_compaction_cases".to_string(),
+            "ProtectedReplayCompactionCases".to_string(),
+        ));
+    }
     if !lean_compaction_cursor_cases().is_empty() {
         emitted.insert((
             "compaction_cursor_cases".to_string(),
@@ -1092,6 +1124,50 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "prompt_assembly_cases".to_string(),
             "PromptAssemblyClaudeStreamCases".to_string(),
         ));
+    }
+    if !snapshot
+        .prompt_assembly_claude_thinking_stream_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeThinkingStreamCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_claude_replay_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeReplayCases".to_string(),
+        ));
+    }
+    for (domain, present) in [
+        (
+            "PromptAssemblyAssistantOrderCases",
+            !snapshot.prompt_assembly_assistant_order_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyModeSanitizeCases",
+            !snapshot.prompt_assembly_mode_sanitize_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyClaudeCheckpointCases",
+            !snapshot.prompt_assembly_claude_checkpoint_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyReasoningSuffixCases",
+            !snapshot.prompt_assembly_reasoning_suffix_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyReplayShapeCases",
+            !snapshot.prompt_assembly_replay_shape_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyReplayPrefixCases",
+            !snapshot.prompt_assembly_replay_prefix_cases.is_empty(),
+        ),
+    ] {
+        assert!(present, "{domain} must emit cases");
+        emitted.insert(("prompt_assembly_cases".to_string(), domain.to_string()));
     }
     if !snapshot.rendered_capture_cases.is_empty() {
         emitted.insert((
@@ -1499,6 +1575,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "agent_request_admission_cases".to_string(),
             "AgentRequestAdmissionCases".to_string(),
+        ));
+    }
+    if !snapshot.title_request_admission_cases.is_empty() {
+        emitted.insert((
+            "title_request_admission_cases".to_string(),
+            "TitleRequestAdmissionCases".to_string(),
+        ));
+    }
+    if !snapshot.title_request_purpose_wire_cases.is_empty() {
+        emitted.insert((
+            "title_request_purpose_wire_cases".to_string(),
+            "TitleRequestPurposeWireCases".to_string(),
+        ));
+    }
+    if !snapshot.title_usage_cases.is_empty() {
+        emitted.insert((
+            "title_usage_cases".to_string(),
+            "TitleUsageCases".to_string(),
+        ));
+    }
+    if !snapshot.title_admission_join_cases.is_empty() {
+        emitted.insert((
+            "title_admission_join_cases".to_string(),
+            "TitleAdmissionJoinCases".to_string(),
         ));
     }
     assert_eq!(

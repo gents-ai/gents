@@ -48,6 +48,7 @@ fn config(
 
 pub(super) fn request(request_id: &str) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),
         agent_did: "did:test:test".to_string(),

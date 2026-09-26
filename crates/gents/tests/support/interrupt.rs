@@ -173,6 +173,7 @@ async fn create_runtime_request_inner(
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         agent_did,
         agent_did,

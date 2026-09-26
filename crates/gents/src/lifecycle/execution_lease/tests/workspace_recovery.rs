@@ -62,6 +62,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "workspace-recovery-parent",
         did,
         did,

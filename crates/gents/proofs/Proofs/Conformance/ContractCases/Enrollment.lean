@@ -227,6 +227,178 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
       (requestAdmissionBase .enrollment) false
   ]
 
+/-- These are concrete signed request inputs. Expected decisions are evaluated
+by the Enrollment admission/claim owner, not by a second observation projector. -/
+structure TitleRequestAdmissionCase where
+  name : String
+  parentObservedState : RequestState
+  observationAvailable : Bool
+  branchFieldsExact : Bool
+  pendingDeadlineAbsent : Bool
+  request : AgentRequestSemantics
+  admission : AgentRequestAdmission
+  runtimeEvidence : Option RuntimeInternalEvidence
+  sessionBehavior : String
+  expectedAdmitted : Bool
+  expectedClaimable : Bool
+  expectedDisposition : AgentRequestAdmissionDisposition
+  expectedPendingState : Option RequestState
+  deriving Repr
+
+def titleParentLink : TitleParentLink :=
+  { requestId := "p", documentId := "P" }
+
+def titleParentEvidence : TitleParentEvidence :=
+  { link := titleParentLink, agentDid := "a"
+  , sessionId := "s", behaviorId := "b"
+  , logicalBindingCurrent := true, physicalBindingCurrent := true }
+
+def titleRequest : AgentRequestSemantics :=
+  { requestId := "t", purpose := .titleAudit
+  , targetAgent := "a", requesterDid := "a"
+  , behaviorId := "b", sessionId := "s"
+  , content := "Generate a title", input := {}, createdAt := "2026-09-24T00:00:00Z"
+  , triggerConfigDocumentId := "", retryFields := [], triggerFields := []
+  , parentFields := titleParentFields titleParentLink, workspace := {} }
+
+def titleAdmissionUnsigned : AgentRequestAdmission :=
+  { kind := .runtimeInternal, signerDid := "a"
+  , enrollmentRequestId := "", enrollmentRequestDigest := emptyDigest
+  , enrollmentAdminDid := "", enrollmentAuthorizationSequence := 0
+  , enrollmentAuthorizationExpiresAt := ""
+  , issuerDid := "a", sourceRequestId := titleParentLink.requestId
+  , runtimeSourceKind := .localControl, bridgeAuthorDid := ""
+  , signedFields := [], signatureValid := true }
+
+def titleEvidence : RuntimeInternalEvidence :=
+  { sourceKind := .localControl, issuerDid := "a"
+  , sourceRequestId := titleParentLink.requestId, bridgeAuthorDid := ""
+  , targetAgent := "a", targetRuntimeAttestationValid := true
+  , sourceBindingCurrent := true, triggerConfigDocumentBindingCurrent := false
+  , sourceDocumentBindingCurrent := true, sourceToolCallBindingCurrent := false
+  , targetPolicyAllows := false, bridgeAuthorBindingCurrent := false
+  , bridgeAuthorAuthorizationFresh := false, targetCrossPrincipalPolicyAllows := false
+  , titleParent := some titleParentEvidence }
+
+def signTitleAdmission (request : AgentRequestSemantics)
+    (admission : AgentRequestAdmission := titleAdmissionUnsigned) : AgentRequestAdmission :=
+  { admission with signedFields := agentRequestAdmissionFields request admission }
+
+private def titlePendingContext : RequestContext :=
+  { state := .pending, origin := .interactive, backend := ⟨"title-backend"⟩
+  , admission := .released, deadline := 100, claimTime := 0, currentTime := 1
+  , retryCount := 0, maxRetries := 0, messageSeq := 0, persistence := .uncommitted }
+
+private def titleRequestAdmissionCase (name : String) (request : AgentRequestSemantics)
+    (admission : AgentRequestAdmission) (evidence : Option RuntimeInternalEvidence)
+    (parentState : RequestState := .completed)
+    (sessionBehavior : String := "b")
+    (observationAvailable : Bool := true)
+    (branchFieldsExact : Bool := true)
+    (pendingDeadlineAbsent : Bool := true) : TitleRequestAdmissionCase :=
+  { name, parentObservedState := parentState, observationAvailable
+  , branchFieldsExact, pendingDeadlineAbsent, request, admission
+  , runtimeEvidence := evidence, sessionBehavior
+  , expectedAdmitted := decide (agentRequestAdmissible ({} : Enrollment.State)
+      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent)
+  , expectedClaimable := decide (agentRequestClaimable ({} : Enrollment.State)
+      request admission none none false evidence branchFieldsExact pendingDeadlineAbsent
+      sessionBehavior []
+      (fun _ => false) (fun _ => false))
+  , expectedDisposition := titlePendingDisposition observationAvailable ({} : Enrollment.State)
+      request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+  , expectedPendingState := (titlePendingStep? observationAvailable ({} : Enrollment.State)
+      request admission evidence sessionBehavior branchFieldsExact pendingDeadlineAbsent
+      titlePendingContext).map (·.state) }
+
+def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
+  let signed := signTitleAdmission titleRequest
+  let normal := { titleRequest with purpose := .normal }
+  let forgedRequester := { titleRequest with requesterDid := "did:key:forged" }
+  let wrongParent := { titleRequest with
+    parentFields := titleParentFields { titleParentLink with documentId := "forged-doc" } }
+  let toolParent := { titleRequest with
+    parentFields := textFieldsToBytes ["0", "some", titleParentLink.requestId,
+      "some", titleParentLink.documentId, "some", "forged-tool", "some", "forged-tool-doc"] }
+  let queuedQueue : RequestQueue := { source := .user, policy := .append }
+  let queued := { titleRequest with input := ({ queue := some queuedQueue } : RequestInput) }
+  let skill := { titleRequest with
+    input := ({ selectedSkillIds := ["tool-skill"] } : RequestInput) }
+  let cwd := { titleRequest with input := ({ cwd := some "/tmp/title" } : RequestInput) }
+  let goalFacts : GoalContinuationInput := { sequence := 1, wrapup := false }
+  let goal := { titleRequest with
+    input := ({ goalContinuation := some goalFacts } : RequestInput) }
+  let suppliedTitleValue : AgentSession.Title := { text := "caller title", source := .user }
+  let suppliedTitle := { titleRequest with
+    input := ({ initialTitle := some suppliedTitleValue } : RequestInput) }
+  let retry := { titleRequest with retryFields := textFieldsToBytes ["retry-parent"] }
+  let trigger := { titleRequest with triggerFields := textFieldsToBytes ["trigger"] }
+  let noParent := { titleEvidence with titleParent := none }
+  let wrongSessionParent := { titleParentEvidence with sessionId := "different-session" }
+  let wrongSession := { titleEvidence with titleParent := some wrongSessionParent }
+  let stalePhysicalParent := { titleParentEvidence with physicalBindingCurrent := false }
+  let stalePhysical := { titleEvidence with titleParent := some stalePhysicalParent }
+  [ titleRequestAdmissionCase "valid-title-parent-completed" titleRequest signed (some titleEvidence)
+  , titleRequestAdmissionCase "valid-title-parent-processing" titleRequest signed
+      (some titleEvidence) .processing
+  , titleRequestAdmissionCase "ordinary-signed-control-preserved" normal
+      (signTitleAdmission normal) (some titleEvidence)
+  , titleRequestAdmissionCase "pending-title-observation-unavailable" titleRequest signed
+      (some titleEvidence) .completed "b" false
+  , titleRequestAdmissionCase "foreign-admission-branch-fields" titleRequest signed
+      (some titleEvidence) .completed "b" true false true
+  , titleRequestAdmissionCase "present-preclaim-deadline" titleRequest signed
+      (some titleEvidence) .completed "b" true true false
+  , titleRequestAdmissionCase "signed-purpose-mutation" { titleRequest with purpose := .normal }
+      signed (some titleEvidence)
+  , titleRequestAdmissionCase "forged-requester" forgedRequester
+      (signTitleAdmission forgedRequester) (some titleEvidence)
+  , titleRequestAdmissionCase "forged-physical-parent" wrongParent
+      (signTitleAdmission wrongParent) (some titleEvidence)
+  , titleRequestAdmissionCase "tool-linked-parent" toolParent
+      (signTitleAdmission toolParent) (some titleEvidence)
+  , titleRequestAdmissionCase "queue-control-input" queued
+      (signTitleAdmission queued) (some titleEvidence)
+  , titleRequestAdmissionCase "skill-control-input" skill
+      (signTitleAdmission skill) (some titleEvidence)
+  , titleRequestAdmissionCase "cwd-control-input" cwd
+      (signTitleAdmission cwd) (some titleEvidence)
+  , titleRequestAdmissionCase "goal-control-input" goal
+      (signTitleAdmission goal) (some titleEvidence)
+  , titleRequestAdmissionCase "caller-title-control-input" suppliedTitle
+      (signTitleAdmission suppliedTitle) (some titleEvidence)
+  , titleRequestAdmissionCase "retry-control-input" retry
+      (signTitleAdmission retry) (some titleEvidence)
+  , titleRequestAdmissionCase "trigger-control-input" trigger
+      (signTitleAdmission trigger) (some titleEvidence)
+  , titleRequestAdmissionCase "missing-parent-evidence" titleRequest signed (some noParent)
+  , titleRequestAdmissionCase "parent-session-mismatch" titleRequest signed (some wrongSession)
+  , titleRequestAdmissionCase "stale-parent-document" titleRequest signed (some stalePhysical)
+  , titleRequestAdmissionCase "unsigned-title" titleRequest
+      { signed with signatureValid := false } (some titleEvidence)
+  , titleRequestAdmissionCase "title-local-self-forbidden" titleRequest
+      (signTitleAdmission titleRequest { titleAdmissionUnsigned with kind := .localSelf })
+      (some titleEvidence)
+  , titleRequestAdmissionCase "title-cross-source-forbidden" titleRequest
+      (signTitleAdmission titleRequest
+        { titleAdmissionUnsigned with runtimeSourceKind := .localChild })
+      (some titleEvidence)
+  ]
+
+structure TitlePurposeWireCase where
+  name : String
+  wire : Option String
+  expectedDecoded : Option RequestPurpose
+  deriving Repr
+
+def titlePurposeWireCases : List TitlePurposeWireCase :=
+  let makeCase (name : String) (wire : Option String) : TitlePurposeWireCase :=
+    { name, wire, expectedDecoded := wire.bind RequestPurpose.fromWire? }
+  [ makeCase "missing-purpose-is-invalid" none
+  , makeCase "unknown-purpose-is-invalid" (some "titleAudit")
+  , makeCase "normal-purpose-explicit" (some "normal")
+  , makeCase "title-purpose-explicit" (some "title-audit") ]
+
 open Enrollment
 
 def enrollmentOffer : Offer :=

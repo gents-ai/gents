@@ -11,7 +11,7 @@ async fn pre_stream_transport_failure_retries_and_succeeds() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -64,7 +64,7 @@ async fn pre_stream_rate_limit_server_and_connect_failures_share_retry_budget() 
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -104,7 +104,7 @@ async fn transport_ladder_exhaustion_fails_with_last_error() {
     let stream = run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -143,7 +143,7 @@ async fn three_minute_outage_recovers_within_ladder() {
     let stream = run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -186,7 +186,7 @@ async fn parse_400_resamples_once_then_repairs_on_identical_error() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         loop_config,
@@ -242,7 +242,7 @@ async fn first_stream_poll_parse_400_uses_pre_stream_retry_policy() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -276,7 +276,7 @@ async fn permanent_400_fails_immediately() {
     let stream = run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -311,7 +311,7 @@ async fn deadline_fail_fast_pre_sleep() {
     let stream = run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -370,7 +370,7 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("hi"),
+        TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -412,7 +412,7 @@ async fn reasoning_only_completion_retracts_and_resamples() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("solve this"),
+        TaggedMessage::unassociated(Message::user("solve this")),
         Vec::new(),
         Arc::new(Vec::new()),
         config(0),
@@ -455,7 +455,7 @@ async fn mid_stream_failure_after_tool_intent_retracts_without_dispatch() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(tools),
         config(4),
@@ -487,4 +487,62 @@ async fn mid_stream_failure_after_tool_intent_retracts_without_dispatch() {
         "retried request must not invent a result for an undispatched tool: {:?}",
         histories[1]
     );
+}
+
+fn reasoning_rejection() -> CompletionError {
+    CompletionError::ProviderError(
+        "400 invalid_request_error: messages.1.content.0: Invalid `signature` in `thinking` \
+         block"
+            .to_string(),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn reasoning_rejection_repairs_once_without_resampling() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(reasoning_rejection()),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("recovered".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let stream = run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(Message::user("continue")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(2),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("recovered"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 1);
+    assert!(collected.attempts[0].will_retry);
+    assert_eq!(collected.attempts[0].backoff, Duration::ZERO);
+    assert_eq!(model.seen_histories().await.len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn repeated_reasoning_rejection_fails_after_its_one_repair() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(reasoning_rejection()),
+        ScriptedCall::FailStream(reasoning_rejection()),
+    ]);
+    let stream = run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(Message::user("continue")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(2),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert!(collected.error.is_some());
+    assert_eq!(collected.attempts.len(), 2);
+    assert!(collected.attempts[0].will_retry);
+    assert!(!collected.attempts[1].will_retry);
+    assert_eq!(model.seen_histories().await.len(), 2);
 }

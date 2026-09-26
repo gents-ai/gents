@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::message::{
     AudioMediaType, DocumentMediaType, ImageDetail, ImageMediaType, VideoMediaType,
 };
-use crate::rendered_request::CaptureScope;
+use crate::rendered_request::{CaptureScope, CaptureScopeKind};
 
 /// Strict reconstruction of an unsealed source for recovery/closure planning.
 pub mod extent;
@@ -79,6 +79,24 @@ pub enum OutputSource {
     Authored { key: String },
 }
 
+impl OutputSource {
+    /// Auxiliary captures are request-owned audit evidence, not assistant output.
+    pub fn is_auxiliary_audit(&self) -> bool {
+        matches!(
+            self,
+            Self::ProviderTurn {
+                scope: CaptureScope {
+                    kind: CaptureScopeKind::Compaction
+                        | CaptureScopeKind::CompactionFallback
+                        | CaptureScopeKind::Title,
+                    ..
+                },
+                ..
+            }
+        )
+    }
+}
+
 /// What a stream carries and where it sits in the native message. Carried by
 /// the run that opens the stream, so live views render unclosed output in
 /// native structure without any control document.
@@ -103,8 +121,13 @@ pub enum StreamPayload {
     Text,
     Reasoning,
     ReasoningSummary,
-    /// Provider-opaque reasoning (`Encrypted` / `Redacted`); never rendered.
-    ReasoningOpaque,
+    /// Provider-encrypted reasoning; retained for replay but never rendered.
+    ReasoningEncrypted,
+    /// Provider-redacted reasoning; retained for replay but never rendered.
+    ReasoningRedacted,
+    /// The signature field of a reasoning text part. It may share the part's
+    /// native position with its body and is never rendered.
+    ReasoningSignature,
     /// Native JSON argument text exactly as emitted; it may be incomplete
     /// until sealed and is never rewritten to canonicalize. Buffer argument
     /// bytes until the provider's call identity is known.
@@ -225,7 +248,8 @@ pub struct OutputSegment {
 /// A zero-byte continuation is not a flush: it carries no new output fact and
 /// cannot be used as a streaming heartbeat. Silent work uses explicit renewal.
 /// Runs cover the payload exactly; streams open densely from zero and declare
-/// exactly once. Missing earlier flushes never permit inventing a declaration.
+/// exactly once per `(block_index, part_index, signature field)` position.
+/// Missing earlier flushes never permit inventing a declaration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SegmentRun {

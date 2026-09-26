@@ -164,6 +164,31 @@ theorem retractBeforeRetry_preserves_toolProjectionCoherent
       (fresh_of_no_collision before record (by simpa using hcollision) habsent) _ coherent
     simpa [sourceOpen] using hopen
 
+theorem closeAuxiliary_preserves_toolProjectionCoherent
+    (before after : World) (generation : Generation) (closing : Segment)
+    (coherent : toolProjectionCoherent before = true)
+    (h : closeAuxiliary before generation closing = .ok after) :
+    toolProjectionCoherent after = true := by
+  have hc := checked_core_success _ _ _ h
+  unfold closeAuxiliaryCore at hc
+  split at hc <;> try contradiction
+  rename_i hcollision
+  split at hc
+  · split at hc <;> try contradiction
+    cases hc
+    exact coherent
+  · rename_i habsent
+    split at hc <;> try contradiction
+    split at hc <;> try contradiction
+    rename_i hopen
+    dsimp only at hc
+    split at hc <;> try contradiction
+    split at hc <;> try contradiction
+    cases hc
+    apply toolProjectionCoherent_append_open before closing
+      (fresh_of_no_collision before closing (by simpa using hcollision) habsent) _ coherent
+    simpa [sourceOpen] using hopen
+
 theorem publishAuthored_preserves_toolProjectionCoherent
     (before after : World) (generation : Generation) (closing : Segment)
     (message : MessageEnvelope) (coherent : toolProjectionCoherent before = true)

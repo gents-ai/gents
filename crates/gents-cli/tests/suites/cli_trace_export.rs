@@ -488,7 +488,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     let request_doc_id = exec_doc_id(
         node,
         r#"mutation {
-            create_AgentRequest(input: {
+            create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-cap",
                 agent_did: "did:test:amy",
                 behavior_id: "amy",
@@ -1755,7 +1755,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     let root_request_doc_id = exec_doc_id(
         node,
         r#"mutation {
-            create_AgentRequest(input: {
+            create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-1",
                 agent_did: "did:test:amy",
                 behavior_id: "amy",
@@ -1875,7 +1875,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         node,
         &format!(
             r#"mutation {{
-            create_AgentRequest(input: {{
+            create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "req-child",
                 agent_did: "did:test:reviewer",
                 behavior_id: "reviewer",
@@ -1979,7 +1979,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     let deadline_request_doc_id = exec_doc_id(
         node,
         r#"mutation {
-            create_AgentRequest(input: {
+            create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-deadline",
                 agent_did: "did:test:amy",
                 behavior_id: "amy",

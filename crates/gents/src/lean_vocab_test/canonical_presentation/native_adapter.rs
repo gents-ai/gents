@@ -17,10 +17,11 @@ use gents_protocol::output::{
 };
 
 use super::super::{
-    ExecutionFuture, LeanCanonicalClosure, LeanCanonicalMessage, LeanCanonicalSegment,
-    LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
-    LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
-    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart, LeanResultPart,
+    ExecutionFuture, LeanAuxiliaryKind, LeanCanonicalClosure, LeanCanonicalMessage,
+    LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData,
+    LeanMediaKind, LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome,
+    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart,
+    LeanResultPart,
 };
 use super::{assert_native_payload_presentation_case, PayloadPresentationAdapter};
 
@@ -108,6 +109,25 @@ fn source(value: &LeanCanonicalSource) -> Result<OutputSource> {
             turn_index: u32::try_from(*turn)?,
             attempt: u32::try_from(*attempt)?,
         },
+        LeanCanonicalSource::Auxiliary {
+            auxiliary_kind,
+            scope,
+            turn,
+            attempt,
+        } => OutputSource::ProviderTurn {
+            scope: format!(
+                "{}.{}",
+                match auxiliary_kind {
+                    LeanAuxiliaryKind::Compaction => "compaction",
+                    LeanAuxiliaryKind::CompactionFallback => "compaction_fallback",
+                    LeanAuxiliaryKind::Title => "title",
+                },
+                scope
+            )
+            .parse()?,
+            turn_index: u32::try_from(*turn)?,
+            attempt: u32::try_from(*attempt)?,
+        },
         LeanCanonicalSource::Tool { call } => OutputSource::ToolCall {
             tool_call_doc_id: tool_id(*call),
         },
@@ -142,8 +162,10 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
                             let payload = match decl.kind {
                                 LeanPayloadKind::Text => StreamPayload::Text,
                                 LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
+                                LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
                                 LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
-                                LeanPayloadKind::Opaque => StreamPayload::ReasoningOpaque,
+                                LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
+                                LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
                                 LeanPayloadKind::Arguments => {
                                     let tool = decl
                                         .tool

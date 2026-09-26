@@ -113,14 +113,21 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
-            Message::user("exercise repeated failures"),
+            TaggedMessage::unassociated(Message::user("exercise repeated failures")),
             Vec::new(),
             Arc::new(vec![Box::new(RepeatProbe {
                 script: Arc::clone(&script),
             }) as Box<dyn ToolDyn>]),
             owned_config(64),
         );
-        let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
         assert!(
             script.lock().unwrap().is_empty(),
             "{name}: every modeled dispatch must run"
@@ -242,12 +249,19 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        Message::user("list the missing directory"),
+        TaggedMessage::unassociated(Message::user("list the missing directory")),
         Vec::new(),
         Arc::new(tools),
         owned_config(64),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
     let error = collected.error.expect("the repeated bash failure must stop");
     assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}");
     assert_eq!(collected.tool_results.len(), 4);
@@ -314,14 +328,21 @@ async fn envelope_shaped_errors_from_other_tools_keep_their_hint() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        Message::user("call the tool"),
+        TaggedMessage::unassociated(Message::user("call the tool")),
         Vec::new(),
         Arc::new(vec![Box::new(EnvelopeShapedTool {
             calls: Arc::clone(&calls),
         }) as Box<dyn ToolDyn>]),
         owned_config(64),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
     assert!(collected

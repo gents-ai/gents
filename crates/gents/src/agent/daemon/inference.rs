@@ -10,6 +10,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
+use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::ReductionOptions;
 use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
 use crate::hook::DefraSessionHook;
@@ -122,7 +123,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         request: &crate::watcher::AgentRequest,
         doc_id: &str,
-        history: &[crate::llm::message::Message],
+        history: &[TaggedMessage],
+        mut replay: LoopReplayInput,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         stream_writer: &crate::streaming::DefraStreamWriter,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
@@ -212,6 +214,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 loop_config.output_obligation_gate = output_obligation_gate
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
+                let provider_profile = loop_config.provider_input_counter.profile();
                 let turn_context_window = self.behavior.context_window;
                 let max_turns_provenance = self.behavior.max_turns_provenance;
                 let turn_compaction_options = self.compaction_options_for_request(
@@ -242,9 +245,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let request = turn_request.clone();
                     let request_commit_cid = turn_request_commit_cid.clone();
                     Box::pin(async move {
+                        let provider_view = crate::agent::loop_stream::provider_view_tagged(
+                            provider_profile,
+                            compaction_request.messages,
+                        )
+                        .map_err(anyhow::Error::new)?;
+                        options.max_compacted_prefix_messages =
+                            crate::agent::loop_stream::replay_compaction_prefix_bound(
+                                &provider_view, &compaction_request.required,
+                            )?;
+                        let native_messages = provider_view
+                            .iter()
+                            .map(|row| row.message.clone())
+                            .collect::<Vec<_>>();
                         options.keep_recent_tokens = compactor.retention_target(
                             options.keep_recent_tokens,
-                            &compaction_request.messages,
+                            &native_messages,
                             compaction_request.admission,
                         )?;
                         // This is a request-local sticky projection, not a
@@ -258,6 +274,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             crate::provider_context_reduction::capture_source_boundary(
                                 node.as_ref(),
                                 &request.session_id,
+                                &request.agent_did,
+                                request.requester_did.as_deref(),
                                 &request.doc_id,
                                 &request_commit_cid,
                             )
@@ -266,7 +284,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             CallKind::Compaction,
                             1,
                             compactor.reduce(
-                                compaction_request.messages,
+                                native_messages,
                                 turn_context_window,
                                 &options,
                                 compaction_request.admission,
@@ -280,20 +298,43 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 call_id: join.call_id,
                                 call_seq: join.call_seq,
                             });
+                        let provider_values = provider_view
+                            .iter()
+                            .map(|row| row.message.clone())
+                            .collect::<Vec<_>>();
                         let Some(exact) = result.exact_reduction() else {
                             if result.cannot_fit() {
                                 return Ok(
                                     crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
                                 );
                             }
+                            anyhow::ensure!(
+                                result.provider_messages()? == provider_values,
+                                "repaired provider view disagrees with source-index projection"
+                            );
                             return Ok(
                                 crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
-                                    messages: result.provider_messages()?.to_vec(),
+                                    messages: provider_view,
                                 },
                             );
                         };
+                        anyhow::ensure!(
+                            exact
+                                .compacted_prefix
+                                .iter()
+                                .chain(exact.retained_suffix)
+                                .eq(provider_values.iter()),
+                            "exact reduction split disagrees with source-index provider view"
+                        );
+                        let split = exact.compacted_prefix.len();
+                        let associations =
+                            crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                                compaction_request.required,
+                                &provider_view[..split],
+                                &provider_view[split..],
+                            );
                         let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-                        let (row, provider_messages) =
+                        let (row, _) =
                             crate::provider_context_reduction::persist_exact(
                             node.as_ref(),
                             crate::provider_context_reduction::NewExactProviderContextReduction {
@@ -311,6 +352,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     .map(String::as_str),
                                 producer_call: producer_call.as_ref(),
                                 source_boundary: &source_boundary,
+                                replay_associations: &associations,
                                 original_tokens: result.original_token_estimate,
                                 compacted_tokens: result.compacted_token_estimate,
                             },
@@ -318,7 +360,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         )
                         .await?;
                         Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                            messages: provider_messages,
+                            messages: row.checkpoint_tagged_messages()?,
                             reduction_key: row.reduction_key,
                         })
                     })
@@ -332,10 +374,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 )
                 .await?;
                 let (loop_history, loop_prompt) = if let Some((row, lineage_keys)) = restored {
-                    let mut messages = row.checkpoint_messages()?;
+                    let mut messages = row.checkpoint_tagged_messages()?;
                     let prompt = messages.pop().context(
                         "durable provider-context checkpoint has no current prompt",
                     )?;
+                    anyhow::ensure!(
+                        row.agent_did == request.agent_did
+                            && row.requester_did == request.requester_did
+                            && row.session_id == request.session_id
+                            && row.request_id == request.request_id
+                            && row.request_doc_id == request.doc_id,
+                        "durable provider-context checkpoint crossed its current request scope"
+                    );
+                    let boundary = row.source_boundary()?;
+                    let replay_scope = crate::session::CanonicalReplayScope {
+                        expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                        agent_did: &request.agent_did,
+                        requester_did: request.requester_did.as_deref(),
+                        session_id: &request.session_id,
+                        request_id: &request.request_id,
+                        request_doc_id: &request.doc_id,
+                        request_commit_cid: &row.request_commit_cid,
+                    };
+                    replay.required = row.replay_associations()?.required;
+                    crate::session::validate_canonical_replay_boundary(
+                        self.node.as_ref(), replay_scope, &boundary,
+                    ).await?;
                     loop_config.context_message = None;
                     loop_config.active_reduction_keys = row.active_reduction_keys();
                     loop_config.reduction_chain_keys = lineage_keys;
@@ -360,14 +424,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .collect();
                     (
                         history.to_vec(),
-                        crate::llm::message::Message::user(request.content.clone()),
+                        TaggedMessage::unassociated(crate::llm::message::Message::user(
+                            request.content.clone(),
+                        )),
                     )
                 };
+                loop_config.replay = replay;
                 let loop_tools = self.loop_tools.clone();
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
+                let provider_profile = loop_config.provider_input_counter.profile();
                 let mut stream = admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index,
@@ -416,6 +484,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             stream_writer,
                             lifecycle,
                             doc_id,
+                            provider_profile,
                         );
                         let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
                         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -426,11 +495,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let item = match tokio::select! {
                                 biased;
                                 _ = shutdown.changed() => {
+                                    // No output write here: embedded writes issued during
+                                    // runtime teardown can stall shutdown. Recovery closes
+                                    // the request; received bytes since the last flush are
+                                    // not retained on shutdown.
+                                    drop(stream);
                                     return Err(anyhow!("shutdown requested during inference stream"));
                                 }
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    let output_result = processor
+                                        .persist_received_partial_turn("persist interrupted assistant turn")
+                                        .await;
                                     drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
@@ -442,16 +519,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to cancel in-flight tool calls during request interrupt"
                                         );
                                     }
-                                    if let Err(error) = processor
-                                        .persist_partial_turn("persist interrupted assistant turn")
-                                        .await
-                                    {
+                                    if let Err(error) = output_result {
                                         tracing::warn!(
                                             request_id = %request_id,
                                             session_id = %session_id,
                                             error = %error,
-                                            "failed to persist interrupted assistant turn before terminal transition"
+                                            "failed to persist received provider audit before interrupt terminal transition"
                                         );
+                                        return Err(error.context("persisting received provider audit during interrupt"));
                                     }
                                     // Tool terminalization publishes its result atomically;
                                     // abort cannot recreate results from mutable legacy rows.
@@ -506,6 +581,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                                 &terminal_failure_reason,
                                                 error.to_string(),
                                             );
+                                            let output_result = processor
+                                                .persist_received_partial_turn(
+                                                    "persist deadline-expired assistant turn",
+                                                )
+                                                .await;
                                             drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
@@ -517,6 +597,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                                     "failed to sweep expired in-flight tool calls after request deadline"
                                                 );
                                             }
+                                            output_result.context(
+                                                "persisting received provider audit after request deadline",
+                                            )?;
                                             return Err(error);
                                         }
                                     }
@@ -525,48 +608,58 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 Some(item) => item,
                                 None => break,
                             };
-                            let processed = match await_with_request_deadline(
-                                request_deadline,
-                                processor.process_item(item),
-                                "processing inference stream item",
-                            )
-                            .await
-                            {
+                            // Once pulled from the stream, this item owns a write
+                            // receipt; timing out its future can lose its bytes.
+                            let processed = match processor.process_item(item).await {
                                 Ok(processed) => processed,
                                 Err(error) => {
-                                    admission::set_terminal_failure_reason(
-                                        &terminal_failure_reason,
-                                        error.to_string(),
-                                    );
                                     drop(stream);
-                                    if let Err(sweep_error) =
-                                        persistence_hook.timeout_expired_tool_calls().await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %sweep_error,
-                                            "failed to sweep expired in-flight tool calls after request deadline"
-                                        );
-                                    }
                                     return Err(error);
                                 }
                             };
+                            if let Err(error) = ensure_request_deadline_open(
+                                request_deadline,
+                                "processing inference stream item",
+                            ) {
+                                admission::set_terminal_failure_reason(
+                                    &terminal_failure_reason,
+                                    error.to_string(),
+                                );
+                                let output_result = processor
+                                    .persist_received_partial_turn(
+                                        "persist deadline-expired assistant turn",
+                                    )
+                                    .await;
+                                drop(stream);
+                                if let Err(sweep_error) =
+                                    persistence_hook.timeout_expired_tool_calls().await
+                                {
+                                    tracing::warn!(
+                                        request_id = %request_id,
+                                        session_id = %session_id,
+                                        error = %sweep_error,
+                                        "failed to sweep expired in-flight tool calls after request deadline"
+                                    );
+                                }
+                                output_result.context(
+                                    "persisting received provider audit after request deadline",
+                                )?;
+                                return Err(error);
+                            }
                             match processed {
-                                Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
-                                Ok(crate::agent::stream_processor::StreamAction::Done) => break,
-                                Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
+                                crate::agent::stream_processor::StreamAction::Continue => {}
+                                crate::agent::stream_processor::StreamAction::Done => break,
+                                crate::agent::stream_processor::StreamAction::Error(error) => {
                                     stream_error = Some(error);
                                     break;
                                 }
-                                Err(error) => return Err(error),
                             }
                         }
 
                         drop(stream);
                         if let Some(error) = stream_error {
                             let _ = processor
-                                .persist_partial_turn("persist errored assistant turn")
+                                .persist_received_partial_turn("persist errored assistant turn")
                                 .await?;
                             let error_reason = stream_failure_reason(
                                 &error.to_string(),
@@ -579,6 +672,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         }
 
                         if processor.final_text.is_none() {
+                            processor
+                                .persist_received_partial_turn("persist unterminated assistant turn")
+                                .await
+                                .context("persisting received provider audit after stream EOF")?;
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 "provider stream ended without an explicit terminal response"
                             )));
@@ -611,10 +708,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             )));
                         }
 
-                        ensure_request_deadline_open(
+                        if let Err(error) = ensure_request_deadline_open(
                             request_deadline,
                             "finalizing inference response",
-                        )?;
+                        ) {
+                            processor
+                                .persist_received_partial_turn(
+                                    "persist deadline-expired assistant turn",
+                                )
+                                .await
+                                .context("persisting received provider audit after request deadline")?;
+                            return Err(error);
+                        }
                         Ok(HandleRequestOutcome::Completed)
                     },
                 )
@@ -1012,6 +1117,7 @@ mod tests {
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             behavior.agent_did(),
             requester_did,
@@ -1064,6 +1170,7 @@ mod tests {
         )
         .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
             behavior.agent_did(),
             member.did(),
@@ -1230,6 +1337,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
+            None,
             Arc::new(RoutedReplyModel),
             preamble,
             loop_tools,
@@ -1371,6 +1479,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
+            None,
             Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
@@ -1508,6 +1617,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -1673,6 +1783,7 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior.clone(),
+            None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),

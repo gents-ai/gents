@@ -28,9 +28,22 @@ GROUPS = {
     "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",
     "terminal_diagnostic_replay_cases": "LeanTerminalDiagnosticReplayCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
+    "reasoning_audit_cases": "LeanReasoningAuditCase",
+    "reasoning_signature_cases": "LeanReasoningSignatureCase",
+    "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
+    "prompt_assembly_claude_wire_start_cases": "LeanPromptAssemblyClaudeWireStartCase",
+    "prompt_assembly_claude_thinking_stream_cases": "LeanPromptAssemblyClaudeThinkingStreamCase",
+    "prompt_assembly_reasoning_suffix_cases": "LeanPromptAssemblyReasoningSuffixCase",
+    "prompt_assembly_replay_shape_cases": "LeanPromptAssemblyReplayShapeCase",
+    "prompt_assembly_replay_prefix_cases": "LeanPromptAssemblyReplayPrefixCase",
+    "title_request_admission_cases": "LeanTitleRequestAdmissionCase",
+    "title_request_purpose_wire_cases": "LeanTitleRequestPurposeWireCase",
+    "title_usage_cases": "LeanTitleUsageCase",
+    "title_admission_join_cases": "LeanTitleAdmissionJoinCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
     "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
+    "protected_replay_compaction_cases": "LeanProtectedReplayCompactionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
     "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
     "queued_steering_trace_cases": "LeanQueuedSteeringTraceCase",
@@ -100,13 +113,19 @@ def parse_fields(body):
         name, ty = match.group(1), " ".join(match.group(2).split())
         joined = ",".join(attrs)
         rename = re.search(r'rename\s*=\s*"([^"]+)"', joined)
+        required_nullable = bool(re.search(
+            r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"', joined))
         fields.append({
             "name": rename.group(1) if rename else name,
             "type": ty,
             "default": "default" in joined,
+            "required_nullable": required_nullable,
             "unsupported": unsupported_serde(attrs, [
                 r'default', r'rename\s*=\s*"[^"]+"',
-            ]) + unsupported_non_serde(all_attrs),
+                r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"',
+            ]) + unsupported_non_serde(all_attrs) + (
+                ["required_nullable on non-Option field"]
+                if required_nullable and not ty.startswith("Option<") else []),
         })
     return fields, errors
 
@@ -170,14 +189,16 @@ def parse_items(source):
                         item["unsupported"].append(f"unsupported variant layout `{part}`")
                     continue
                 vname, vfields, vnew = vm.groups()
+                renamed = re.search(r'rename\s*=\s*"([^"]+)"', ",".join(variant_attrs))
                 parsed_fields, field_errors = parse_fields(vfields) if vfields is not None else (None, [])
                 item["unsupported"].extend(field_errors)
                 variants.append({
-                    "name": (snake(vname) if item["snake"] else
+                    "name": (renamed.group(1) if renamed else
+                             snake(vname) if item["snake"] else
                              vname[0].lower() + vname[1:] if item["camel"] else vname),
                     "fields": parsed_fields,
                     "newtype": " ".join(vnew.split()) if vnew else None,
-                    "unsupported": unsupported_serde(variant_attrs, []) +
+                    "unsupported": unsupported_serde(variant_attrs, [r'rename\s*=\s*"[^"]+"']) +
                                    unsupported_non_serde(all_variant_attrs),
                 })
                 item["unsupported"].extend(variants[-1]["unsupported"])
@@ -259,7 +280,9 @@ class Checker:
                     f"{path}.{field['name']}",
                     "unsupported serde syntax: " + ", ".join(field["unsupported"]))
                 continue
-            optional = field["default"] or env.get(field["type"], field["type"]).startswith("Option<")
+            optional = field["default"] or (
+                env.get(field["type"], field["type"]).startswith("Option<")
+                and not field["required_nullable"])
             if field["name"] not in value:
                 if not optional:
                     self.fail(path, f"missing field `{field['name']}`")

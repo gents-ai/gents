@@ -362,6 +362,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "request-output-gate",
             identity.did(),
             identity.did(),
@@ -496,6 +497,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             identity.did(),
             identity.did(),

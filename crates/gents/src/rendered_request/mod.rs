@@ -71,6 +71,7 @@ pub(crate) fn context_for_claimed_request(
     request: &crate::watcher::AgentRequest,
     request_commit_cid: &str,
     model_name: String,
+    provider_family: Option<String>,
 ) -> RenderedRequestContext {
     RenderedRequestContext {
         request_doc_id: request.doc_id.clone(),
@@ -81,6 +82,7 @@ pub(crate) fn context_for_claimed_request(
         behavior_id: request.behavior_id.clone(),
         session_id: request.session_id.clone(),
         model_name,
+        provider_family,
     }
 }
 
@@ -99,25 +101,104 @@ pub(crate) fn scope_from_factory(
     ))
 }
 
-/// Run `future` under a capture scope (with the native admission-join lookup
-/// installed) when one can be built, and unchanged otherwise.
-pub(crate) async fn scope_request_if_configured<T>(
-    context: RenderedRequestContext,
-    factory: Option<&RenderedRequestCaptureFactory>,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    match scope_from_factory(context, factory) {
-        Some(scope) => scope::scope_request(scope, future).await,
-        None => future.await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A delta capture whose base must be read from the store.
+    fn delta_capture() -> String {
+        let mut value = serde_json::json!({"model": "m", "stream": true});
+        value["padding"] = serde_json::json!("x".repeat(4096));
+        let mut base_value = value.clone();
+        base_value["stream"] = serde_json::json!(false);
+        let request = encoding::encode_against(
+            &value,
+            &base_value,
+            encoding::BaseWitness {
+                doc_id: "bae-base".into(),
+                field_commit_cid: "base-commit".into(),
+                depth: 0,
+                agent_did: "did:test".into(),
+                requester_did: String::new(),
+                session_id: "session".into(),
+                source: "openai_responses".into(),
+                capture_scope: "inference.1".into(),
+            },
+        )
+        .unwrap();
+        let provenance = encoding::encode_full(&serde_json::json!({})).unwrap();
+        let stored = encoding::encode_container(&request, &provenance).unwrap();
+        assert!(stored.contains("base-commit"), "fixture must store a delta");
+        stored
+    }
+
+    struct FailingStore;
+
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for FailingStore {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+            anyhow::bail!("store unavailable")
+        }
+        async fn capture_field_commit(
+            &self,
+            _doc_id: &str,
+            _field: &str,
+        ) -> Result<Option<commits::RequestJsonCommit>> {
+            anyhow::bail!("store unavailable")
+        }
+    }
+
+    struct MissingBase;
+
+    #[async_trait::async_trait]
+    impl CaptureBaseReader for MissingBase {
+        async fn execute_capture_query(&self, _query: &str) -> Result<Value> {
+            Ok(serde_json::json!({"data": {"RenderedRequest": []}}))
+        }
+        async fn capture_field_commit(
+            &self,
+            _doc_id: &str,
+            _field: &str,
+        ) -> Result<Option<commits::RequestJsonCommit>> {
+            Ok(None)
+        }
+    }
+
+    /// Replay drops a turn only for a capture that fails verification; a store
+    /// read failure while resolving its base is typed so it propagates.
+    #[tokio::test]
+    async fn base_resolution_distinguishes_store_reads_from_missing_bases() {
+        let stored = delta_capture();
+        let store = decode_capture_json_from(
+            &FailingStore,
+            gents_protocol::rendered_request::CAPTURE_VERSION,
+            &stored,
+            CapturePayloadKind::RequestBody,
+        )
+        .await
+        .expect_err("a failed store read cannot decode");
+        assert!(
+            store.downcast_ref::<CaptureStoreReadError>().is_some(),
+            "{store:#}"
+        );
+
+        let missing = decode_capture_json_from(
+            &MissingBase,
+            gents_protocol::rendered_request::CAPTURE_VERSION,
+            &stored,
+            CapturePayloadKind::RequestBody,
+        )
+        .await
+        .expect_err("a missing base cannot decode");
+        assert!(
+            missing.downcast_ref::<CaptureStoreReadError>().is_none(),
+            "{missing:#}"
+        );
+    }
+
     fn agent_request() -> crate::watcher::AgentRequest {
         crate::watcher::AgentRequest {
+            purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "request-1".to_string(),
             agent_did: "did:key:test".to_string(),
@@ -154,11 +235,11 @@ mod tests {
     fn context_for_request_carries_an_absent_requester_as_empty() {
         let mut request = agent_request();
         request.requester_did = None;
-        let context = context_for_claimed_request(&request, "", "test-model".to_string());
+        let context = context_for_claimed_request(&request, "", "test-model".to_string(), None);
         assert_eq!(context.requester_did, "");
 
         request.requester_did = Some("did:key:requester".to_string());
-        let context = context_for_claimed_request(&request, "", "test-model".to_string());
+        let context = context_for_claimed_request(&request, "", "test-model".to_string(), None);
         assert_eq!(context.requester_did, "did:key:requester");
     }
 
@@ -206,6 +287,13 @@ pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<
         |_| anyhow::bail!("capture delta requires base resolution"),
     )
 }
+
+/// A store read that failed while resolving a capture's delta chain. It says
+/// nothing about the capture itself, so replay must not treat it as an
+/// unverifiable capture.
+#[derive(Debug, thiserror::Error)]
+#[error("reading a rendered-request capture base from the store: {0:#}")]
+pub struct CaptureStoreReadError(pub anyhow::Error);
 
 #[async_trait::async_trait]
 trait CaptureBaseReader {
@@ -272,7 +360,10 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                         }} }}"#,
                         doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
                     );
-                    let response = reader.execute_capture_query(&query).await?;
+                    let response = reader
+                        .execute_capture_query(&query)
+                        .await
+                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
                     let rows = response
                         .get("data")
                         .and_then(|data| data.get("RenderedRequest"))
@@ -285,7 +376,8 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
                     };
                     let actual = reader
                         .capture_field_commit(&base.doc_id, "request_json")
-                        .await?
+                        .await
+                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
                         .context("rendered-request delta base lacks field commit")?
                         .cid;
                     cache.insert(base.doc_id.clone(), (row.clone(), actual));

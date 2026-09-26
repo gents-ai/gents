@@ -368,7 +368,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
         &graphql,
         &format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "default",
@@ -554,7 +554,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                 &graphql,
                 &format!(
                     r#"mutation {{
-                        create_AgentRequest(input: {{
+                        create_AgentRequest(input: {{purpose: "normal", 
                             request_id: "{request_id}",
                             agent_did: "{agent_did}",
                             behavior_id: "default",

@@ -407,7 +407,21 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
 /// rewrite), so the projection is that body; `openai_wire_api` is ignored.
 #[test]
 fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
-    let request = core_request("claude-visible reasoning");
+    let mut request = core_request("claude-visible reasoning");
+    request.chat_history = OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&[
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(Reasoning {
+                id: None,
+                content: vec![crate::llm::message::ReasoningContent::Text {
+                    text: "claude-visible reasoning".to_owned(),
+                    signature: Some("provider-signature".to_owned()),
+                }],
+            })],
+        },
+        Message::user("visible prompt"),
+    ]))
+    .expect("non-empty signed Claude history");
     for wire in [OpenAiWireApi::ChatCompletions, OpenAiWireApi::Responses] {
         let counter = ProviderInputCounter::new(
             BackendProviderKind::ClaudeCliSubscription,
@@ -418,6 +432,7 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
         assert_eq!(
             counter.project_body(&request).expect("provider body"),
             crate::claude_messages::build_messages_body("claude-sonnet-5", &request)
+                .expect("Claude body")
         );
     }
     let projection = ProviderInputCounter::new(

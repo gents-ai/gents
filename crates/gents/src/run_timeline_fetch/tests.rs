@@ -133,6 +133,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
                 }) { _docID }
                 create_AgentRequest(input: {
                     request_id: "pending-tool-request"
+                    purpose: "normal"
                     agent_did: "did:test:timeline"
                     behavior_id: "general"
                     session_id: "pending-tool-session"
