@@ -831,19 +831,28 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let agent_did = "did:test:codex-shim";
         let access = ConfigAccess::Local(node.clone());
-        seed_backend_with_catalog(&access, node.as_ref(), vec![advertised("model-x")]).await;
+        // Publication admits a profile only against its backend's catalog, so
+        // the unadvertised profile is published while its model is listed and
+        // then left behind by a later discovery that drops it.
+        seed_backend_with_catalog(
+            &access,
+            node.as_ref(),
+            vec![advertised("model-x"), advertised("not-advertised")],
+        )
+        .await;
 
         let mut unadvertised = profile("profile-unadvertised", "not-advertised");
         unadvertised.backend_id = "backend-a".to_string();
         write_inference_profile_document(&access, &unadvertised)
             .await
-            .expect("seed unadvertised profile");
+            .expect("seed profile while its model is advertised");
         write_inference_profile_document(&access, &profile("profile-x", "model-x"))
             .await
             .expect("seed advertised profile");
         write_agent_behavior_document(&access, &behavior("default", "profile-x"))
             .await
             .expect("seed behavior");
+        seed_backend_with_catalog(&access, node.as_ref(), vec![advertised("model-x")]).await;
 
         let selection = ModelSelection {
             backend_id: "backend-a".into(),
