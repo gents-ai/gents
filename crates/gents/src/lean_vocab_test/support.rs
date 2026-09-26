@@ -238,8 +238,10 @@ pub(crate) struct LeanContractSnapshot {
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
-    pub(crate) prompt_assembly_claude_narrowing_cases: Vec<LeanPromptAssemblyClaudeNarrowingCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
+    pub(crate) prompt_assembly_reasoning_suffix_cases: Vec<LeanPromptAssemblyReasoningSuffixCase>,
+    pub(crate) prompt_assembly_replay_shape_cases: Vec<LeanPromptAssemblyReplayShapeCase>,
+    pub(crate) prompt_assembly_replay_prefix_cases: Vec<LeanPromptAssemblyReplayPrefixCase>,
     pub(crate) protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
@@ -1953,14 +1955,24 @@ pub(crate) fn lean_prompt_assembly_claude_replay_cases(
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
 }
 
-pub(crate) fn lean_prompt_assembly_claude_narrowing_cases(
-) -> &'static [LeanPromptAssemblyClaudeNarrowingCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_narrowing_cases
-}
-
 pub(crate) fn lean_prompt_assembly_claude_checkpoint_cases(
 ) -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
     &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
+}
+
+pub(crate) fn lean_prompt_assembly_reasoning_suffix_cases(
+) -> &'static [LeanPromptAssemblyReasoningSuffixCase] {
+    &lean_contract_snapshot().prompt_assembly_reasoning_suffix_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_shape_cases(
+) -> &'static [LeanPromptAssemblyReplayShapeCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_shape_cases
+}
+
+pub(crate) fn lean_prompt_assembly_replay_prefix_cases(
+) -> &'static [LeanPromptAssemblyReplayPrefixCase] {
+    &lean_contract_snapshot().prompt_assembly_replay_prefix_cases
 }
 
 pub(crate) fn lean_protected_replay_compaction_cases(

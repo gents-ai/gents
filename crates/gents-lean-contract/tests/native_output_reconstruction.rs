@@ -24,7 +24,7 @@ mod runtime_contract;
 use std::collections::BTreeSet;
 
 use gents_protocol::output::live::{
-    project_live, reconstruct_audit_prefix, DensePrefixError, LiveObservation, LiveTarget,
+    project_live, reconstruct_dense_prefix, DensePrefixError, LiveObservation, LiveTarget,
     LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::{
@@ -1065,7 +1065,7 @@ fn generated_reasoning_audit_cases_drive_exact_native_prefix() {
             .iter()
             .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
             .collect::<Vec<_>>();
-        let actual = reconstruct_audit_prefix(
+        let actual = reconstruct_dense_prefix(
             &observed,
             &nat(case.input.target.coordinate.request),
             &lean_source(&case.input.target.coordinate.source),
@@ -1142,7 +1142,7 @@ fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
         let writer = lean_writer(&input.target.writer);
         assert!(source.is_auxiliary_audit(), "{}", case.name);
         let actual_audit =
-            reconstruct_audit_prefix(&observed, &request_doc_id, &source, &writer, None);
+            reconstruct_dense_prefix(&observed, &request_doc_id, &source, &writer, None);
         match (&case.expected.audit, actual_audit) {
             (LeanReasoningAuditResult::Ok { streams: expected }, Ok(actual)) => {
                 assert_eq!(actual.streams.len(), expected.len(), "{}", case.name);

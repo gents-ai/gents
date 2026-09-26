@@ -890,111 +890,6 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
     }
 }
 
-#[test]
-fn generated_claude_narrowing_cases_bind_native_evidence_and_replay() {
-    use crate::lean_vocab_test::{
-        lean_prompt_assembly_claude_narrowing_cases, LeanClaudeReplayOrigin, LeanClaudeReplayUsage,
-    };
-    use gents_loop::claude_messages_body::{
-        narrow_assistant_content, ReplayEvidenceError, ReplayOrigin, ReplayUsage,
-    };
-
-    fn outcome(error: anyhow::Error) -> &'static str {
-        if let Some(error) = error.downcast_ref::<ReplayEvidenceError>() {
-            return match error {
-                ReplayEvidenceError::MissingOrigin => "missingContinuationOrigin",
-                ReplayEvidenceError::ForeignOrigin => "foreignContinuationOrigin",
-                ReplayEvidenceError::AmbiguousOrigin => "ambiguousContinuationOrigin",
-                ReplayEvidenceError::MissingWitness => "missingReasoningWitness",
-                ReplayEvidenceError::AlteredReasoning => "alteredReasoning",
-            };
-        }
-        match error.to_string().as_str() {
-            "Claude thinking replay requires a nonempty signature" => "missingSignature",
-            "Claude redacted thinking replay has no data" => "malformedRedacted",
-            "unsupported native reasoning kind in Claude replay" => "unsupportedReasoning",
-            "unsupported assistant image in Claude replay" => "unsupportedReplayBlock",
-            other => panic!("unexpected native replay failure: {other}"),
-        }
-    }
-
-    let cases = lean_prompt_assembly_claude_narrowing_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no provenance narrowing cases"
-    );
-    for case in cases {
-        assert_eq!(case.carriers.len(), case.rows.len(), "{}", case.name);
-        let result: anyhow::Result<Vec<Vec<serde_json::Value>>> = case
-            .rows
-            .iter()
-            .map(|row| {
-                let content = native_claude_replay_content(&row.blocks);
-                let expected = row.expected_reasoning.as_ref().map(|witness| {
-                    witness
-                        .iter()
-                        .map(|block| {
-                            (
-                                block.block_index,
-                                native_claude_reasoning_parts(&block.parts),
-                            )
-                        })
-                        .collect()
-                });
-                let origin = match row.origin {
-                    LeanClaudeReplayOrigin::ClaudeSubscription => ReplayOrigin::ClaudeSubscription,
-                    LeanClaudeReplayOrigin::Foreign => ReplayOrigin::Foreign,
-                    LeanClaudeReplayOrigin::Missing => ReplayOrigin::Missing,
-                    LeanClaudeReplayOrigin::Ambiguous => ReplayOrigin::Ambiguous,
-                };
-                let usage = match row.usage {
-                    LeanClaudeReplayUsage::Historical => ReplayUsage::Historical,
-                    LeanClaudeReplayUsage::RequiredCurrent => ReplayUsage::RequiredCurrent {
-                        origin,
-                        expected: expected.as_ref(),
-                    },
-                };
-                let content = narrow_assistant_content(&content, usage)?;
-                let body = build_messages_body_native(
-                    "claude-sonnet-5",
-                    None,
-                    Some(128),
-                    &[Message::Assistant { id: None, content }],
-                    &[],
-                )?;
-                let messages = body["messages"].as_array().expect("messages array");
-                let mut blocks = match messages.as_slice() {
-                    [] => Vec::new(),
-                    [message] => message["content"]
-                        .as_array()
-                        .expect("assistant content")
-                        .clone(),
-                    _ => panic!("one modeled row produced multiple messages"),
-                };
-                for block in &mut blocks {
-                    block
-                        .as_object_mut()
-                        .expect("content object")
-                        .remove("cache_control");
-                }
-                Ok(blocks)
-            })
-            .collect();
-        match result {
-            Ok(actual) => {
-                assert_eq!(case.outcome, "ok", "{}", case.name);
-                let expected: Vec<_> = case
-                    .replay
-                    .iter()
-                    .map(|row| claude_replay_json(row))
-                    .collect();
-                assert_eq!(actual, expected, "{}", case.name);
-            }
-            Err(error) => assert_eq!(outcome(error), case.outcome, "{}", case.name),
-        }
-    }
-}
-
 fn profile_of_order(mode: crate::lean_vocab_test::LeanAssistantOrderMode) -> ProviderInputProfile {
     match mode {
         crate::lean_vocab_test::LeanAssistantOrderMode::Grouped => {
@@ -1127,28 +1022,226 @@ fn native_replay_tag(
 }
 
 fn native_replay_origin(
-    origin: crate::lean_vocab_test::LeanClaudeReplayOrigin,
+    origin: &crate::lean_vocab_test::LeanClaudeReplayOrigin,
 ) -> gents_loop::claude_messages_body::ReplayOrigin {
     use crate::lean_vocab_test::LeanClaudeReplayOrigin as Lean;
     use gents_loop::claude_messages_body::ReplayOrigin as Native;
     match origin {
         Lean::ClaudeSubscription => Native::ClaudeSubscription,
+        Lean::AcceptedProvider => Native::AcceptedProvider,
         Lean::Foreign => Native::Foreign,
         Lean::Missing => Native::Missing,
         Lean::Ambiguous => Native::Ambiguous,
     }
 }
 
-fn replay_evidence_outcome(
-    error: &gents_loop::claude_messages_body::ReplayEvidenceError,
-) -> &'static str {
-    use gents_loop::claude_messages_body::ReplayEvidenceError as Error;
-    match error {
-        Error::MissingOrigin => "missingContinuationOrigin",
-        Error::ForeignOrigin => "foreignContinuationOrigin",
-        Error::AmbiguousOrigin => "ambiguousContinuationOrigin",
-        Error::MissingWitness => "missingReasoningWitness",
-        Error::AlteredReasoning => "alteredReasoning",
+fn native_replay_wire(
+    wire: crate::lean_vocab_test::LeanReasoningReplayWire,
+) -> gents_loop::claude_messages_body::ReplayWire {
+    use crate::lean_vocab_test::LeanReasoningReplayWire as Lean;
+    use gents_loop::claude_messages_body::ReplayWire as Native;
+    match wire {
+        Lean::ClaudeMessages => Native::ClaudeMessages,
+        Lean::Responses => Native::Responses,
+    }
+}
+
+fn native_replay_resolution(
+    entry: &crate::lean_vocab_test::LeanClaudeCheckpointResolution,
+) -> gents_loop::claude_messages_body::ResolvedReplayEvidence {
+    use gents_loop::claude_messages_body::{ReplayIssuer, ResolvedReplayEvidence};
+    ResolvedReplayEvidence {
+        origin: native_replay_origin(&entry.origin),
+        issuer: ReplayIssuer {
+            family: entry.issuer_family.clone(),
+            endpoint: entry.issuer_endpoint.clone(),
+        },
+        wire: native_replay_wire(entry.wire),
+        physical_header: entry.physical_header.clone(),
+        complete: entry.complete,
+        captured: entry.captured.as_deref().map(native_flat_items),
+        reasoning: entry
+            .expected_reasoning
+            .iter()
+            .map(|block| {
+                (
+                    block.block_index,
+                    native_claude_reasoning_parts(&block.parts),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn native_flat_items(
+    items: &[crate::lean_vocab_test::LeanReplayFlatItem],
+) -> Vec<gents_loop::provider_input::replay_frontier::FlatItem> {
+    use crate::lean_vocab_test::LeanReplayFlatKind;
+    use gents_loop::provider_input::replay_frontier::FlatItem;
+    items
+        .iter()
+        .map(|item| match item.kind {
+            LeanReplayFlatKind::Ordinary => FlatItem::Ordinary(item.bytes.clone()),
+            LeanReplayFlatKind::Reasoning => FlatItem::Reasoning(item.bytes.clone()),
+        })
+        .collect()
+}
+
+fn native_tagged_replay_row(
+    row: &crate::lean_vocab_test::LeanClaudeTaggedReplayRow,
+) -> gents_loop::claude_messages_body::TaggedAssistantRow {
+    gents_loop::claude_messages_body::TaggedAssistantRow {
+        source: row.source.as_ref().map(native_replay_tag),
+        physical_header: row.physical_header.clone(),
+        block_indices: row.block_indices.clone(),
+        id: None,
+        content: native_claude_replay_content(&row.blocks),
+    }
+}
+
+fn native_tagged_message(
+    row: &crate::lean_vocab_test::LeanClaudeTaggedReplayRow,
+) -> gents_loop::loop_stream::TaggedMessage {
+    gents_loop::loop_stream::TaggedMessage {
+        message: Message::Assistant {
+            id: None,
+            content: native_claude_replay_content(&row.blocks),
+        },
+        source: row.source.as_ref().map(native_replay_tag),
+        physical_header: row.physical_header.clone(),
+        block_indices: row.block_indices.clone(),
+    }
+}
+
+#[test]
+fn generated_replay_shape_cases_bind_source_index_projection() {
+    use crate::lean_vocab_test::lean_prompt_assembly_replay_shape_cases;
+    use gents_loop::loop_stream::select_tagged_assistant_blocks;
+
+    let cases = lean_prompt_assembly_replay_shape_cases();
+    assert!(!cases.is_empty(), "Lean emitted no replay-shape cases");
+    for case in cases {
+        let source = native_tagged_message(&case.source);
+        match select_tagged_assistant_blocks(&source, &case.retained_indices) {
+            Err(error) => {
+                assert_eq!(
+                    replay_checkpoint_outcome(&error),
+                    case.outcome,
+                    "{}",
+                    case.name
+                );
+                assert!(case.shaped.is_none(), "{}", case.name);
+            }
+            Ok(shaped) => {
+                assert_eq!(case.outcome, "ok", "{}", case.name);
+                assert_eq!(
+                    shaped,
+                    native_tagged_message(case.shaped.as_ref().expect("modeled shaped row")),
+                    "{}",
+                    case.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn generated_replay_prefix_cases_bind_acceptance_checks() {
+    use crate::lean_vocab_test::lean_prompt_assembly_replay_prefix_cases;
+    use gents_loop::provider_input::replay_frontier::{anchored, drop_leading_reasoning, ords};
+
+    let cases = lean_prompt_assembly_replay_prefix_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let captured = native_flat_items(&case.captured);
+        let current = native_flat_items(&case.current);
+        let captured_anchored = anchored(&captured);
+        let current_anchored = anchored(&current);
+        assert_eq!(
+            ords(&current) == ords(&captured),
+            case.ordinary_equal,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            captured_anchored.ends_with(&current_anchored),
+            case.reasoning_suffix,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            current
+                == drop_leading_reasoning(
+                    captured_anchored
+                        .len()
+                        .saturating_sub(current_anchored.len()),
+                    &captured
+                ),
+            case.leading_removal,
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn generated_reasoning_suffix_cases_bind_native_selection() {
+    use crate::lean_vocab_test::lean_prompt_assembly_reasoning_suffix_cases;
+    use gents_loop::claude_messages_body::{replay_stage, select_replay, ReplayIssuer};
+
+    let cases = lean_prompt_assembly_reasoning_suffix_cases();
+    assert!(
+        cases.iter().any(|case| case.name.contains("/before-turn-")),
+        "Lean emitted no replay scenario steps"
+    );
+    for case in cases {
+        let rows = case
+            .rows
+            .iter()
+            .map(native_tagged_replay_row)
+            .collect::<Vec<_>>();
+        let issuer = ReplayIssuer {
+            family: case.issuer_family.clone(),
+            endpoint: case.issuer_endpoint.clone(),
+        };
+        let wire = native_replay_wire(case.wire);
+        let resolutions = case
+            .resolutions
+            .iter()
+            .map(|entry| {
+                (
+                    native_replay_tag(&entry.tag),
+                    native_replay_resolution(entry),
+                )
+            })
+            .collect::<Vec<_>>();
+        let resolve = |tag: &gents_loop::claude_messages_body::ReplayTag| {
+            resolutions
+                .iter()
+                .filter(|(candidate, _)| candidate == tag)
+                .map(|(_, evidence)| evidence.clone())
+                .collect::<Vec<_>>()
+        };
+        let stage = replay_stage(&rows, &issuer, wire, resolve);
+        let expected_stage = case
+            .stage
+            .iter()
+            .map(native_tagged_replay_row)
+            .collect::<Vec<_>>();
+        assert_eq!(stage, expected_stage, "{}: stage rows", case.name);
+        let actual = select_replay(
+            &rows,
+            &issuer,
+            wire,
+            resolve,
+            &native_flat_items(&case.assembled),
+        );
+        let expected = case
+            .replay
+            .iter()
+            .map(native_tagged_replay_row)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{}", case.name);
     }
 }
 
@@ -1174,7 +1267,6 @@ fn replay_checkpoint_outcome(
         Error::DuplicateAssociation => "duplicateReplayAssociation",
         Error::RequiredInPrefix => "requiredReplayInPrefix",
         Error::MissingRequired => "missingRequiredReplay",
-        Error::Evidence(error) => replay_evidence_outcome(error),
         Error::Codec(error) => replay_codec_outcome(error),
     }
 }
@@ -1214,6 +1306,8 @@ fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint(
                     .iter()
                     .map(|row| TaggedAssistantRow {
                         source: row.source.as_ref().map(native_replay_tag),
+                        physical_header: row.physical_header.clone(),
+                        block_indices: row.block_indices.clone(),
                         id: None,
                         content: native_claude_replay_content(&row.blocks),
                     })
@@ -1236,8 +1330,7 @@ fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint(
 fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
     use crate::lean_vocab_test::lean_prompt_assembly_claude_checkpoint_cases;
     use gents_loop::claude_messages_body::{
-        prepare_replay_checkpoint, restore_and_narrow_replay, ResolvedReplayEvidence,
-        TaggedAssistantRow,
+        prepare_replay_checkpoint, restore_contiguous_replay, TaggedAssistantRow,
     };
     let cases = lean_prompt_assembly_claude_checkpoint_cases();
     assert!(!cases.is_empty());
@@ -1249,6 +1342,8 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
             .zip(&case.carrier_ids)
             .map(|(row, id)| TaggedAssistantRow {
                 source: row.source.as_ref().map(native_replay_tag),
+                physical_header: row.physical_header.clone(),
+                block_indices: row.block_indices.clone(),
                 id: Some(id.clone()),
                 content: native_claude_replay_content(&row.blocks),
             })
@@ -1300,38 +1395,7 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
                 );
             }
         }
-        let resolutions = case
-            .resolutions
-            .iter()
-            .map(|entry| {
-                (
-                    native_replay_tag(&entry.tag),
-                    ResolvedReplayEvidence {
-                        origin: native_replay_origin(entry.origin),
-                        reasoning: entry
-                            .expected_reasoning
-                            .iter()
-                            .map(|block| {
-                                (
-                                    block.block_index,
-                                    native_claude_reasoning_parts(&block.parts),
-                                )
-                            })
-                            .collect(),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        // Only representation translation: duplicate resolution records stay
-        // duplicated, and witnesses come from modeled resolver inputs rather
-        // than from the content being checked.
-        match restore_and_narrow_replay(&checkpoint, |tag| {
-            resolutions
-                .iter()
-                .filter(|(candidate, _)| candidate == tag)
-                .map(|(_, evidence)| evidence.clone())
-                .collect()
-        }) {
+        match restore_contiguous_replay(&checkpoint) {
             Err(error) => assert_eq!(
                 replay_checkpoint_outcome(&error),
                 case.outcome,
@@ -1341,22 +1405,12 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
             Ok(prepared) => {
                 assert_eq!(case.outcome, "ok", "{}", case.name);
                 assert_eq!(prepared.len(), case.replay.len(), "{}", case.name);
-                for ((row, selected), expected) in
-                    prepared.iter().zip(&checkpoint.retained).zip(&case.replay)
-                {
-                    assert_eq!(row.source, selected.source, "{}", case.name);
-                    assert_eq!(row.id, selected.id, "{}", case.name);
-                    assert_eq!(
-                        row.wire_blocks,
-                        claude_replay_json(expected),
-                        "{}",
-                        case.name
-                    );
+                for (row, expected) in prepared.iter().zip(&case.replay) {
+                    assert_eq!(row, &claude_replay_json(expected), "{}", case.name);
                 }
-                // The live body owner receives the same narrowed native rows.
-                // This assistant-only test does not claim full request restore
-                // or provider budgeting is wired to the result yet.
-                let native = prepared
+                // The live body owner emits the same strict codec output.
+                let native = checkpoint
+                    .retained
                     .iter()
                     .map(|row| Message::Assistant {
                         id: row.id.clone(),
@@ -1385,9 +1439,8 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
                     })
                     .collect::<Vec<_>>();
                 let expected = prepared
-                    .iter()
-                    .filter(|row| !row.wire_blocks.is_empty())
-                    .map(|row| row.wire_blocks.clone())
+                    .into_iter()
+                    .filter(|row| !row.is_empty())
                     .collect::<Vec<_>>();
                 assert_eq!(actual, expected, "{}", case.name);
             }
