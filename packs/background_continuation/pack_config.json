@@ -36,9 +36,7 @@
         "target_ids": [
           "background-parent-tools:worker"
         ],
-        "spawn_enabled": true,
-        "background_enabled": true,
-        "default_await_mode": "background"
+        "enabled": true
       }
     },
     {
