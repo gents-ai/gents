@@ -296,8 +296,9 @@ async fn load_request_show_snapshot(
         .doc_id
         .clone()
         .context("request show missing physical identity")?;
-    let child_requests = crate::caused_sessions::load_session_origins(
-        crate::caused_sessions::LineageReader::Graphql(graphql),
+    let access = ConfigAccess::Graphql(graphql.to_string());
+    let child_requests = gents::session_origin::load_session_origins(
+        gents::session_origin::OriginReader::Access(&access),
         &[request_doc_id],
         "",
     )
