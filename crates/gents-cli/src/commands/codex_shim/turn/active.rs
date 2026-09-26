@@ -177,24 +177,6 @@ pub(super) async fn next_steering_request_after(
     ))
 }
 
-pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
-    state: &ShimState,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    thread_id: &str,
-    request_id: &str,
-) -> Result<String> {
-    let rows = load_thread_request_rows(state, agent_did, requester_did, thread_id).await?;
-    let by_id = rows
-        .iter()
-        .map(|row| (row.request_id.as_str(), row))
-        .collect::<BTreeMap<_, _>>();
-    let Some(request) = by_id.get(request_id).copied() else {
-        return Ok(request_id.to_string());
-    };
-    codex_turn_root_and_depth(request, &by_id).map(|(root_id, _)| root_id)
-}
-
 fn next_steering_request_after_from_rows(
     rows: &[AgentRequestRow],
     queued_after_request_id: &str,
@@ -580,9 +562,13 @@ fn codex_turn_root_and_depth<'a>(
 
 fn steering_parent_id(row: &AgentRequestRow) -> Option<String> {
     let queue = row.input.as_ref()?.queue.as_ref()?;
-    (queue.source == gents_protocol::request_input::QueueSource::Steering)
-        .then(|| queue.queued_after_request_id.clone())
-        .flatten()
+    matches!(
+        queue.source,
+        gents_protocol::request_input::QueueSource::User
+            | gents_protocol::request_input::QueueSource::Steering
+    )
+    .then(|| queue.queued_after_request_id.clone())
+    .flatten()
 }
 
 /// Request-only projection per `Proofs/Client/Types.lean`: supersession

@@ -9,30 +9,10 @@ use super::progress::{
 };
 use super::projection_state::ProjectionStatus;
 pub(super) use super::projection_state::ToolProjectionStatus;
-use super::subagent_projection::{collab_projection, is_subagent_control_tool};
 
-#[cfg(test)]
 pub(super) fn tool_projection_status(tool: &GentsToolCallProgress) -> ToolProjectionStatus {
-    tool_projection_status_with_settled(tool, false, false)
-}
-
-pub(super) fn tool_projection_status_with_settled(
-    tool: &GentsToolCallProgress,
-    projection_settled: bool,
-    link_settle_expired: bool,
-) -> ToolProjectionStatus {
     let status = observed_tool_status(tool);
-    if is_subagent_control_tool(&tool.tool_name) {
-        if let Some(projection) = collab_projection(tool) {
-            ToolProjectionStatus::Collab(projection)
-        } else if status == ProjectionStatus::Failed
-            || (projection_settled && link_settle_expired && status == ProjectionStatus::Completed)
-        {
-            ToolProjectionStatus::Mcp(status)
-        } else {
-            ToolProjectionStatus::DeferredCollab
-        }
-    } else if is_gents_file_change_tool(tool) {
+    if is_gents_file_change_tool(tool) {
         if file_update_change(tool).is_none() {
             ToolProjectionStatus::DeferredFileChange
         } else {
@@ -134,8 +114,6 @@ pub(super) fn update_running_background_tools(
         }
         ToolProjectionStatus::Mcp(_)
         | ToolProjectionStatus::Command(_)
-        | ToolProjectionStatus::Collab(_)
-        | ToolProjectionStatus::DeferredCollab
         | ToolProjectionStatus::DeferredFileChange
         | ToolProjectionStatus::FileChange(_) => {
             running.remove(&tool.tool_call_key);
@@ -299,9 +277,6 @@ pub(super) fn command_execution_item(
 }
 
 fn command_execution_display(tool: &GentsToolCallProgress) -> String {
-    if let Some(child_request_id) = tool.child_request_id.as_deref() {
-        return format!("spawn_subagent {child_request_id}");
-    }
     if let Some(command) = shell_command_from_tool_args(&tool.args) {
         return command;
     }
@@ -439,29 +414,6 @@ fn shell_join(argv: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn settled_unresolved_subagent_control_falls_back_to_visible_mcp() {
-        let tool = test_tool(
-            "spawn_subagent",
-            "completed",
-            r#"{"name":"reviewer","prompt":"inspect"}"#,
-        )
-        .with_result(r#"{"child_request_id":"child-request"}"#);
-
-        assert_eq!(
-            tool_projection_status(&tool),
-            ToolProjectionStatus::DeferredCollab
-        );
-        assert_eq!(
-            tool_projection_status_with_settled(&tool, true, false),
-            ToolProjectionStatus::DeferredCollab
-        );
-        assert_eq!(
-            tool_projection_status_with_settled(&tool, true, true),
-            ToolProjectionStatus::Mcp(ProjectionStatus::Completed)
-        );
-    }
 
     #[test]
     fn background_tool_projects_as_codex_unified_exec_startup() {
@@ -779,10 +731,8 @@ mod tests {
             tool_name: tool_name.to_string(),
             lifecycle_state: Some(status.to_string()),
             await_mode: None,
-            child_request_id: None,
             args: args.to_string(),
             result: String::new(),
-            subagent_link: None,
             ..Default::default()
         }
     }

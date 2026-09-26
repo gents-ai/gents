@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::command_projection::{
     codex_command_status, codex_mcp_status, codex_patch_status, command_execution_item,
-    file_change_item, tool_projection_status_with_settled, ToolProjectionStatus,
+    file_change_item, tool_projection_status, ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
@@ -23,9 +23,6 @@ use super::protocol::{
     absolute_path, agent_message_item_with_phase, timestamp_seconds, turn_value,
 };
 use super::store::query_node_json;
-use super::subagent_projection::{
-    attach_subagent_link, collab_tool_item, load_authorized_subagent_threads_for_root,
-};
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
 
@@ -105,7 +102,6 @@ pub(super) async fn load_thread_turns(
                 status
                 lifecycle_state
                 await_mode
-                child_request_id
                 started_at
                 completed_at
                 selected_service_id
@@ -166,18 +162,9 @@ pub(super) async fn load_thread_turns(
             );
         }
     }
-    let mut tools = decode_tool_rows(state, &response, owner, &record.session_id, requester)
+    let tools = decode_tool_rows(state, &response, owner, &record.session_id, requester)
         .await
         .context("decoding AgentToolCall history rows")?;
-    let root_session_id = record
-        .subagent
-        .as_ref()
-        .map(|link| link.root_session_id.as_str())
-        .unwrap_or(record.session_id.as_str());
-    let subagent_links = load_authorized_subagent_threads_for_root(state, root_session_id).await?;
-    for tool in &mut tools {
-        attach_subagent_link(&mut tool.progress, &subagent_links);
-    }
     let messages = decode_canonical_message_rows(state, &response).await?;
     let compactions = load_completed_compactions(state, &requests).await?;
 
@@ -389,9 +376,13 @@ fn steering_root_id(
 
 fn steering_parent_id(request: &AgentRequestRow) -> Option<String> {
     let queue = request.input.as_ref()?.queue.as_ref()?;
-    (queue.source == gents_protocol::request_input::QueueSource::Steering)
-        .then(|| queue.queued_after_request_id.clone())
-        .flatten()
+    matches!(
+        queue.source,
+        gents_protocol::request_input::QueueSource::User
+            | gents_protocol::request_input::QueueSource::Steering
+    )
+    .then(|| queue.queued_after_request_id.clone())
+    .flatten()
 }
 
 fn is_background_completion(request: &AgentRequestRow) -> bool {
@@ -593,7 +584,7 @@ fn append_request_items(
                 rendered_assistant_sequences.insert(tool.message_sequence);
             }
         }
-        if let Some(item) = project_tool(record, &tool.progress, projection_settled) {
+        if let Some(item) = project_tool(record, &tool.progress) {
             items.push(item);
         }
     }
@@ -660,19 +651,14 @@ fn append_assistant_message_items(
 fn project_tool(
     record: &CodexThreadRecord,
     tool: &GentsToolCallProgress,
-    projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
-    match tool_projection_status_with_settled(tool, projection_settled, true) {
+    match tool_projection_status(tool) {
         ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, codex_mcp_status(status))),
         ToolProjectionStatus::Command(status) => Some(command_execution_item(
             &record.cwd,
             tool,
             codex_command_status(status),
         )),
-        ToolProjectionStatus::Collab(projection) => {
-            Some(collab_tool_item(&record.session_id, tool, &projection))
-        }
-        ToolProjectionStatus::DeferredCollab => None,
         ToolProjectionStatus::DeferredFileChange => None,
         ToolProjectionStatus::FileChange(status) => {
             file_change_item(tool, codex_patch_status(status))
@@ -1036,10 +1022,8 @@ mod tests {
                 tool_name: "list_files".to_string(),
                 lifecycle_state: Some("completed".to_string()),
                 await_mode: None,
-                child_request_id: None,
                 args: r#"{"path":"."}"#.to_string(),
                 result: "Cargo.toml\nsrc".to_string(),
-                subagent_link: None,
                 ..Default::default()
             },
         };
@@ -1052,10 +1036,8 @@ mod tests {
                 tool_name: "read_file".to_string(),
                 lifecycle_state: Some("completed".to_string()),
                 await_mode: None,
-                child_request_id: None,
                 args: r#"{"path":"Cargo.toml"}"#.to_string(),
                 result: "[package]".to_string(),
-                subagent_link: None,
                 ..Default::default()
             },
         };

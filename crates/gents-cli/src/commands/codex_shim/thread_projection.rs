@@ -6,10 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::host_runtime::thread_git_info;
-use super::subagent_projection::{
-    load_authorized_subagent_threads, load_authorized_subagent_threads_for_root_ids,
-    LinkedSubagentThread,
-};
+use super::caused_threads::{load_caused_threads, load_caused_threads_for_root_ids, CausedThread};
 use super::ShimState;
 
 mod goal;
@@ -48,7 +45,7 @@ pub(super) struct CodexThreadRecord {
     pub(super) projection_started: Option<String>,
     pub(super) session: Option<gents_protocol::session::AgentSession>,
     pub(super) latest_request: Option<gents_protocol::graphql::GraphqlTurnState>,
-    pub(super) subagent: Option<LinkedSubagentThread>,
+    pub(super) subagent: Option<CausedThread>,
 }
 
 impl CodexThreadRecord {
@@ -104,7 +101,7 @@ pub(super) async fn load_codex_thread(
 ) -> Result<Option<CodexThreadRecord>> {
     // A wire thread ID has no principal/requester component. Validate child
     // identities before choosing a root record with the same label.
-    let links = load_authorized_subagent_threads(state).await?;
+    let links = load_caused_threads(state).await?;
     if state.is_thread_created(thread_id).await {
         for link in links.iter().filter(|link| link.session_id == thread_id) {
             anyhow::ensure!(
@@ -142,13 +139,27 @@ pub(super) async fn load_codex_thread(
     Ok(Some(assemble_subagent_record(state, link).await?))
 }
 
+pub(super) async fn root_thread_ids(state: &ShimState) -> Result<Vec<String>> {
+    let mut ids = list_scoped_sessions(state)
+        .await?
+        .into_iter()
+        .map(|session| session.session_id)
+        .collect::<Vec<_>>();
+    for session_id in state.created_thread_ids().await {
+        if !ids.contains(&session_id) {
+            ids.push(session_id);
+        }
+    }
+    Ok(ids)
+}
+
 pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<String>> {
     let mut loaded = state.loaded_thread_ids().await;
     let root_ids = loaded
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    for link in load_authorized_subagent_threads_for_root_ids(state, &loaded).await? {
+    for link in load_caused_threads_for_root_ids(state, &loaded).await? {
         if root_ids.contains(&link.root_session_id) && !loaded.contains(&link.session_id) {
             loaded.push(link.session_id);
         }
@@ -212,9 +223,9 @@ pub(super) async fn list_codex_threads_for_sources(
         };
     }
 
-    // Start from durable Codex roots, then walk only their authorized bridge
-    // graph. This keeps thread/list scoped to the same GENTS authority as
-    // thread/read and avoids a fleet-wide child scan. Git metadata is resolved
+    // Start from durable Codex roots, then walk only the sessions their
+    // requests caused. This keeps thread/list scoped to the same GENTS
+    // authority as thread/read and avoids a fleet-wide child scan. Git metadata is resolved
     // once per unique root workspace; children inherit their authorized root's
     // projection instead of spawning one git process per child.
     let active_roots =
@@ -223,7 +234,7 @@ pub(super) async fn list_codex_threads_for_sources(
         list_codex_threads_by_archived_with_git_cache(state, true, &mut git_info_cache).await?;
     let root_workspaces = index_root_workspaces(active_roots.iter().chain(&archived_roots));
     let root_ids = root_workspaces.keys().cloned().collect::<Vec<_>>();
-    let links = load_authorized_subagent_threads_for_root_ids(state, &root_ids).await?;
+    let links = load_caused_threads_for_root_ids(state, &root_ids).await?;
     for link in &links {
         if root_workspaces.contains_key(&link.session_id) {
             anyhow::ensure!(
@@ -325,7 +336,7 @@ async fn assemble_record_with_git_cache(
 
 async fn assemble_subagent_record(
     state: &ShimState,
-    link: LinkedSubagentThread,
+    link: CausedThread,
 ) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, &link.root_session_id).await?;
     let git_info = thread_git_info(&cwd).await;
@@ -334,7 +345,7 @@ async fn assemble_subagent_record(
 
 async fn assemble_subagent_record_with_workspace(
     state: &ShimState,
-    link: LinkedSubagentThread,
+    link: CausedThread,
     workspace: &RootThreadWorkspace,
 ) -> Result<CodexThreadRecord> {
     assemble_subagent_record_parts(
@@ -348,7 +359,7 @@ async fn assemble_subagent_record_with_workspace(
 
 async fn assemble_subagent_record_parts(
     state: &ShimState,
-    link: LinkedSubagentThread,
+    link: CausedThread,
     cwd: PathBuf,
     git_info: Option<Value>,
 ) -> Result<CodexThreadRecord> {
@@ -431,7 +442,7 @@ fn index_root_workspaces<'a>(
 
 fn root_workspace_for_link<'a>(
     root_workspaces: &'a HashMap<String, RootThreadWorkspace>,
-    link: &LinkedSubagentThread,
+    link: &CausedThread,
 ) -> Option<&'a RootThreadWorkspace> {
     root_workspaces.get(&link.root_session_id)
 }
@@ -520,20 +531,13 @@ mod tests {
         let expected = workspaces.get("root-session").expect("root workspace");
 
         for index in 0..128 {
-            let link = LinkedSubagentThread {
-                parent_request_doc_id: "test-parent-doc".into(),
-                parent_agent_did: "did:parent".into(),
-                parent_requester_did: None,
-                request_doc_id: "test-request-doc".into(),
+            let link = CausedThread {
                 latest_request_doc_id: "test-request-doc".into(),
                 requester_did: Some("did:parent".into()),
-                request_id: format!("request-{index}"),
                 latest_request_id: format!("request-{index}"),
                 latest_request_content: String::new(),
                 latest_request_created_at: None,
                 session_id: format!("child-{index}"),
-                parent_request_id: "parent-request".to_string(),
-                parent_tool_call_id: format!("spawn-{index}"),
                 parent_session_id: "root-session".to_string(),
                 root_session_id: "root-session".to_string(),
                 depth: 1,
@@ -574,20 +578,13 @@ mod tests {
             record.projection_behavior_id("root-behavior"),
             "root-behavior"
         );
-        let link = LinkedSubagentThread {
-            parent_request_doc_id: "test-parent-doc".into(),
-            parent_agent_did: "did:parent".into(),
-            parent_requester_did: None,
-            request_doc_id: "test-request-doc".into(),
+        let link = CausedThread {
             latest_request_doc_id: "test-request-doc".into(),
             requester_did: Some("did:parent".into()),
-            request_id: "request-0".to_string(),
             latest_request_id: "request-0".to_string(),
             latest_request_content: String::new(),
             latest_request_created_at: None,
             session_id: "child-0".to_string(),
-            parent_request_id: "parent-request".to_string(),
-            parent_tool_call_id: "spawn-0".to_string(),
             parent_session_id: "root-session".to_string(),
             root_session_id: "root-session".to_string(),
             depth: 1,

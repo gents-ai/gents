@@ -130,7 +130,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     assert_eq!(session_id, thread_id);
     assert_eq!(
         input.queue.as_ref().expect("steering queue").source,
-        gents_protocol::request_input::QueueSource::Steering
+        gents_protocol::request_input::QueueSource::User
     );
     assert_eq!(
         input.queue.as_ref().expect("steering queue").policy,
@@ -492,7 +492,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     assert_ne!(steering_request_id, turn_start.turn.id);
     assert_eq!(
         input.queue.as_ref().expect("steering queue").source,
-        gents_protocol::request_input::QueueSource::Steering
+        gents_protocol::request_input::QueueSource::User
     );
     assert_eq!(
         input
