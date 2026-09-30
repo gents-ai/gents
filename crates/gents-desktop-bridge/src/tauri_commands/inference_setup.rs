@@ -1451,6 +1451,62 @@ mod provider_account_tests {
         assert!(pending.retry(agent, provider, failed_write).await.is_none());
         assert_eq!(*writes.lock().unwrap(), ["token-b", "token-d"]);
     }
+
+    #[tokio::test]
+    async fn accounts_list_in_resolver_order() {
+        let node = serving_node().await;
+        let access = gents::ConfigAccess::Local(node.clone());
+        let agent = "did:key:zOrder";
+        let at = |secs| chrono::DateTime::from_timestamp(secs, 0);
+        // Stored so that insertion order is not resolver order.
+        for (id, connected_at, enabled) in [
+            ("a", at(2_000), true),
+            ("b", at(1_000), true),
+            ("c", None, false),
+        ] {
+            let credential = OAuthCredential {
+                credential_id: format!("claude-subscription:{agent}:{id}"),
+                account_ref: Some(id.to_string()),
+                connected_at,
+                enabled,
+                ..issued_credential(agent)
+            };
+            gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
+                .await
+                .expect("store account");
+        }
+
+        let accounts = observe_provider_accounts(
+            &PendingOAuthCredentials::default(),
+            Ok(gents::ConfigAccess::Local(node)),
+            agent,
+        )
+        .await
+        .expect("observe accounts");
+        let ids: Vec<&str> = accounts
+            .iter()
+            .map(|account| account.credential_id.rsplit(':').next().unwrap())
+            .collect();
+        assert_eq!(ids, ["c", "b", "a"]);
+
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+        let first_match = accounts
+            .iter()
+            .find(|account| {
+                account.provider == provider && account.enabled && !account.pending_save
+            })
+            .map(|account| account.credential_id.clone());
+        let resolved = gents::oauth_credential::resolve_oauth_credential(
+            &access,
+            agent,
+            provider,
+            gents::oauth_credential::AccountPick::ProviderDefault,
+        )
+        .await
+        .expect("resolve")
+        .map(|credential| credential.credential_id);
+        assert_eq!(first_match, resolved);
+    }
 }
 
 #[tauri::command]
