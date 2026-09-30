@@ -77,6 +77,13 @@ pub(crate) enum Command {
     #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(
+        about = "List, label, disable or remove the subscription accounts signed in on this node"
+    )]
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
+    #[command(
         name = "grok-login",
         about = "Sign in with Grok / xAI subscription OAuth and store credentials in DefraDB"
     )]
@@ -1323,6 +1330,63 @@ pub(crate) struct CodexAuthProbeArgs {
         help = "Maximum number of model slugs to print"
     )]
     pub(crate) max_models: usize,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct AccountsTargetArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the accounts")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Only accounts of this sign-in provider")]
+    pub(crate) provider: Option<String>,
+}
+
+const ACCOUNT_PROVIDERS: [&str; 3] = ["chatgpt-codex", "claude-subscription", "xai-oauth"];
+const ACCOUNT_HELP: &str = "The account: its label, credential_id or account_ref";
+
+#[derive(Subcommand)]
+pub(crate) enum AccountsCommand {
+    #[command(
+        about = "List accounts, and backends that use no account, with the profiles that use them"
+    )]
+    List {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        output: OutputFormat,
+    },
+    #[command(about = "Rename an account")]
+    Label {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+        #[arg(help = "The new label")]
+        label: String,
+    },
+    #[command(
+        about = "Disable an account; profiles using it fail until moved or it is signed in again"
+    )]
+    Disable {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+    },
+    #[command(
+        about = "Delete an account's tokens on this node and the backend sign-in created for it, unless a profile uses it"
+    )]
+    Remove {
+        #[command(flatten)]
+        target: AccountsTargetArgs,
+        #[arg(help = ACCOUNT_HELP)]
+        account: String,
+        #[arg(long, help = "Remove without asking")]
+        yes: bool,
+    },
 }
 
 const LOGIN_LABEL_HELP: &str = "Name for the account signed in to: names a new account or renames a stored one (default: the product name, numbered for a second account)";
