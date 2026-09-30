@@ -510,7 +510,7 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
         gents::document_config::BackendAuth::Environment {
             variable: "API_KEY".into(),
         },
-        gents::document_config::BackendAuth::PrincipalOAuth,
+        gents::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
     ] {
         let wire = serde_json::to_value(configured).unwrap();
         assert!(auth.contains(wire["kind"].as_str().unwrap()));

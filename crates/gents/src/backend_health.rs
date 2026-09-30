@@ -1013,7 +1013,7 @@ mod tests {
         // so the runtime-level prober must leave it alone entirely.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
         codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
-        codex.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        codex.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         let outcome = probe_backends_cycle(
             &node,
             &client,
@@ -1035,7 +1035,7 @@ mod tests {
             crate::claude_subscription::DEFAULT_BACKEND_ENDPOINT.to_string(),
         );
         claude.provider_kind = crate::backend_provider::BackendProviderKind::ClaudeCliSubscription;
-        claude.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        claude.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         claude
     }
 
@@ -1046,7 +1046,7 @@ mod tests {
     ) -> InferenceBackend {
         let mut backend = backend(id, endpoint.to_string());
         backend.provider_kind = kind;
-        backend.auth = crate::document_config::BackendAuth::PrincipalOAuth;
+        backend.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         backend
     }
 

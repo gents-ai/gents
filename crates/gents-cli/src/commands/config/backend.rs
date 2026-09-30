@@ -192,7 +192,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
-            BackendAuth::PrincipalOAuth => None,
+            BackendAuth::PrincipalOAuth { .. } => None,
             auth => auth.resolve_api_key()?,
         },
         api_key_env_var: match &backend.auth {
@@ -262,7 +262,10 @@ mod tests {
     #[test]
     fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
         let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_oauth"}}"#).unwrap();
-        assert_eq!(backend.auth, BackendAuth::PrincipalOAuth);
+        assert_eq!(
+            backend.auth,
+            BackendAuth::PrincipalOAuth { account_ref: None }
+        );
         assert_eq!(backend.max_concurrent, None);
         assert!(plan.documents()[0].add.get("catalogs").is_none());
         assert!(plan.documents()[0].add.get("models").is_none());

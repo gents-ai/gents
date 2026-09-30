@@ -920,8 +920,8 @@ fn parse_config_projection(
             if backend_owner != owner || !backend.enabled {
                 continue;
             }
-            let credential_scope =
-                matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(owner.as_str());
+            let credential_scope = matches!(backend.auth, BackendAuth::PrincipalOAuth { .. })
+                .then_some(owner.as_str());
             if let Some(catalog) = observations
                 .get(&(owner.clone(), id.clone()))
                 .map(|observation| observation.catalog_for(credential_scope))
@@ -953,8 +953,8 @@ fn parse_config_projection(
                 .as_deref()
                 .map(|id| scoped_config(&executions, owner, id))
                 .transpose()?;
-            let credential_scope =
-                matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(owner.as_str());
+            let credential_scope = matches!(backend.auth, BackendAuth::PrincipalOAuth { .. })
+                .then_some(owner.as_str());
             if let Some(catalog) = observations
                 .get(&(owner.clone(), backend.backend_id.clone()))
                 .map(|observation| observation.catalog_for(credential_scope))

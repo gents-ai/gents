@@ -718,7 +718,7 @@ pub fn backend_catalog<'a>(
 ) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
     let credential_scope = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
     )
     .then_some(backend.agent_did.as_str());
     Ok(observation

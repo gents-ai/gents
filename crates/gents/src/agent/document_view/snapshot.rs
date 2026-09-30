@@ -385,7 +385,7 @@ fn ensure_inference_available(
     }
     if matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
     ) {
         let provider = match backend.provider_kind {
             crate::backend_provider::BackendProviderKind::ChatGptCodex => {

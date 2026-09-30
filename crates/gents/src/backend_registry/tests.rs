@@ -64,7 +64,7 @@ fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
 #[test]
 fn principal_oauth_has_one_canonical_serde_tag() {
     assert_eq!(
-        serde_json::to_value(BackendAuth::PrincipalOAuth).unwrap(),
+        serde_json::to_value(BackendAuth::PrincipalOAuth { account_ref: None }).unwrap(),
         serde_json::json!({"kind": "principal_oauth"})
     );
     assert!(
@@ -194,7 +194,9 @@ fn resolve_backend_api_key_uses_explicit_credentials() {
         BackendAuth::Unauthenticated.resolve_api_key().unwrap(),
         None
     );
-    assert!(BackendAuth::PrincipalOAuth.resolve_api_key().is_err());
+    assert!(BackendAuth::PrincipalOAuth { account_ref: None }
+        .resolve_api_key()
+        .is_err());
     assert!(BackendAuth::ApiKey { key: " ".into() }
         .resolve_api_key()
         .is_err());
@@ -291,7 +293,7 @@ fn inference_backend_validation_reports_every_violation() {
 #[test]
 fn inference_backend_validation_requires_provider_compatible_auth() {
     let mut backend = base_backend();
-    backend.auth = BackendAuth::PrincipalOAuth;
+    backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
     assert!(backend.validate().is_err());
     for provider in [
         BackendProviderKind::ChatGptCodex,
@@ -299,7 +301,7 @@ fn inference_backend_validation_requires_provider_compatible_auth() {
         BackendProviderKind::ClaudeCliSubscription,
     ] {
         backend.provider_kind = provider;
-        backend.auth = BackendAuth::PrincipalOAuth;
+        backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
         backend.validate().unwrap();
         for auth in [
             BackendAuth::Unauthenticated,
@@ -629,7 +631,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     let mut claude = base_backend();
     claude.backend_id = "claude".into();
     claude.provider_kind = BackendProviderKind::ClaudeCliSubscription;
-    claude.auth = BackendAuth::PrincipalOAuth;
+    claude.auth = BackendAuth::PrincipalOAuth { account_ref: None };
     claude.endpoint = endpoint.clone();
     let mut elsewhere = claude.clone();
     elsewhere.backend_id = "claude-elsewhere".into();
@@ -666,7 +668,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         &owner,
         claude.provider_kind,
         &endpoint,
-        &BackendAuth::PrincipalOAuth,
+        &BackendAuth::PrincipalOAuth { account_ref: None },
         models,
     )
     .await?;

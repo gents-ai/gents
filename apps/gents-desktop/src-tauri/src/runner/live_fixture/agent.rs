@@ -206,7 +206,7 @@ fn live_backend_candidate(
             .map(|value| value.auth.clone())
             .unwrap_or_else(|| {
                 if backend.provider_kind.is_agent_scoped_oauth() {
-                    BackendAuth::PrincipalOAuth
+                    BackendAuth::PrincipalOAuth { account_ref: None }
                 } else {
                     BackendAuth::Unauthenticated
                 }
