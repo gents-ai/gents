@@ -1701,13 +1701,17 @@ impl BearerSource for DbCredentialBearer {
             .await
         {
             Ok(RefreshPersist::Written) => {}
-            Ok(RefreshPersist::Superseded) => tracing::debug!(
-                agent_did = %self.agent_did,
-                credential_id = %self.credential_id,
-                product = self.product.name,
-                "the stored account changed while its token refreshed; the stored row stands \
-                 and the refreshed token is served from memory"
-            ),
+            Ok(RefreshPersist::Superseded) => {
+                // The next call loads the stored row instead of refreshing this one.
+                *self.cache.lock().await = None;
+                tracing::debug!(
+                    agent_did = %self.agent_did,
+                    credential_id = %self.credential_id,
+                    product = self.product.name,
+                    "the stored account changed while its token refreshed; the stored row stands \
+                     and this refreshed token is served once"
+                )
+            }
             Err(error) => tracing::error!(
                 agent_did = %self.agent_did,
                 credential_id = %self.credential_id,
