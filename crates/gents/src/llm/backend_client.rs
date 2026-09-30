@@ -322,6 +322,7 @@ mod tests {
     use super::*;
     use crate::agent::PendingAgentBehavior;
     use crate::identity::KeyIdentity;
+    use crate::oauth_credential::BearerSource;
 
     async fn test_node() -> Arc<EmbeddedNode> {
         Arc::new(EmbeddedNode::builder().build().await.unwrap())
@@ -427,7 +428,7 @@ mod tests {
             },
             agent_did: agent_did.to_string(),
             provider: provider.to_string(),
-            access_token: "access-token".to_string(),
+            access_token: format!("access-{}", account_ref.unwrap_or("original")),
             refresh_token: "refresh-token".to_string(),
             id_token: None,
             account_id: None,
@@ -497,6 +498,13 @@ mod tests {
                 _ => panic!("{kind:?} {wire:?} built {}", client.provider_family()),
             };
             assert_eq!(built, kind);
+            let acct_b = format!(
+                "{}:acct-b",
+                crate::oauth_credential::oauth_credential_id(behavior.agent_did(), provider)
+            );
+            let bearer = crate::oauth_credential::test_support::bound_bearer(&acct_b)
+                .unwrap_or_else(|| panic!("{kind:?} {wire:?} did not bind acct-b"));
+            assert_eq!(bearer.current_bearer().await.unwrap(), "access-acct-b");
         }
     }
 

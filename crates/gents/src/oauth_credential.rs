@@ -1554,6 +1554,17 @@ pub(crate) mod test_support {
         node
     }
 
+    /// The bearer a client build bound for `credential_id`, without binding one.
+    pub(crate) fn bound_bearer(
+        credential_id: &str,
+    ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
+        super::bearer_registry()
+            .lock()
+            .expect("bearer registry mutex poisoned")
+            .get(credential_id)
+            .cloned()
+    }
+
     pub(crate) async fn seed_credential(
         node: &EmbeddedNode,
         agent_did: &str,
