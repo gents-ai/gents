@@ -14,6 +14,7 @@ use crate::{print_json, resolve_agent_did, resolve_config_access};
 
 pub(crate) struct ClaudeLoginOptions {
     pub(crate) provider: String,
+    pub(crate) label: Option<String>,
     pub(crate) manual: bool,
     pub(crate) open_browser: bool,
     pub(crate) client_id: Option<String>,
@@ -21,8 +22,7 @@ pub(crate) struct ClaudeLoginOptions {
 }
 
 pub(crate) struct ClaudeLoginOutcome {
-    pub(crate) doc_id: String,
-    pub(crate) credential: gents::oauth_credential::OAuthCredential,
+    pub(crate) sign_in: gents::oauth_credential::SignIn,
 }
 
 pub(crate) async fn claude_login(args: ClaudeLoginArgs) -> Result<()> {
@@ -34,6 +34,7 @@ pub(crate) async fn claude_login(args: ClaudeLoginArgs) -> Result<()> {
         &agent_did,
         &ClaudeLoginOptions {
             provider: args.provider,
+            label: args.label,
             manual: args.manual,
             open_browser: !args.no_browser,
             client_id: args.client_id,
@@ -114,14 +115,21 @@ pub(crate) async fn run_claude_login(
         .write("cli.claude_login.credential", &mutation)
         .await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
-    Ok(ClaudeLoginOutcome { doc_id, credential })
+    Ok(ClaudeLoginOutcome {
+        sign_in: gents::oauth_credential::SignIn {
+            doc_id,
+            credential,
+            result: gents::oauth_credential::SignInResult::Refreshed,
+            identity_matched: false,
+        },
+    })
 }
 
 pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
-    let credential = &outcome.credential;
+    let credential = &outcome.sign_in.credential;
     json!({
         "login": "completed",
-        "doc_id": outcome.doc_id,
+        "doc_id": outcome.sign_in.doc_id,
         "credential_id": credential.credential_id,
         "agent_did": credential.agent_did,
         "provider": credential.provider,
@@ -178,12 +186,18 @@ mod tests {
             chrono::Utc::now(),
         );
         let json = claude_login_result_json(&ClaudeLoginOutcome {
-            doc_id: "bae-1".into(),
-            credential,
+            sign_in: gents::oauth_credential::SignIn {
+                doc_id: "bae-1".into(),
+                credential,
+                result: gents::oauth_credential::SignInResult::Added,
+                identity_matched: false,
+            },
         });
         let text = json.to_string();
         assert!(!text.contains("SECRET"), "{text}");
         assert_eq!(json["access_token"], "<redacted>");
         assert_eq!(json["login"], "completed");
+        assert_eq!(json["label"], "Claude");
+        assert_eq!(json["result"], "added");
     }
 }

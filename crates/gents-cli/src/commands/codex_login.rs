@@ -11,14 +11,14 @@ use crate::{print_json, resolve_agent_did, resolve_config_access};
 
 pub(crate) struct CodexLoginOptions {
     pub(crate) provider: String,
+    pub(crate) label: Option<String>,
     pub(crate) client_id: Option<String>,
     pub(crate) issuer: Option<String>,
     pub(crate) device_auth: bool,
 }
 
 pub(crate) struct CodexLoginOutcome {
-    pub(crate) doc_id: String,
-    pub(crate) credential: gents::oauth_credential::OAuthCredential,
+    pub(crate) sign_in: gents::oauth_credential::SignIn,
 }
 
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
@@ -30,6 +30,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
         &agent_did,
         &CodexLoginOptions {
             provider: args.provider,
+            label: args.label,
             client_id: args.client_id,
             issuer: args.issuer,
             device_auth: args.device_auth,
@@ -99,14 +100,20 @@ pub(crate) async fn run_codex_login(
         .write("cli.codex_login.credential", &mutation)
         .await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
-
-    Ok(CodexLoginOutcome { doc_id, credential })
+    Ok(CodexLoginOutcome {
+        sign_in: gents::oauth_credential::SignIn {
+            doc_id,
+            credential,
+            result: gents::oauth_credential::SignInResult::Refreshed,
+            identity_matched: false,
+        },
+    })
 }
 
 pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
-    let credential = &outcome.credential;
+    let credential = &outcome.sign_in.credential;
     json!({
-        "doc_id": outcome.doc_id,
+        "doc_id": outcome.sign_in.doc_id,
         "credential_id": credential.credential_id,
         "agent_did": credential.agent_did,
         "provider": credential.provider,
@@ -120,4 +127,34 @@ pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
         "refresh_token": "<redacted>",
         "id_token": credential.id_token.as_ref().map(|_| "<redacted>"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_json_redacts_tokens_and_reports_the_account() {
+        let mut credential = gents::oauth_credential::OAuthCredential::from_login_tokens(
+            "did:key:z6MkTest",
+            "chatgpt-codex",
+            "id-SECRET",
+            "access-SECRET".into(),
+            "refresh-SECRET".into(),
+            chrono::Utc::now(),
+        );
+        credential.label = Some("Work".into());
+        let json = codex_login_result_json(&CodexLoginOutcome {
+            sign_in: gents::oauth_credential::SignIn {
+                doc_id: "bae-1".into(),
+                credential,
+                result: gents::oauth_credential::SignInResult::Refreshed,
+                identity_matched: true,
+            },
+        });
+        let text = json.to_string();
+        assert!(!text.contains("SECRET"), "{text}");
+        assert_eq!(json["label"], "Work");
+        assert_eq!(json["result"], "refreshed");
+    }
 }

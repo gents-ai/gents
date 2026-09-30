@@ -1335,6 +1335,8 @@ pub(crate) struct CodexLoginArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long, default_value = "chatgpt-codex")]
     pub(crate) provider: String,
+    #[arg(skip)]
+    pub(crate) label: Option<String>,
     #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
     pub(crate) device_auth: bool,
     #[arg(long, help = "OAuth issuer override for testing")]
@@ -1371,6 +1373,8 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long, default_value = "xai-oauth")]
     pub(crate) provider: String,
+    #[arg(skip)]
+    pub(crate) label: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1383,6 +1387,8 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long, default_value = "claude-subscription")]
     pub(crate) provider: String,
+    #[arg(skip)]
+    pub(crate) label: Option<String>,
     #[arg(
         long,
         default_value_t = false,
