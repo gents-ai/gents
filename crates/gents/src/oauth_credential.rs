@@ -1547,6 +1547,19 @@ impl DbCredentialBearer {
         *self.cache.lock().await = Some(credential.clone());
     }
 
+    /// Serve `stored` when the cache holds another document: the cached row
+    /// was removed and its `credential_id` signed in again, so its token is
+    /// not this account's. The same document keeps the cache.
+    pub(crate) async fn adopt_document(&self, stored: &OAuthCredential) {
+        let mut cache = self.cache.lock().await;
+        if cache
+            .as_ref()
+            .is_some_and(|cached| cached.doc_id != stored.doc_id)
+        {
+            *cache = Some(stored.clone());
+        }
+    }
+
     /// Write a refresh's fields onto the row it read, only while that row
     /// still holds `stored_refresh_token`: a sign-in (always a new refresh
     /// token), remove or replacement since the read makes it match nothing,

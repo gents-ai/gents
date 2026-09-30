@@ -329,6 +329,7 @@ pub async fn bootstrap_oauth_client(
             product,
         )
     });
+    bearer.adopt_document(&credential).await;
     Ok((bearer, credential))
 }
 
