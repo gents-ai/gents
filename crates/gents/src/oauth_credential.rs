@@ -349,7 +349,35 @@ pub async fn resolve_oauth_credential(
     let response = access
         .execute(&enabled_oauth_credentials_query(agent_did, provider))
         .await?;
-    let rows = oauth_credentials_from_response(&response)
+    pick_from_response(&response, agent_did, provider, pick)
+}
+
+/// The provider's default account for `agent_did` (Lean `SelfConfig` `dflt`),
+/// read inside a self-config transaction. `None` means both "the original
+/// account is the default" and "no account is enabled"; the latter lets a move
+/// onto the provider's no-reference backend through, which then fails at run
+/// time with the missing-credential guidance, as with one account today.
+pub(crate) async fn provider_default_account_ref(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+) -> Result<Option<String>> {
+    let response = txn
+        .execute(&enabled_oauth_credentials_query(agent_did, provider))
+        .await?;
+    Ok(
+        pick_from_response(&response, agent_did, provider, AccountPick::ProviderDefault)?
+            .and_then(|row| row.account_ref),
+    )
+}
+
+fn pick_from_response(
+    response: &Value,
+    agent_did: &str,
+    provider: &str,
+    pick: AccountPick<'_>,
+) -> Result<Option<OAuthCredential>> {
+    let rows = oauth_credentials_from_response(response)
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     Ok(pick_oauth_credential(&rows, agent_did, provider, pick).cloned())
