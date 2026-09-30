@@ -419,10 +419,23 @@ mod tests {
         behavior: &ResolvedBehavior,
         provider: &str,
     ) {
+        seed_oauth_account(node, behavior, provider, None).await;
+    }
+
+    async fn seed_oauth_account(
+        node: &EmbeddedNode,
+        behavior: &ResolvedBehavior,
+        provider: &str,
+        account_ref: Option<&str>,
+    ) {
         let agent_did = behavior.agent_did();
+        let original = crate::oauth_credential::oauth_credential_id(agent_did, provider);
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
-            credential_id: crate::oauth_credential::oauth_credential_id(agent_did, provider),
+            credential_id: match account_ref {
+                Some(account_ref) => format!("{original}:{account_ref}"),
+                None => original,
+            },
             agent_did: agent_did.to_string(),
             provider: provider.to_string(),
             access_token: "access-token".to_string(),
@@ -434,7 +447,7 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
-            account_ref: None,
+            account_ref: account_ref.map(str::to_string),
             connected_at: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
@@ -443,7 +456,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backend_account_reference_fails_closed_before_the_original_credential() {
+    async fn backend_account_reference_builds_with_its_own_account() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        for (kind, wire, provider) in [
+            (
+                BackendProviderKind::ChatGptCodex,
+                crate::OpenAiWireApi::Responses,
+                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            ),
+            (
+                BackendProviderKind::XaiGrokOAuth,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            ),
+            (
+                BackendProviderKind::XaiGrokOAuth,
+                crate::OpenAiWireApi::Responses,
+                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            ),
+            (
+                BackendProviderKind::ClaudeCliSubscription,
+                crate::OpenAiWireApi::Responses,
+                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            ),
+        ] {
+            let mut behavior = test_behavior(kind, wire);
+            seed_oauth_account(node.as_ref(), &behavior, provider, None).await;
+            seed_oauth_account(node.as_ref(), &behavior, provider, Some("acct-b")).await;
+            behavior.backend_auth = crate::document_config::BackendAuth::PrincipalOAuth {
+                account_ref: Some("acct-b".into()),
+            };
+            let client =
+                build_backend_client(node.clone(), &behavior, "key", Duration::from_secs(5))
+                    .await
+                    .unwrap_or_else(|error| panic!("{kind:?} {wire:?} with acct-b: {error:#}"));
+            let built = match (&client, wire) {
+                (BackendClient::ChatGptCodex(_), _) => BackendProviderKind::ChatGptCodex,
+                (
+                    BackendClient::XaiGrokChatCompletions(_),
+                    crate::OpenAiWireApi::ChatCompletions,
+                )
+                | (BackendClient::XaiGrokResponses(_), crate::OpenAiWireApi::Responses) => {
+                    BackendProviderKind::XaiGrokOAuth
+                }
+                (BackendClient::ClaudeSubscription(_), _) => {
+                    BackendProviderKind::ClaudeCliSubscription
+                }
+                _ => panic!("{kind:?} {wire:?} built {}", client.provider_family()),
+            };
+            assert_eq!(built, kind);
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_account_reference_never_falls_back_to_the_original_account() {
         let node = test_node().await;
         crate::migration::ensure_all_runtime_migrations(node.clone())
             .await
@@ -465,10 +534,12 @@ mod tests {
             .await
             .err()
             .expect("an account reference must not build with the original credential");
-        assert!(
-            format!("{error:#}").contains("account references require the multi-account resolver"),
-            "{error:#}"
+        let missing = crate::oauth_credential::classify_chatgpt_auth_error(
+            codex.agent_did(),
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            &crate::oauth_credential::OAuthAuthProblem::Missing,
         );
+        assert!(format!("{error:#}").contains(&missing), "{error:#}");
     }
 
     /// Seed credentials so every OAuth route reaches a concrete client. A
