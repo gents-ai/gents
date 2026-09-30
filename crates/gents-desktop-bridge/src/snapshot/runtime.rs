@@ -724,7 +724,7 @@ fn backend_config_view(
         models,
         advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
-        account_ref: None,
+        account_ref: row.auth.oauth_account_ref().map(str::to_owned),
     }
 }
 

@@ -805,7 +805,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
             pending_save: false,
-            account_ref: None,
+            account_ref: credential.account_ref.clone(),
         }
     }
 }
