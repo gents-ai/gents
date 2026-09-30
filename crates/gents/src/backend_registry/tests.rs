@@ -656,6 +656,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         account_ref: None,
         connected_at: None,
         provider_account_key: None,
+        label: None,
     };
     let models = crate::backend_provider::discover_models(
         &reqwest::Client::new(),

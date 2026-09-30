@@ -1716,6 +1716,7 @@ async fn oauth_account_scope_matches_lean() {
             account_ref: account.map(str::to_string),
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }

@@ -67,6 +67,7 @@ impl OAuthCredential {
             account_ref: None,
             connected_at: None,
             provider_account_key,
+            label: None,
         }
     }
 }

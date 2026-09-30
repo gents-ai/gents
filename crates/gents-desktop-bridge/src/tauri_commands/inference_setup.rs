@@ -1043,6 +1043,7 @@ mod provider_account_tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1071,6 +1072,7 @@ mod provider_account_tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         }
     }
 
@@ -1165,6 +1167,7 @@ mod provider_account_tests {
             credential_id: format!("{provider}:{agent}"),
             provider: provider.to_string(),
             provider_account_key: Some("user:principal-1".to_string()),
+            label: None,
             ..issued_credential(agent)
         };
         gents::oauth_credential::upsert_oauth_credential_on(

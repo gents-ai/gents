@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key";
+const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
 /// The fields [`pick_oauth_credential`] reads: no token.
 const OAUTH_PICK_FIELDS: &str = "credential_id agent_did provider enabled account_ref connected_at";
 
@@ -207,6 +207,10 @@ pub struct OAuthCredential {
     /// `provider`; `None` when the tokens did not show it.
     #[serde(default)]
     pub provider_account_key: Option<String>,
+    /// The user-chosen name shown in every view instead of the sign-in email;
+    /// `None` shows the product name.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 const REDACTED: &str = "[redacted]";
@@ -278,9 +282,12 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     // immutability check rejects re-sending an immutable field on a pre-existing document, so the
     // `update` branch (re-login and per-request token rotation both land here) must omit it.
     // `credential_id` is likewise only ever written in `add`. Mirrors session/observations.rs.
-    // `account_ref` and `connected_at` are set once, when a row is first stored; a refresh or
-    // re-sign-in never rewrites them.
-    let update_input = render_oauth_input(&fields, &["agent_did", "account_ref", "connected_at"]);
+    // `account_ref`, `connected_at` and `label` are set once, when a row is first stored; a
+    // refresh or re-sign-in never rewrites them (a label changes only through its own update).
+    let update_input = render_oauth_input(
+        &fields,
+        &["agent_did", "account_ref", "connected_at", "label"],
+    );
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
@@ -418,6 +425,7 @@ fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
         account_ref: clean_optional(row.account_ref),
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
         provider_account_key: None,
+        label: None,
     })
 }
 
@@ -652,6 +660,10 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
                 credential.provider_account_key.as_deref(),
             ),
         ),
+        (
+            "label",
+            gents_protocol::graphql::nullable_string_field("label", credential.label.as_deref()),
+        ),
     ]
 }
 
@@ -689,6 +701,7 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
         account_ref: clean_optional(row.account_ref),
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
         provider_account_key: clean_optional(row.provider_account_key),
+        label: clean_optional(row.label),
     })
 }
 
@@ -1050,6 +1063,7 @@ mod tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         }
     }
 
@@ -1393,6 +1407,7 @@ mod resolver_tests {
             connected_at: connected_at
                 .map(|secs| DateTime::<Utc>::from_timestamp(secs, 0).unwrap()),
             provider_account_key: None,
+            label: None,
         }
     }
 
@@ -1701,6 +1716,7 @@ mod backfill_tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: key.map(str::to_owned),
+            label: None,
         };
         upsert_oauth_credential(node, &credential).await.unwrap();
     }
@@ -2046,6 +2062,7 @@ pub(crate) mod test_support {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await

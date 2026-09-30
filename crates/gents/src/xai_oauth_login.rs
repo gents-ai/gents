@@ -311,6 +311,7 @@ pub fn credential_from_login_tokens(
         account_ref: None,
         connected_at: None,
         provider_account_key: xai_account_key(&tokens.access_token),
+        label: None,
     }
 }
 
