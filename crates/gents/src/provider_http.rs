@@ -31,6 +31,14 @@ impl ProviderHttpClient {
     pub fn new(inner: ReqwestClient) -> Self {
         Self { inner }
     }
+
+    pub(crate) fn with_usage(
+        inner: ReqwestClient,
+        reporter: std::sync::Arc<crate::usage_observation::UsageReporter>,
+    ) -> Self {
+        let _ = reporter;
+        Self::new(inner)
+    }
 }
 
 fn instance_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> http_client::Error {

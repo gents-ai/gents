@@ -11,8 +11,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_loop::account_usage::{UsagePlan, UsageReport, REWRITE_AFTER};
+use gents_loop::account_usage::{UsagePlan, UsageReport, UsageSource, REWRITE_AFTER};
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
+use rig::http_client::HeaderMap;
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
@@ -316,6 +317,29 @@ async fn write(
             })
         })
         .await
+}
+
+/// Records the usage headers of one provider client's responses for the
+/// account that client serves.
+pub(crate) struct UsageReporter {
+    node: Arc<EmbeddedNode>,
+    account: UsageAccount,
+}
+
+impl std::fmt::Debug for UsageReporter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UsageReporter").finish_non_exhaustive()
+    }
+}
+
+impl UsageReporter {
+    pub(crate) fn new(node: Arc<EmbeddedNode>, account: UsageAccount) -> Arc<Self> {
+        Arc::new(Self { node, account })
+    }
+
+    pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
+        let _ = (headers, source);
+    }
 }
 
 /// Stored usage of the account `backend` names for `agent_did`, with the
