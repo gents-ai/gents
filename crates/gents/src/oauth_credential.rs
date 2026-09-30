@@ -1119,6 +1119,57 @@ mod tests {
     }
 
     #[test]
+    fn account_fields_are_only_in_the_add_block() {
+        let mut credential = sample_credential();
+        credential.account_ref = Some("acct-b".to_string());
+        credential.connected_at = Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap());
+        let mutation = oauth_credential_upsert_mutation(&credential);
+        let (add_block, update_block) = mutation.split_at(mutation.find("update:").unwrap());
+
+        assert!(
+            add_block.contains(r#"account_ref: "acct-b""#)
+                && add_block.contains(r#"connected_at: "2023-11-14T22:13:20Z""#),
+            "add block must set the account fields: {add_block}"
+        );
+        assert!(
+            !update_block.contains("account_ref") && !update_block.contains("connected_at"),
+            "update block must never rewrite the account fields: {update_block}"
+        );
+    }
+
+    #[tokio::test]
+    async fn account_fields_are_kept_when_a_row_is_stored_again() {
+        let node = super::test_support::test_node().await;
+        let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut credential = sample_credential();
+        credential.doc_id = None;
+        credential.account_ref = Some("acct-b".to_string());
+        credential.connected_at = Some(connected_at);
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+
+        let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.account_ref.as_deref(), Some("acct-b"));
+        assert_eq!(stored.connected_at, Some(connected_at));
+
+        // A refresh or re-sign-in stores the row again without the account fields.
+        credential.account_ref = None;
+        credential.connected_at = None;
+        credential.access_token = "access-rotated".to_string();
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+
+        let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.access_token, "access-rotated");
+        assert_eq!(stored.account_ref.as_deref(), Some("acct-b"));
+        assert_eq!(stored.connected_at, Some(connected_at));
+    }
+
+    #[test]
     fn not_entitled_copy_is_product_specific() {
         let msg = classify_oauth_auth_error(
             &CHATGPT_OAUTH_PRODUCT,
