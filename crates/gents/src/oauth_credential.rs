@@ -3622,7 +3622,8 @@ mod backfill_tests {
 
     /// Refresh `did`'s expired Grok row through an owner bearer while
     /// `change` runs between the owner's pre-refresh read and its persist.
-    async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F)
+    /// Returns the owner bearer.
+    async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F) -> DbCredentialBearer
     where
         F: std::future::Future<Output = ()>,
     {
@@ -3652,6 +3653,7 @@ mod backfill_tests {
         std::env::remove_var(XAI_ENV);
         handle.await.expect("server");
         refreshed.expect("the owner still serves its refreshed token");
+        bearer
     }
 
     #[tokio::test]
@@ -3730,7 +3732,7 @@ mod backfill_tests {
             Utc::now(),
         );
         let access = ConfigAccess::Local(node.clone());
-        refresh_racing(&node, did, async {
+        let bearer = refresh_racing(&node, did, async {
             let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
             assert_eq!(signed.result, SignInResult::Refreshed);
         })
@@ -3745,6 +3747,19 @@ mod backfill_tests {
             stored.provider_account_key.as_deref(),
             Some("user:principal-1")
         );
+
+        // The next refresh refreshes the sign-in, not the superseded session.
+        let _env = TOKEN_URL_ENV.lock().await;
+        let body =
+            token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+        let (url, handle) = one_shot_token_server(200, body).await;
+        std::env::set_var(XAI_ENV, &url);
+        bearer.invalidate().await;
+        let refreshed = bearer.current_bearer().await;
+        std::env::remove_var(XAI_ENV);
+        let request = handle.await.expect("server");
+        refreshed.expect("second refresh");
+        assert!(request.contains("refresh-signed-in"), "{request}");
     }
 
     /// Rows stored before #2116, with none of the account fields.
