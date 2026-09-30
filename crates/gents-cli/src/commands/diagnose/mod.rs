@@ -122,8 +122,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
+    let accounts = gents::oauth_credential::list_accounts(&access, &agent_did).await;
     let backend_reports = match bundle.as_ref() {
-        Some(bundle) => diagnose_backends(&access, bundle).await,
+        Some(bundle) => {
+            diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
+        }
         None => Vec::new(),
     };
     let matching_runtime_state = runtime_state.as_ref().filter(|state| {
@@ -178,7 +181,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let mut chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         chatgpt_provider,
@@ -226,7 +229,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let mut xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         xai_provider,
@@ -272,7 +275,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    let claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let mut claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         claude_provider,
@@ -316,6 +319,38 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "error": error.to_string(),
         }),
     };
+
+    for (check, provider, classify) in [
+        (
+            &mut chatgpt_auth_check,
+            chatgpt_provider,
+            gents::oauth_credential::classify_chatgpt_auth_error
+                as fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+        ),
+        (
+            &mut xai_auth_check,
+            xai_provider,
+            gents::xai_grok_oauth::classify_xai_auth_error,
+        ),
+        (
+            &mut claude_auth_check,
+            claude_provider,
+            gents::claude_oauth::classify_claude_auth_error,
+        ),
+    ] {
+        check["accounts"] = match &accounts {
+            Ok(accounts) => accounts_json(
+                &accounts
+                    .iter()
+                    .filter(|account| account.provider == provider)
+                    .collect::<Vec<_>>(),
+                &agent_did,
+                provider,
+                classify,
+            ),
+            Err(error) => json!({ "error": error.to_string() }),
+        };
+    }
 
     // An auth failure only degrades overall health when an OAuth backend is actually
     // configured and enabled — deployments that don't use that backend have no credential
@@ -411,12 +446,32 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 /// its label, whether its token is usable now, and what to do when not. The
 /// check's own fields and gate stay on the provider's default account.
 fn accounts_json(
-    _accounts: &[&gents::oauth_credential::AccountSummary],
-    _agent_did: &str,
-    _provider: &str,
-    _classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+    accounts: &[&gents::oauth_credential::AccountSummary],
+    agent_did: &str,
+    provider: &str,
+    classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
 ) -> Value {
-    json!([])
+    use gents::oauth_credential::OAuthAuthProblem;
+    accounts
+        .iter()
+        .map(|account| {
+            let problem = if !account.enabled {
+                Some(OAuthAuthProblem::WrongMode {
+                    found_mode: "disabled".into(),
+                })
+            } else if !gents::oauth_credential::token_is_fresh(account.access_token_expires_at) {
+                Some(OAuthAuthProblem::Expired)
+            } else {
+                None
+            };
+            json!({
+                "label": account.label,
+                "ok": problem.is_none(),
+                "expires_at": account.access_token_expires_at,
+                "guidance": problem.map(|problem| classify(agent_did, provider, &problem)),
+            })
+        })
+        .collect()
 }
 
 /// `checks.claude_auth.ok` reports token freshness, but a stale access token

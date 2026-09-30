@@ -11,6 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
+    accounts: &[gents::oauth_credential::AccountSummary],
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
     for profile in &bundle.config.inference_profiles {
@@ -33,6 +34,9 @@ pub(super) async fn diagnose_backends(
             "required_models": required,
             "ok": result.is_ok(),
         });
+        if let Some(account) = account_field(backend, accounts) {
+            report["account"] = account;
+        }
         match result {
             Ok(details) => report
                 .as_object_mut()
@@ -117,9 +121,10 @@ async fn backend_check(
 /// for a backend that uses no account.
 fn account_field(
     backend: &InferenceBackend,
-    _accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::oauth_credential::AccountSummary],
 ) -> Option<Value> {
-    matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }).then_some(Value::Null)
+    gents::oauth_credential::backend_account(backend, accounts)
+        .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
 }
 
 const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
