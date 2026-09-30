@@ -54,7 +54,8 @@ pub struct DesktopAppState {
     pub pending_oauth_credentials: PendingOAuthCredentials,
 }
 
-type CredentialKey = (String, String);
+/// Agent DID, credential provider and the sign-in's account identity.
+type CredentialKey = (String, String, String);
 
 /// A credential issued by a completed sign-in, ordered by issuance for its
 /// (agent DID, credential provider) key.
@@ -72,6 +73,7 @@ impl IssuedOAuthCredential {
         (
             self.credential.agent_did.clone(),
             self.credential.provider.clone(),
+            String::new(),
         )
     }
 }
@@ -181,7 +183,7 @@ impl PendingOAuthCredentials {
         F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
-        let key = (agent_did.to_string(), provider.to_string());
+        let key = (agent_did.to_string(), provider.to_string(), String::new());
         let gate = self.write_gate(&key);
         let _ordered = gate.lock().await;
         let credential = self
@@ -203,7 +205,7 @@ impl PendingOAuthCredentials {
         let mut held: Vec<_> = self
             .slots()
             .iter()
-            .filter(|((agent, _), _)| agent == agent_did)
+            .filter(|((agent, _, _), _)| agent == agent_did)
             .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
             .collect();
         held.sort_by(|left, right| left.provider.cmp(&right.provider));
