@@ -4732,6 +4732,9 @@ async fn behavior_profile_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("behavior-pick").await;
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
     assert_account_choice_refused(&core, || behavior_request(&core, to("p-chat-b"))).await;
+    core.apply(behavior_request(&core, to("p-original")))
+        .await
+        .unwrap();
     core.preview(behavior_request(&core, to("p-grok")))
         .await
         .unwrap();
@@ -4752,6 +4755,7 @@ async fn compaction_profile_pick_cannot_switch_account() {
         .unwrap()
     };
     assert_account_choice_refused(&core, || to("p-chat-b")).await;
+    core.apply(to("p-original")).await.unwrap();
     core.preview(to("p-grok")).await.unwrap();
     core.apply(to("p-grok")).await.unwrap();
 }
@@ -4843,7 +4847,12 @@ async fn persona_profile_pick_cannot_switch_account() {
         );
     }
     assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
-    for accepted in [create("p-grok"), clone("p-grok")] {
+    for accepted in [
+        create("p-grok"),
+        clone("p-grok"),
+        params("edit", &["--id", "persona-pick", "--profile", "p-original"]),
+        params("edit", &["--id", "persona-pick", "--profile", "p-grok"]),
+    ] {
         persona_mutate(
             &node,
             &owner,
