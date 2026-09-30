@@ -429,16 +429,52 @@ pub(crate) async fn remove_account(
 /// the result is then an error that carries every block and names the
 /// failures.
 pub(crate) async fn probe_each_account<F, Fut>(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _provider: &str,
-    _probe: F,
+    access: &ConfigAccess,
+    agent_did: &str,
+    provider: &str,
+    probe: F,
 ) -> Result<Vec<String>>
 where
     F: Fn(gents::oauth_credential::OAuthCredential) -> Fut,
     Fut: std::future::Future<Output = Result<String>>,
 {
-    anyhow::bail!("not implemented")
+    let mut blocks = Vec::new();
+    let mut failed = Vec::new();
+    for account in gents::oauth_credential::list_accounts(access, agent_did)
+        .await?
+        .into_iter()
+        .filter(|account| account.provider == provider)
+    {
+        if !account.enabled {
+            blocks.push(format!("{}: disabled, not probed", account.label));
+            continue;
+        }
+        let probed = match gents::oauth_credential::resolve_oauth_credential(
+            access,
+            agent_did,
+            provider,
+            gents::oauth_credential::AccountPick::Reference(account.account_ref.as_deref()),
+        )
+        .await?
+        {
+            Some(credential) => probe(credential).await,
+            None => Err(anyhow::anyhow!("the account is no longer stored")),
+        };
+        match probed {
+            Ok(text) => blocks.push(format!("{}\n{text}", account.label)),
+            Err(error) => {
+                blocks.push(format!("{}: probe failed: {error:#}", account.label));
+                failed.push(account.label);
+            }
+        }
+    }
+    anyhow::ensure!(
+        failed.is_empty(),
+        "{}\n\nprobe failed for: {}",
+        blocks.join("\n\n"),
+        failed.join(", ")
+    );
+    Ok(blocks)
 }
 
 #[cfg(test)]

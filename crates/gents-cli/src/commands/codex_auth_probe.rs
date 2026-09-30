@@ -29,21 +29,39 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
-    let credential = gents::oauth_credential::resolve_oauth_credential(
+    let blocks = crate::commands::accounts::probe_each_account(
         &access,
         &agent_did,
         &provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        |credential| probe_account(credential, &agent_did, &provider, args.max_models),
     )
-    .await?
-    .ok_or_else(|| {
-        anyhow::anyhow!(gents::oauth_credential::classify_chatgpt_auth_error(
-            &agent_did,
-            &provider,
-            &gents::oauth_credential::OAuthAuthProblem::Missing,
-        ))
-    })?;
+    .await?;
+    if blocks.is_empty() {
+        bail!(
+            "{}",
+            gents::oauth_credential::classify_chatgpt_auth_error(
+                &agent_did,
+                &provider,
+                &gents::oauth_credential::OAuthAuthProblem::Missing,
+            )
+        );
+    }
+    println!("Agent DID: {agent_did}");
+    for block in blocks {
+        println!("\n{block}");
+    }
+    Ok(())
+}
 
+/// Probe one account and render its block (after the label).
+async fn probe_account(
+    credential: gents::oauth_credential::OAuthCredential,
+    agent_did: &str,
+    provider: &str,
+    max_models: usize,
+) -> Result<String> {
+    use std::fmt::Write;
+    let mut out = String::new();
     let backend_url = gents::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
@@ -91,23 +109,24 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let ModelsResponse { models, data } =
         serde_json::from_slice(&body).context("failed to decode models response")?;
 
-    println!("Agent DID: {agent_did}");
-    println!("Credential: {}", credential.credential_id);
-    println!(
+    writeln!(out, "Credential: {}", credential.credential_id)?;
+    writeln!(
+        out,
         "Auth: ChatGPT (account: {}, plan: {})",
         credential
             .account_id
             .as_deref()
             .unwrap_or("<unknown-account>"),
         credential.chatgpt_plan_type.as_deref().unwrap_or("Unknown")
-    );
-    println!("Backend: {backend_url}");
-    println!(
+    )?;
+    writeln!(out, "Backend: {backend_url}")?;
+    writeln!(
+        out,
         "Access token expires: {}",
         credential.access_token_expires_at
-    );
+    )?;
     if let Some(etag) = etag {
-        println!("Models etag: {etag}");
+        writeln!(out, "Models etag: {etag}")?;
     }
     let mut rendered = models
         .into_iter()
@@ -122,16 +141,16 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
         .chain(data.into_iter().map(|model| model.id))
         .collect::<Vec<_>>();
     rendered.sort();
-    println!("Models returned: {}", rendered.len());
+    writeln!(out, "Models returned: {}", rendered.len())?;
 
-    let max_models = args.max_models.min(rendered.len());
+    let max_models = max_models.min(rendered.len());
     for model in rendered.iter().take(max_models) {
-        println!("- {model}");
+        writeln!(out, "- {model}")?;
     }
 
     if max_models < rendered.len() {
-        println!("- ... {} more", rendered.len() - max_models);
+        writeln!(out, "- ... {} more", rendered.len() - max_models)?;
     }
 
-    Ok(())
+    Ok(out)
 }
