@@ -1,4 +1,5 @@
 import Proofs.SelfConfig.Theorems
+import Proofs.SelfConfig.Auth
 
 namespace SelfConfig.ContractCases
 
@@ -57,13 +58,29 @@ def decodeReach (doc : Doc) : Option Reach := do
     | _ => none
   pure { enabled, setupTag }
 
-/-- The invoker-only no-lockout slice for the guarded target. -/
+/-- Fixture decoder for the exact backend auth texts used below. -/
+def decodeAuthText : String → Option Configuration.BackendAuth
+  | "{\"kind\":\"environment\",\"variable\":\"KEY\"}" => some (.environment "KEY")
+  | "{\"kind\":\"principal_oauth\"}" => some (.principalOAuth none)
+  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}" => some (.principalOAuth (some "a1"))
+  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}" => some (.principalOAuth (some "a2"))
+  | _ => none
+
+def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
+  (doc "auth").bind decodeAuthText
+
+/-- The invoker-only no-lockout slice for Tools and Behavior targets. -/
 def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
   if t = .agentBehavior then keepsReach decodeReach stored
   else keepsControl decodeControl stored
 
+/-- A guarded row replays its target's typed guard: the no-lockout slice for
+Tools and Behavior, and the auth fence for Backend, which Rust enforces in
+`validate` on every model write rather than only under no-lockout. -/
 def caseGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
-  if r.guarded then lockoutGuard r.target stored else fun _ => true
+  if !r.guarded then fun _ => true
+  else if r.target = .inferenceBackend then authGuard decodeAuth stored
+  else lockoutGuard r.target stored
 
 def project (t : Target) (doc : Doc) : List (FieldKey × FieldValue) :=
   (allFields t).filterMap (fun k => (doc k).map (fun v => (k, v)))
@@ -99,7 +116,7 @@ def buildWitness (r : CaseRow) : CaseWitness :=
   , unchangedOnReject :=
       outcome.isSome || decide (project r.target result = project r.target stored)
   , controlKeptAfterAccept :=
-      !(r.guarded && outcome.isSome) || lockoutGuard r.target stored result
+      !(r.guarded && outcome.isSome) || caseGuard r stored result
   }
 
 /-- Values are decoded group values abstracted as strings; nested validation
@@ -216,6 +233,30 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceBackend, guarded := false, validates := true
     , doc := [("backend_id", "backend-1")]
     , patch := [("probe_status", some "healthy")] }
+  , { name := "backend_oauth_account_change_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")] }
+  , { name := "backend_oauth_reference_set_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
+    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")] }
+  , { name := "backend_oauth_reference_dropped_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+  , { name := "backend_oauth_original_introduce_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
+    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+  , { name := "backend_oauth_endpoint_edit_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
+  , { name := "backend_oauth_to_environment_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"environment\",\"variable\":\"KEY\"}")] }
   , { name := "profile_optional_sampling_clear_accepted"
     , target := .inferenceProfile, guarded := false, validates := true
     , doc := [("sampling_id", "sampling-1")]

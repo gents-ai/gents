@@ -1,7 +1,8 @@
 //! Generated field tables and patch results checked against the existing patch owner.
-//! Guarded rows replay the Lean no-lockout verdict through the production Tools
-//! guard. Reference validation and transactional rejection need an end-to-end
-//! ConfigApplyTxn consumer; this test does not simulate them.
+//! Guarded rows replay the Lean guard verdict through the production guard of
+//! their target (Tools and Behavior no-lockout, Backend auth). Reference
+//! validation and transactional rejection need an end-to-end ConfigApplyTxn
+//! consumer; this test does not simulate them.
 use crate::lean_vocab_test::{
     lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
 };
@@ -115,12 +116,15 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 SelfConfigTarget::AgentBehavior => {
                     gents::self_config::guard_behavior_keeps_reach(&stored, &candidate)
                 }
-                other => panic!("{}: no no-lockout guard for {other:?}", case.name),
+                SelfConfigTarget::InferenceBackend => {
+                    gents::self_config::guard_backend_auth(&stored, &candidate)
+                }
+                other => panic!("{}: no runtime guard for {other:?}", case.name),
             };
             assert_eq!(
                 verdict.is_ok(),
                 case.accepted,
-                "{}: runtime no-lockout guard",
+                "{}: runtime guard",
                 case.name
             );
         }

@@ -4512,6 +4512,81 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     assert!(read.to_string().contains(VARIABLE));
 }
 
+/// The account fence lives in `validate`, so it holds with no-lockout off.
+#[tokio::test]
+async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("self-config-account");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "acct").await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let store = |kind: &str, auth: Value| {
+        let backend: crate::InferenceBackend = serde_json::from_value(json!({
+            "agent_did": owner, "backend_id": "acct:backend", "name": "Test inference",
+            "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
+        }))
+        .unwrap();
+        let access = &access;
+        async move {
+            crate::config_client::write_inference_backend_document(access, &backend)
+                .await
+                .unwrap();
+        }
+    };
+    let to_oauth = |auth: Value| {
+        vec![
+            ("provider_kind".into(), Some(json!("ChatGptCodex"))),
+            ("auth".into(), Some(auth)),
+        ]
+    };
+    let refused = |patch: SelfConfigPatch| {
+        let core = &core;
+        async move {
+            let preview = core.preview(backend_request(patch.clone())).await;
+            let apply = core.apply(backend_request(patch)).await;
+            for result in [preview, apply] {
+                let error = result.expect_err("account reference change must be refused");
+                assert!(
+                    format!("{error:#}").contains("OAuth account references are operator-managed"),
+                    "{error:#}"
+                );
+            }
+        }
+    };
+
+    store(
+        "OpenAiCompatible",
+        json!({"kind":"environment","variable":"KEY"}),
+    )
+    .await;
+    refused(to_oauth(
+        json!({"kind":"principal_oauth","account_ref":"a1"}),
+    ))
+    .await;
+    let original = to_oauth(json!({"kind":"principal_oauth"}));
+    core.preview(backend_request(original.clone()))
+        .await
+        .unwrap();
+    core.apply(backend_request(original)).await.unwrap();
+
+    store(
+        "ChatGptCodex",
+        json!({"kind":"principal_oauth","account_ref":"a1"}),
+    )
+    .await;
+    refused(to_oauth(
+        json!({"kind":"principal_oauth","account_ref":"a2"}),
+    ))
+    .await;
+    refused(to_oauth(json!({"kind":"principal_oauth"}))).await;
+    let endpoint = vec![("endpoint".into(), Some(json!("http://127.0.0.1:2/v1")))];
+    core.preview(backend_request(endpoint.clone()))
+        .await
+        .unwrap();
+    core.apply(backend_request(endpoint)).await.unwrap();
+}
+
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
     let node = build_persona_node().await;
