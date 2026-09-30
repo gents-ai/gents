@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, REWRITE_AFTER,
+    self, usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
@@ -23,7 +23,9 @@ use crate::config::ResolvedBehavior;
 use crate::config_client::ConfigAccess;
 use crate::document_config::InferenceBackend;
 use crate::graphql::escape_graphql_string;
-use crate::oauth_credential::{resolve_oauth_credential, AccountPick, OAuthCredential};
+use crate::oauth_credential::{
+    resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
+};
 
 /// The provider account usage belongs to, per agent. A credential account's
 /// key is resolved when usage is written or read, so a key filled after the
@@ -411,7 +413,17 @@ impl Default for UsageEndpoints {
     }
 }
 
-/// Reads `backend`'s usage from its provider on demand, in the runtime.
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
+
+/// Reads `backend`'s usage from its provider on demand. Runs in the runtime:
+/// an OAuth account's bearer comes from the refresh owner, so an expired
+/// sign-in is renewed here like a request would renew it (one credential
+/// write, one runtime view reload). Every skip happens before any bearer is
+/// touched, so a skipped read never refreshes.
+// ponytail: the skip check is not atomic, so two concurrent Opens of one
+// account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
@@ -420,8 +432,130 @@ pub async fn read_account_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
-    let _ = (node, agent_did, backend, trigger, endpoints, now);
-    Ok(UsageRead::Unavailable("inert".to_string()))
+    use crate::backend_provider::BackendProviderKind as Kind;
+    let kind = backend.provider_kind;
+    if !backend.enabled {
+        return Ok(UsageRead::Disabled);
+    }
+    match (kind, trigger) {
+        (Kind::OpenAiCompatible, _) => return Ok(UsageRead::NotReported),
+        (Kind::ClaudeCliSubscription, UsageTrigger::Open) => {
+            return Ok(UsageRead::SkippedUntilRefresh)
+        }
+        _ => {}
+    }
+    let api_key = match kind {
+        Kind::OpenRouter => match backend.auth.resolve_api_key() {
+            Ok(Some(key)) => Some(key),
+            _ => return Ok(unavailable("no key")),
+        },
+        _ => None,
+    };
+    let access = ConfigAccess::Local(node.clone());
+    let account = UsageAccount::for_backend(agent_did, backend);
+    let Some(target) = target(&access, &account).await? else {
+        return Ok(unavailable("no enabled account"));
+    };
+    let last_read = load(&access, &target)
+        .await?
+        .and_then(|stored| stored.read_at);
+    if last_read.is_some_and(|read_at| now - read_at < READ_SKIP_WINDOW) {
+        return Ok(UsageRead::SkippedRecent);
+    }
+
+    let http = reqwest::Client::builder().timeout(READ_TIMEOUT).build()?;
+    let (request, parse): (reqwest::RequestBuilder, UsageParser) = match api_key {
+        Some(key) => (
+            http.get(format!("{}/key", backend.endpoint.trim_end_matches('/')))
+                .bearer_auth(key),
+            account_usage::openrouter_key,
+        ),
+        None => {
+            let provider = kind.oauth_provider().context("backend has no usage read")?;
+            let bootstrap = crate::oauth_http::bootstrap_oauth_client(
+                node.clone(),
+                agent_did,
+                provider,
+                crate::backend_health::oauth_refresh_kind(kind),
+                crate::backend_health::oauth_product(kind),
+                AccountPick::Reference(backend.auth.oauth_account_ref()),
+            )
+            .await;
+            let Ok((bearer, credential)) = bootstrap else {
+                return Ok(unavailable("sign-in expired"));
+            };
+            let Ok(token) = bearer.current_bearer().await else {
+                return Ok(unavailable("sign-in expired"));
+            };
+            let (request, parse): (reqwest::RequestBuilder, UsageParser) = match kind {
+                Kind::ChatGptCodex => (
+                    http.get(codex_usage_url(&backend.endpoint)).headers(
+                        crate::chatgpt_codex::build_chatgpt_codex_headers(
+                            credential.account_id.as_deref(),
+                            credential.is_fedramp,
+                        )?,
+                    ),
+                    account_usage::codex_usage,
+                ),
+                Kind::XaiGrokOAuth => (
+                    http.get(&endpoints.grok_billing)
+                        .headers(crate::xai_grok_oauth::build_xai_grok_oauth_headers()?),
+                    account_usage::grok_billing,
+                ),
+                _ => (
+                    http.get(&endpoints.claude_usage)
+                        .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
+                    account_usage::claude_oauth_usage,
+                ),
+            };
+            (request.bearer_auth(token), parse)
+        }
+    };
+
+    let outcome = match request.send().await {
+        Err(_) => Err("unreachable".to_string()),
+        Ok(response) => match response.status().as_u16() {
+            200..=299 => response
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|body| parse(&body, now))
+                .ok_or_else(|| "malformed".to_string()),
+            401 | 403 => Err("unauthorized".to_string()),
+            429 => Err("throttled".to_string()),
+            status => Err(format!("http {status}")),
+        },
+    };
+    match outcome {
+        Ok(report) => {
+            write(&node, &account, report, Some((now, None))).await?;
+            Ok(UsageRead::Read)
+        }
+        Err(error) => {
+            write(
+                &node,
+                &account,
+                UsageReport::default(),
+                Some((now, Some(error.clone()))),
+            )
+            .await?;
+            Ok(UsageRead::Unavailable(error))
+        }
+    }
+}
+
+fn unavailable(reason: &str) -> UsageRead {
+    UsageRead::Unavailable(reason.to_string())
+}
+
+/// `/wham/usage` on the backend's host: the Responses base without its
+/// trailing `/codex` (default `https://chatgpt.com/backend-api/wham/usage`).
+fn codex_usage_url(endpoint: &str) -> String {
+    let base = crate::chatgpt_codex::normalize_endpoint(endpoint);
+    format!(
+        "{}/wham/usage",
+        base.strip_suffix("/codex").unwrap_or(&base)
+    )
 }
 
 /// Stored usage of the account `backend` names for `agent_did`, with the
