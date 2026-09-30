@@ -414,11 +414,32 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
     }
 }
 fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    anchored_request(
+    let mut request = anchored_request(
         SelfConfigTarget::InferenceProfile,
         "inference_profile_id",
         patch,
-    )
+    );
+    fence_profile_backend(&mut request);
+    request
+}
+/// A profile's backend selection may not switch accounts of one provider.
+fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
+    request.validate = Box::new(|txn, _, stored, merged| {
+        Box::pin(async move {
+            let Some(next) = merged.get("backend_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let current = stored.get("backend_id").and_then(Value::as_str);
+            if current == Some(next) {
+                return Ok(());
+            }
+            let owner = merged
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("profile is missing agent_did")?;
+            ops::guard_backend_choice_in_txn(txn, owner, current, next).await
+        })
+    });
 }
 fn profile_create_request(
     owner: String,
@@ -435,6 +456,7 @@ fn profile_create_request(
         merged.insert("agent_did".into(), json!(owner));
         Ok(())
     });
+    fence_profile_backend(&mut request);
     request
 }
 fn profile_target_request(

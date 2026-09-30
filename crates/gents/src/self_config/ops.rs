@@ -829,6 +829,29 @@ pub fn guard_backend_choice(
     );
     Ok(())
 }
+/// [`guard_backend_choice`] over the owner's stored backends, inside the
+/// write transaction; `current_backend_id` is `None` on create.
+pub(crate) async fn guard_backend_choice_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    current_backend_id: Option<&str>,
+    next_backend_id: &str,
+) -> Result<()> {
+    let backend = |id: String| async move {
+        read_owned_doc(txn, SelfConfigTarget::InferenceBackend, owner, &id)
+            .await?
+            .map(|(_, doc)| crate::InferenceBackend::from_value(&Value::Object(doc)))
+            .transpose()
+    };
+    let current = match current_backend_id {
+        Some(id) => backend(id.to_owned()).await?,
+        None => None,
+    };
+    let next = backend(next_backend_id.to_owned())
+        .await?
+        .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
+    guard_backend_choice(current.as_ref(), &next)
+}
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
     let tools = decode_merged::<Tools>("Tools", merged)?;
     if let Some(lsp) = tools
