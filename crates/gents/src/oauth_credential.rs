@@ -947,6 +947,61 @@ async fn store_sign_in_in_txn(
     })
 }
 
+/// One sign-in account as views show it: no token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AccountSummary {
+    pub credential_id: String,
+    pub provider: String,
+    pub account_ref: Option<String>,
+    /// The effective label ([`effective_account_label`]).
+    pub label: String,
+    /// The sign-in's display identity ([`account_display_label`]); display only.
+    pub identity: Option<String>,
+    pub plan: Option<String>,
+    pub enabled: bool,
+    /// The provider's default account ([`AccountPick::ProviderDefault`]).
+    pub default: bool,
+    pub access_token_expires_at: DateTime<Utc>,
+}
+
+/// `agent_did`'s sign-in accounts in resolver order. Only providers a backend
+/// reads are accounts; a cloud workspace token is not.
+pub async fn list_accounts(
+    _access: &crate::config_client::ConfigAccess,
+    _agent_did: &str,
+) -> Result<Vec<AccountSummary>> {
+    anyhow::bail!("not implemented")
+}
+
+/// Rename an account; a backend still named by its old label follows.
+pub async fn set_account_label(
+    _access: &crate::config_client::ConfigAccess,
+    _agent_did: &str,
+    _credential_id: &str,
+    _label: &str,
+) -> Result<()> {
+    anyhow::bail!("not implemented")
+}
+
+/// Enable or disable an account, keeping its tokens.
+pub async fn set_account_enabled(
+    _access: &crate::config_client::ConfigAccess,
+    _agent_did: &str,
+    _credential_id: &str,
+    _enabled: bool,
+) -> Result<()> {
+    anyhow::bail!("not implemented")
+}
+
+/// Delete an account's row inside the caller's transaction.
+pub async fn remove_account_in_txn(
+    _txn: &crate::config_client::ConfigApplyTxn<'_>,
+    _agent_did: &str,
+    _credential_id: &str,
+) -> Result<()> {
+    anyhow::bail!("not implemented")
+}
+
 pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
     gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
         .into_iter()
@@ -3075,6 +3130,205 @@ mod lifecycle_tests {
         assert!(text.contains("sign in again"), "{text}");
         assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
         assert!(backends(&access, did).await.is_empty());
+    }
+
+    async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result<()> {
+        access
+            .transact("test.remove_account", |txn| {
+                Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn list_accounts_is_ordered_token_free_and_marks_the_default() {
+        let access = access().await;
+        let did = "did:key:z6MkTestListAccounts";
+        let a = store(
+            &access,
+            Product::Claude.sign_in(did, "a", "refresh-SECRET-a"),
+        )
+        .await;
+        store(
+            &access,
+            Product::Claude.sign_in(did, "b", "refresh-SECRET-b"),
+        )
+        .await;
+        store(
+            &access,
+            Product::Claude.sign_in(did, "c", "refresh-SECRET-c"),
+        )
+        .await;
+        store(&access, Product::Grok.sign_in(did, "a", "refresh-SECRET-g")).await;
+        set_enabled(&access, &a.credential.credential_id, false).await;
+
+        let listed = list_accounts(&access, did).await.unwrap();
+        let rows = list_oauth_credentials_on(&access, did).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|account| &account.credential_id)
+                .collect::<Vec<_>>(),
+            rows.iter()
+                .map(|row| &row.credential_id)
+                .collect::<Vec<_>>()
+        );
+        for provider in [CLAUDE_OAUTH_PROVIDER, XAI_OAUTH_PROVIDER] {
+            let default =
+                resolve_oauth_credential(&access, did, provider, AccountPick::ProviderDefault)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let marked: Vec<_> = listed
+                .iter()
+                .filter(|account| account.provider == provider && account.default)
+                .map(|account| account.credential_id.clone())
+                .collect();
+            assert_eq!(marked, [default.credential_id], "{provider}");
+        }
+        let claude: Vec<_> = listed
+            .iter()
+            .filter(|account| account.provider == CLAUDE_OAUTH_PROVIDER)
+            .collect();
+        let mut labels: Vec<_> = claude
+            .iter()
+            .map(|account| account.label.as_str())
+            .collect();
+        labels.sort();
+        assert_eq!(labels, ["Claude", "Claude 2", "Claude 3"]);
+        let original = claude
+            .iter()
+            .find(|account| account.account_ref.is_none())
+            .unwrap();
+        assert!(!original.enabled);
+        assert_eq!(original.identity.as_deref(), Some("label-a"));
+        let text = serde_json::to_string(&listed).unwrap();
+        assert!(
+            !text.contains("SECRET") && !text.contains("access-TEST"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloud_workspace_token_is_not_an_account() {
+        let access = access().await;
+        let did = "did:key:z6MkTestCloudToken";
+        let mut cloud = Product::Grok.sign_in(did, "a", "refresh-1");
+        cloud.provider = "gents-cloud".into();
+        cloud.credential_id = oauth_credential_id(did, "gents-cloud");
+        upsert_oauth_credential_on(&access, &cloud).await.unwrap();
+        let before = list_oauth_credentials_on(&access, did).await.unwrap();
+
+        assert!(list_accounts(&access, did).await.unwrap().is_empty());
+        let id = cloud.credential_id.as_str();
+        for error in [
+            set_account_label(&access, did, id, "Work")
+                .await
+                .unwrap_err(),
+            set_account_enabled(&access, did, id, false)
+                .await
+                .unwrap_err(),
+            remove(&access, did, id).await.unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("not found"), "{error}");
+        }
+        assert_eq!(
+            list_oauth_credentials_on(&access, did).await.unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn a_label_change_is_validated_unique_and_renames_the_backend() {
+        let access = access().await;
+        let did = "did:key:z6MkTestSetLabel";
+        store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
+        let b = store(&access, Product::Claude.sign_in(did, "b", "refresh-b")).await;
+        let id = b.credential.credential_id.as_str();
+
+        set_account_label(&access, did, id, " Work ").await.unwrap();
+        let row = rows(&access, did, CLAUDE_OAUTH_PROVIDER)
+            .await
+            .into_iter()
+            .find(|row| row.credential_id == id)
+            .unwrap();
+        assert_eq!(row.label.as_deref(), Some("Work"));
+        let backend = backends(&access, did).await.remove(0);
+        assert_eq!(backend.name, "Work");
+
+        for bad in ["Claude", "", "a\u{7}b"] {
+            assert!(
+                set_account_label(&access, did, id, bad).await.is_err(),
+                "{bad:?}"
+            );
+        }
+
+        let mut custom = backend.clone();
+        custom.name = "Custom".into();
+        crate::config_client::write_inference_backend_document(&access, &custom)
+            .await
+            .unwrap();
+        set_account_label(&access, did, id, "Home").await.unwrap();
+        assert_eq!(backends(&access, did).await.remove(0).name, "Custom");
+    }
+
+    #[tokio::test]
+    async fn disable_keeps_the_tokens() {
+        let access = access().await;
+        let did = "did:key:z6MkTestDisable";
+        let a = store(&access, Product::Grok.sign_in(did, "a", "refresh-a")).await;
+        let before = rows(&access, did, XAI_OAUTH_PROVIDER).await.remove(0);
+        set_account_enabled(&access, did, &a.credential.credential_id, false)
+            .await
+            .unwrap();
+        let after = rows(&access, did, XAI_OAUTH_PROVIDER).await.remove(0);
+        assert!(!after.enabled);
+        assert_eq!(after.access_token, before.access_token);
+        assert_eq!(after.refresh_token, before.refresh_token);
+        set_account_enabled(&access, did, &a.credential.credential_id, true)
+            .await
+            .unwrap();
+        assert!(rows(&access, did, XAI_OAUTH_PROVIDER).await[0].enabled);
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_the_row() {
+        let access = access().await;
+        let did = "did:key:z6MkTestRemove";
+        let a = store(&access, Product::ChatGpt.sign_in(did, "a", "refresh-a")).await;
+        let b = store(&access, Product::ChatGpt.sign_in(did, "b", "refresh-b")).await;
+        remove(&access, did, &b.credential.credential_id)
+            .await
+            .unwrap();
+        let left = rows(&access, did, CHATGPT_CODEX_PROVIDER).await;
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].credential_id, a.credential.credential_id);
+        let error = remove(&access, did, &b.credential.credential_id)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn another_principals_account_is_not_touched() {
+        let access = access().await;
+        let mine = "did:key:z6MkTestMine";
+        let theirs = "did:key:z6MkTestTheirs";
+        let signed = store(&access, Product::Claude.sign_in(theirs, "a", "refresh-a")).await;
+        let id = signed.credential.credential_id.as_str();
+        let before = rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await;
+        for error in [
+            set_account_label(&access, mine, id, "Work")
+                .await
+                .unwrap_err(),
+            set_account_enabled(&access, mine, id, false)
+                .await
+                .unwrap_err(),
+            remove(&access, mine, id).await.unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("not found"), "{error}");
+        }
+        assert_eq!(rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await, before);
     }
 
     #[tokio::test]
