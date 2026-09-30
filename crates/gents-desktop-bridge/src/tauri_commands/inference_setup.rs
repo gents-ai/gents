@@ -80,16 +80,7 @@ async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
 ) -> anyhow::Result<SignIn> {
-    let doc_id = gents::oauth_credential::upsert_oauth_credential_on(&access?, &credential).await?;
-    Ok(SignIn {
-        doc_id: doc_id.clone(),
-        credential: OAuthCredential {
-            doc_id: Some(doc_id),
-            ..credential
-        },
-        result: gents::oauth_credential::SignInResult::Refreshed,
-        identity_matched: false,
-    })
+    gents::oauth_credential::store_sign_in(&access?, credential, None).await
 }
 
 fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> BridgeError {
@@ -855,17 +846,14 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     let access = core
         .operator_access(request.agent_did.trim())
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let credentials = list_oauth_credentials_on(&access, request.agent_did.trim())
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let mut credential = credentials
-        .into_iter()
-        .find(|entry| entry.credential_id == request.credential_id)
-        .ok_or_else(|| BridgeError::untyped("provider account not found"))?;
-    credential.enabled = false;
-    gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    gents::oauth_credential::set_account_enabled(
+        &access,
+        request.agent_did.trim(),
+        &request.credential_id,
+        false,
+    )
+    .await
+    .map_err(|_| BridgeError::untyped("provider account not found"))?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
@@ -1179,6 +1167,8 @@ mod provider_account_tests {
             credential_id: format!("{provider}:{agent}"),
             provider: provider.to_string(),
             provider_account_key: Some("user:principal-1".to_string()),
+            // Grok rows carry no `account_id`.
+            account_id: None,
             label: None,
             ..issued_credential(agent)
         };
