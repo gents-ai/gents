@@ -8,14 +8,18 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_loop::account_usage::UsageReport;
+use gents_loop::account_usage::{UsagePlan, UsageReport, REWRITE_AFTER};
+use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
+use serde_json::{json, Value};
 
+use crate::backend_provider::BackendProviderOauthExt;
 use crate::config_client::ConfigAccess;
 use crate::document_config::InferenceBackend;
-use crate::oauth_credential::OAuthCredential;
+use crate::graphql::escape_graphql_string;
+use crate::oauth_credential::{resolve_oauth_credential, AccountPick, OAuthCredential};
 
 /// The provider account usage belongs to, per agent. A credential account's
 /// key is resolved when usage is written or read, so a key filled after the
@@ -42,6 +46,22 @@ impl UsageAccount {
             account_ref: row.account_ref.clone(),
         }
     }
+
+    /// The account `backend` names for `agent_did` (account = backend).
+    fn for_backend(agent_did: &str, backend: &InferenceBackend) -> Self {
+        match backend.provider_kind.oauth_provider() {
+            Some(provider) => Self::Credential {
+                agent_did: agent_did.to_string(),
+                provider: provider.to_string(),
+                account_ref: backend.auth.oauth_account_ref().map(str::to_string),
+            },
+            None => Self::Backend {
+                agent_did: agent_did.to_string(),
+                provider: backend.provider_kind.as_str().to_string(),
+                backend_id: backend.backend_id.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -52,14 +72,164 @@ pub struct StoredUsage {
     pub read_error: Option<String>,
 }
 
+impl StoredUsage {
+    fn merge(self, other: StoredUsage) -> StoredUsage {
+        let (read_at, read_error) = if other.read_at > self.read_at {
+            (other.read_at, other.read_error)
+        } else {
+            (self.read_at, self.read_error)
+        };
+        let report = self.report.merge(other.report);
+        StoredUsage {
+            observed_at: report.observed_at(),
+            report,
+            read_at,
+            read_error,
+        }
+    }
+
+    /// Only what was observed at or after `since`.
+    fn since(mut self, since: DateTime<Utc>) -> StoredUsage {
+        let report = &mut self.report;
+        report.windows.retain(|window| window.observed_at >= since);
+        report.credits = report.credits.take().filter(|c| c.observed_at >= since);
+        report.plan = report.plan.take().filter(|plan| plan.observed_at >= since);
+        self.observed_at = report.observed_at();
+        if self.read_at.is_some_and(|read_at| read_at < since) {
+            self.read_at = None;
+            self.read_error = None;
+        }
+        self
+    }
+}
+
+/// Where an account's usage is stored.
+struct Target {
+    agent_did: String,
+    provider: String,
+    /// Written here: the provider account key, else `reference`.
+    key: String,
+    /// `ref:<account_ref>` or `ref:original`, DID-free, for usage seen before
+    /// the key is known. A new first sign-in after every account was removed
+    /// reuses the reference, so its observations from before the sign-in's
+    /// `connected_at` belong to the removed account.
+    reference: Option<String>,
+    connected_at: Option<DateTime<Utc>>,
+    /// The plan the sign-in carries, for a report that has none.
+    plan: Option<UsagePlan>,
+}
+
+/// `None` for a credential account with no enabled sign-in: disabled and
+/// removed accounts get no usage written or loaded.
+async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<Target>> {
+    match account {
+        UsageAccount::Backend {
+            agent_did,
+            provider,
+            backend_id,
+        } => Ok(Some(Target {
+            agent_did: agent_did.clone(),
+            provider: provider.clone(),
+            key: backend_id.clone(),
+            reference: None,
+            connected_at: None,
+            plan: None,
+        })),
+        UsageAccount::Credential {
+            agent_did,
+            provider,
+            account_ref,
+        } => {
+            let pick = AccountPick::Reference(account_ref.as_deref());
+            let Some(row) = resolve_oauth_credential(access, agent_did, provider, pick).await?
+            else {
+                return Ok(None);
+            };
+            let reference = format!("ref:{}", account_ref.as_deref().unwrap_or("original"));
+            Ok(Some(Target {
+                agent_did: agent_did.clone(),
+                provider: provider.clone(),
+                key: row
+                    .provider_account_key
+                    .unwrap_or_else(|| reference.clone()),
+                reference: Some(reference),
+                connected_at: row.connected_at,
+                plan: row.chatgpt_plan_type.map(|name| UsagePlan {
+                    name,
+                    observed_at: row.last_refresh.unwrap_or_default(),
+                }),
+            }))
+        }
+    }
+}
+
+fn row_query(target: &Target, key: &str) -> String {
+    format!(
+        r#"{{ {COLLECTION}(filter: {{ agent_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _eq: "{}" }} }}, limit: 1) {{ _docID report read_at read_error }} }}"#,
+        escape_graphql_string(&target.agent_did),
+        escape_graphql_string(&target.provider),
+        escape_graphql_string(key),
+    )
+}
+
+fn stored_row(response: &Value) -> Result<Option<(String, StoredUsage)>> {
+    let Some(row) = response["data"][COLLECTION]
+        .as_array()
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(None);
+    };
+    let doc_id = row["_docID"].as_str().context("usage row without _docID")?;
+    // A report this build cannot read is replaced by the next observation.
+    let report: UsageReport = serde_json::from_value(row["report"].clone()).unwrap_or_default();
+    let read_at = row["read_at"]
+        .as_str()
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+    Ok(Some((
+        doc_id.to_string(),
+        StoredUsage {
+            observed_at: report.observed_at(),
+            report,
+            read_at,
+            read_error: row["read_error"].as_str().map(str::to_string),
+        },
+    )))
+}
+
+async fn load(access: &ConfigAccess, target: &Target) -> Result<Option<StoredUsage>> {
+    let mut keys = vec![target.key.as_str()];
+    keys.extend(target.reference.as_deref().filter(|key| *key != target.key));
+    let mut loaded: Option<StoredUsage> = None;
+    for key in keys {
+        let response = access.execute(&row_query(target, key)).await?;
+        let Some((_, mut stored)) = stored_row(&response)? else {
+            continue;
+        };
+        if let Some(since) = target
+            .connected_at
+            .filter(|_| Some(key) == target.reference.as_deref())
+        {
+            stored = stored.since(since);
+        }
+        loaded = Some(match loaded {
+            Some(loaded) => loaded.merge(stored),
+            None => stored,
+        });
+    }
+    Ok(loaded.filter(|stored| !stored.report.is_empty() || stored.read_at.is_some()))
+}
+
 /// Stored usage of `account`; `None` when nothing is stored or the account
 /// has no enabled sign-in.
 pub async fn load_usage(
     access: &ConfigAccess,
     account: &UsageAccount,
 ) -> Result<Option<StoredUsage>> {
-    let _ = (access, account);
-    Ok(None)
+    match target(access, account).await? {
+        Some(target) => load(access, &target).await,
+        None => Ok(None),
+    }
 }
 
 /// Merge `report` into `account`'s stored usage.
@@ -71,24 +241,100 @@ pub async fn record_usage(
     write(node, account, report, None).await
 }
 
+/// One read-merge-write transaction. `read` is an on-demand read's time and
+/// error; header observations leave both as stored. Unchanged values are not
+/// rewritten until the report is [`REWRITE_AFTER`] newer, which bounds
+/// updates, and their replication, to about one a minute per account.
 async fn write(
     node: &Arc<EmbeddedNode>,
     account: &UsageAccount,
     report: UsageReport,
     read: Option<(DateTime<Utc>, Option<String>)>,
 ) -> Result<()> {
-    let _ = (node, account, report, read);
-    Ok(())
+    if report.is_empty() && read.is_none() {
+        return Ok(());
+    }
+    let access = ConfigAccess::Local(node.clone());
+    let Some(target) = target(&access, account).await? else {
+        return Ok(());
+    };
+    let query = row_query(&target, &target.key);
+    access
+        .transact("usage_observation.record", |txn| {
+            let (target, query, report, read) = (&target, &query, report.clone(), read.clone());
+            Box::pin(async move {
+                let (doc_id, stored) = match stored_row(&txn.execute(query).await?)? {
+                    Some((doc_id, stored)) => (Some(doc_id), stored),
+                    None => (None, StoredUsage::default()),
+                };
+                let merged = stored.report.clone().merge(report.clone());
+                let recent = report
+                    .observed_at()
+                    .zip(stored.observed_at)
+                    .is_some_and(|(new, old)| new - old < REWRITE_AFTER);
+                if read.is_none() && recent && merged.same_values(&stored.report) {
+                    return Ok(());
+                }
+                let mut input = json!({ "report": merged });
+                if let Some(observed_at) = merged.observed_at() {
+                    input["observed_at"] = json!(observed_at);
+                }
+                if let Some((read_at, read_error)) = read {
+                    input["read_at"] = json!(read_at);
+                    input["read_error"] = json!(read_error);
+                }
+                let response = match doc_id {
+                    Some(doc_id) => {
+                        txn.execute_with_variables(
+                            &format!(
+                                r#"mutation($input: {COLLECTION}MutationInputArg!) {{ update_{COLLECTION}(docID: "{}", input: $input) {{ _docID }} }}"#,
+                                escape_graphql_string(&doc_id)
+                            ),
+                            &json!({ "input": input }),
+                        )
+                        .await?
+                    }
+                    None => {
+                        input["agent_did"] = json!(target.agent_did);
+                        input["provider"] = json!(target.provider);
+                        input["usage_key"] = json!(target.key);
+                        txn.execute_with_variables(
+                            &format!(
+                                "mutation($input: {COLLECTION}MutationInputArg!) {{ create_{COLLECTION}(input: $input) {{ _docID }} }}"
+                            ),
+                            &json!({ "input": input }),
+                        )
+                        .await?
+                    }
+                };
+                anyhow::ensure!(
+                    response.get("errors").is_none_or(Value::is_null),
+                    "writing provider usage failed: {}",
+                    response["errors"]
+                );
+                Ok(())
+            })
+        })
+        .await
 }
 
-/// Stored usage of the account `backend` names for `agent_did`.
+/// Stored usage of the account `backend` names for `agent_did`, with the
+/// sign-in's plan when the report has none.
 pub async fn usage_for_backend(
     access: &ConfigAccess,
     agent_did: &str,
     backend: &InferenceBackend,
 ) -> Result<Option<StoredUsage>> {
-    let _ = (access, agent_did, backend);
-    Ok(None)
+    let account = UsageAccount::for_backend(agent_did, backend);
+    let Some(target) = target(access, &account).await? else {
+        return Ok(None);
+    };
+    let mut stored = load(access, &target).await?;
+    if let Some(plan) = target.plan {
+        let stored = stored.get_or_insert_with(StoredUsage::default);
+        stored.report.plan.get_or_insert(plan);
+    }
+    Ok(stored)
 }
 
 #[cfg(test)]

@@ -85,6 +85,14 @@ impl UsageReport {
         self.windows.is_empty() && self.credits.is_none() && self.plan.is_none()
     }
 
+    /// The newest observation in the report.
+    pub fn observed_at(&self) -> Option<DateTime<Utc>> {
+        let windows = self.windows.iter().map(|window| window.observed_at);
+        let credits = self.credits.iter().map(|credits| credits.observed_at);
+        let plan = self.plan.iter().map(|plan| plan.observed_at);
+        windows.chain(credits).chain(plan).max()
+    }
+
     /// Per window label, and for credits and plan, the newer observation
     /// wins; on a tie `other` wins. A missing value never clears one.
     pub fn merge(self, other: UsageReport) -> UsageReport {
