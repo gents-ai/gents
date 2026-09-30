@@ -4591,9 +4591,16 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 /// (`p-original`, `p-chat-b`, `p-grok`); the behavior's own profile is on the
 /// original ChatGPT account and its context has an unset-profile compaction.
 /// No-lockout stays off.
-async fn account_choice_core(behavior: &str) -> (String, SelfConfigCore) {
+async fn account_choice_core(
+    behavior: &str,
+) -> (
+    std::sync::Arc<defra_node::EmbeddedNode>,
+    std::sync::Arc<dyn crate::AgentIdentity>,
+    SelfConfigCore,
+) {
     let node = build_persona_node().await;
-    let owner = persona_identity(behavior).did().to_string();
+    let identity = persona_identity(behavior);
+    let owner = identity.did().to_string();
     crate::test_support::install_test_behavior(&node, &owner, behavior).await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     for (id, kind, auth) in [
@@ -4667,8 +4674,8 @@ async fn account_choice_core(behavior: &str) -> (String, SelfConfigCore) {
     })
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node, owner.clone(), behavior.into()).unwrap();
-    (owner, core)
+    let core = SelfConfigCore::new(node.clone(), owner, behavior.into()).unwrap();
+    (node, identity, core)
 }
 
 async fn assert_account_choice_refused(
@@ -4686,7 +4693,8 @@ async fn assert_account_choice_refused(
 
 #[tokio::test]
 async fn profile_self_config_cannot_pick_another_account() {
-    let (owner, core) = account_choice_core("pick").await;
+    let (_, _, core) = account_choice_core("pick").await;
+    let owner = core.agent_did().to_owned();
     let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
     assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
     core.preview(profile_request(to("grok-original")))
@@ -4705,7 +4713,7 @@ async fn profile_self_config_cannot_pick_another_account() {
 
 #[tokio::test]
 async fn behavior_profile_pick_cannot_switch_account() {
-    let (_, core) = account_choice_core("behavior-pick").await;
+    let (_, _, core) = account_choice_core("behavior-pick").await;
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
     assert_account_choice_refused(&core, || behavior_request(&core, to("p-chat-b"))).await;
     core.preview(behavior_request(&core, to("p-grok")))
@@ -4719,7 +4727,7 @@ async fn behavior_profile_pick_cannot_switch_account() {
 /// An unset compaction profile reuses the behavior's, so that is its current.
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {
-    let (_, core) = account_choice_core("compaction-pick").await;
+    let (_, _, core) = account_choice_core("compaction-pick").await;
     let to = |profile: &str| {
         profile_target_request(
             Some("compaction"),
@@ -4730,6 +4738,129 @@ async fn compaction_profile_pick_cannot_switch_account() {
     assert_account_choice_refused(&core, || to("p-chat-b")).await;
     core.preview(to("p-grok")).await.unwrap();
     core.apply(to("p-grok")).await.unwrap();
+}
+
+/// Create and clone have no current backend; edit's is the target behavior's.
+/// The fence runs before the signed request is written.
+#[tokio::test]
+async fn persona_profile_pick_cannot_switch_account() {
+    let (node, identity, core) = account_choice_core("persona-pick").await;
+    let owner = core.agent_did().to_owned();
+    let params = |action: &str, argv: &[&str]| {
+        behavior_params(
+            action,
+            None,
+            &argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    let create = |profile: &str| {
+        params(
+            "create",
+            &[
+                "--display-name",
+                "Picker",
+                "--description",
+                "Picks",
+                "--system-prompt",
+                "Pick.",
+                "--preset",
+                "write",
+                "--profile",
+                profile,
+            ],
+        )
+    };
+    let clone = |profile: &str| {
+        params(
+            "clone",
+            &[
+                "--from",
+                "persona-pick",
+                "--display-name",
+                "Picker clone",
+                "--profile",
+                profile,
+            ],
+        )
+    };
+    let edit = params("edit", &["--id", "persona-pick", "--profile", "p-chat-b"]);
+    for refused in [create("p-chat-b"), clone("p-chat-b"), edit] {
+        let error = persona_mutate(
+            &node,
+            &owner,
+            identity.as_ref(),
+            &refused,
+            &Default::default(),
+        )
+        .await
+        .expect_err("switching to another account must be refused");
+        assert!(
+            format!("{error:#}").contains("selects another"),
+            "{error:#}"
+        );
+    }
+    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
+    for accepted in [create("p-grok"), clone("p-grok")] {
+        persona_mutate(
+            &node,
+            &owner,
+            identity.as_ref(),
+            &accepted,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn pack_inference_slot_cannot_pick_another_account() {
+    let (node, identity, core) = account_choice_core("pack-pick").await;
+    let mut tool_config = config(&[]);
+    tool_config.behavior_id = "pack-pick".into();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_graph_tools = true;
+    let tools = build_self_config_tools(
+        node,
+        core.agent_did().to_owned(),
+        Some(identity),
+        &tool_config,
+    );
+    let argv = |prefix: &[&str], profile: &str| {
+        let mut argv: Vec<String> = prefix.iter().map(|arg| (*arg).to_owned()).collect();
+        for slot in ["coordinator", "worker", "verifier"] {
+            argv.push("--inference-slot".into());
+            argv.push(format!("{slot}={profile}"));
+        }
+        argv
+    };
+    let error = call_config_tool(
+        &tools,
+        argv(&["pack", "preview", "install", "code_review"], "p-chat-b"),
+    )
+    .await
+    .expect_err("preview binding another account must be refused");
+    assert!(error.contains("selects another"), "{error}");
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            argv(&["pack", "preview", "install", "code_review"], "p-grok"),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], true);
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let install = ["pack", "install", "code_review", "--digest", digest];
+    let error = call_config_tool(&tools, argv(&install, "p-chat-b"))
+        .await
+        .expect_err("install binding another account must be refused");
+    assert!(error.contains("selects another"), "{error}");
+    call_config_tool(&tools, argv(&install, "p-grok"))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
