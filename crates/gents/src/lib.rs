@@ -87,6 +87,7 @@ pub mod startup_readiness;
 pub mod startup_recovery;
 pub mod storage_backend;
 pub mod store_key;
+pub mod usage_observation;
 pub mod xai_grok_oauth;
 pub mod xai_oauth_login;
 pub mod xai_oauth_refresh;
