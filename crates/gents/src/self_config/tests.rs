@@ -4590,7 +4590,8 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 /// Two ChatGPT accounts and Grok's original account, a profile on each
 /// (`p-original`, `p-chat-b`, `p-grok`); the behavior's own profile is on the
 /// original ChatGPT account and its context has an unset-profile compaction.
-/// No-lockout stays off.
+/// Spare contexts `ctx-original` and `ctx-chat-b` use compactions `c-original`
+/// and `c-chat-b` on those profiles. No-lockout stays off.
 async fn account_choice_core(
     behavior: &str,
 ) -> (
@@ -4658,6 +4659,21 @@ async fn account_choice_core(
             ),
         ]
         .into_iter()
+        .chain(["original", "chat-b"].into_iter().flat_map(|account| {
+            let compaction = format!("c-{account}");
+            [
+                (
+                    crate::Collection::Compaction,
+                    json!({"agent_did": owner, "compaction_id": compaction,
+                        "inference_profile_id": format!("p-{account}")}),
+                ),
+                (
+                    crate::Collection::AgentContext,
+                    json!({"agent_did": owner, "context_id": format!("ctx-{account}"),
+                        "compaction_id": compaction}),
+                ),
+            ]
+        }))
         .map(
             |(collection, value)| crate::config_client::DesiredStateApplyDocument {
                 collection,
@@ -4738,6 +4754,32 @@ async fn compaction_profile_pick_cannot_switch_account() {
     assert_account_choice_refused(&core, || to("p-chat-b")).await;
     core.preview(to("p-grok")).await.unwrap();
     core.apply(to("p-grok")).await.unwrap();
+}
+
+/// Compaction runs on its own profile, else the behavior's; re-pointing the
+/// context's compaction or the behavior's context is a pick too.
+#[tokio::test]
+async fn compaction_reference_pick_cannot_switch_account() {
+    let (_, _, core) = account_choice_core("compaction-ref-pick").await;
+    let context = |compaction: &str| {
+        protect_working_behavior(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("compaction_id".into(), Some(json!(compaction)))],
+        ))
+    };
+    let behavior = |context: &str| {
+        protect_working_behavior(behavior_request(
+            &core,
+            vec![("context_id".into(), Some(json!(context)))],
+        ))
+    };
+    assert_account_choice_refused(&core, || context("c-chat-b")).await;
+    assert_account_choice_refused(&core, || behavior("ctx-chat-b")).await;
+    core.preview(context("c-original")).await.unwrap();
+    core.apply(context("c-original")).await.unwrap();
+    core.preview(behavior("ctx-original")).await.unwrap();
+    core.apply(behavior("ctx-original")).await.unwrap();
 }
 
 /// Create and clone have no current backend; edit's is the target behavior's.
