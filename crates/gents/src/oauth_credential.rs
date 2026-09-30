@@ -3120,6 +3120,133 @@ mod backfill_tests {
         assert_eq!(stored.provider_account_key, None);
     }
 
+    /// Refresh `did`'s expired Grok row through an owner bearer while
+    /// `change` runs between the owner's pre-refresh read and its persist.
+    async fn refresh_racing<F>(node: &Arc<EmbeddedNode>, did: &str, change: F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        let body =
+            token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+        let _env = TOKEN_URL_ENV.lock().await;
+        let (received_tx, received) = tokio::sync::oneshot::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        let (url, handle) =
+            super::test_support::gated_token_server(200, body, Some((received_tx, release_rx)))
+                .await;
+        std::env::set_var(XAI_ENV, &url);
+        let bearer = DbCredentialBearer::new(
+            node.clone(),
+            did,
+            XAI_OAUTH_PROVIDER,
+            oauth_credential_id(did, XAI_OAUTH_PROVIDER),
+            true,
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        );
+        let (refreshed, ()) = tokio::join!(bearer.current_bearer(), async {
+            received.await.expect("the owner asked for a refresh");
+            change.await;
+            release.send(()).expect("server waits");
+        });
+        std::env::remove_var(XAI_ENV);
+        handle.await.expect("server");
+        refreshed.expect("the owner still serves its refreshed token");
+    }
+
+    #[tokio::test]
+    async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRaceRemove";
+        seed_expired_grok(&node, did, None).await;
+        let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+        refresh_racing(&node, did, async {
+            ConfigAccess::write_local(
+                &node,
+                "test.remove",
+                &format!(
+                    r#"mutation {{ delete_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(
+            lookup_oauth_credential_by_id(&node, &credential_id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_racing_a_disable_keeps_it_disabled() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRaceDisable";
+        seed_expired_grok(&node, did, None).await;
+        let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+        refresh_racing(&node, did, async {
+            ConfigAccess::write_local(
+                &node,
+                "test.disable",
+                &format!(
+                    r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+        let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert!(!stored.enabled);
+        assert_eq!(stored.refresh_token, "refresh-rotated");
+        assert_eq!(
+            stored.provider_account_key.as_deref(),
+            Some("user:principal-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRaceSignIn";
+        seed_expired_grok(&node, did, None).await;
+        let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+        let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+            did,
+            XAI_OAUTH_PROVIDER,
+            &crate::xai_oauth_login::XaiLoginTokens {
+                access_token: unsigned_jwt(
+                    json!({ "principal_type": "user", "principal_id": "principal-1" }),
+                ),
+                refresh_token: "refresh-signed-in".into(),
+                id_token: None,
+                expires_in: Some(900),
+            },
+            Utc::now(),
+        );
+        let access = ConfigAccess::Local(node.clone());
+        refresh_racing(&node, did, async {
+            let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
+            assert_eq!(signed.result, SignInResult::Refreshed);
+        })
+        .await;
+        let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.refresh_token, "refresh-signed-in");
+        assert_eq!(stored.access_token, sign_in.access_token);
+        assert_eq!(
+            stored.provider_account_key.as_deref(),
+            Some("user:principal-1")
+        );
+    }
+
     /// Rows stored before #2116, with none of the account fields.
     async fn seed_upgraded_row(
         node: &Arc<EmbeddedNode>,
@@ -3403,6 +3530,19 @@ pub(crate) mod test_support {
         status: u16,
         body: &'static str,
     ) -> (String, tokio::task::JoinHandle<String>) {
+        gated_token_server(status, body, None).await
+    }
+
+    /// [`one_shot_token_server`] that, with a gate, signals once it has read
+    /// the request and answers only after the gate's release fires.
+    pub(crate) async fn gated_token_server(
+        status: u16,
+        body: &'static str,
+        gate: Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -3434,6 +3574,10 @@ pub(crate) mod test_support {
                 }
             }
             let request = String::from_utf8_lossy(&buf).into_owned();
+            if let Some((received, release)) = gate {
+                received.send(()).ok();
+                release.await.ok();
+            }
             let response = format!(
                 "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
