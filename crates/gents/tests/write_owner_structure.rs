@@ -877,11 +877,33 @@ struct OAuthPickVisitor {
     reads: usize,
 }
 
+/// An `OAuthCredential` read or mutation: the name, then arguments or a
+/// selection set (`{{` in a format string) across any whitespace. A format
+/// placeholder such as `OAuthCredential {id}` is not one.
+static RAW_OAUTH_QUERY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"OAuthCredential\s*(\(|\{[{\s])").expect("raw query pattern")
+});
+
+/// The string literals in macro tokens, decoded and joined, so escapes and
+/// `concat!` pieces read as the text the macro builds.
+fn macro_strings(mut cursor: syn::buffer::Cursor, strings: &mut String) {
+    while let Some((_, next)) = cursor.token_tree() {
+        if let Some((literal, _)) = cursor.literal() {
+            if let syn::Lit::Str(literal) = syn::Lit::new(literal) {
+                strings.push_str(&literal.value());
+            }
+        } else if let Some((inside, ..)) = cursor.any_group() {
+            macro_strings(inside, strings);
+        }
+        cursor = next;
+    }
+}
+
 impl OAuthPickVisitor {
     fn raw_query(&mut self, text: &str) {
-        if text.contains("OAuthCredential(") {
+        if RAW_OAUTH_QUERY.is_match(text) {
             self.violations
-                .push("holds a raw `OAuthCredential(` query".to_string());
+                .push("holds a raw `OAuthCredential` query".to_string());
         }
     }
 
@@ -923,7 +945,10 @@ impl<'ast> Visit<'ast> for OAuthPickVisitor {
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        self.raw_query(&invocation.tokens.to_string());
+        let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
+        let mut strings = String::new();
+        macro_strings(tokens.begin(), &mut strings);
+        self.raw_query(&strings);
         visit::visit_macro(self, invocation);
     }
 
