@@ -852,6 +852,17 @@ pub(crate) async fn guard_backend_choice_in_txn(
         .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
     guard_backend_choice(current.as_ref(), &next)
 }
+/// The backend an owned profile selects.
+pub(crate) async fn profile_backend_id(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    profile_id: &str,
+) -> Result<String> {
+    read_owned_doc(txn, SelfConfigTarget::InferenceProfile, owner, profile_id)
+        .await?
+        .and_then(|(_, doc)| doc.get("backend_id")?.as_str().map(ToOwned::to_owned))
+        .with_context(|| format!("InferenceProfile {profile_id:?} not found"))
+}
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
     let tools = decode_merged::<Tools>("Tools", merged)?;
     if let Some(lsp) = tools

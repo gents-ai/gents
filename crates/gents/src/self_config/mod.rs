@@ -210,7 +210,38 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
     request.guard = Box::new(|_, stored, merged| guard_behavior_keeps_reach(stored, merged));
+    fence_profile_pick(&mut request);
     request
+}
+/// An `inference_profile_id` pick may not switch accounts of one provider.
+/// Unset (compaction only) reuses the behavior's profile.
+fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
+    request.validate = Box::new(|txn, anchor, stored, merged| {
+        Box::pin(async move {
+            let Some(next) = merged.get("inference_profile_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let current = stored.get("inference_profile_id").and_then(Value::as_str);
+            if current == Some(next) {
+                return Ok(());
+            }
+            let owner = merged
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("document is missing agent_did")?;
+            let current_backend = match current {
+                Some(id) => Some(ops::profile_backend_id(txn, owner, id).await?),
+                None => anchor
+                    .profile
+                    .get("backend_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            };
+            let next_backend = ops::profile_backend_id(txn, owner, next).await?;
+            ops::guard_backend_choice_in_txn(txn, owner, current_backend.as_deref(), &next_backend)
+                .await
+        })
+    });
 }
 
 /// Model-facing patches may target any owned behavior, including the invoking
@@ -474,7 +505,12 @@ fn profile_target_request(
             "retry_policy_id",
             patch,
         ),
-        "compaction" => anchored_request(SelfConfigTarget::Compaction, "compaction_id", patch),
+        "compaction" => {
+            let mut request =
+                anchored_request(SelfConfigTarget::Compaction, "compaction_id", patch);
+            fence_profile_pick(&mut request);
+            request
+        }
         other => bail!("unknown profile target {other:?}"),
     })
 }
