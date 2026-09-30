@@ -4,9 +4,11 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use gents::oauth_credential::AccountSummary;
+use gents::document_config::InferenceProfile;
+use gents::oauth_credential::{backend_account, AccountSummary};
+use gents::InferenceBackend;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
 use crate::cli::output_format::OutputFormat;
@@ -66,6 +68,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             yes,
         } => {
             let (access, did) = target_access(&target).await?;
+            warn_profiles(&access, &did, &account, target.provider.as_deref()).await?;
             let confirmed = yes
                 || (std::io::stdin().is_terminal()
                     && std::io::stderr().is_terminal()
@@ -94,54 +97,330 @@ async fn target_access(target: &AccountsTargetArgs) -> Result<(crate::CommandAcc
     Ok((access, did))
 }
 
-pub(crate) async fn account_rows(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _provider: Option<&str>,
-) -> Result<Vec<AccountRow>> {
-    anyhow::bail!("not implemented")
+/// The principal's accounts and the configuration that uses them.
+struct Snapshot {
+    accounts: Vec<AccountSummary>,
+    backends: Vec<InferenceBackend>,
+    profiles: Vec<InferenceProfile>,
 }
 
-pub(crate) fn render_table(_rows: &[AccountRow]) -> String {
-    String::new()
+async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
+    let accounts = gents::oauth_credential::list_accounts(access, agent_did).await?;
+    let (backends, profiles) = access
+        .transact("accounts.config", |txn| {
+            Box::pin(async move {
+                Ok((
+                    gents::config_client::list_inference_backends_in_txn(txn, agent_did).await?,
+                    gents::config_client::list_inference_profiles_in_txn(txn, agent_did).await?,
+                ))
+            })
+        })
+        .await?;
+    Ok(Snapshot {
+        accounts,
+        backends,
+        profiles,
+    })
+}
+
+impl Snapshot {
+    fn profiles_on(&self, backend_ids: &[&str]) -> Vec<String> {
+        self.profiles
+            .iter()
+            .filter(|profile| backend_ids.contains(&profile.backend_id.as_str()))
+            .map(|profile| profile.profile_id.clone())
+            .collect()
+    }
+
+    /// Profiles whose backend runs on `account`.
+    fn account_profiles(&self, account: &AccountSummary) -> Vec<String> {
+        let serving: Vec<_> = self
+            .backends
+            .iter()
+            .filter(|backend| {
+                backend_account(backend, &self.accounts)
+                    .flatten()
+                    .is_some_and(|found| found.credential_id == account.credential_id)
+            })
+            .map(|backend| backend.backend_id.as_str())
+            .collect();
+        self.profiles_on(&serving)
+    }
+
+    /// The one account `needle` (label, `credential_id` or `account_ref`)
+    /// names, among `provider`'s when given.
+    fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
+        let candidates: Vec<_> = self
+            .accounts
+            .iter()
+            .filter(|account| provider.is_none_or(|provider| account.provider == provider))
+            .filter(|account| {
+                account.label == needle
+                    || account.credential_id == needle
+                    || account.account_ref.as_deref() == Some(needle)
+            })
+            .collect();
+        match candidates.as_slice() {
+            [one] => Ok(one),
+            [] if self
+                .backends
+                .iter()
+                .any(|backend| backend.name == needle || backend.backend_id == needle) =>
+            {
+                anyhow::bail!(
+                    "{needle:?} is a backend, not a signed-in account; manage it with `gents config backend`"
+                )
+            }
+            [] => anyhow::bail!(
+                "no account {needle:?} on this node; `gents accounts list` shows them"
+            ),
+            many => anyhow::bail!(
+                "{needle:?} names several accounts: {}; pass --provider or one of these ids",
+                many.iter()
+                    .map(|account| account.credential_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+fn provider_kind_name(backend: &InferenceBackend) -> String {
+    serde_json::to_value(backend.provider_kind)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+pub(crate) async fn account_rows(
+    access: &ConfigAccess,
+    agent_did: &str,
+    provider: Option<&str>,
+) -> Result<Vec<AccountRow>> {
+    let snapshot = snapshot(access, agent_did).await?;
+    let mut rows: Vec<_> = snapshot
+        .accounts
+        .iter()
+        .filter(|account| provider.is_none_or(|provider| account.provider == provider))
+        .map(|account| AccountRow {
+            provider: account.provider.clone(),
+            label: account.label.clone(),
+            identity: account.identity.clone(),
+            plan: account.plan.clone(),
+            status: if account.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .to_owned(),
+            default: account.default,
+            credential_id: Some(account.credential_id.clone()),
+            account_ref: account.account_ref.clone(),
+            backend_id: None,
+            profiles: snapshot.account_profiles(account),
+        })
+        .collect();
+    if provider.is_some() {
+        return Ok(rows);
+    }
+    for backend in &snapshot.backends {
+        let status = match backend_account(backend, &snapshot.accounts) {
+            Some(Some(_)) => continue,
+            Some(None) => "account not on this node",
+            None if backend.enabled => "enabled",
+            None => "disabled",
+        };
+        rows.push(AccountRow {
+            provider: provider_kind_name(backend),
+            label: backend.name.clone(),
+            identity: None,
+            plan: None,
+            status: status.to_owned(),
+            default: false,
+            credential_id: None,
+            account_ref: backend.auth.oauth_account_ref().map(str::to_owned),
+            backend_id: Some(backend.backend_id.clone()),
+            profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
+        });
+    }
+    Ok(rows)
+}
+
+pub(crate) fn render_table(rows: &[AccountRow]) -> String {
+    let headers = [
+        "PROVIDER", "LABEL", "IDENTITY", "PLAN", "STATUS", "DEFAULT", "PROFILES",
+    ];
+    let cell = |value: Option<&str>| {
+        value
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("-")
+            .to_owned()
+    };
+    let rendered: Vec<[String; 7]> = rows
+        .iter()
+        .map(|row| {
+            [
+                row.provider.clone(),
+                row.label.clone(),
+                cell(row.identity.as_deref()),
+                cell(row.plan.as_deref()),
+                row.status.clone(),
+                if row.default { "yes" } else { "-" }.to_owned(),
+                cell(Some(&row.profiles.join(","))),
+            ]
+        })
+        .collect();
+    let mut widths = headers.map(str::len);
+    for row in &rendered {
+        for (width, value) in widths.iter_mut().zip(row) {
+            *width = (*width).max(value.chars().count());
+        }
+    }
+    let line = |cells: &[String; 7]| {
+        let mut line = cells
+            .iter()
+            .zip(widths)
+            .map(|(value, width)| format!("{value:<width$}"))
+            .collect::<Vec<_>>()
+            .join("  ");
+        line.truncate(line.trim_end().len());
+        line + "\n"
+    };
+    std::iter::once(line(&headers.map(str::to_owned)))
+        .chain(rendered.iter().map(line))
+        .collect()
 }
 
 pub(crate) async fn resolve_account(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _account: &str,
-    _provider: Option<&str>,
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
 ) -> Result<AccountSummary> {
-    anyhow::bail!("not implemented")
+    Ok(snapshot(access, agent_did)
+        .await?
+        .pick(account, provider)?
+        .clone())
 }
 
 pub(crate) async fn label_account(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _account: &str,
-    _provider: Option<&str>,
-    _label: &str,
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
+    label: &str,
 ) -> Result<Value> {
-    anyhow::bail!("not implemented")
+    let account = resolve_account(access, agent_did, account, provider).await?;
+    gents::oauth_credential::set_account_label(access, agent_did, &account.credential_id, label)
+        .await?;
+    Ok(json!({
+        "credential_id": account.credential_id,
+        "provider": account.provider,
+        "label": gents::oauth_credential::validate_account_label(label)?,
+    }))
+}
+
+/// Say which profiles fail their next turn once `account` stops.
+async fn warn_profiles(
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
+) -> Result<()> {
+    let snapshot = snapshot(access, agent_did).await?;
+    let profiles = snapshot.account_profiles(snapshot.pick(account, provider)?);
+    if !profiles.is_empty() {
+        eprintln!(
+            "These profiles use this account and fail their next turn until moved to another \
+             backend: {}",
+            profiles.join(", ")
+        );
+    }
+    Ok(())
 }
 
 pub(crate) async fn disable_account(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _account: &str,
-    _provider: Option<&str>,
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
 ) -> Result<Value> {
-    anyhow::bail!("not implemented")
+    let snapshot = snapshot(access, agent_did).await?;
+    let account = snapshot.pick(account, provider)?;
+    gents::oauth_credential::set_account_enabled(access, agent_did, &account.credential_id, false)
+        .await?;
+    Ok(json!({
+        "credential_id": account.credential_id,
+        "provider": account.provider,
+        "label": account.label,
+        "enabled": false,
+        "profiles": snapshot.account_profiles(account),
+    }))
 }
 
+/// Delete the account's row and, in the same transaction, the backends
+/// sign-in created for it (its reference) that no profile uses. A backend
+/// with no reference is never deleted: it is the provider's own backend.
 pub(crate) async fn remove_account(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _account: &str,
-    _provider: Option<&str>,
-    _confirmed: bool,
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
+    confirmed: bool,
 ) -> Result<Value> {
-    anyhow::bail!("not implemented")
+    let snapshot = snapshot(access, agent_did).await?;
+    let account = snapshot.pick(account, provider)?.clone();
+    anyhow::ensure!(
+        confirmed,
+        "removing an account asks for confirmation; pass --yes when not running in a terminal"
+    );
+    let (deleted, kept) = access
+        .transact("accounts.remove", |txn| {
+            let account = account.clone();
+            Box::pin(async move {
+                gents::oauth_credential::remove_account_in_txn(
+                    txn,
+                    agent_did,
+                    &account.credential_id,
+                )
+                .await?;
+                let profiles =
+                    gents::config_client::list_inference_profiles_in_txn(txn, agent_did).await?;
+                let (kept, deleted): (Vec<_>, Vec<_>) =
+                    gents::config_client::list_inference_backends_in_txn(txn, agent_did)
+                        .await?
+                        .into_iter()
+                        .filter(|backend| {
+                            account.account_ref.is_some()
+                                && backend_account(backend, std::slice::from_ref(&account))
+                                    .flatten()
+                                    .is_some()
+                        })
+                        .map(|backend| backend.backend_id)
+                        .partition(|backend_id| {
+                            profiles
+                                .iter()
+                                .any(|profile| &profile.backend_id == backend_id)
+                        });
+                crate::config_import::apply_delete_collection(
+                    txn,
+                    gents::Collection::InferenceBackend,
+                    agent_did,
+                    &deleted,
+                )
+                .await?;
+                Ok((deleted, kept))
+            })
+        })
+        .await?;
+    Ok(json!({
+        "removed": account.credential_id,
+        "provider": account.provider,
+        "label": account.label,
+        "profiles": snapshot.account_profiles(&account),
+        "deleted_backends": deleted,
+        "kept_backends": kept,
+    }))
 }
 
 #[cfg(test)]

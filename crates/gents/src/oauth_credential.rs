@@ -964,6 +964,27 @@ pub struct AccountSummary {
     pub access_token_expires_at: DateTime<Utc>,
 }
 
+/// The account a principal OAuth backend runs on, among `accounts` (one
+/// principal's): the one of the backend's provider with the backend's
+/// reference, where no reference is the provider's original account. `None`
+/// for a backend that uses no account; `Some(None)` when that account is not
+/// on this node.
+pub fn backend_account<'a>(
+    backend: &crate::InferenceBackend,
+    accounts: &'a [AccountSummary],
+) -> Option<Option<&'a AccountSummary>> {
+    use crate::backend_provider::BackendProviderOauthExt;
+    let crate::document_config::BackendAuth::PrincipalOAuth { account_ref } = &backend.auth else {
+        return None;
+    };
+    let provider = backend.provider_kind.oauth_provider()?;
+    Some(
+        accounts
+            .iter()
+            .find(|account| account.provider == provider && account.account_ref == *account_ref),
+    )
+}
+
 /// The providers whose sign-ins are accounts: the ones a backend reads.
 const ACCOUNT_PROVIDERS: [&str; 3] = [
     crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,

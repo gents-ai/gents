@@ -14,7 +14,7 @@ pub async fn load_inference_backend_in_txn(
 }
 
 /// Every backend of `agent_did` in this transaction's snapshot.
-pub(crate) async fn list_inference_backends_in_txn(
+pub async fn list_inference_backends_in_txn(
     txn: &ConfigApplyTxn<'_>,
     agent_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
