@@ -604,6 +604,40 @@ mod tests {
         assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
     }
 
+    /// A malformed organization block still signs in, with no organization id,
+    /// so no provider account key can be formed from the pair.
+    #[tokio::test]
+    async fn exchange_with_a_malformed_organization_signs_in_without_its_id() {
+        for organization in [
+            r#""org-1""#,
+            "42",
+            r#"["org-1"]"#,
+            r#"{"uuid":42}"#,
+            r#"{"name":"Example Org"}"#,
+        ] {
+            let body = format!(
+                r#"{{"access_token":"access-NEW","refresh_token":"refresh-NEW","account":{{"uuid":"account-1"}},"organization":{organization}}}"#
+            );
+            let (url, _handle) = one_shot_server(200, Box::leak(body.into_boxed_str())).await;
+            let opts = LoginOptions {
+                token_url: url,
+                ..options()
+            };
+            let tokens = exchange_code(
+                &opts,
+                "http://localhost:1/callback",
+                &generate_pkce(),
+                "code-1",
+                "state-1",
+            )
+            .await
+            .unwrap_or_else(|err| panic!("{organization}: {err}"));
+            assert_eq!(tokens.access_token, "access-NEW");
+            assert_eq!(tokens.organization_uuid, None, "{organization}");
+            assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
+        }
+    }
+
     #[tokio::test]
     async fn exchange_error_never_echoes_the_code() {
         let (url, _handle) = one_shot_server(401, r#"{"error":"invalid_grant"}"#).await;
