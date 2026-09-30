@@ -652,16 +652,74 @@ pub async fn store_sign_in(
         .await
 }
 
+/// The key forms `credential`'s own tokens show, whole values trimmed. ChatGPT
+/// and Grok keys are recomputed from the tokens (a stored key written beside
+/// other tokens is not trusted); a Claude access token is opaque, so its
+/// stored key stands.
+fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
+    let keys = match credential.provider.as_str() {
+        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
+            crate::chatgpt_oauth_refresh::chatgpt_account_keys(
+                &credential.access_token,
+                credential.id_token.as_deref(),
+                credential.account_id.as_deref(),
+            )
+        }
+        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => {
+            crate::xai_oauth_login::xai_account_key(&credential.access_token)
+                .into_iter()
+                .collect()
+        }
+        _ => credential.provider_account_key.iter().cloned().collect(),
+    };
+    keys.iter()
+        .filter_map(|key| trimmed(Some(key)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How a stored row matches a sign-in, best first: the sign-in shows every
+/// identity field the row knows (a key in its key set, an equal
+/// `account_id`), and the row knows a key, or only an `account_id`, or
+/// nothing at all. `None` when the sign-in cannot confirm a known field.
+fn sign_in_match(
+    row: &OAuthCredential,
+    sign_in_keys: &[String],
+    sign_in: &OAuthCredential,
+) -> Option<u8> {
+    let row_keys = identity_keys(row);
+    let row_account = trimmed(row.account_id.as_deref());
+    if !row_keys.is_empty() && !sign_in_keys.iter().any(|key| row_keys.contains(key)) {
+        return None;
+    }
+    if row_account.is_some() && trimmed(sign_in.account_id.as_deref()) != row_account {
+        return None;
+    }
+    Some(match (row_keys.is_empty(), row_account) {
+        (false, _) => 0,
+        (true, Some(_)) => 1,
+        (true, None) => 2,
+    })
+}
+
 async fn store_sign_in_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
 ) -> Result<SignIn> {
     let rows = provider_rows_in_txn(txn, &credential.agent_did, &credential.provider).await?;
-    let key = trimmed(credential.provider_account_key.as_deref());
+    let sign_in_keys = identity_keys(&credential);
     let matched = rows
         .iter()
-        .find(|row| key.is_some() && trimmed(row.provider_account_key.as_deref()) == key);
-    if let Some(row) = matched {
+        .filter_map(|row| Some((sign_in_match(row, &sign_in_keys, &credential)?, row)))
+        .min_by_key(|(tier, _)| *tier);
+    if let Some((tier, row)) = matched {
+        // Keep the stored key when this sign-in shows it in any form, so a
+        // key moving between forms does not re-key the account.
+        if trimmed(row.provider_account_key.as_deref())
+            .is_some_and(|stored| sign_in_keys.iter().any(|key| key == stored))
+        {
+            credential.provider_account_key = row.provider_account_key.clone();
+        }
         credential.doc_id = row.doc_id.clone();
         credential.credential_id = row.credential_id.clone();
         credential.account_ref = row.account_ref.clone();
@@ -687,7 +745,7 @@ async fn store_sign_in_in_txn(
             doc_id,
             credential,
             result: SignInResult::Refreshed,
-            identity_matched: true,
+            identity_matched: tier < 2,
         });
     }
     let now = Utc::now();
