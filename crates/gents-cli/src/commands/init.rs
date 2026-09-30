@@ -1575,6 +1575,7 @@ mod tests {
             credential,
             result,
             identity_matched: false,
+            profiles: Vec::new(),
         }
     }
 

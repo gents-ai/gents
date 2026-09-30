@@ -578,6 +578,9 @@ pub struct SignIn {
     /// The sign-in refreshed a row that knew an identity field (key or
     /// `account_id`), as opposed to a row with no identity at all.
     pub identity_matched: bool,
+    /// An add at the provider's original slot: the profiles on the
+    /// provider's backends with no account reference, which now run on it.
+    pub profiles: Vec<String>,
 }
 
 impl SignIn {
@@ -593,6 +596,11 @@ impl SignIn {
                 effective_account_label(&self.credential)
             )
         })
+    }
+
+    /// After an add at the original slot: which profiles now use it.
+    pub fn profiles_note(&self) -> Option<String> {
+        None
     }
 }
 
@@ -900,6 +908,7 @@ async fn store_sign_in_in_txn(
             credential,
             result: SignInResult::Refreshed,
             identity_matched: tier < 2,
+            profiles: Vec::new(),
         });
     }
     let now = Utc::now();
@@ -944,6 +953,7 @@ async fn store_sign_in_in_txn(
         credential,
         result: SignInResult::Added,
         identity_matched: false,
+        profiles: Vec::new(),
     })
 }
 
@@ -3474,6 +3484,64 @@ mod lifecycle_tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
+    }
+
+    /// Q1 (i): with no row left, a sign-in takes the original slot again and
+    /// the backends with no account reference run on it, deliberately.
+    #[tokio::test]
+    async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
+        let access = access().await;
+        let did = "did:key:z6MkTestSlotReuse";
+        for product in PRODUCTS {
+            let spec = preset(product);
+            let original = crate::InferenceBackend {
+                agent_did: did.to_owned(),
+                backend_id: format!("{}-original", product.provider()),
+                name: format!("{product:?}"),
+                provider_kind: spec.provider_kind,
+                openai_wire_api: spec.openai_wire_api,
+                endpoint: spec.endpoint,
+                auth: crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+                connect_timeout_secs: None,
+                discovery_timeout_secs: None,
+                max_concurrent: None,
+                max_queue_depth: None,
+                enabled: true,
+                tags: Vec::new(),
+            };
+            crate::config_client::write_inference_backend_document(&access, &original)
+                .await
+                .unwrap();
+            let profile = serde_json::from_value(json!({
+                "agent_did": did,
+                "profile_id": format!("{product:?}-profile"),
+                "backend_id": original.backend_id,
+                "model_name": "model-x",
+            }))
+            .unwrap();
+            crate::config_client::write_inference_profile_document(&access, &profile)
+                .await
+                .unwrap();
+        }
+        let a = store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
+        remove(&access, did, &a.credential.credential_id)
+            .await
+            .unwrap();
+        let b = store(&access, Product::Claude.sign_in(did, "b", "refresh-b")).await;
+        assert_eq!(b.result, SignInResult::Added);
+        assert_eq!(b.credential.credential_id, a.credential.credential_id);
+        assert_eq!(b.credential.account_ref, None);
+        assert_ne!(b.doc_id, a.doc_id);
+        let stored = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].refresh_token, "refresh-b");
+        assert_eq!(b.profiles, ["Claude-profile"]);
+        let note = b.profiles_note().expect("the sign-in names its profiles");
+        assert!(note.contains("Claude-profile"), "{note}");
+
+        let added = store(&access, Product::Claude.sign_in(did, "c", "refresh-c")).await;
+        assert!(added.profiles.is_empty());
+        assert_eq!(added.profiles_note(), None);
     }
 
     #[tokio::test]

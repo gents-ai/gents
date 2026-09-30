@@ -145,6 +145,7 @@ mod tests {
                 credential,
                 result: gents::oauth_credential::SignInResult::Refreshed,
                 identity_matched: true,
+                profiles: Vec::new(),
             },
         });
         let text = json.to_string();
