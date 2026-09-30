@@ -110,19 +110,12 @@ pub(crate) async fn run_claude_login(
         &login_tokens,
         chrono::Utc::now(),
     );
-    let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
-    let response = access
-        .write("cli.claude_login.credential", &mutation)
-        .await?;
-    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
-    Ok(ClaudeLoginOutcome {
-        sign_in: gents::oauth_credential::SignIn {
-            doc_id,
-            credential,
-            result: gents::oauth_credential::SignInResult::Refreshed,
-            identity_matched: false,
-        },
-    })
+    let sign_in =
+        gents::oauth_credential::store_sign_in(access, credential, opts.label.as_deref()).await?;
+    if let Some(hint) = sign_in.account_chooser_hint() {
+        eprintln!("{hint}");
+    }
+    Ok(ClaudeLoginOutcome { sign_in })
 }
 
 pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
@@ -130,6 +123,8 @@ pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
     json!({
         "login": "completed",
         "doc_id": outcome.sign_in.doc_id,
+        "label": gents::oauth_credential::effective_account_label(credential),
+        "result": outcome.sign_in.result,
         "credential_id": credential.credential_id,
         "agent_did": credential.agent_did,
         "provider": credential.provider,

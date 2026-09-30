@@ -346,8 +346,16 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
 
 /// What `init` says when its sign-in added an account beside others instead
 /// of taking the provider's original slot, which the setup backend runs on.
-fn added_account_note(_sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
-    None
+fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
+    (sign_in.result == gents::oauth_credential::SignInResult::Added
+        && sign_in.credential.account_ref.is_some())
+    .then(|| {
+        format!(
+            "This sign-in was stored as another account, {}. The backend set up here runs on \
+             the provider's original account; see `gents accounts`.",
+            gents::oauth_credential::effective_account_label(&sign_in.credential)
+        )
+    })
 }
 
 enum InlineCodexLoginState {
@@ -429,7 +437,12 @@ async fn maybe_inline_grok_login(
     )
     .await
     {
-        Ok(outcome) => InlineGrokLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineGrokLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!("Grok login failed: {error:#}");
             InlineGrokLoginState::Unauthenticated
@@ -501,7 +514,12 @@ async fn maybe_inline_claude_login(
     )
     .await
     {
-        Ok(outcome) => InlineClaudeLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineClaudeLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!("Claude login failed: {error:#}");
             InlineClaudeLoginState::Unauthenticated
@@ -552,7 +570,12 @@ async fn maybe_inline_codex_login(
     )
     .await
     {
-        Ok(outcome) => InlineCodexLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineCodexLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!(
                 "ChatGPT login did not complete: {error:#}\n\

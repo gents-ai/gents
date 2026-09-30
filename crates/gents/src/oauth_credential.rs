@@ -580,6 +580,22 @@ pub struct SignIn {
     pub identity_matched: bool,
 }
 
+impl SignIn {
+    /// After a sign-in that refreshed an account already stored: how to reach
+    /// another account instead (a signed-in browser returns the same one).
+    pub fn account_chooser_hint(&self) -> Option<String> {
+        (self.result == SignInResult::Refreshed && self.identity_matched).then(|| {
+            let name = sign_in_product(&self.credential.provider)
+                .map_or(self.credential.provider.as_str(), |product| product.name);
+            format!(
+                "This is the account already stored as {}. To add a different {name} account, \
+                 sign out of {name} in the browser first or use a private window.",
+                effective_account_label(&self.credential)
+            )
+        })
+    }
+}
+
 /// The product of a sign-in provider; `None` for a provider no backend kind
 /// reads (a sign-in there would be stored and never used).
 fn sign_in_product(provider: &str) -> Option<OAuthProduct> {

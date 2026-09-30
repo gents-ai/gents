@@ -95,25 +95,20 @@ pub(crate) async fn run_codex_login(
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
-    let response = access
-        .write("cli.codex_login.credential", &mutation)
-        .await?;
-    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
-    Ok(CodexLoginOutcome {
-        sign_in: gents::oauth_credential::SignIn {
-            doc_id,
-            credential,
-            result: gents::oauth_credential::SignInResult::Refreshed,
-            identity_matched: false,
-        },
-    })
+    let sign_in =
+        gents::oauth_credential::store_sign_in(access, credential, opts.label.as_deref()).await?;
+    if let Some(hint) = sign_in.account_chooser_hint() {
+        eprintln!("{hint}");
+    }
+    Ok(CodexLoginOutcome { sign_in })
 }
 
 pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
     let credential = &outcome.sign_in.credential;
     json!({
         "doc_id": outcome.sign_in.doc_id,
+        "label": gents::oauth_credential::effective_account_label(credential),
+        "result": outcome.sign_in.result,
         "credential_id": credential.credential_id,
         "agent_did": credential.agent_did,
         "provider": credential.provider,

@@ -1325,6 +1325,8 @@ pub(crate) struct CodexAuthProbeArgs {
     pub(crate) max_models: usize,
 }
 
+const LOGIN_LABEL_HELP: &str = "Name for the account signed in to: names a new account or renames a stored one (default: the product name, numbered for a second account)";
+
 #[derive(clap::Args)]
 pub(crate) struct CodexLoginArgs {
     #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
@@ -1333,9 +1335,9 @@ pub(crate) struct CodexLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "chatgpt-codex")]
+    #[arg(long, default_value = "chatgpt-codex", value_parser = ["chatgpt-codex"], help = "OAuth provider key (only chatgpt-codex)")]
     pub(crate) provider: String,
-    #[arg(skip)]
+    #[arg(long, help = LOGIN_LABEL_HELP)]
     pub(crate) label: Option<String>,
     #[arg(long, default_value_t = false, help = "Use ChatGPT device-code login")]
     pub(crate) device_auth: bool,
@@ -1371,9 +1373,9 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "xai-oauth")]
+    #[arg(long, default_value = "xai-oauth", value_parser = ["xai-oauth"], help = "OAuth provider key (only xai-oauth)")]
     pub(crate) provider: String,
-    #[arg(skip)]
+    #[arg(long, help = LOGIN_LABEL_HELP)]
     pub(crate) label: Option<String>,
 }
 
@@ -1385,9 +1387,9 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
     pub(crate) agent_did: Option<String>,
-    #[arg(long, default_value = "claude-subscription")]
+    #[arg(long, default_value = "claude-subscription", value_parser = ["claude-subscription"], help = "OAuth provider key (only claude-subscription)")]
     pub(crate) provider: String,
-    #[arg(skip)]
+    #[arg(long, help = LOGIN_LABEL_HELP)]
     pub(crate) label: Option<String>,
     #[arg(
         long,
