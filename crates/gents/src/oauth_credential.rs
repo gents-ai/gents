@@ -447,6 +447,8 @@ pub async fn list_oauth_credentials(
 /// Read agent-scoped credentials through the selected canonical control-plane
 /// access. Desktop-managed runtimes use their operator GraphQL endpoint here;
 /// callers must not fall back to a replicated client copy for private tokens.
+/// Rows come back in resolver order, so a list's first enabled row of a
+/// provider is the provider's default account.
 pub async fn list_oauth_credentials_on(
     access: &crate::config_client::ConfigAccess,
     agent_did: &str,
@@ -454,9 +456,11 @@ pub async fn list_oauth_credentials_on(
     let response = access
         .execute(&oauth_credentials_for_agent_query(agent_did))
         .await?;
-    oauth_credentials_from_response(&response)
+    let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by(resolver_order);
+    Ok(rows)
 }
 
 pub async fn lookup_oauth_credential_by_doc_id(
