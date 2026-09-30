@@ -4865,6 +4865,58 @@ async fn persona_profile_pick_cannot_switch_account() {
     }
 }
 
+/// Preview runs the write's account check, so the two agree.
+#[tokio::test]
+async fn persona_preview_agrees_with_the_account_choice_fence() {
+    let (node, _, core) = account_choice_core("preview-pick").await;
+    let owner = core.agent_did().to_owned();
+    let create = [
+        "--display-name",
+        "Picker",
+        "--description",
+        "Picks",
+        "--system-prompt",
+        "Pick.",
+        "--preset",
+        "write",
+    ];
+    let clone = ["--from", "preview-pick", "--display-name", "Picker clone"];
+    let edit = ["--id", "preview-pick"];
+    for (operation, argv, profile, admitted) in [
+        ("create", &create[..], "p-chat-b", false),
+        ("clone", &clone[..], "p-chat-b", false),
+        ("edit", &edit[..], "p-chat-b", false),
+        ("create", &create[..], "p-grok", true),
+        ("clone", &clone[..], "p-grok", true),
+        ("edit", &edit[..], "p-original", true),
+    ] {
+        let argv: Vec<String> = argv
+            .iter()
+            .chain(&["--profile", profile])
+            .map(|arg| (*arg).to_owned())
+            .collect();
+        let params = behavior_params("preview", Some(operation.into()), &argv).unwrap();
+        let preview: Value = serde_json::from_str(
+            &persona_preview(&node, &owner, &params, &Default::default())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            preview["admitted"], admitted,
+            "{operation} {profile}: {preview}"
+        );
+        if !admitted {
+            assert!(
+                preview["rejection"]
+                    .as_str()
+                    .is_some_and(|rejection| rejection.contains("selects another")),
+                "{preview}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn pack_inference_slot_cannot_pick_another_account() {
     let (node, identity, core) = account_choice_core("pack-pick").await;
