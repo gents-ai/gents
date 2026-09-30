@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at";
+/// The fields [`pick_oauth_credential`] reads: no token.
+const OAUTH_PICK_FIELDS: &str = "credential_id agent_did provider enabled account_ref connected_at";
 
 /// Display metadata only. Never use decoded, unverified claims for authorization
 /// or overwrite the account ID used by a provider's authentication headers.
@@ -320,7 +322,7 @@ pub fn pick_oauth_credential<'c>(
         .min_by(|a, b| resolver_order(a, b))
 }
 
-fn enabled_oauth_credentials_query(agent_did: &str, provider: &str) -> String {
+fn enabled_oauth_credentials_query(agent_did: &str, provider: &str, fields: &str) -> String {
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
     let provider = crate::graphql::escape_graphql_string(provider);
     format!(
@@ -332,7 +334,7 @@ fn enabled_oauth_credentials_query(agent_did: &str, provider: &str) -> String {
                     enabled: {{ _eq: true }}
                 }}
             ) {{
-                {OAUTH_CREDENTIAL_FIELDS}
+                {fields}
             }}
         }}"#
     )
@@ -347,7 +349,11 @@ pub async fn resolve_oauth_credential(
     pick: AccountPick<'_>,
 ) -> Result<Option<OAuthCredential>> {
     let response = access
-        .execute(&enabled_oauth_credentials_query(agent_did, provider))
+        .execute(&enabled_oauth_credentials_query(
+            agent_did,
+            provider,
+            OAUTH_CREDENTIAL_FIELDS,
+        ))
         .await?;
     pick_from_response(&response, agent_did, provider, pick)
 }
@@ -363,12 +369,45 @@ pub(crate) async fn provider_default_account_ref(
     provider: &str,
 ) -> Result<Option<String>> {
     let response = txn
-        .execute(&enabled_oauth_credentials_query(agent_did, provider))
+        .execute(&enabled_oauth_credentials_query(
+            agent_did,
+            provider,
+            OAUTH_PICK_FIELDS,
+        ))
         .await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "OAuthCredential")
+        .into_iter()
+        .map(pick_row_from_value)
+        .collect::<Result<Vec<_>>>()?;
     Ok(
-        pick_from_response(&response, agent_did, provider, AccountPick::ProviderDefault)?
-            .and_then(|row| row.account_ref),
+        pick_oauth_credential(&rows, agent_did, provider, AccountPick::ProviderDefault)
+            .and_then(|row| row.account_ref.clone()),
     )
+}
+
+/// Decode a row read with [`OAUTH_PICK_FIELDS`] like
+/// [`oauth_credential_from_value`], its token fields left blank. The pick
+/// takes whole rows; this keeps a model-driven transaction off the tokens.
+fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
+    let row: OAuthCredentialRow =
+        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+    Ok(OAuthCredential {
+        doc_id: None,
+        credential_id: row.credential_id,
+        agent_did: required(row.agent_did, "agent_did")?,
+        provider: required(row.provider, "provider")?,
+        access_token: String::new(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: DateTime::default(),
+        last_refresh: None,
+        enabled: row.enabled.unwrap_or(true),
+        account_ref: clean_optional(row.account_ref),
+        connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
+    })
 }
 
 fn pick_from_response(
