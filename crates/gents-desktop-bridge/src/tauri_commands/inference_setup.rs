@@ -1042,6 +1042,7 @@ mod provider_account_tests {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1069,6 +1070,7 @@ mod provider_account_tests {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         }
     }
 
@@ -1634,6 +1636,8 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account_id,
+        organization_uuid: tokens.organization_uuid,
+        account_uuid: tokens.account_uuid,
     };
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());

@@ -439,6 +439,7 @@ mod tests {
             enabled: true,
             account_ref: account_ref.map(str::to_string),
             connected_at: None,
+            provider_account_key: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await

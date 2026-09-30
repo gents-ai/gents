@@ -60,6 +60,9 @@ pub struct ClaudeLoginTokens {
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
     pub account_id: Option<String>,
+    /// The organization and account ids of the token response, when present.
+    pub organization_uuid: Option<String>,
+    pub account_uuid: Option<String>,
 }
 
 impl fmt::Debug for ClaudeLoginTokens {
@@ -102,6 +105,7 @@ pub fn credential_from_login_tokens(
         enabled: true,
         account_ref: None,
         connected_at: None,
+        provider_account_key: None,
     }
 }
 
@@ -165,6 +169,8 @@ mod tests {
             expires_in: Some(28800),
             scope: Some(CLAUDE_OAUTH_SCOPES.into()),
             account_id: Some("person@example.test".into()),
+            organization_uuid: None,
+            account_uuid: None,
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -196,6 +202,8 @@ mod tests {
             expires_in: None,
             scope: None,
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -213,6 +221,8 @@ mod tests {
             expires_in: Some(28800),
             scope: Some("user:profile".into()),
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let text = format!("{tokens:?}");
         assert!(!text.contains("SECRET"), "{text}");

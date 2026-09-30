@@ -54,6 +54,9 @@ pub struct LoginTokens {
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
     pub account_id: Option<String>,
+    /// The organization and account ids of the token response, when present.
+    pub organization_uuid: Option<String>,
+    pub account_uuid: Option<String>,
 }
 
 impl fmt::Debug for LoginTokens {
@@ -424,6 +427,8 @@ pub(crate) async fn exchange_code(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account.as_ref().and_then(account_label),
+        organization_uuid: None,
+        account_uuid: None,
     })
 }
 
@@ -514,6 +519,8 @@ mod tests {
             expires_in: Some(60),
             scope: Some("user:inference".into()),
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let rendered = format!("{tokens:?}");
         assert!(!rendered.contains("SECRET"), "{rendered}");

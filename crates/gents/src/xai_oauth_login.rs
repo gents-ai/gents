@@ -287,6 +287,7 @@ pub fn credential_from_login_tokens(
         enabled: true,
         account_ref: None,
         connected_at: None,
+        provider_account_key: None,
     }
 }
 

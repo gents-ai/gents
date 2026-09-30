@@ -1397,6 +1397,7 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_
         enabled: true,
         account_ref: None,
         connected_at: None,
+        provider_account_key: None,
     };
     let mutation = crate::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = node.execute(&mutation).await;
@@ -1627,6 +1628,8 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
             expires_in: Some(3600),
             scope: None,
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         },
         chrono::Utc::now(),
     );
@@ -1698,6 +1701,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         enabled: true,
         account_ref: None,
         connected_at: None,
+        provider_account_key: None,
     };
     let doc_id = crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
         .await

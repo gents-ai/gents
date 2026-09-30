@@ -100,6 +100,8 @@ pub(crate) async fn run_claude_login(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account_id,
+        organization_uuid: tokens.organization_uuid,
+        account_uuid: tokens.account_uuid,
     };
     let credential = gents::claude_oauth::credential_from_login_tokens(
         agent_did,
@@ -170,6 +172,8 @@ mod tests {
                 expires_in: Some(60),
                 scope: None,
                 account_id: None,
+                organization_uuid: None,
+                account_uuid: None,
             },
             chrono::Utc::now(),
         );

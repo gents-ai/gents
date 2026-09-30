@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at";
+const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key";
 /// The fields [`pick_oauth_credential`] reads: no token.
 const OAUTH_PICK_FIELDS: &str = "credential_id agent_did provider enabled account_ref connected_at";
 
@@ -203,6 +203,10 @@ pub struct OAuthCredential {
     /// field existed.
     #[serde(default)]
     pub connected_at: Option<DateTime<Utc>>,
+    /// The provider's stable id for the signed-in account, scoped by
+    /// `provider`; `None` when the tokens did not show it.
+    #[serde(default)]
+    pub provider_account_key: Option<String>,
 }
 
 const REDACTED: &str = "[redacted]";
@@ -409,6 +413,7 @@ fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
         enabled: row.enabled.unwrap_or(true),
         account_ref: clean_optional(row.account_ref),
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
+        provider_account_key: None,
     })
 }
 
@@ -636,6 +641,13 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
             "connected_at",
             datetime_field("connected_at", credential.connected_at),
         ),
+        (
+            "provider_account_key",
+            gents_protocol::graphql::nullable_string_field(
+                "provider_account_key",
+                credential.provider_account_key.as_deref(),
+            ),
+        ),
     ]
 }
 
@@ -672,6 +684,7 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
         enabled: row.enabled.unwrap_or(true),
         account_ref: clean_optional(row.account_ref),
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
+        provider_account_key: clean_optional(row.provider_account_key),
     })
 }
 
@@ -1011,6 +1024,7 @@ mod tests {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         }
     }
 
@@ -1352,6 +1366,7 @@ mod resolver_tests {
             account_ref: account_ref.map(str::to_string),
             connected_at: connected_at
                 .map(|secs| DateTime::<Utc>::from_timestamp(secs, 0).unwrap()),
+            provider_account_key: None,
         }
     }
 
@@ -1642,6 +1657,7 @@ pub(crate) mod test_support {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await

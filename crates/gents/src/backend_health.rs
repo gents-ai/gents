@@ -1112,6 +1112,7 @@ mod tests {
             enabled: true,
             account_ref: Some("acct-b".into()),
             connected_at: Some(Utc::now()),
+            provider_account_key: None,
         };
         crate::oauth_credential::upsert_oauth_credential(&node, &account)
             .await
