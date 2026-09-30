@@ -1187,6 +1187,62 @@ pub trait BearerSource: Send + Sync {
     }
 }
 
+/// What a refresh's write found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshPersist {
+    Written,
+    /// The row was removed, replaced or signed in again since the refresh
+    /// read it; the stored row stands.
+    Superseded,
+}
+
+/// The fields a refresh changes, plus the key when this refresh filled it.
+const REFRESH_FIELDS: &[&str] = &[
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "account_id",
+    "chatgpt_plan_type",
+    "is_fedramp",
+    "access_token_expires_at",
+    "last_refresh",
+];
+
+fn refresh_update_mutation(
+    credential: &OAuthCredential,
+    stored_refresh_token: &str,
+    key_filled: bool,
+) -> String {
+    let document = match &credential.doc_id {
+        Some(doc_id) => format!(
+            r#"_docID: {{ _eq: "{}" }}"#,
+            crate::graphql::escape_graphql_string(doc_id)
+        ),
+        None => format!(
+            r#"credential_id: {{ _eq: "{}" }}"#,
+            crate::graphql::escape_graphql_string(&credential.credential_id)
+        ),
+    };
+    let fields: Vec<_> = oauth_credential_input_fields(credential)
+        .into_iter()
+        .filter(|(name, _)| {
+            REFRESH_FIELDS.contains(name) || (key_filled && *name == "provider_account_key")
+        })
+        .collect();
+    format!(
+        r#"mutation {{
+            update_OAuthCredential(
+                filter: {{ {document}, refresh_token: {{ _eq: "{}" }} }},
+                input: {{
+                    {}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        crate::graphql::escape_graphql_string(stored_refresh_token),
+        render_oauth_input(&fields, &[]),
+    )
+}
+
 pub struct DbCredentialBearer {
     node: Arc<EmbeddedNode>,
     agent_did: String,
@@ -1286,12 +1342,39 @@ impl DbCredentialBearer {
         *self.cache.lock().await = Some(credential.clone());
     }
 
-    async fn persist_with_retry(&self, credential: &OAuthCredential) -> Result<()> {
+    /// Write a refresh's fields onto the row it read, only while that row
+    /// still holds `stored_refresh_token`: a sign-in (always a new refresh
+    /// token), remove or replacement since the read makes it match nothing,
+    /// so a refresh never revives, re-enables or overwrites a row. Retried
+    /// only on an error.
+    async fn persist_with_retry(
+        &self,
+        credential: &OAuthCredential,
+        stored_refresh_token: &str,
+        key_filled: bool,
+    ) -> Result<RefreshPersist> {
+        let mutation = refresh_update_mutation(credential, stored_refresh_token, key_filled);
         let mut last_error = None;
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
-            match upsert_oauth_credential(self.node.as_ref(), credential).await {
-                Ok(_) => return Ok(()),
+            match crate::config_client::ConfigAccess::write_local(
+                self.node.as_ref(),
+                "oauth_credential.refresh",
+                &mutation,
+            )
+            .await
+            {
+                Ok(response) => {
+                    let written = response
+                        .get("data")
+                        .and_then(|data| data.get("update_OAuthCredential"))
+                        .is_some_and(crate::graphql::response_has_documents);
+                    return Ok(if written {
+                        RefreshPersist::Written
+                    } else {
+                        RefreshPersist::Superseded
+                    });
+                }
                 Err(error) => {
                     last_error = Some(error);
                     if attempt + 1 < 3 {
@@ -1373,6 +1456,7 @@ impl BearerSource for DbCredentialBearer {
         }
 
         let db_credential = self.load_credential().await?;
+        let stored_refresh_token = db_credential.refresh_token.clone();
         if db_credential.access_token_expires_at >= credential.access_token_expires_at {
             credential = db_credential;
             if !forced && token_is_fresh(credential.access_token_expires_at) {
@@ -1400,14 +1484,26 @@ impl BearerSource for DbCredentialBearer {
         // The refresh owner is the single writer of existing rows: an empty key
         // is filled here, from the tokens persisted beside it, and never
         // recomputed once present.
-        if credential.provider_account_key.is_none() {
+        let key_filled = credential.provider_account_key.is_none() && {
             credential.provider_account_key = provider_account_key(self.refresh_kind, &credential);
-        }
+            credential.provider_account_key.is_some()
+        };
 
         self.cache_credential(&credential).await;
         self.force_refresh.store(false, Ordering::SeqCst);
-        if let Err(error) = self.persist_with_retry(&credential).await {
-            tracing::error!(
+        match self
+            .persist_with_retry(&credential, &stored_refresh_token, key_filled)
+            .await
+        {
+            Ok(RefreshPersist::Written) => {}
+            Ok(RefreshPersist::Superseded) => tracing::debug!(
+                agent_did = %self.agent_did,
+                credential_id = %self.credential_id,
+                product = self.product.name,
+                "the stored account changed while its token refreshed; the stored row stands \
+                 and the refreshed token is served from memory"
+            ),
+            Err(error) => tracing::error!(
                 agent_did = %self.agent_did,
                 credential_id = %self.credential_id,
                 product = self.product.name,
@@ -1415,7 +1511,7 @@ impl BearerSource for DbCredentialBearer {
                 "failed to persist rotated OAuth token to DefraDB after retries; serving \
                  the rotated token from memory. It must be re-persisted before this process exits \
                  or the rotated refresh token will be lost."
-            );
+            ),
         }
         Ok(credential.access_token)
     }
