@@ -1133,7 +1133,32 @@ async fn persona_preview(
         make_default: args.make_default,
         ..Default::default()
     };
-    let verdict = decide_persona_request(&doc, &catalog);
+    let mut verdict = decide_persona_request(&doc, &catalog);
+    if matches!(verdict, PersonaVerdict::Admit) {
+        let current_behavior = matches!(op, PersonaOp::Edit)
+            .then_some(args.behavior_id.as_deref())
+            .flatten();
+        let next_profile = args.profile_id.value();
+        let actor = ::identity::Did::new(agent_did.to_owned())
+            .context("self-config principal DID is not ACP-addressable")?;
+        if let Err(error) = crate::config_client::ConfigAccess::transact_local(
+            node,
+            Some(actor),
+            "self_config.preview_persona_profile_choice",
+            |txn| {
+                Box::pin(guard_persona_profile_choice(
+                    txn,
+                    agent_did,
+                    current_behavior,
+                    next_profile,
+                ))
+            },
+        )
+        .await
+        {
+            verdict = PersonaVerdict::Reject(format!("{error:#}"));
+        }
+    }
     let rejection = match &verdict {
         PersonaVerdict::Admit => None,
         PersonaVerdict::Reject(detail) => Some(detail.clone()),
@@ -1204,6 +1229,37 @@ async fn persona_preview(
         "process_ceiling": process_ceiling,
     }
     .pretty()
+}
+
+/// Create and clone have no current backend; edit's is the target behavior's.
+async fn guard_persona_profile_choice(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    current_behavior: Option<&str>,
+    next_profile: Option<&str>,
+) -> Result<()> {
+    let Some(next_profile) = next_profile else {
+        return Ok(());
+    };
+    let current_profile = match current_behavior {
+        Some(behavior_id) => {
+            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, behavior_id)
+                .await?
+                .and_then(|(_, doc)| {
+                    doc.get("inference_profile_id")?
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                })
+        }
+        None => None,
+    };
+    let current_backend = match current_profile {
+        Some(profile) => Some(ops::profile_backend_id(txn, agent_did, &profile).await?),
+        None => None,
+    };
+    let next_backend = ops::profile_backend_id(txn, agent_did, next_profile).await?;
+    ops::guard_backend_choice_in_txn(txn, agent_did, current_backend.as_deref(), &next_backend)
+        .await
 }
 
 async fn persona_mutate(
@@ -1295,7 +1351,6 @@ async fn persona_mutate(
     let mutation = local_persona_request_mutation(&record);
     let actor = ::identity::Did::new(identity.did().to_owned())
         .context("self-config principal DID is not ACP-addressable")?;
-    // Create and clone have no current backend; edit's is the target behavior's.
     let current_behavior = (op == "edit")
         .then_some(record.behavior_id.as_deref())
         .flatten();
@@ -1307,38 +1362,8 @@ async fn persona_mutate(
             let mutation = &mutation;
             let next_profile = record.profile_id.as_deref();
             Box::pin(async move {
-                if let Some(next_profile) = next_profile {
-                    let current_profile = match current_behavior {
-                        Some(behavior_id) => ops::read_owned_doc(
-                            txn,
-                            SelfConfigTarget::AgentBehavior,
-                            agent_did,
-                            behavior_id,
-                        )
-                        .await?
-                        .and_then(|(_, doc)| {
-                            doc.get("inference_profile_id")?
-                                .as_str()
-                                .map(ToOwned::to_owned)
-                        }),
-                        None => None,
-                    };
-                    let current_backend = match current_profile {
-                        Some(profile) => {
-                            Some(ops::profile_backend_id(txn, agent_did, &profile).await?)
-                        }
-                        None => None,
-                    };
-                    let next_backend =
-                        ops::profile_backend_id(txn, agent_did, next_profile).await?;
-                    ops::guard_backend_choice_in_txn(
-                        txn,
-                        agent_did,
-                        current_backend.as_deref(),
-                        &next_backend,
-                    )
+                guard_persona_profile_choice(txn, agent_did, current_behavior, next_profile)
                     .await?;
-                }
                 txn.execute_local_response(mutation).await.map(|_| ())
             })
         },
