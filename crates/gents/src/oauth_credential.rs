@@ -285,7 +285,9 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     // immutability check rejects re-sending an immutable field on a pre-existing document, so the
     // `update` branch (re-login and per-request token rotation both land here) must omit it.
     // `credential_id` is likewise only ever written in `add`. Mirrors session/observations.rs.
-    let update_input = render_oauth_input(&fields, &["agent_did"]);
+    // `account_ref` and `connected_at` are set once, when a row is first stored; a refresh or
+    // re-sign-in never rewrites them.
+    let update_input = render_oauth_input(&fields, &["agent_did", "account_ref", "connected_at"]);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
@@ -520,6 +522,17 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
                 "enabled: {}",
                 gents_protocol::graphql::graphql_bool_literal(credential.enabled)
             ),
+        ),
+        (
+            "account_ref",
+            gents_protocol::graphql::nullable_string_field(
+                "account_ref",
+                credential.account_ref.as_deref(),
+            ),
+        ),
+        (
+            "connected_at",
+            datetime_field("connected_at", credential.connected_at),
         ),
     ]
 }
