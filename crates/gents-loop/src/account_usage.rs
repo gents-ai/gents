@@ -85,19 +85,70 @@ impl UsageReport {
         self.windows.is_empty() && self.credits.is_none() && self.plan.is_none()
     }
 
+    /// Per window label, and for credits and plan, the newer observation
+    /// wins; on a tie `other` wins. A missing value never clears one.
     pub fn merge(self, other: UsageReport) -> UsageReport {
-        other
+        let mut windows = self.windows;
+        for window in other.windows {
+            match windows.iter_mut().find(|kept| kept.label == window.label) {
+                Some(kept) if window.observed_at >= kept.observed_at => *kept = window,
+                Some(_) => {}
+                None => windows.push(window),
+            }
+        }
+        UsageReport {
+            windows,
+            credits: newer(self.credits, other.credits, |credits| credits.observed_at),
+            plan: newer(self.plan, other.plan, |plan| plan.observed_at),
+        }
     }
 
+    /// Equal ignoring every `observed_at`.
     pub fn same_values(&self, other: &UsageReport) -> bool {
-        let _ = other;
-        false
+        self.values() == other.values()
+    }
+
+    fn values(&self) -> UsageReport {
+        let epoch = DateTime::<Utc>::UNIX_EPOCH;
+        let mut report = self.clone();
+        for window in &mut report.windows {
+            window.observed_at = epoch;
+        }
+        if let Some(credits) = &mut report.credits {
+            credits.observed_at = epoch;
+        }
+        if let Some(plan) = &mut report.plan {
+            plan.observed_at = epoch;
+        }
+        report
     }
 }
 
+fn newer<T>(kept: Option<T>, other: Option<T>, at: fn(&T) -> DateTime<Utc>) -> Option<T> {
+    match (kept, other) {
+        (Some(kept), Some(other)) if at(&kept) > at(&other) => Some(kept),
+        (kept, other) => other.or(kept),
+    }
+}
+
+/// The windows worth showing at `now`: none past its reset or older than
+/// [`LAST_KNOWN_FOR`]; older than [`STALE_AFTER`] is [`Freshness::Stale`].
 pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageWindow, Freshness)> {
-    let _ = (report, now);
-    Vec::new()
+    report
+        .windows
+        .iter()
+        .filter(|window| window.resets_at.is_none_or(|reset| reset > now))
+        .filter_map(|window| {
+            let age = now - window.observed_at;
+            if age > LAST_KNOWN_FOR {
+                None
+            } else if age > STALE_AFTER {
+                Some((window, Freshness::Stale))
+            } else {
+                Some((window, Freshness::Fresh))
+            }
+        })
+        .collect()
 }
 
 /// Usage windows from a provider response's headers:
