@@ -2326,7 +2326,7 @@ mod sign_in_tests {
     }
 
     #[tokio::test]
-    async fn a_sign_in_of_another_account_replaces_tokens_and_key() {
+    async fn the_raw_upsert_of_another_account_replaces_tokens_and_key() {
         let node = Arc::new(test_node().await);
         sign_in(&node, &chatgpt(Some("member-a"), "refresh-1")).await;
         let stored = sign_in(&node, &chatgpt(Some("member-b"), "refresh-2")).await;
