@@ -964,42 +964,171 @@ pub struct AccountSummary {
     pub access_token_expires_at: DateTime<Utc>,
 }
 
+/// The providers whose sign-ins are accounts: the ones a backend reads.
+const ACCOUNT_PROVIDERS: [&str; 3] = [
+    crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+    crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+    crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+];
+
+/// A filter on `agent_did`'s accounts, optionally one `credential_id`.
+fn account_filter(agent_did: &str, credential_id: Option<&str>) -> String {
+    let providers = ACCOUNT_PROVIDERS
+        .iter()
+        .map(|provider| format!("\"{provider}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let credential = credential_id
+        .map(|id| {
+            format!(
+                r#", credential_id: {{ _eq: "{}" }}"#,
+                crate::graphql::escape_graphql_string(id)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"{{ agent_did: {{ _eq: "{}" }}, provider: {{ _in: [{providers}] }}{credential} }}"#,
+        crate::graphql::escape_graphql_string(agent_did)
+    )
+}
+
+fn account_not_found(credential_id: &str) -> anyhow::Error {
+    anyhow::anyhow!("account {credential_id:?} not found for this agent")
+}
+
 /// `agent_did`'s sign-in accounts in resolver order. Only providers a backend
 /// reads are accounts; a cloud workspace token is not.
 pub async fn list_accounts(
-    _access: &crate::config_client::ConfigAccess,
-    _agent_did: &str,
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
 ) -> Result<Vec<AccountSummary>> {
-    anyhow::bail!("not implemented")
+    let response = access
+        .execute(&format!(
+            "query {{ OAuthCredential(filter: {}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}",
+            account_filter(agent_did, None)
+        ))
+        .await?;
+    let mut rows = oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by(resolver_order);
+    let defaults: Vec<_> = ACCOUNT_PROVIDERS
+        .iter()
+        .filter_map(|provider| {
+            pick_oauth_credential(&rows, agent_did, provider, AccountPick::ProviderDefault)
+        })
+        .map(|row| row.credential_id.clone())
+        .collect();
+    Ok(rows
+        .iter()
+        .map(|row| AccountSummary {
+            credential_id: row.credential_id.clone(),
+            provider: row.provider.clone(),
+            account_ref: row.account_ref.clone(),
+            label: effective_account_label(row),
+            identity: account_display_label(row),
+            plan: row.chatgpt_plan_type.clone(),
+            enabled: row.enabled,
+            default: defaults.contains(&row.credential_id),
+            access_token_expires_at: row.access_token_expires_at,
+        })
+        .collect())
 }
 
 /// Rename an account; a backend still named by its old label follows.
 pub async fn set_account_label(
-    _access: &crate::config_client::ConfigAccess,
-    _agent_did: &str,
-    _credential_id: &str,
-    _label: &str,
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    credential_id: &str,
+    label: &str,
 ) -> Result<()> {
-    anyhow::bail!("not implemented")
+    let label = validate_account_label(label)?;
+    access
+        .transact("oauth_credential.label", |txn| {
+            let label = label.clone();
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!(
+                        "query {{ OAuthCredential(filter: {}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}",
+                        account_filter(agent_did, Some(credential_id))
+                    ))
+                    .await?;
+                let row = oauth_credentials_from_response(&response)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| account_not_found(credential_id))??;
+                let rows = provider_rows_in_txn(txn, agent_did, &row.provider).await?;
+                let others: Vec<_> = rows
+                    .iter()
+                    .filter(|other| other.doc_id != row.doc_id)
+                    .collect();
+                ensure_label_free(&others, &label)?;
+                let doc_id = row
+                    .doc_id
+                    .as_deref()
+                    .context("stored OAuthCredential has no _docID")?;
+                txn.execute(&format!(
+                    r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
+                    crate::graphql::escape_graphql_string(doc_id),
+                    gents_protocol::graphql::nullable_string_field("label", Some(&label)),
+                ))
+                .await?;
+                let old_label = effective_account_label(&row);
+                let renamed = OAuthCredential {
+                    label: Some(label),
+                    ..row
+                };
+                sync_account_backend(txn, &renamed, Some(&old_label)).await
+            })
+        })
+        .await
 }
 
 /// Enable or disable an account, keeping its tokens.
 pub async fn set_account_enabled(
-    _access: &crate::config_client::ConfigAccess,
-    _agent_did: &str,
-    _credential_id: &str,
-    _enabled: bool,
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    credential_id: &str,
+    enabled: bool,
 ) -> Result<()> {
-    anyhow::bail!("not implemented")
+    let response = access
+        .write(
+            "oauth_credential.enabled",
+            &format!(
+                "mutation {{ update_OAuthCredential(filter: {}, input: {{ enabled: {} }}) {{ _docID }} }}",
+                account_filter(agent_did, Some(credential_id)),
+                gents_protocol::graphql::graphql_bool_literal(enabled),
+            ),
+        )
+        .await?;
+    ensure_matched(&response, "update_OAuthCredential", credential_id)
 }
 
 /// Delete an account's row inside the caller's transaction.
 pub async fn remove_account_in_txn(
-    _txn: &crate::config_client::ConfigApplyTxn<'_>,
-    _agent_did: &str,
-    _credential_id: &str,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    credential_id: &str,
 ) -> Result<()> {
-    anyhow::bail!("not implemented")
+    let response = txn
+        .execute(&format!(
+            "mutation {{ delete_OAuthCredential(filter: {}) {{ _docID }} }}",
+            account_filter(agent_did, Some(credential_id)),
+        ))
+        .await?;
+    ensure_matched(&response, "delete_OAuthCredential", credential_id)
+}
+
+fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {
+    if response
+        .get("data")
+        .and_then(|data| data.get(field))
+        .is_some_and(crate::graphql::response_has_documents)
+    {
+        Ok(())
+    } else {
+        Err(account_not_found(credential_id))
+    }
 }
 
 pub fn oauth_credentials_from_response(response: &Value) -> Vec<Result<OAuthCredential>> {
