@@ -81,20 +81,44 @@ private def authText : BackendAuth → String
   | .principalOAuth (some a) =>
     s!"\{\"kind\":\"principal_oauth\",\"account_ref\":{(toJson a).compress}}"
 
+/-- Stored sign-ins the cases resolve against: alice's original and `acct-1`,
+bob's `acct-2`, and alice's disabled `acct-off`. -/
+private def oauthRows : List OAuthAccountRow := [
+  ⟨"alice", "ChatGptCodex", none, true⟩,
+  ⟨"alice", "ChatGptCodex", some "acct-1", true⟩,
+  ⟨"bob", "ChatGptCodex", some "acct-2", true⟩,
+  ⟨"alice", "ChatGptCodex", some "acct-off", false⟩]
+
 /-- A backend stored under `stored_owner` runs under `scope`: any OAuth account
-reference is looked up under the executing scope, never the stored owner. -/
+reference is looked up under the executing scope, never the stored owner, and
+never resolves another principal's or a disabled row. -/
 private def oauthAccountCases : List (String × String × String × String × BackendAuth) := [
   ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth none),
   ("reference_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-1")),
   ("foreign_stored_owner_uses_executing_scope", "alice", "bob", "ChatGptCodex",
     .principalOAuth (some "acct-1")),
-  ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY")]
+  ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY"),
+  ("foreign_principal_row_rejected", "alice", "alice", "ChatGptCodex",
+    .principalOAuth (some "acct-2")),
+  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-off"))]
 
-private def oauthAccountJson : Json := toJson (oauthAccountCases.map
-  fun (name, scope, storedOwner, kind, auth) => Json.mkObj
-    [("name", toJson name), ("scope", toJson scope), ("stored_owner", toJson storedOwner),
-     ("provider_kind", toJson kind), ("auth", toJson (authText auth)),
-     ("owner", toJson (oauthLookupOwner scope auth))])
+private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
+  [("owner", toJson row.owner), ("provider_kind", toJson row.kind),
+   ("account", toJson row.account), ("enabled", toJson row.enabled)]
+
+private def oauthResolvedJson (scope kind : String) : BackendAuth → Json
+  | .principalOAuth account =>
+    (oauthResolve scope kind account oauthRows).map oauthRowJson |>.getD Json.null
+  | _ => Json.null
+
+private def oauthAccountJson : Json := Json.mkObj
+  [("rows", toJson (oauthRows.map oauthRowJson)),
+   ("cases", toJson (oauthAccountCases.map fun (name, scope, storedOwner, kind, auth) =>
+    Json.mkObj
+      [("name", toJson name), ("scope", toJson scope), ("stored_owner", toJson storedOwner),
+       ("provider_kind", toJson kind), ("auth", toJson (authText auth)),
+       ("owner", toJson (oauthLookupOwner scope auth)),
+       ("resolved", oauthResolvedJson scope kind auth)]))]
 
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
