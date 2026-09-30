@@ -249,6 +249,20 @@ source consistency checks, not a separate runtime compatibility version.
   before the account was signed in at its backend shows none. Nothing moves a
   profile to another account except these commands.
 
+- Provider usage is kept per node and provider account (#1525). ChatGPT and
+  Claude subscription responses and OpenAI-compatible API-key responses record
+  the usage headers the provider sends in a new local `ProviderAccountUsage`
+  collection, owned by the agent and never stored on the sign-in. Usage for
+  ChatGPT, Grok and OpenRouter accounts can also be read on demand; the Claude
+  read runs only on an explicit refresh, reads within the last few minutes are
+  skipped, and nothing polls. An on-demand read renews an expired sign-in the
+  same way a request would; if renewal fails the account shows its sign-in as
+  expired.
+  Usage is stale after 15 minutes and dropped after 60 minutes or at its reset
+  time. The Codex app-server shim answers `account/rateLimits/read` from the
+  stored usage of the session's account without calling the provider. Earlier
+  builds open the store unchanged and ignore the new collection.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no
