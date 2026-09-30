@@ -242,13 +242,6 @@ async fn oauth_credential_for_probe(
     let Some(provider) = backend.provider_kind.oauth_provider() else {
         anyhow::bail!("backend kind has no OAuth provider");
     };
-    // Removed by the #2117 resolver PR, with the `build_backend_client` guard.
-    if let crate::document_config::BackendAuth::PrincipalOAuth {
-        account_ref: Some(account_ref),
-    } = &backend.auth
-    {
-        anyhow::bail!("backend account {account_ref:?}: account references require the multi-account resolver");
-    }
     let (_, credential) = crate::oauth_http::bootstrap_oauth_client(
         context.node.clone(),
         context.principal_did,
