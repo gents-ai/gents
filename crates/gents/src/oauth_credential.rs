@@ -1859,6 +1859,16 @@ mod backfill_tests {
             .await
             .expect("an upgraded row builds a client");
             assert_eq!(bootstrapped.credential_id, before.credential_id);
+            let credential_id = oauth_credential_id(did, provider);
+            let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+                .await
+                .unwrap()
+                .expect("stored row");
+            assert_eq!(stored, before, "{provider}");
+            assert_eq!(stored.credential_id, credential_id);
+            assert_eq!(stored.access_token, "placeholder-access");
+            assert_eq!(stored.refresh_token, "placeholder-refresh");
+            assert!(stored.enabled);
 
             let after = refresh_once(&node, did, provider, kind, body).await;
             assert_eq!(
