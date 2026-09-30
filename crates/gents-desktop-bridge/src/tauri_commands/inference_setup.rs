@@ -373,22 +373,26 @@ pub async fn discover_inference_models_for_core(
                 "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
             )
         })?;
-        gents::oauth_credential::list_oauth_credentials_on(&access, request.agent_did.trim())
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    agent_did = %request.agent_did.trim(),
-                    error = %format!("{error:#}"),
-                    "reading provider accounts for model discovery failed"
-                );
-                BridgeError::new(
-                    BridgeErrorCode::EndpointUnreachable,
-                    "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
-                )
-            })?
-            .into_iter()
-            .find(|credential| credential.enabled && credential.provider == provider)
+        // Discovery sets up a backend with no account reference, which runs on the original account.
+        gents::oauth_credential::resolve_oauth_credential(
+            &access,
+            request.agent_did.trim(),
+            provider,
+            gents::oauth_credential::AccountPick::Reference(None),
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                target: LOG_TARGET,
+                agent_did = %request.agent_did.trim(),
+                error = %format!("{error:#}"),
+                "reading provider accounts for model discovery failed"
+            );
+            BridgeError::new(
+                BridgeErrorCode::EndpointUnreachable,
+                "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
+            )
+        })?
     } else {
         None
     };

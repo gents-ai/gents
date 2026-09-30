@@ -73,8 +73,12 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .build()
         .context("building backend discovery client")?;
     let (oauth_credential, oauth_agent_did) = if target.provider_kind.is_agent_scoped_oauth() {
+        // A preset becomes a backend with no reference, which runs on the original account.
+        let account_ref = stored
+            .as_ref()
+            .and_then(|backend| backend.auth.oauth_account_ref());
         let (credential, owner) =
-            load_oauth_credential_for_discovery(&args, target.provider_kind).await?;
+            load_oauth_credential_for_discovery(&args, target.provider_kind, account_ref).await?;
         (credential, Some(owner))
     } else {
         (None, None)
@@ -146,6 +150,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
 async fn load_oauth_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
     provider_kind: BackendProviderKind,
+    account_ref: Option<&str>,
 ) -> Result<(Option<gents::oauth_credential::OAuthCredential>, String)> {
     let (provider, _login) = match provider_kind {
         BackendProviderKind::ChatGptCodex => (
@@ -165,9 +170,13 @@ async fn load_oauth_credential_for_discovery(
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let credential =
-        crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
-            .await?;
+    let credential = gents::oauth_credential::resolve_oauth_credential(
+        &access,
+        &agent_did,
+        provider,
+        gents::oauth_credential::AccountPick::Reference(account_ref),
+    )
+    .await?;
     Ok((credential, agent_did))
 }
 

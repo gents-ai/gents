@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::GrokAuthProbeArgs;
-use crate::config_writes::ConfigAccess;
 use crate::{resolve_agent_did, resolve_config_access};
 
 #[derive(Deserialize)]
@@ -68,15 +67,20 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let provider = gents::xai_grok_oauth::normalize_provider(&args.provider);
-    let credential = load_oauth_credential(&access, &agent_did, &provider)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(gents::xai_grok_oauth::classify_xai_auth_error(
-                &agent_did,
-                &provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
-            ))
-        })?;
+    let credential = gents::oauth_credential::resolve_oauth_credential(
+        &access,
+        &agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(gents::xai_grok_oauth::classify_xai_auth_error(
+            &agent_did,
+            &provider,
+            &gents::oauth_credential::OAuthAuthProblem::Missing,
+        ))
+    })?;
 
     let backend_url = gents::xai_grok_oauth::default_backend_endpoint();
     // `/models-v2` is the catalog path the official Grok CLI queries.
@@ -166,17 +170,4 @@ mod tests {
         let rendered = rendered_model_names(body).expect("mixed body parses");
         assert_eq!(rendered, vec!["grok-2", "grok-4.5 (Grok 4.5)"]);
     }
-}
-
-pub(crate) async fn load_oauth_credential(
-    access: &ConfigAccess,
-    agent_did: &str,
-    provider: &str,
-) -> Result<Option<gents::oauth_credential::OAuthCredential>> {
-    let query = gents::oauth_credential::oauth_credential_query(agent_did, provider);
-    let response = access.execute(&query).await?;
-    gents::oauth_credential::oauth_credentials_from_response(&response)
-        .into_iter()
-        .next()
-        .transpose()
 }

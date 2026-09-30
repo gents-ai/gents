@@ -394,8 +394,14 @@ async fn maybe_inline_grok_login(
         return InlineGrokLoginState::Unauthenticated;
     }
     let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineGrokLoginState::ExistingCredential,
         Ok(None) => {}
@@ -454,9 +460,14 @@ async fn maybe_inline_claude_login(
     }
     let provider =
         gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    // The credential lookup is provider-generic; the grok probe just owns the copy.
-    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineClaudeLoginState::ExistingCredential,
         Ok(None) => {}
@@ -500,8 +511,14 @@ async fn maybe_inline_codex_login(
         return InlineCodexLoginState::Unauthenticated;
     }
     let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    match crate::commands::codex_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineCodexLoginState::ExistingCredential,
         Ok(None) => {}

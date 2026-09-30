@@ -245,25 +245,6 @@ pub fn oauth_credential_id(agent_did: &str, provider: &str) -> String {
     format!("{provider}:{agent_did}")
 }
 
-pub fn oauth_credential_query(agent_did: &str, provider: &str) -> String {
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
-    format!(
-        r#"query {{
-            OAuthCredential(
-                filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    provider: {{ _eq: "{provider}" }},
-                    enabled: {{ _eq: true }}
-                }},
-                limit: 1
-            ) {{
-                {OAUTH_CREDENTIAL_FIELDS}
-            }}
-        }}"#
-    )
-}
-
 pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
     let credential_id = crate::graphql::escape_graphql_string(credential_id);
     format!(
@@ -355,8 +336,7 @@ pub async fn resolve_oauth_credential(
 ) -> Result<Option<OAuthCredential>> {
     let response = access
         .execute(&enabled_oauth_credentials_query(agent_did, provider))
-        .await
-        .context("querying OAuthCredential")?;
+        .await?;
     let rows = oauth_credentials_from_response(&response)
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
