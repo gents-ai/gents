@@ -1,8 +1,8 @@
 //! Generated field tables and patch results checked against the existing patch owner.
 //! Guarded rows replay the Lean guard verdict through the production guard of
-//! their target (Tools and Behavior no-lockout, Backend auth). Reference
-//! validation and transactional rejection need an end-to-end ConfigApplyTxn
-//! consumer; this test does not simulate them.
+//! their target (Tools and Behavior no-lockout, Backend auth, and the Profile
+//! account choice). Reference validation and transactional rejection need an
+//! end-to-end ConfigApplyTxn consumer; this test does not simulate them.
 use crate::lean_vocab_test::{
     lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
 };
