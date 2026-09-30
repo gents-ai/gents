@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::provider_limit::epoch_seconds;
 
@@ -169,6 +170,44 @@ pub fn usage_from_headers<'a>(
             .push(window(kind.to_string(), used, None, reset));
     }
     report
+}
+
+/// ChatGPT `GET /wham/usage`. `None` when malformed.
+pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let _ = body;
+    Some(inert(now))
+}
+
+/// Grok `GET {cli-chat-proxy}/billing?format=credits`. `None` when malformed.
+pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let _ = body;
+    Some(inert(now))
+}
+
+/// OpenRouter `GET /api/v1/key`. `None` when malformed.
+pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let _ = body;
+    Some(inert(now))
+}
+
+/// Claude `GET /api/oauth/usage`. `None` when malformed.
+pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let _ = body;
+    Some(inert(now))
+}
+
+fn inert(now: DateTime<Utc>) -> UsageReport {
+    UsageReport {
+        windows: vec![UsageWindow {
+            label: "inert".to_string(),
+            window_minutes: None,
+            used_pct: 0.0,
+            resets_at: None,
+            source: UsageSource::Endpoint,
+            observed_at: now,
+        }],
+        ..UsageReport::default()
+    }
 }
 
 /// One label per Claude window for headers (`5h`, `7d`, `7d_<model>`) and

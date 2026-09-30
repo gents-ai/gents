@@ -150,3 +150,156 @@ fn headers_source_and_observed_at_are_kept() {
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["windows"][0]["source"], json!("error"));
 }
+
+fn rfc(value: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(value)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+#[test]
+fn endpoint_codex_windows_plan_and_credits() {
+    let body = json!({
+        "plan_type": "plus",
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {
+                "used_percent": 12,
+                "limit_window_seconds": 18000,
+                "reset_after_seconds": 600,
+                "reset_at": 1790000000
+            },
+            "secondary_window": {
+                "used_percent": 40,
+                "limit_window_seconds": 604800,
+                "reset_at": 1790500000
+            }
+        },
+        "credits": { "has_credits": true, "unlimited": false, "balance": "3.00" }
+    });
+    let report = codex_usage(&body, now()).expect("well-formed");
+    let primary = find(&report, "primary");
+    assert_eq!(primary.used_pct, 12.0);
+    assert_eq!(primary.window_minutes, Some(300));
+    assert_eq!(primary.resets_at, Some(at(1_790_000_000)));
+    assert_eq!(primary.source, UsageSource::Endpoint);
+    let secondary = find(&report, "secondary");
+    assert_eq!(secondary.window_minutes, Some(10080));
+    assert_eq!(
+        report.plan.as_ref().map(|plan| plan.name.as_str()),
+        Some("plus")
+    );
+    let credits = report.credits.expect("credits");
+    assert_eq!(credits.has_credits, Some(true));
+    assert_eq!(credits.unlimited, Some(false));
+    assert_eq!(credits.balance.as_deref(), Some("3.00"));
+}
+
+#[test]
+fn endpoint_codex_unknown_fields_are_ignored() {
+    let body = json!({
+        "rate_limit": {
+            "primary_window": { "used_percent": 7, "future_field": [1, 2] },
+            "secondary_window": null,
+            "luna_reserve": {}
+        },
+        "spend_control": { "anything": true },
+        "additional_rate_limits": [{ "limit_name": "extra" }]
+    });
+    let report = codex_usage(&body, now()).expect("well-formed");
+    assert_eq!(report.windows.len(), 1, "{report:?}");
+    assert_eq!(find(&report, "primary").used_pct, 7.0);
+    assert!(report.plan.is_none());
+    assert!(report.credits.is_none());
+}
+
+#[test]
+fn endpoint_codex_without_rate_limit_is_malformed() {
+    assert_eq!(codex_usage(&json!({ "plan_type": "plus" }), now()), None);
+    assert_eq!(codex_usage(&json!("not an object"), now()), None);
+}
+
+#[test]
+fn endpoint_grok_percent_and_period_end() {
+    let body = json!({
+        "config": {
+            "creditUsagePercent": 33.5,
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "start": "2026-09-28T00:00:00Z",
+                "end": "2026-10-05T00:00:00Z"
+            }
+        },
+        "subscriptionTier": "tier-a"
+    });
+    let report = grok_billing(&body, now()).expect("well-formed");
+    let period = find(&report, "period");
+    assert_eq!(period.used_pct, 33.5);
+    assert_eq!(period.resets_at, Some(rfc("2026-10-05T00:00:00Z")));
+    assert_eq!(period.window_minutes, Some(7 * 24 * 60));
+    assert_eq!(report.plan.map(|plan| plan.name), Some("tier-a".into()));
+}
+
+#[test]
+fn endpoint_grok_legacy_shape_is_malformed() {
+    let body = json!({ "monthlyLimit": 1000, "used": 250 });
+    assert_eq!(grok_billing(&body, now()), None);
+}
+
+#[test]
+fn endpoint_openrouter_capped_key_window_and_next_reset() {
+    // 2026-09-30 is a Wednesday.
+    let cases = [
+        ("daily", rfc("2026-10-01T00:00:00Z")),
+        ("weekly", rfc("2026-10-05T00:00:00Z")),
+        ("monthly", rfc("2026-10-01T00:00:00Z")),
+    ];
+    for (reset, expected) in cases {
+        let body = json!({ "data": {
+            "label": "sk-or-TEST",
+            "limit": 20.0,
+            "limit_remaining": 15.0,
+            "limit_reset": reset,
+            "usage": 5.0
+        }});
+        let report = openrouter_key(&body, now()).expect("well-formed");
+        let window = find(&report, reset);
+        assert_eq!(window.used_pct, 25.0);
+        assert_eq!(window.resets_at, Some(expected), "{reset}");
+    }
+    let body = json!({ "data": { "limit": 10, "limit_remaining": 10, "limit_reset": null } });
+    let report = openrouter_key(&body, now()).expect("well-formed");
+    let total = find(&report, "total");
+    assert_eq!(total.used_pct, 0.0);
+    assert_eq!(total.resets_at, None);
+}
+
+#[test]
+fn endpoint_openrouter_uncapped_key_is_empty_not_unlimited() {
+    let body = json!({ "data": { "limit": null, "limit_remaining": null, "usage": 5.0 } });
+    let report = openrouter_key(&body, now()).expect("an uncapped key is well-formed");
+    assert!(report.is_empty(), "{report:?}");
+    assert_eq!(openrouter_key(&json!({ "error": "x" }), now()), None);
+}
+
+#[test]
+fn endpoint_claude_percent_windows_labels_match_headers_and_nulls_skipped() {
+    let body = json!({
+        "five_hour": { "utilization": 12.5, "resets_at": "2026-09-30T15:00:00.000Z" },
+        "seven_day": { "utilization": 40.0, "resets_at": null },
+        "seven_day_opus": { "utilization": 5.0, "resets_at": "2026-10-03T00:00:00Z" },
+        "seven_day_sonnet": null,
+        "extra_usage": { "is_enabled": false, "utilization": 99.0 }
+    });
+    let report = claude_oauth_usage(&body, now()).expect("well-formed");
+    assert_eq!(report.windows.len(), 3, "{report:?}");
+    let five = find(&report, "5h");
+    assert_eq!(five.used_pct, 12.5);
+    assert_eq!(five.resets_at, Some(rfc("2026-09-30T15:00:00Z")));
+    assert_eq!(find(&report, "7d").resets_at, None);
+    assert_eq!(find(&report, "7d opus").used_pct, 5.0);
+
+    let from_headers = headers(&[("anthropic-ratelimit-unified-7d_opus-utilization", "0.05")]);
+    assert_eq!(from_headers.windows[0].label, "7d opus");
+}
