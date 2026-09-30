@@ -275,6 +275,9 @@ pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
     )
 }
 
+/// Fields a token write never sends to a stored row.
+const SET_ONCE_FIELDS: &[&str] = &["agent_did", "account_ref", "connected_at", "label"];
+
 pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String {
     let fields = oauth_credential_input_fields(credential);
     let add_input = render_oauth_input(&fields, &[]);
@@ -284,10 +287,7 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     // `credential_id` is likewise only ever written in `add`. Mirrors session/observations.rs.
     // `account_ref`, `connected_at` and `label` are set once, when a row is first stored; a
     // refresh or re-sign-in never rewrites them (a label changes only through its own update).
-    let update_input = render_oauth_input(
-        &fields,
-        &["agent_did", "account_ref", "connected_at", "label"],
-    );
+    let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
@@ -580,20 +580,148 @@ pub struct SignIn {
     pub identity_matched: bool,
 }
 
+/// The product of a sign-in provider; `None` for a provider no backend kind
+/// reads (a sign-in there would be stored and never used).
+fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
+    match provider {
+        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => Some(CHATGPT_OAUTH_PRODUCT),
+        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => {
+            Some(crate::claude_oauth::CLAUDE_OAUTH_PRODUCT)
+        }
+        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => Some(XAI_OAUTH_PRODUCT),
+        _ => None,
+    }
+}
+
+fn oauth_credentials_of_provider_query(agent_did: &str, provider: &str) -> String {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let provider = crate::graphql::escape_graphql_string(provider);
+    format!(
+        r#"query {{
+            OAuthCredential(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                provider: {{ _eq: "{provider}" }}
+            }}) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+/// `agent_did`'s rows of `provider`, enabled or not, in resolver order.
+async fn provider_rows_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+) -> Result<Vec<OAuthCredential>> {
+    let response = txn
+        .execute(&oauth_credentials_of_provider_query(agent_did, provider))
+        .await?;
+    let mut rows = oauth_credentials_from_response(&response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by(resolver_order);
+    Ok(rows)
+}
+
+fn trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 /// Store a sign-in: refresh the stored account it shows, or add it.
+///
+/// A refresh keeps the row's id, reference, connection time and label and
+/// enables it. An add takes the provider's original slot
+/// (`{provider}:{did}`, no reference) when the provider has no row on this
+/// node, else mints an opaque, DID-free `account_ref`.
 pub async fn store_sign_in(
     access: &crate::config_client::ConfigAccess,
     credential: OAuthCredential,
     _label: Option<&str>,
 ) -> Result<SignIn> {
-    let doc_id = upsert_oauth_credential_on(access, &credential).await?;
+    anyhow::ensure!(
+        sign_in_product(&credential.provider).is_some(),
+        "no backend reads sign-ins of provider {:?}",
+        credential.provider
+    );
+    access
+        .transact("oauth_credential.sign_in", |txn| {
+            let credential = credential.clone();
+            Box::pin(async move { store_sign_in_in_txn(txn, credential).await })
+        })
+        .await
+}
+
+async fn store_sign_in_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    mut credential: OAuthCredential,
+) -> Result<SignIn> {
+    let rows = provider_rows_in_txn(txn, &credential.agent_did, &credential.provider).await?;
+    let key = trimmed(credential.provider_account_key.as_deref());
+    let matched = rows
+        .iter()
+        .find(|row| key.is_some() && trimmed(row.provider_account_key.as_deref()) == key);
+    if let Some(row) = matched {
+        credential.doc_id = row.doc_id.clone();
+        credential.credential_id = row.credential_id.clone();
+        credential.account_ref = row.account_ref.clone();
+        credential.connected_at = row.connected_at;
+        credential.label = row.label.clone();
+        credential.enabled = true;
+        let doc_id = row
+            .doc_id
+            .clone()
+            .context("stored OAuthCredential has no _docID")?;
+        let fields = oauth_credential_input_fields(&credential);
+        let mutation = format!(
+            r#"mutation {{
+                update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+                    {}
+                }}) {{ _docID }}
+            }}"#,
+            crate::graphql::escape_graphql_string(&doc_id),
+            render_oauth_input(&fields, SET_ONCE_FIELDS),
+        );
+        txn.execute(&mutation).await?;
+        return Ok(SignIn {
+            doc_id,
+            credential,
+            result: SignInResult::Refreshed,
+            identity_matched: true,
+        });
+    }
+    let now = Utc::now();
+    credential.connected_at = DateTime::from_timestamp(now.timestamp(), 0);
+    if rows.is_empty() {
+        credential.account_ref = None;
+        credential.credential_id = oauth_credential_id(&credential.agent_did, &credential.provider);
+    } else {
+        let account_ref = uuid::Uuid::new_v4().simple().to_string();
+        credential.credential_id = format!(
+            "{}:{}:{account_ref}",
+            credential.provider, credential.agent_did
+        );
+        credential.account_ref = Some(account_ref);
+    }
+    credential.enabled = true;
+    let fields = oauth_credential_input_fields(&credential);
+    let mutation = format!(
+        r#"mutation {{
+            create_OAuthCredential(input: {{
+                credential_id: "{}",
+                {}
+            }}) {{ _docID }}
+        }}"#,
+        crate::graphql::escape_graphql_string(&credential.credential_id),
+        render_oauth_input(&fields, &[]),
+    );
+    let response = txn.execute(&mutation).await?;
+    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+    credential.doc_id = Some(doc_id.clone());
     Ok(SignIn {
-        doc_id: doc_id.clone(),
-        credential: OAuthCredential {
-            doc_id: Some(doc_id),
-            ..credential
-        },
-        result: SignInResult::Refreshed,
+        doc_id,
+        credential,
+        result: SignInResult::Added,
         identity_matched: false,
     })
 }
