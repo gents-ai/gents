@@ -820,8 +820,13 @@ mod tests {
     #[tokio::test]
     async fn disable_names_the_profiles_and_keeps_the_row() {
         let access = seeded().await;
-        let result = disable_account(&access, DID, "Work", None).await.unwrap();
+        let mut warnings = Vec::new();
+        let result = disable_account(&access, DID, "Work", None, &mut warnings)
+            .await
+            .unwrap();
         assert_eq!(result["profiles"], json!(["work-profile"]));
+        let warnings = String::from_utf8(warnings).unwrap();
+        assert!(warnings.contains("work-profile"), "{warnings}");
         let rows = account_rows(&access, DID, None).await.unwrap();
         assert_eq!(row(&rows, "Work").status, "disabled");
         assert!(stored_ids(&access)
