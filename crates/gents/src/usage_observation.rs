@@ -372,6 +372,58 @@ impl UsageReporter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageTrigger {
+    /// The account list was opened.
+    Open,
+    /// The user asked for fresh usage.
+    Refresh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UsageRead {
+    Read,
+    SkippedRecent,
+    /// Claude's usage endpoint is read only on an explicit refresh.
+    SkippedUntilRefresh,
+    /// The provider has no usage read.
+    NotReported,
+    Disabled,
+    Unavailable(String),
+}
+
+/// Usage endpoints that do not follow from the backend endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageEndpoints {
+    pub grok_billing: String,
+    pub claude_usage: String,
+}
+
+impl Default for UsageEndpoints {
+    fn default() -> Self {
+        Self {
+            grok_billing: format!(
+                "{}/billing?format=credits",
+                crate::xai_grok_oauth::XAI_GROK_OAUTH_BASE_URL
+            ),
+            claude_usage: "https://api.anthropic.com/api/oauth/usage".to_string(),
+        }
+    }
+}
+
+/// Reads `backend`'s usage from its provider on demand, in the runtime.
+pub async fn read_account_usage(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    backend: &InferenceBackend,
+    trigger: UsageTrigger,
+    endpoints: &UsageEndpoints,
+    now: DateTime<Utc>,
+) -> Result<UsageRead> {
+    let _ = (node, agent_did, backend, trigger, endpoints, now);
+    Ok(UsageRead::Unavailable("inert".to_string()))
+}
+
 /// Stored usage of the account `backend` names for `agent_did`, with the
 /// sign-in's plan when the report has none.
 pub async fn usage_for_backend(

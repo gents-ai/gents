@@ -519,3 +519,677 @@ async fn store_never_writes_the_credential_row() {
     assert_eq!(rows(&node).await.len(), 1);
     assert_eq!(read().await.unwrap().expect("row"), before);
 }
+
+const CODEX_USAGE_BODY: &str = r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000,"reset_at":4102444800}}}"#;
+const OPENROUTER_KEY_BODY: &str =
+    r#"{"data":{"limit":20,"limit_remaining":15,"limit_reset":"daily"}}"#;
+
+/// A signed-in account of `provider` for `agent_did`, expiring at `expires_at`.
+async fn sign_in(
+    node: &Arc<EmbeddedNode>,
+    agent_did: &str,
+    provider: &str,
+    expires_at: DateTime<Utc>,
+    account_id: Option<&str>,
+) {
+    test_support::seed_credential(node, agent_did, provider, expires_at).await;
+    if let Some(account_id) = account_id {
+        let mut row = resolve_oauth_credential(
+            &local(node),
+            agent_did,
+            provider,
+            AccountPick::Reference(None),
+        )
+        .await
+        .unwrap()
+        .expect("row");
+        row.account_id = Some(account_id.to_string());
+        upsert_oauth_credential(node, &row).await.unwrap();
+    }
+}
+
+/// The server origin of a `one_shot_token_server` URL.
+fn origin(url: &str) -> String {
+    url.trim_end_matches("/v1/oauth/token").to_string()
+}
+
+fn first_line(request: &str) -> &str {
+    request.lines().next().unwrap_or_default()
+}
+
+fn api_key_backend(endpoint: String, backend_id: &str, auth: Value) -> InferenceBackend {
+    let mut backend = backend(A, "OpenRouter", backend_id, auth);
+    backend.endpoint = endpoint;
+    backend
+}
+
+fn openrouter_account(backend_id: &str) -> UsageAccount {
+    UsageAccount::Backend {
+        agent_did: A.to_string(),
+        provider: "OpenRouter".to_string(),
+        backend_id: backend_id.to_string(),
+    }
+}
+
+async fn read(
+    node: &Arc<EmbeddedNode>,
+    agent_did: &str,
+    backend: &InferenceBackend,
+    trigger: UsageTrigger,
+    endpoints: &UsageEndpoints,
+    now: DateTime<Utc>,
+) -> UsageRead {
+    read_account_usage(node.clone(), agent_did, backend, trigger, endpoints, now)
+        .await
+        .expect("read")
+}
+
+/// The server got no connection within a short wait.
+async fn never_called(handle: tokio::task::JoinHandle<String>) {
+    let mut handle = handle;
+    let waited = tokio::time::timeout(std::time::Duration::from_millis(300), &mut handle).await;
+    assert!(waited.is_err(), "the server was called: {waited:?}");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn read_codex_sends_account_header_to_the_backend_host_and_stores_endpoint_windows() {
+    let did = "did:key:z6MkUsageReadCodex";
+    let node = node().await;
+    sign_in(
+        &node,
+        did,
+        CODEX,
+        Utc::now() + Duration::hours(1),
+        Some("acct-ws"),
+    )
+    .await;
+    let now = Utc::now();
+    let mut codex = backend(
+        did,
+        "ChatGptCodex",
+        "backend-usage-a",
+        json!({ "kind": "principal_oauth" }),
+    );
+    for (step, suffix) in [(0, "/codex"), (1, "/codex/")] {
+        let (url, handle) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
+        codex.endpoint = format!("{}{suffix}", origin(&url));
+        let at = now + Duration::minutes(6 * step);
+        assert_eq!(
+            read(
+                &node,
+                did,
+                &codex,
+                UsageTrigger::Open,
+                &UsageEndpoints::default(),
+                at
+            )
+            .await,
+            UsageRead::Read,
+            "{suffix}"
+        );
+        let request = handle.await.unwrap();
+        assert_eq!(first_line(&request), "GET /wham/usage HTTP/1.1", "{suffix}");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("chatgpt-account-id: acct-ws"),
+            "{request}"
+        );
+    }
+
+    let stored = usage_for_backend(&local(&node), did, &codex)
+        .await
+        .unwrap()
+        .expect("stored");
+    let primary = &stored.report.windows[0];
+    assert_eq!(
+        (primary.label.as_str(), primary.used_pct),
+        ("primary", 12.0)
+    );
+    assert_eq!(primary.source, UsageSource::Endpoint);
+    assert!(stored.read_at.is_some());
+    assert_eq!(stored.read_error, None);
+}
+
+#[tokio::test]
+async fn read_grok_sends_identity_headers_and_credits_query() {
+    let did = "did:key:z6MkUsageReadGrok";
+    let node = node().await;
+    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
+    let (url, handle) = test_support::one_shot_token_server(
+        200,
+        r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#,
+    )
+    .await;
+    let endpoints = UsageEndpoints {
+        grok_billing: format!("{}/v1/billing?format=credits", origin(&url)),
+        ..UsageEndpoints::default()
+    };
+    let grok = backend(
+        did,
+        "XaiGrokOAuth",
+        "backend-usage-grok",
+        json!({ "kind": "principal_oauth" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            did,
+            &grok,
+            UsageTrigger::Open,
+            &endpoints,
+            Utc::now()
+        )
+        .await,
+        UsageRead::Read
+    );
+    let request = handle.await.unwrap();
+    assert_eq!(
+        first_line(&request),
+        "GET /v1/billing?format=credits HTTP/1.1"
+    );
+    let lower = request.to_ascii_lowercase();
+    assert!(
+        lower.contains("x-xai-token-auth: xai-grok-cli"),
+        "{request}"
+    );
+    assert!(
+        lower.contains("authorization: bearer access-test"),
+        "{request}"
+    );
+    assert_eq!(
+        UsageEndpoints::default().grok_billing,
+        "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+    );
+    let stored = usage_for_backend(&local(&node), did, &grok)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.report.windows[0].used_pct, 30.0);
+}
+
+#[tokio::test]
+async fn read_openrouter_uses_the_backend_key_and_endpoint() {
+    let node = node().await;
+    let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-or",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Open,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Read
+    );
+    let request = handle.await.unwrap();
+    assert_eq!(first_line(&request), "GET /api/v1/key HTTP/1.1");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer sk-or-test"),
+        "{request}"
+    );
+    let stored = usage_for_backend(&local(&node), A, &openrouter)
+        .await
+        .unwrap()
+        .unwrap();
+    let daily = &stored.report.windows[0];
+    assert_eq!((daily.label.as_str(), daily.used_pct), ("daily", 25.0));
+}
+
+#[tokio::test]
+async fn read_claude_waits_for_refresh() {
+    let did = "did:key:z6MkUsageReadClaudeOpen";
+    let node = node().await;
+    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
+    let (url, handle) = test_support::one_shot_token_server(200, "{}").await;
+    let endpoints = UsageEndpoints {
+        claude_usage: format!("{}/api/oauth/usage", origin(&url)),
+        ..UsageEndpoints::default()
+    };
+    let claude = backend(
+        did,
+        "ClaudeCliSubscription",
+        "backend-usage-claude",
+        json!({ "kind": "principal_oauth" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            did,
+            &claude,
+            UsageTrigger::Open,
+            &endpoints,
+            Utc::now()
+        )
+        .await,
+        UsageRead::SkippedUntilRefresh
+    );
+    never_called(handle).await;
+}
+
+#[tokio::test]
+async fn read_claude_on_refresh_sends_the_oauth_beta() {
+    let did = "did:key:z6MkUsageReadClaude";
+    let node = node().await;
+    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
+    let (url, handle) = test_support::one_shot_token_server(
+        200,
+        r#"{"five_hour":{"utilization":25.0,"resets_at":"2100-01-01T00:00:00Z"},"seven_day":null}"#,
+    )
+    .await;
+    let endpoints = UsageEndpoints {
+        claude_usage: format!("{}/api/oauth/usage", origin(&url)),
+        ..UsageEndpoints::default()
+    };
+    let claude = backend(
+        did,
+        "ClaudeCliSubscription",
+        "backend-usage-claude",
+        json!({ "kind": "principal_oauth" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            did,
+            &claude,
+            UsageTrigger::Refresh,
+            &endpoints,
+            Utc::now()
+        )
+        .await,
+        UsageRead::Read
+    );
+    let request = handle.await.unwrap();
+    assert_eq!(first_line(&request), "GET /api/oauth/usage HTTP/1.1");
+    assert!(
+        request.to_ascii_lowercase().contains(&format!(
+            "anthropic-beta: {}",
+            crate::claude_messages::OAUTH_BETA
+        )),
+        "{request}"
+    );
+    let stored = usage_for_backend(&local(&node), did, &claude)
+        .await
+        .unwrap()
+        .unwrap();
+    let five = &stored.report.windows[0];
+    assert_eq!((five.label.as_str(), five.used_pct), ("5h", 25.0));
+}
+
+#[tokio::test]
+async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
+    let did = "did:key:z6MkUsageReadRefresh";
+    let node = node().await;
+    sign_in(&node, did, CODEX, Utc::now() - Duration::hours(1), None).await;
+    let token =
+        test_support::unsigned_jwt(json!({ "exp": (Utc::now() + Duration::hours(1)).timestamp() }));
+    let token_body: &'static str = Box::leak(
+        json!({ "access_token": token, "refresh_token": "refresh-rotated", "expires_in": 900 })
+            .to_string()
+            .into_boxed_str(),
+    );
+    let _env = test_support::TOKEN_URL_ENV.lock().await;
+    let (token_url, token_handle) = test_support::one_shot_token_server(200, token_body).await;
+    std::env::set_var(REFRESH_ENV, &token_url);
+    let (usage_url, usage_handle) =
+        test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
+    let mut codex = backend(
+        did,
+        "ChatGptCodex",
+        "backend-usage-a",
+        json!({ "kind": "principal_oauth" }),
+    );
+    codex.endpoint = format!("{}/codex", origin(&usage_url));
+
+    let result = read(
+        &node,
+        did,
+        &codex,
+        UsageTrigger::Open,
+        &UsageEndpoints::default(),
+        Utc::now(),
+    )
+    .await;
+    std::env::remove_var(REFRESH_ENV);
+
+    assert_eq!(result, UsageRead::Read);
+    token_handle.await.unwrap();
+    let request = usage_handle.await.unwrap();
+    assert!(request.contains(&format!("Bearer {token}")), "{request}");
+    let stored = usage_for_backend(&local(&node), did, &codex)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
+}
+
+#[tokio::test]
+async fn read_api_key_without_a_source_is_not_reported() {
+    let node = node().await;
+    let openai = backend(
+        A,
+        "OpenAiCompatible",
+        "backend-usage-a",
+        json!({ "kind": "api_key", "key": "sk-TEST" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openai,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::NotReported
+    );
+}
+
+const REFRESH_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+
+#[tokio::test]
+async fn read_guard_recent_read_is_skipped() {
+    let node = node().await;
+    let now = Utc::now();
+    let (url, handle) = test_support::one_shot_token_server(429, "{}").await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-recent",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Open,
+            &UsageEndpoints::default(),
+            now
+        )
+        .await,
+        UsageRead::Unavailable("throttled".into())
+    );
+    handle.await.unwrap();
+    let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-recent",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            now + Duration::minutes(1)
+        )
+        .await,
+        UsageRead::SkippedRecent
+    );
+    never_called(handle).await;
+
+    // A recent read skips before any token is touched: an expired sign-in
+    // is not refreshed.
+    let did = "did:key:z6MkUsageReadRecent";
+    sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;
+    let account = UsageAccount::Credential {
+        agent_did: did.to_string(),
+        provider: CODEX.to_string(),
+        account_ref: None,
+    };
+    write(&node, &account, UsageReport::default(), Some((now, None)))
+        .await
+        .unwrap();
+    let _env = test_support::TOKEN_URL_ENV.lock().await;
+    let (token_url, token_handle) = test_support::one_shot_token_server(200, "{}").await;
+    std::env::set_var(REFRESH_ENV, &token_url);
+    let codex = backend(
+        did,
+        "ChatGptCodex",
+        "backend-usage-a",
+        json!({ "kind": "principal_oauth" }),
+    );
+    let result = read(
+        &node,
+        did,
+        &codex,
+        UsageTrigger::Open,
+        &UsageEndpoints::default(),
+        now + Duration::minutes(1),
+    )
+    .await;
+    std::env::remove_var(REFRESH_ENV);
+    assert_eq!(result, UsageRead::SkippedRecent);
+    never_called(token_handle).await;
+}
+
+#[tokio::test]
+async fn read_guard_throttled_is_unavailable_not_exhausted() {
+    let node = node().await;
+    let now = Utc::now();
+    record_usage(
+        &node,
+        &openrouter_account("backend-usage-throttled"),
+        report(vec![window("daily", 40.0, now - Duration::minutes(10))]),
+    )
+    .await
+    .unwrap();
+    let (url, handle) =
+        test_support::one_shot_token_server(429, r#"{"error":"rate limited"}"#).await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-throttled",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            now
+        )
+        .await,
+        UsageRead::Unavailable("throttled".into())
+    );
+    handle.await.unwrap();
+    let stored = load_usage(
+        &local(&node),
+        &openrouter_account("backend-usage-throttled"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(used(&stored, "daily"), Some(40.0));
+    assert_eq!(stored.report.windows.len(), 1);
+    assert_eq!(stored.read_error.as_deref(), Some("throttled"));
+}
+
+#[tokio::test]
+async fn read_guard_malformed_stores_nothing_invented() {
+    let node = node().await;
+    let (url, handle) = test_support::one_shot_token_server(200, r#"{"error":"x"}"#).await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-malformed",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Open,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Unavailable("malformed".into())
+    );
+    handle.await.unwrap();
+    let stored = load_usage(
+        &local(&node),
+        &openrouter_account("backend-usage-malformed"),
+    )
+    .await
+    .unwrap()
+    .expect("the read is recorded");
+    assert!(stored.report.is_empty(), "{stored:?}");
+    assert_eq!(stored.read_error.as_deref(), Some("malformed"));
+}
+
+#[tokio::test]
+async fn read_guard_refresh_failure_is_sign_in_expired() {
+    let did = "did:key:z6MkUsageReadRefreshFail";
+    let node = node().await;
+    sign_in(&node, did, CODEX, Utc::now() - Duration::hours(1), None).await;
+    let _env = test_support::TOKEN_URL_ENV.lock().await;
+    let (token_url, token_handle) =
+        test_support::one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
+    std::env::set_var(REFRESH_ENV, &token_url);
+    let (usage_url, usage_handle) =
+        test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
+    let mut codex = backend(
+        did,
+        "ChatGptCodex",
+        "backend-usage-a",
+        json!({ "kind": "principal_oauth" }),
+    );
+    codex.endpoint = format!("{}/codex", origin(&usage_url));
+
+    let result = read(
+        &node,
+        did,
+        &codex,
+        UsageTrigger::Refresh,
+        &UsageEndpoints::default(),
+        Utc::now(),
+    )
+    .await;
+    std::env::remove_var(REFRESH_ENV);
+
+    assert_eq!(result, UsageRead::Unavailable("sign-in expired".into()));
+    token_handle.await.unwrap();
+    never_called(usage_handle).await;
+    assert!(rows(&node).await.is_empty());
+}
+
+#[tokio::test]
+async fn read_guard_disabled_account_is_not_read() {
+    let node = node().await;
+    let mut openrouter = api_key_backend(
+        "http://127.0.0.1:9/api/v1".to_string(),
+        "backend-usage-disabled",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+    openrouter.enabled = false;
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Disabled
+    );
+
+    let mut row = credential(A, None, Some("acct-key-a"));
+    row.enabled = false;
+    seed(&node, &row).await;
+    let codex = backend(
+        A,
+        "ChatGptCodex",
+        "backend-usage-a",
+        json!({ "kind": "principal_oauth" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &codex,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Unavailable("no enabled account".into())
+    );
+    assert!(rows(&node).await.is_empty());
+}
+
+#[tokio::test]
+async fn read_guard_unreachable_is_unavailable() {
+    let node = node().await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let openrouter = api_key_backend(
+        format!("http://127.0.0.1:{port}/api/v1"),
+        "backend-usage-unreachable",
+        json!({ "kind": "api_key", "key": "sk-or-TEST" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Open,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Unavailable("unreachable".into())
+    );
+}
+
+#[tokio::test]
+async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
+    let node = node().await;
+    let (url, handle) = test_support::one_shot_token_server(200, OPENROUTER_KEY_BODY).await;
+    let openrouter = api_key_backend(
+        format!("{}/api/v1", origin(&url)),
+        "backend-usage-env",
+        json!({ "kind": "environment", "variable": "GENTS_USAGE_TEST_UNSET_KEY" }),
+    );
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Open,
+            &UsageEndpoints::default(),
+            Utc::now()
+        )
+        .await,
+        UsageRead::Unavailable("no key".into())
+    );
+    never_called(handle).await;
+}
