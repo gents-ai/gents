@@ -407,6 +407,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     Ok(())
 }
 
+/// One entry per account of a provider, for `checks.<provider>_auth.accounts`:
+/// its label, whether its token is usable now, and what to do when not. The
+/// check's own fields and gate stay on the provider's default account.
+fn accounts_json(
+    _accounts: &[&gents::oauth_credential::AccountSummary],
+    _agent_did: &str,
+    _provider: &str,
+    _classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+) -> Value {
+    json!([])
+}
+
 /// `checks.claude_auth.ok` reports token freshness, but a stale access token
 /// alone does not degrade the overall status: the prober counts such a
 /// credential healthy and the next request refreshes it. Only a credential
@@ -420,7 +432,71 @@ fn claude_auth_gate(backend_configured: bool, check: &Value) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::claude_auth_gate;
+    use super::{accounts_json, claude_auth_gate};
+    use gents::oauth_credential::AccountSummary;
+
+    fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!("claude-subscription:did:key:z6MkT:{label}"),
+            provider: "claude-subscription".into(),
+            account_ref: Some(label.into()),
+            label: label.into(),
+            identity: Some("identity-private".into()),
+            plan: None,
+            enabled,
+            default: false,
+            access_token_expires_at: chrono::Utc::now()
+                + chrono::Duration::minutes(expires_in_minutes),
+        }
+    }
+
+    fn claude_accounts(accounts: &[AccountSummary]) -> serde_json::Value {
+        accounts_json(
+            &accounts.iter().collect::<Vec<_>>(),
+            "did:key:z6MkT",
+            "claude-subscription",
+            gents::claude_oauth::classify_claude_auth_error,
+        )
+    }
+
+    #[test]
+    fn each_account_reports_its_own_state() {
+        let accounts = [
+            account("Claude", true, 60),
+            account("Work", false, 60),
+            account("Claude 3", true, -1),
+        ];
+        let json = claude_accounts(&accounts);
+        let entries = json.as_array().expect("an array");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["label"], "Claude");
+        assert_eq!(entries[0]["ok"], true);
+        assert_eq!(entries[1]["label"], "Work");
+        assert_eq!(entries[1]["ok"], false);
+        assert!(entries[1]["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("claude-login"));
+        assert_eq!(entries[2]["ok"], false);
+        assert!(entries[2]["guidance"].as_str().unwrap().contains("expired"));
+        assert!(entries
+            .iter()
+            .all(|entry| entry.get("expires_at").is_some()));
+        let text = json.to_string();
+        assert!(
+            !text.contains("identity-private") && !text.contains("SECRET"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_stale_standby_never_degrades_status() {
+        let mut check = json!({"ok": true, "credential_id": "claude-subscription:did:key:z6MkT"});
+        check["accounts"] =
+            claude_accounts(&[account("Claude", true, 60), account("Old", true, -1)]);
+        assert!(claude_auth_gate(true, &check));
+        assert_eq!(check["ok"], true);
+    }
 
     #[test]
     fn claude_auth_degrades_status_only_when_no_credential_can_be_read() {
