@@ -1150,6 +1150,7 @@ async fn persona_preview(
                     txn,
                     agent_did,
                     current_behavior,
+                    clone_from.as_deref(),
                     next_profile,
                 ))
             },
@@ -1232,10 +1233,13 @@ async fn persona_preview(
 }
 
 /// Create and clone have no current backend; edit's is the target behavior's.
+/// A clone also keeps its source's context, which moves its compaction from
+/// its own profile to whatever that context compacts on.
 async fn guard_persona_profile_choice(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
     current_behavior: Option<&str>,
+    clone_from: Option<&str>,
     next_profile: Option<&str>,
 ) -> Result<()> {
     let Some(next_profile) = next_profile else {
@@ -1259,7 +1263,36 @@ async fn guard_persona_profile_choice(
     };
     let next_backend = ops::profile_backend_id(txn, agent_did, next_profile).await?;
     ops::guard_backend_choice_in_txn(txn, agent_did, current_backend.as_deref(), &next_backend)
-        .await
+        .await?;
+    let source = match clone_from {
+        Some(id) => {
+            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, id).await?
+        }
+        None => None,
+    };
+    let Some((_, source)) = source else {
+        return Ok(());
+    };
+    let own =
+        serde_json::Map::from_iter([("inference_profile_id".to_owned(), json!(next_profile))]);
+    let mut cloned = own.clone();
+    if let Some(context) = source.get("context_id") {
+        cloned.insert("context_id".to_owned(), context.clone());
+    }
+    let anchor = ops::BehaviorAnchor {
+        doc: source,
+        context: serde_json::Map::new(),
+        profile: serde_json::Map::new(),
+        execution: serde_json::Map::new(),
+    };
+    ops::guard_compaction_choice_in_txn(
+        txn,
+        SelfConfigTarget::AgentBehavior,
+        &anchor,
+        &own,
+        &cloned,
+    )
+    .await
 }
 
 async fn persona_mutate(
@@ -1361,9 +1394,16 @@ async fn persona_mutate(
         |txn| {
             let mutation = &mutation;
             let next_profile = record.profile_id.as_deref();
+            let clone_from = record.clone_from.as_deref();
             Box::pin(async move {
-                guard_persona_profile_choice(txn, agent_did, current_behavior, next_profile)
-                    .await?;
+                guard_persona_profile_choice(
+                    txn,
+                    agent_did,
+                    current_behavior,
+                    clone_from,
+                    next_profile,
+                )
+                .await?;
                 txn.execute_local_response(mutation).await.map(|_| ())
             })
         },
