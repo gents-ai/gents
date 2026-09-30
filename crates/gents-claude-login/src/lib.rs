@@ -377,24 +377,23 @@ struct TokenResponse {
     organization: Option<serde_json::Value>,
 }
 
-fn account_label(account: &serde_json::Value) -> Option<String> {
-    ["email_address", "uuid"].into_iter().find_map(|key| {
-        account
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    })
-}
-
-fn uuid_of(block: Option<&serde_json::Value>) -> Option<String> {
-    block?
-        .get("uuid")
+fn text_field(block: &serde_json::Value, key: &str) -> Option<String> {
+    block
+        .get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn account_label(account: &serde_json::Value) -> Option<String> {
+    ["email_address", "uuid"]
+        .into_iter()
+        .find_map(|key| text_field(account, key))
+}
+
+fn uuid_of(block: Option<&serde_json::Value>) -> Option<String> {
+    text_field(block?, "uuid")
 }
 
 pub(crate) async fn exchange_code(
