@@ -296,16 +296,28 @@ pub enum AccountPick<'a> {
     Reference(Option<&'a str>),
 }
 
-/// The single credential pick: the enabled row of `agent_did` and `provider`
-/// that `pick` names. Every reader that chooses a row goes through here.
+/// The fixed account order: earliest `connected_at` first, rows without one
+/// (stored before the field existed) before any time, ties by `credential_id`.
+fn resolver_order(a: &OAuthCredential, b: &OAuthCredential) -> std::cmp::Ordering {
+    (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
+}
+
+/// The single credential pick: the first enabled row of `agent_did` and
+/// `provider` in [`resolver_order`] that `pick` names. Every reader that
+/// chooses a row goes through here.
 pub fn pick_oauth_credential<'c>(
     rows: impl IntoIterator<Item = &'c OAuthCredential>,
     agent_did: &str,
     provider: &str,
-    _pick: AccountPick<'_>,
+    pick: AccountPick<'_>,
 ) -> Option<&'c OAuthCredential> {
     rows.into_iter()
-        .find(|row| row.agent_did == agent_did && row.provider == provider && row.enabled)
+        .filter(|row| row.agent_did == agent_did && row.provider == provider && row.enabled)
+        .filter(|row| match pick {
+            AccountPick::ProviderDefault => true,
+            AccountPick::Reference(account_ref) => row.account_ref.as_deref() == account_ref,
+        })
+        .min_by(|a, b| resolver_order(a, b))
 }
 
 fn enabled_oauth_credentials_query(agent_did: &str, provider: &str) -> String {
