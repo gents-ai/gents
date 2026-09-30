@@ -2377,7 +2377,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                     "display_name": "string|null",
                     "description": "string|null",
                     "context_id": "existing same-principal AgentContext ID|null",
-                    "inference_profile_id": "existing same-principal InferenceProfile ID (required)",
+                    "inference_profile_id": "existing same-principal InferenceProfile ID (required); never another account of the current provider",
                     "enabled": "boolean; default true",
                     "tags": "array<string>; default [] (UI/discovery labels only)",
                 }),
@@ -2413,7 +2413,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceProfile,
                 json!({
-                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","backend_id":"existing same-principal backend ID; never another account of the current provider","model_name":"string","reasoning_effort":"none|minimal|low|medium|high|xhigh|max|ultra|null","context_window":"positive integer <= the model's advertised maximum context window, when the backend advertises one|null","max_output_tokens":"positive integer|null","sampling_id":"existing same-principal sampling ID|null","execution_id":"existing same-principal execution ID|null","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(
@@ -2437,7 +2437,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::Compaction,
                 json!({
-                    "display_name":"string|null","strategy":"StripToolResults|StripThenSummarize|null; absent uses StripThenSummarize","threshold":"number 0..1|null; default 0.75","keep_recent_tokens":"non-negative integer|null","tool_result_max_chars":"positive integer|null","summary_max_output_tokens":"positive integer|null","summary_file_list_max":"non-negative integer|null","inference_profile_id":"existing same-principal profile ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","strategy":"StripToolResults|StripThenSummarize|null; absent uses StripThenSummarize","threshold":"number 0..1|null; default 0.75","keep_recent_tokens":"non-negative integer|null","tool_result_max_chars":"positive integer|null","summary_max_output_tokens":"positive integer|null","summary_file_list_max":"non-negative integer|null","inference_profile_id":"existing same-principal profile ID|null; never another account of the current provider","tags":"array<string>; default []"
                 }),
             ),
         ],

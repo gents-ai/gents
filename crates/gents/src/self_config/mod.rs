@@ -1294,13 +1294,52 @@ async fn persona_mutate(
     let mutation = local_persona_request_mutation(&record);
     let actor = ::identity::Did::new(identity.did().to_owned())
         .context("self-config principal DID is not ACP-addressable")?;
+    // Create and clone have no current backend; edit's is the target behavior's.
+    let current_behavior = (op == "edit")
+        .then_some(record.behavior_id.as_deref())
+        .flatten();
     crate::config_client::ConfigAccess::transact_local(
         node,
         Some(actor),
         "self_config.create_persona_request",
         |txn| {
             let mutation = &mutation;
-            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+            let next_profile = record.profile_id.as_deref();
+            Box::pin(async move {
+                if let Some(next_profile) = next_profile {
+                    let current_profile = match current_behavior {
+                        Some(behavior_id) => ops::read_owned_doc(
+                            txn,
+                            SelfConfigTarget::AgentBehavior,
+                            agent_did,
+                            behavior_id,
+                        )
+                        .await?
+                        .and_then(|(_, doc)| {
+                            doc.get("inference_profile_id")?
+                                .as_str()
+                                .map(ToOwned::to_owned)
+                        }),
+                        None => None,
+                    };
+                    let current_backend = match current_profile {
+                        Some(profile) => {
+                            Some(ops::profile_backend_id(txn, agent_did, &profile).await?)
+                        }
+                        None => None,
+                    };
+                    let next_backend =
+                        ops::profile_backend_id(txn, agent_did, next_profile).await?;
+                    ops::guard_backend_choice_in_txn(
+                        txn,
+                        agent_did,
+                        current_backend.as_deref(),
+                        &next_backend,
+                    )
+                    .await?;
+                }
+                txn.execute_local_response(mutation).await.map(|_| ())
+            })
         },
     )
     .await?;
@@ -1934,6 +1973,30 @@ impl PackInstaller {
         Ok((rollback, installed))
     }
 
+    /// Pack slots have no current backend: each bound profile must be
+    /// account-free or on its provider's default account.
+    async fn fence_bindings(
+        &self,
+        bindings: &crate::pack::PackInferenceBindings,
+    ) -> anyhow::Result<()> {
+        let owner = self.core.agent_did();
+        crate::config_client::ConfigAccess::transact_local(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.pack_profile_choice",
+            |txn| {
+                Box::pin(async move {
+                    for profile in bindings.values() {
+                        let backend = ops::profile_backend_id(txn, owner, profile).await?;
+                        ops::guard_backend_choice_in_txn(txn, owner, None, &backend).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
         let distribution = self.resolve(operation, &args).await?;
         if let Some(expected) = args.expected_digest.as_deref() {
@@ -1986,6 +2049,7 @@ impl PackInstaller {
             &args.inference_slots,
         )
         .await?;
+        self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
             agent_did: self.core.agent_did().to_owned(),
         };
@@ -2080,6 +2144,7 @@ impl PackInstaller {
             &args.inference_slots,
         )
         .await?;
+        self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
             agent_did: self.core.agent_did().to_owned(),
         };
