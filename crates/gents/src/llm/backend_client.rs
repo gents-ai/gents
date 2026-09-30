@@ -144,6 +144,17 @@ pub(crate) async fn build_backend_client(
     api_key: &str,
     build_timeout: Duration,
 ) -> Result<BackendClient> {
+    // Removed by the #2117 resolver PR: until then only the original account
+    // resolves, and it must never stand in for a named one.
+    if let crate::document_config::BackendAuth::PrincipalOAuth {
+        account_ref: Some(account_ref),
+    } = &behavior.backend_auth
+    {
+        anyhow::bail!(
+            "backend account {account_ref:?} for behavior {}: account references require the multi-account resolver",
+            behavior.behavior_id
+        );
+    }
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
             let build_context = format!(
