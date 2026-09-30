@@ -217,6 +217,7 @@ pub(crate) async fn build_backend_client(
                 crate::chatgpt_codex::build_responses_client(
                     node,
                     behavior.agent_did(),
+                    behavior.backend_auth.oauth_account_ref(),
                     &behavior.backend_endpoint,
                 ),
             )
@@ -251,6 +252,7 @@ pub(crate) async fn build_backend_client(
                     crate::xai_grok_oauth::build_chat_completions_client(
                         node,
                         behavior.agent_did(),
+                        behavior.backend_auth.oauth_account_ref(),
                         &behavior.backend_endpoint,
                     ),
                 )
@@ -265,6 +267,7 @@ pub(crate) async fn build_backend_client(
                     crate::xai_grok_oauth::build_responses_client(
                         node,
                         behavior.agent_did(),
+                        behavior.backend_auth.oauth_account_ref(),
                         &behavior.backend_endpoint,
                     ),
                 )
@@ -281,6 +284,7 @@ pub(crate) async fn build_backend_client(
                 crate::claude_subscription::ClaudeSubscriptionClient::build(
                     node,
                     behavior.agent_did(),
+                    behavior.backend_auth.oauth_account_ref(),
                 ),
             )
             .await

@@ -301,6 +301,7 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<
     rig::providers::openai::Client<
@@ -319,6 +320,7 @@ pub async fn build_responses_client(
         provider,
         OAuthRefreshKind::ChatGpt,
         CHATGPT_OAUTH_PRODUCT,
+        crate::oauth_credential::AccountPick::Reference(account_ref),
     )
     .await?;
     let headers =

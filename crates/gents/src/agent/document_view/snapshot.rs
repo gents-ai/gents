@@ -404,7 +404,10 @@ fn ensure_inference_available(
                 ));
             }
         };
-        if !view.has_enabled_oauth_credential(provider) {
+        if !view.resolves_oauth_credential(
+            provider,
+            crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
+        ) {
             return Err(BehaviorResolutionError::new(
                 BehaviorReadinessUnavailableReason::CredentialsRequired,
                 anyhow!(

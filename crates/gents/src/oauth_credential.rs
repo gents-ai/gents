@@ -305,25 +305,62 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     )
 }
 
-pub async fn lookup_oauth_credential(
-    node: &EmbeddedNode,
+/// Which of a provider's accounts a caller needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountPick<'a> {
+    /// The provider's default account, for callers with no backend.
+    ProviderDefault,
+    /// The account a backend names; `None` is the provider's original account
+    /// (the row with no `account_ref`), never another enabled account.
+    Reference(Option<&'a str>),
+}
+
+/// The single credential pick: the enabled row of `agent_did` and `provider`
+/// that `pick` names. Every reader that chooses a row goes through here.
+pub fn pick_oauth_credential<'c>(
+    rows: impl IntoIterator<Item = &'c OAuthCredential>,
     agent_did: &str,
     provider: &str,
+    _pick: AccountPick<'_>,
+) -> Option<&'c OAuthCredential> {
+    rows.into_iter()
+        .find(|row| row.agent_did == agent_did && row.provider == provider && row.enabled)
+}
+
+fn enabled_oauth_credentials_query(agent_did: &str, provider: &str) -> String {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let provider = crate::graphql::escape_graphql_string(provider);
+    format!(
+        r#"query {{
+            OAuthCredential(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    provider: {{ _eq: "{provider}" }},
+                    enabled: {{ _eq: true }}
+                }}
+            ) {{
+                {OAUTH_CREDENTIAL_FIELDS}
+            }}
+        }}"#
+    )
+}
+
+/// Read `agent_did`'s enabled rows for `provider` through `access` and pick one
+/// with [`pick_oauth_credential`].
+pub async fn resolve_oauth_credential(
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    provider: &str,
+    pick: AccountPick<'_>,
 ) -> Result<Option<OAuthCredential>> {
-    let response = node
-        .execute(&oauth_credential_query(agent_did, provider))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
-    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    oauth_credentials_from_response(&response)
+    let response = access
+        .execute(&enabled_oauth_credentials_query(agent_did, provider))
+        .await
+        .context("querying OAuthCredential")?;
+    let rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .next()
-        .transpose()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(pick_oauth_credential(&rows, agent_did, provider, pick).cloned())
 }
 
 pub async fn lookup_oauth_credential_by_id(

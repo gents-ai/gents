@@ -58,10 +58,19 @@ pub(crate) enum ControlUpdateOutcome {
 }
 
 impl DocumentRuntimeView {
-    pub(super) fn has_enabled_oauth_credential(&self, provider: &str) -> bool {
-        self.oauth_credentials
-            .values()
-            .any(|record| record.value.provider == provider && record.value.enabled)
+    /// Ready means the resolver returns a row for this principal.
+    pub(super) fn resolves_oauth_credential(
+        &self,
+        provider: &str,
+        pick: crate::oauth_credential::AccountPick<'_>,
+    ) -> bool {
+        crate::oauth_credential::pick_oauth_credential(
+            self.oauth_credentials.values().map(|record| &record.value),
+            &self.principal.value.agent_did,
+            provider,
+            pick,
+        )
+        .is_some()
     }
 
     pub(crate) fn has_unresolved_behavior_references(&self) -> bool {

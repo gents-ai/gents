@@ -255,6 +255,7 @@ async fn oauth_credential_for_probe(
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
+        crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
     )
     .await
     .with_context(|| {
