@@ -735,6 +735,21 @@ pub fn apply_refreshed_tokens(credential: &mut OAuthCredential, refreshed: Refre
     credential.last_refresh = Some(Utc::now());
 }
 
+/// The provider account key `credential`'s own tokens show, by the bearer's
+/// refresh kind (a provider name can be anything). Claude access tokens carry
+/// no identity, so Claude rows fill at the next sign-in.
+fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) -> Option<String> {
+    match kind {
+        OAuthRefreshKind::ChatGpt => crate::chatgpt_oauth_refresh::chatgpt_account_key(
+            &credential.access_token,
+            credential.id_token.as_deref(),
+            credential.account_id.as_deref(),
+        ),
+        OAuthRefreshKind::Xai => crate::xai_oauth_login::xai_account_key(&credential.access_token),
+        OAuthRefreshKind::Claude => None,
+    }
+}
+
 pub(crate) fn get_or_insert_arc<T>(
     registry: &std::sync::Mutex<std::collections::HashMap<String, Arc<T>>>,
     key: &str,
@@ -979,6 +994,12 @@ impl BearerSource for DbCredentialBearer {
         };
         *last_failure = None;
         apply_refreshed_tokens(&mut credential, refreshed);
+        // The refresh owner is the single writer of existing rows: an empty key
+        // is filled here, from the tokens persisted beside it, and never
+        // recomputed once present.
+        if credential.provider_account_key.is_none() {
+            credential.provider_account_key = provider_account_key(self.refresh_kind, &credential);
+        }
 
         self.cache_credential(&credential).await;
         self.force_refresh.store(false, Ordering::SeqCst);
