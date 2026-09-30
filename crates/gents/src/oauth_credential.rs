@@ -628,6 +628,81 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// The backend a provider's added account runs on: the provider's preset
+/// connection, named by the account's label, referencing the account.
+fn account_backend(
+    credential: &OAuthCredential,
+    account_ref: &str,
+) -> Result<crate::InferenceBackend> {
+    use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
+    let (provider, auth) = match credential.provider.as_str() {
+        crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
+        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
+        crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
+        other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
+    };
+    let spec = crate::inference_setup::connection_spec(provider, auth, "")?;
+    Ok(crate::InferenceBackend {
+        agent_did: credential.agent_did.clone(),
+        backend_id: format!("{}-{account_ref}", credential.provider),
+        name: effective_account_label(credential),
+        provider_kind: spec.provider_kind,
+        openai_wire_api: spec.openai_wire_api,
+        endpoint: spec.endpoint,
+        auth: crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some(account_ref.to_owned()),
+        },
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: None,
+        max_queue_depth: None,
+        enabled: true,
+        tags: Vec::new(),
+    })
+}
+
+async fn write_account_backend(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    backend: &crate::InferenceBackend,
+) -> Result<()> {
+    crate::config_client::write_inference_backend_in_txn(txn, backend)
+        .await
+        .context(
+            "the account's backend could not be stored, so the sign-in was not saved; \
+             fix the agent's configuration and sign in again",
+        )
+}
+
+/// Give an added account its backend when none references it (a lost one
+/// comes back), and carry a label change to a backend still named by the
+/// old label.
+async fn sync_account_backend(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    credential: &OAuthCredential,
+    old_label: Option<&str>,
+) -> Result<()> {
+    let Some(account_ref) = credential.account_ref.as_deref() else {
+        return Ok(());
+    };
+    let serving: Vec<_> =
+        crate::config_client::list_inference_backends_in_txn(txn, &credential.agent_did)
+            .await?
+            .into_iter()
+            .filter(|backend| backend.auth.oauth_account_ref() == Some(account_ref))
+            .collect();
+    if serving.is_empty() {
+        return write_account_backend(txn, &account_backend(credential, account_ref)?).await;
+    }
+    let label = effective_account_label(credential);
+    for mut backend in serving {
+        if old_label.is_some_and(|old| old == backend.name && old != label) {
+            backend.name = label.clone();
+            write_account_backend(txn, &backend).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Longest account label, in characters.
 const MAX_ACCOUNT_LABEL_CHARS: usize = 64;
 
@@ -777,6 +852,7 @@ async fn store_sign_in_in_txn(
         credential.connected_at = row.connected_at;
         credential.label = row.label.clone();
         credential.enabled = true;
+        let old_label = effective_account_label(row);
         let mut set_once = SET_ONCE_FIELDS.to_vec();
         if let Some(label) = label {
             let others: Vec<_> = rows
@@ -802,6 +878,7 @@ async fn store_sign_in_in_txn(
             render_oauth_input(&fields, &set_once),
         );
         txn.execute(&mutation).await?;
+        sync_account_backend(txn, &credential, Some(&old_label)).await?;
         return Ok(SignIn {
             doc_id,
             credential,
@@ -845,6 +922,7 @@ async fn store_sign_in_in_txn(
     let response = txn.execute(&mutation).await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
     credential.doc_id = Some(doc_id.clone());
+    sync_account_backend(txn, &credential, None).await?;
     Ok(SignIn {
         doc_id,
         credential,
