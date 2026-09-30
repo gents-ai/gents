@@ -4587,8 +4587,10 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     core.apply(backend_request(endpoint)).await.unwrap();
 }
 
-/// Two ChatGPT accounts and Grok's original account; the behavior's profile
-/// is on the original ChatGPT account. No-lockout stays off.
+/// Two ChatGPT accounts and Grok's original account, a profile on each
+/// (`p-original`, `p-chat-b`, `p-grok`); the behavior's own profile is on the
+/// original ChatGPT account and its context has an unset-profile compaction.
+/// No-lockout stays off.
 async fn account_choice_core(behavior: &str) -> (String, SelfConfigCore) {
     let node = build_persona_node().await;
     let owner = persona_identity(behavior).did().to_string();
@@ -4620,14 +4622,51 @@ async fn account_choice_core(behavior: &str) -> (String, SelfConfigCore) {
             .await
             .unwrap();
     }
-    let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
-        "agent_did": owner, "profile_id": format!("{behavior}:inference"),
-        "backend_id": "chat-original", "model_name": "test-model",
-    }))
-    .unwrap();
-    crate::config_client::write_inference_profile_document(&access, &profile)
-        .await
+    for (id, backend) in [
+        (format!("{behavior}:inference"), "chat-original"),
+        ("p-original".into(), "chat-original"),
+        ("p-chat-b".into(), "chat-b"),
+        ("p-grok".into(), "grok-original"),
+    ] {
+        let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+            "agent_did": owner, "profile_id": id, "backend_id": backend,
+            "model_name": "test-model",
+        }))
         .unwrap();
+        crate::config_client::write_inference_profile_document(&access, &profile)
+            .await
+            .unwrap();
+    }
+    let compaction = format!("{behavior}:compaction");
+    let plan = crate::config_client::DesiredStateApplyPlan::new(
+        [
+            (
+                crate::Collection::Compaction,
+                json!({"agent_did": owner, "compaction_id": compaction}),
+            ),
+            (
+                crate::Collection::AgentContext,
+                json!({"agent_did": owner, "context_id": format!("{behavior}:context"),
+                    "tools_id": format!("{behavior}:tools"), "compaction_id": compaction}),
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(collection, value)| crate::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            },
+        )
+        .collect(),
+    )
+    .unwrap();
+    crate::config_client::ConfigAccess::transact_local(&node, None, "test.compaction", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
     let core = SelfConfigCore::new(node, owner.clone(), behavior.into()).unwrap();
     (owner, core)
 }
@@ -4662,6 +4701,35 @@ async fn profile_self_config_cannot_pick_another_account() {
         profile_create_request(owner.clone(), "p-new".into(), patch)
     })
     .await;
+}
+
+#[tokio::test]
+async fn behavior_profile_pick_cannot_switch_account() {
+    let (_, core) = account_choice_core("behavior-pick").await;
+    let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
+    assert_account_choice_refused(&core, || behavior_request(&core, to("p-chat-b"))).await;
+    core.preview(behavior_request(&core, to("p-grok")))
+        .await
+        .unwrap();
+    core.apply(behavior_request(&core, to("p-grok")))
+        .await
+        .unwrap();
+}
+
+/// An unset compaction profile reuses the behavior's, so that is its current.
+#[tokio::test]
+async fn compaction_profile_pick_cannot_switch_account() {
+    let (_, core) = account_choice_core("compaction-pick").await;
+    let to = |profile: &str| {
+        profile_target_request(
+            Some("compaction"),
+            vec![("inference_profile_id".into(), Some(json!(profile)))],
+        )
+        .unwrap()
+    };
+    assert_account_choice_refused(&core, || to("p-chat-b")).await;
+    core.preview(to("p-grok")).await.unwrap();
+    core.apply(to("p-grok")).await.unwrap();
 }
 
 #[tokio::test]

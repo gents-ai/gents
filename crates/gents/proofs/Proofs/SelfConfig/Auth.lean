@@ -116,6 +116,24 @@ theorem profile_choice_lands_on_current_or_default (dflt : String → Option Str
     · subst hk; simp [backendChoiceAllowed] at h; exact .inl (by rw [h])
     · simp [backendChoiceAllowed, hk] at h; exact .inr h
 
+/-- A selection that names a profile (behavior and compaction
+`inference_profile_id`, persona `--profile`, pack inference slots) is the
+backend choice between the backends the two profiles reach; `current` is
+absent on create, and an unknown next profile is refused. -/
+def profileChoiceAllowed (backendOf : String → Option (String × BackendAuth))
+    (dflt : String → Option String) (current : Option String) (next : String) : Bool :=
+  match backendOf next with
+  | some n => backendChoiceAllowed dflt (current.bind backendOf) n
+  | none => false
+
+theorem profile_selection_is_backend_choice
+    (backendOf : String → Option (String × BackendAuth)) (dflt : String → Option String)
+    (current : Option String) (next : String) (n : String × BackendAuth)
+    (h : backendOf next = some n) :
+    profileChoiceAllowed backendOf dflt current next =
+      backendChoiceAllowed dflt (current.bind backendOf) n := by
+  simp [profileChoiceAllowed, h]
+
 /-- Schema publication is additive, separate from document transactions. The
 shared schema owner supplies compatibility and exact-artifact validation;
 document ACP is unchanged by publishing a schema. -/
