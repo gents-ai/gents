@@ -130,6 +130,21 @@ pub(crate) fn claude_subscription_replay_issuer(
     )
 }
 
+/// The network terminal of an OpenAI-compatible backend, recording usage
+/// headers for the backend when it has an id.
+fn api_key_http(
+    node: &Arc<EmbeddedNode>,
+    behavior: &ResolvedBehavior,
+) -> crate::provider_http::ProviderHttpClient {
+    match crate::usage_observation::UsageAccount::for_behavior(behavior) {
+        Some(account) => crate::provider_http::ProviderHttpClient::with_usage(
+            Default::default(),
+            crate::usage_observation::UsageReporter::new(node.clone(), account),
+        ),
+        None => crate::provider_http::ProviderHttpClient::default(),
+    }
+}
+
 /// Build the provider completion client for `behavior`'s
 /// `backend_provider_kind` (and, where the provider has one, its configured
 /// `openai_wire_api`).
@@ -155,9 +170,9 @@ pub(crate) async fn build_backend_client(
                     api_key,
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                            crate::provider_http::ProviderHttpClient,
-                        >::default(),
+                        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                            api_key_http(&node, behavior),
+                        ),
                     ),
                 )
                 .with_context(|| build_context.clone())?;
@@ -168,9 +183,9 @@ pub(crate) async fn build_backend_client(
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::inference_http::ResponsesNormalizingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                                crate::provider_http::ProviderHttpClient,
-                            >::default(),
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                                api_key_http(&node, behavior),
+                            ),
                         ),
                     ),
                     Default::default(),
@@ -688,11 +703,15 @@ mod tests {
         match client {
             BackendClient::OpenAiChatCompletions(client) => {
                 let model = client.completion_model("model-a");
-                let _ = model.stream(model.completion_request("hi").build()).await;
+                if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
+                    let _ = futures::StreamExt::next(&mut stream).await;
+                }
             }
             BackendClient::OpenAiResponses(client) => {
                 let model = client.completion_model("model-a");
-                let _ = model.stream(model.completion_request("hi").build()).await;
+                if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
+                    let _ = futures::StreamExt::next(&mut stream).await;
+                }
             }
             _ => panic!("expected an OpenAI-compatible client"),
         }

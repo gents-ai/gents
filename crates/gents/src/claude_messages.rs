@@ -12,8 +12,9 @@ use std::collections::HashSet;
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
 #[cfg(test)]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -909,7 +910,6 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
 > {
-    let _ = usage;
     #[cfg(test)]
     let fixture = take_messages_sse_fixture();
     #[cfg(not(test))]
@@ -954,7 +954,12 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
 
     let client = RenderedRequestCapturingHttpClient::new(MessagesTransport {
         fixture,
-        live: crate::provider_http::ProviderHttpClient::new(http.clone()),
+        live: match usage {
+            Some(usage) => {
+                crate::provider_http::ProviderHttpClient::with_usage(http.clone(), usage)
+            }
+            None => crate::provider_http::ProviderHttpClient::new(http.clone()),
+        },
     });
     let response = match client.send_streaming(http_request).await {
         Ok(response) => response,

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
-use crate::usage_observation::UsageReporter;
+use crate::usage_observation::{UsageAccount, UsageReporter};
 
 /// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
@@ -67,8 +67,8 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         agent_did: &str,
         account_ref: Option<&str>,
     ) -> Result<Self> {
-        let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
-            node,
+        let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+            node.clone(),
             agent_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
@@ -79,7 +79,10 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         Ok(Self {
             bearer,
             http: ReqwestClient::new(),
-            usage: None,
+            usage: Some(UsageReporter::new(
+                node,
+                UsageAccount::for_credential(&credential),
+            )),
         })
     }
 }

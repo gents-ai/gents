@@ -19,6 +19,7 @@ use rig::http_client::HeaderMap;
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
+use crate::config::ResolvedBehavior;
 use crate::config_client::ConfigAccess;
 use crate::document_config::InferenceBackend;
 use crate::graphql::escape_graphql_string;
@@ -48,6 +49,15 @@ impl UsageAccount {
             provider: row.provider.clone(),
             account_ref: row.account_ref.clone(),
         }
+    }
+
+    /// An API-key backend's account; `None` without a backend id.
+    pub fn for_behavior(behavior: &ResolvedBehavior) -> Option<Self> {
+        Some(Self::Backend {
+            agent_did: behavior.agent_did().to_string(),
+            provider: behavior.backend_provider_kind.as_str().to_string(),
+            backend_id: behavior.backend_id.clone()?,
+        })
     }
 
     /// The account `backend` names for `agent_did` (account = backend).
@@ -323,7 +333,7 @@ async fn write(
 
 /// Records the usage headers of one provider client's responses for the
 /// account that client serves.
-pub(crate) struct UsageReporter {
+pub struct UsageReporter {
     node: Arc<EmbeddedNode>,
     pub(crate) account: UsageAccount,
 }
