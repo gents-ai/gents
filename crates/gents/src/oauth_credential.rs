@@ -628,6 +628,54 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// Longest account label, in characters.
+const MAX_ACCOUNT_LABEL_CHARS: usize = 64;
+
+/// A label as stored: trimmed, 1 to 64 characters, no control characters.
+pub fn validate_account_label(label: &str) -> Result<String> {
+    let label = label.trim();
+    anyhow::ensure!(!label.is_empty(), "an account label cannot be empty");
+    anyhow::ensure!(
+        label.chars().count() <= MAX_ACCOUNT_LABEL_CHARS,
+        "an account label is at most {MAX_ACCOUNT_LABEL_CHARS} characters"
+    );
+    anyhow::ensure!(
+        !label.chars().any(char::is_control),
+        "an account label cannot contain control characters"
+    );
+    Ok(label.to_owned())
+}
+
+/// The name an account shows: its label, else its product's name.
+pub fn effective_account_label(credential: &OAuthCredential) -> String {
+    credential.label.clone().unwrap_or_else(|| {
+        sign_in_product(&credential.provider)
+            .map_or(credential.provider.as_str(), |product| product.name)
+            .to_owned()
+    })
+}
+
+/// `label` unless another of the provider's accounts shows it.
+fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
+    anyhow::ensure!(
+        !others
+            .iter()
+            .any(|row| effective_account_label(row) == label),
+        "the label {label:?} is already used by another account of this provider"
+    );
+    Ok(())
+}
+
+/// The first of `Name`, `Name 2`, `Name 3`, ... no account shows.
+fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
+    let name = sign_in_product(provider).map_or(provider, |product| product.name);
+    let taken: std::collections::HashSet<_> = rows.iter().map(effective_account_label).collect();
+    std::iter::once(name.to_owned())
+        .chain((2..).map(|n| format!("{name} {n}")))
+        .find(|label| !taken.contains(label))
+        .expect("an unbounded sequence has a free label")
+}
+
 /// Store a sign-in: refresh the stored account it shows, or add it.
 ///
 /// A refresh keeps the row's id, reference, connection time and label and
@@ -637,8 +685,9 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
 pub async fn store_sign_in(
     access: &crate::config_client::ConfigAccess,
     credential: OAuthCredential,
-    _label: Option<&str>,
+    label: Option<&str>,
 ) -> Result<SignIn> {
+    let label = label.map(validate_account_label).transpose()?;
     anyhow::ensure!(
         sign_in_product(&credential.provider).is_some(),
         "no backend reads sign-ins of provider {:?}",
@@ -647,7 +696,8 @@ pub async fn store_sign_in(
     access
         .transact("oauth_credential.sign_in", |txn| {
             let credential = credential.clone();
-            Box::pin(async move { store_sign_in_in_txn(txn, credential).await })
+            let label = label.clone();
+            Box::pin(async move { store_sign_in_in_txn(txn, credential, label).await })
         })
         .await
 }
@@ -705,6 +755,7 @@ fn sign_in_match(
 async fn store_sign_in_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
+    label: Option<String>,
 ) -> Result<SignIn> {
     let rows = provider_rows_in_txn(txn, &credential.agent_did, &credential.provider).await?;
     let sign_in_keys = identity_keys(&credential);
@@ -726,6 +777,16 @@ async fn store_sign_in_in_txn(
         credential.connected_at = row.connected_at;
         credential.label = row.label.clone();
         credential.enabled = true;
+        let mut set_once = SET_ONCE_FIELDS.to_vec();
+        if let Some(label) = label {
+            let others: Vec<_> = rows
+                .iter()
+                .filter(|other| other.doc_id != row.doc_id)
+                .collect();
+            ensure_label_free(&others, &label)?;
+            credential.label = Some(label);
+            set_once.retain(|field| *field != "label");
+        }
         let doc_id = row
             .doc_id
             .clone()
@@ -738,7 +799,7 @@ async fn store_sign_in_in_txn(
                 }}) {{ _docID }}
             }}"#,
             crate::graphql::escape_graphql_string(&doc_id),
-            render_oauth_input(&fields, SET_ONCE_FIELDS),
+            render_oauth_input(&fields, &set_once),
         );
         txn.execute(&mutation).await?;
         return Ok(SignIn {
@@ -762,6 +823,14 @@ async fn store_sign_in_in_txn(
         credential.account_ref = Some(account_ref);
     }
     credential.enabled = true;
+    credential.label = match label {
+        Some(label) => {
+            ensure_label_free(&rows.iter().collect::<Vec<_>>(), &label)?;
+            Some(label)
+        }
+        None if rows.is_empty() => None,
+        None => Some(next_free_label(&rows, &credential.provider)),
+    };
     let fields = oauth_credential_input_fields(&credential);
     let mutation = format!(
         r#"mutation {{
