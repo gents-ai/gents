@@ -4917,6 +4917,87 @@ async fn persona_preview_agrees_with_the_account_choice_fence() {
     }
 }
 
+/// A clone keeps its source's context, so its compaction may run on another
+/// backend than the clone's own profile; that inherited backend is a pick
+/// from the profile's, as when re-pointing the context.
+#[tokio::test]
+async fn persona_clone_inherited_compaction_cannot_switch_account() {
+    let (node, identity, core) = account_choice_core("clone-pick").await;
+    let owner = core.agent_did().to_owned();
+    let sources = ["original", "chat-b"]
+        .into_iter()
+        .map(|account| {
+            let value = json!({"agent_did": owner, "behavior_id": format!("src-{account}"),
+                "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
+            crate::config_client::DesiredStateApplyDocument {
+                collection: crate::Collection::AgentBehavior,
+                add: value.clone(),
+                update: value,
+            }
+        })
+        .collect();
+    let plan = crate::config_client::DesiredStateApplyPlan::new(sources).unwrap();
+    crate::config_client::ConfigAccess::transact_local(&node, None, "test.sources", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+    let clone = |action: &str, source: &str, profile: &str| {
+        let name = format!("{source} on {profile}");
+        let argv = [
+            "--from",
+            source,
+            "--display-name",
+            &name,
+            "--profile",
+            profile,
+        ];
+        let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
+        let operation = (action == "preview").then(|| "clone".to_owned());
+        behavior_params(action, operation, &argv).unwrap()
+    };
+    for (source, profile) in [("src-chat-b", "p-original"), ("src-chat-b", "p-grok")] {
+        let preview: Value = serde_json::from_str(
+            &persona_preview(
+                &node,
+                &owner,
+                &clone("preview", source, profile),
+                &Default::default(),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["admitted"], false, "{source} {profile}: {preview}");
+        let error = persona_mutate(
+            &node,
+            &owner,
+            identity.as_ref(),
+            &clone("clone", source, profile),
+            &Default::default(),
+        )
+        .await
+        .expect_err("inheriting another account's compaction must be refused");
+        assert!(
+            format!("{error:#}").contains("selects another"),
+            "{error:#}"
+        );
+    }
+    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
+    for profile in ["p-original", "p-grok"] {
+        persona_mutate(
+            &node,
+            &owner,
+            identity.as_ref(),
+            &clone("clone", "src-original", profile),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn pack_inference_slot_cannot_pick_another_account() {
     let (node, identity, core) = account_choice_core("pack-pick").await;
