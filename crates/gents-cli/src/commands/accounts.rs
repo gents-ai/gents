@@ -1,7 +1,7 @@
 //! `gents accounts`: the subscription accounts signed in on this node, and the
 //! backends that use no account, with the profiles that use each.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 use anyhow::Result;
 use gents::document_config::InferenceProfile;
@@ -58,8 +58,14 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
         }
         AccountsCommand::Disable { target, account } => {
             let (access, did) = target_access(&target).await?;
-            let result =
-                disable_account(&access, &did, &account, target.provider.as_deref()).await?;
+            let result = disable_account(
+                &access,
+                &did,
+                &account,
+                target.provider.as_deref(),
+                &mut std::io::stderr(),
+            )
+            .await?;
             print_json(&result)
         }
         AccountsCommand::Remove {
@@ -68,7 +74,14 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             yes,
         } => {
             let (access, did) = target_access(&target).await?;
-            warn_profiles(&access, &did, &account, target.provider.as_deref()).await?;
+            warn_profiles(
+                &access,
+                &did,
+                &account,
+                target.provider.as_deref(),
+                &mut std::io::stderr(),
+            )
+            .await?;
             let confirmed = yes
                 || (std::io::stdin().is_terminal()
                     && std::io::stderr().is_terminal()
@@ -326,15 +339,17 @@ async fn warn_profiles(
     agent_did: &str,
     account: &str,
     provider: Option<&str>,
+    warnings: &mut impl Write,
 ) -> Result<()> {
     let snapshot = snapshot(access, agent_did).await?;
     let profiles = snapshot.account_profiles(snapshot.pick(account, provider)?);
     if !profiles.is_empty() {
-        eprintln!(
+        writeln!(
+            warnings,
             "These profiles use this account and fail their next turn until moved to another \
              backend: {}",
             profiles.join(", ")
-        );
+        )?;
     }
     Ok(())
 }
@@ -344,7 +359,9 @@ pub(crate) async fn disable_account(
     agent_did: &str,
     account: &str,
     provider: Option<&str>,
+    warnings: &mut impl Write,
 ) -> Result<Value> {
+    warn_profiles(access, agent_did, account, provider, warnings).await?;
     let snapshot = snapshot(access, agent_did).await?;
     let account = snapshot.pick(account, provider)?;
     gents::oauth_credential::set_account_enabled(access, agent_did, &account.credential_id, false)
