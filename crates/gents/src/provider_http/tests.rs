@@ -14,42 +14,54 @@ pub(crate) async fn one_shot_server(
     headers: &'static [(&'static str, &'static str)],
     body: &'static str,
 ) -> String {
+    server_for(1, status, headers, body).await
+}
+
+/// Answers `requests` requests, one connection each, like [`one_shot_server`].
+pub(crate) async fn server_for(
+    requests: usize,
+    status: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    body: &'static str,
+) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let url = format!("http://{}", listener.local_addr().expect("addr"));
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            let n = socket.read(&mut chunk).await.expect("read");
-            buf.extend_from_slice(&chunk[..n]);
-            let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
-            if let Some(end) = text.find("\r\n\r\n") {
-                let length = text[..end]
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length:"))
-                    .and_then(|value| value.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                if buf.len() >= end + 4 + length {
+        for _ in 0..requests {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.expect("read");
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                if n == 0 {
                     break;
                 }
             }
-            if n == 0 {
-                break;
-            }
-        }
-        let extra: String = headers
-            .iter()
-            .map(|(name, value)| format!("{name}: {value}\r\n"))
-            .collect();
-        let response = format!(
+            let extra: String = headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect();
+            let response = format!(
             "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
         );
-        socket.write_all(response.as_bytes()).await.expect("write");
-        socket.shutdown().await.ok();
+            socket.write_all(response.as_bytes()).await.expect("write");
+            socket.shutdown().await.ok();
+        }
     });
     url
 }

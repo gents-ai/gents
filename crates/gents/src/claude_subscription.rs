@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
+use crate::usage_observation::UsageReporter;
 
 /// Placeholder endpoint for ClaudeCliSubscription InferenceBackend rows.
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
@@ -38,6 +39,7 @@ pub fn default_model_name() -> &'static str {
 pub struct ClaudeSubscriptionClient<S: BearerSource = DbCredentialBearer> {
     pub(crate) bearer: Arc<S>,
     pub(crate) http: ReqwestClient,
+    pub(crate) usage: Option<Arc<UsageReporter>>,
 }
 
 impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
@@ -45,6 +47,7 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
         Self {
             bearer: self.bearer.clone(),
             http: self.http.clone(),
+            usage: self.usage.clone(),
         }
     }
 }
@@ -76,6 +79,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         Ok(Self {
             bearer,
             http: ReqwestClient::new(),
+            usage: None,
         })
     }
 }
@@ -86,6 +90,7 @@ impl<S: BearerSource> ClaudeSubscriptionClient<S> {
         Self {
             bearer,
             http: ReqwestClient::new(),
+            usage: None,
         }
     }
 }
@@ -109,6 +114,7 @@ pub struct ClaudeSubscriptionModel<S: BearerSource = DbCredentialBearer> {
     model: String,
     bearer: Arc<S>,
     http: ReqwestClient,
+    usage: Option<Arc<UsageReporter>>,
 }
 
 impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
@@ -117,6 +123,7 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
             model: self.model.clone(),
             bearer: self.bearer.clone(),
             http: self.http.clone(),
+            usage: self.usage.clone(),
         }
     }
 }
@@ -143,6 +150,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             model: model.into(),
             bearer: client.bearer.clone(),
             http: client.http.clone(),
+            usage: client.usage.clone(),
         }
     }
 
@@ -164,6 +172,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             surface,
             self.bearer.as_ref(),
             &self.http,
+            self.usage.clone(),
         )
         .await?;
         futures::pin_mut!(stream);
@@ -205,6 +214,7 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
             surface,
             self.bearer.as_ref(),
             &self.http,
+            self.usage.clone(),
         )
         .await?;
         Ok(StreamingCompletionResponse::stream(Box::pin(stream)))

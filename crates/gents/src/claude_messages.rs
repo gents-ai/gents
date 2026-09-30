@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt;
 #[cfg(test)]
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -886,11 +886,12 @@ pub async fn stream_messages<S: BearerSource>(
     surface: HashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
 > {
-    stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http).await
+    stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
 /// `stream_messages` against an explicit URI (tests point it at a local
@@ -903,10 +904,12 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     surface: HashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
 > {
+    let _ = usage;
     #[cfg(test)]
     let fixture = take_messages_sse_fixture();
     #[cfg(not(test))]
