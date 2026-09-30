@@ -30,7 +30,8 @@ pub(crate) struct LeanSelfConfigPatchEntry {
     pub(crate) value: Option<String>,
 }
 
-/// A backend a profile row can select; `auth` is its canonical JSON text.
+/// A backend a profile row can select; `backend_id` and `auth` are canonical
+/// JSON text.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanSelfConfigBackend {
     pub(crate) backend_id: String,

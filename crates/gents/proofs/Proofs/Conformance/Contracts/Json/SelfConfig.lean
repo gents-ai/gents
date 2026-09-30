@@ -41,6 +41,13 @@ def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
           | none => "null")
   ++ "}"
 
+def selfConfigBackendJson (entry : String × String × String) : String :=
+  "{"
+    ++ "\"backend_id\":" ++ jsonString entry.1 ++ ","
+    ++ "\"provider_kind\":" ++ jsonString entry.2.1 ++ ","
+    ++ "\"auth\":" ++ jsonString entry.2.2
+  ++ "}"
+
 def selfConfigCaseJson (w : CaseWitness) : String :=
   "{"
     ++ "\"name\":" ++ jsonString w.row.name ++ ","
@@ -57,7 +64,8 @@ def selfConfigCaseJson (w : CaseWitness) : String :=
     ++ "\"protected_preserved\":" ++ scBool w.protectedPreserved ++ ","
     ++ "\"containment_holds\":" ++ scBool w.containmentHolds ++ ","
     ++ "\"unchanged_on_reject\":" ++ scBool w.unchangedOnReject ++ ","
-    ++ "\"control_kept_after_accept\":" ++ scBool w.controlKeptAfterAccept
+    ++ "\"control_kept_after_accept\":" ++ scBool w.controlKeptAfterAccept ++ ","
+    ++ "\"backends\":" ++ jsonArray (w.row.backends.map selfConfigBackendJson)
   ++ "}"
 
 def selfConfigCasesJson : String :=

@@ -121,10 +121,10 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 }
                 SelfConfigTarget::InferenceProfile => {
                     let backend = |doc: &Map<String, Value>| {
-                        let id = doc.get("backend_id")?.as_str()?;
+                        let id = doc.get("backend_id")?;
                         case.backends
                             .iter()
-                            .find(|backend| backend.backend_id == id)
+                            .find(|backend| &parse_nested(backend.backend_id.clone().into()) == id)
                             .map(typed_backend)
                     };
                     match backend(&candidate) {
@@ -150,10 +150,11 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
 fn typed_backend(
     backend: &crate::lean_vocab_test::LeanSelfConfigBackend,
 ) -> gents::InferenceBackend {
+    let id = parse_nested(backend.backend_id.clone().into());
     serde_json::from_value(serde_json::json!({
         "agent_did": "did:key:agent-a",
-        "backend_id": backend.backend_id,
-        "name": backend.backend_id,
+        "backend_id": id,
+        "name": id,
         "provider_kind": backend.provider_kind,
         "endpoint": "http://127.0.0.1:1/v1",
         "auth": parse_nested(Value::String(backend.auth.clone())),

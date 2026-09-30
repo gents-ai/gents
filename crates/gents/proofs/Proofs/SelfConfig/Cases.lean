@@ -12,6 +12,9 @@ structure CaseRow where
   validates : Bool
   doc : List (FieldKey × FieldValue)
   patch : List (FieldKey × Option FieldValue)
+  /-- Backends a profile row can select: (`backend_id` JSON text, provider
+  kind, auth JSON text). -/
+  backends : List (String × String × String) := []
   deriving Repr
 
 def rowPatch (r : CaseRow) : Patch :=
@@ -64,6 +67,7 @@ def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"principal_oauth\"}" => some (.principalOAuth none)
   | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}" => some (.principalOAuth (some "a1"))
   | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}" => some (.principalOAuth (some "a2"))
+  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}" => some (.principalOAuth (some "g2"))
   | _ => none
 
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
@@ -74,12 +78,17 @@ def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
   if t = .agentBehavior then keepsReach decodeReach stored
   else keepsControl decodeControl stored
 
+def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
+  (r.backends.find? (·.1 = id)).bind fun (_, kind, auth) => (decodeAuthText auth).map (kind, ·)
+
 /-- A guarded row replays its target's typed guard: the no-lockout slice for
-Tools and Behavior, and the auth fence for Backend, which Rust enforces in
+Tools and Behavior, the auth fence for Backend and the account choice fence
+for Profile (default = the original account), which Rust enforces in
 `validate` on every model write rather than only under no-lockout. -/
 def caseGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   if !r.guarded then fun _ => true
   else if r.target = .inferenceBackend then authGuard decodeAuth stored
+  else if r.target = .inferenceProfile then profileGuard (rowBackendOf r) (fun _ => none) stored
   else lockoutGuard r.target stored
 
 def project (t : Target) (doc : Doc) : List (FieldKey × FieldValue) :=
@@ -145,6 +154,16 @@ def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   , target := t, guarded := false, validates := true
   , doc := [(t.uniqueField, "doc-1"), ("agent_did", "did:key:agent-a")]
   , patch := [(k, some v)] }
+
+/-- One provider with two accounts, another with its original and a second
+account, and one account-free backend. -/
+def profileBackends : List (String × String × String) :=
+  [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")
+  , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\"}")
+  , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}")
+  , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
   [ { name := "behavior_owner_patch_rejected"
@@ -257,6 +276,46 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("auth", some "{\"kind\":\"environment\",\"variable\":\"KEY\"}")] }
+  , { name := "profile_keep_backend_model_edit_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("model_name", some "\"model-2\"")]
+    , backends := profileBackends }
+  , { name := "profile_same_provider_same_account_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("backend_id", some "\"chat-a1-alt\"")]
+    , backends := profileBackends }
+  , { name := "profile_same_provider_switch_rejected"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("backend_id", some "\"chat-a2\"")]
+    , backends := profileBackends }
+  , { name := "profile_cross_provider_default_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("backend_id", some "\"grok-original\"")]
+    , backends := profileBackends }
+  , { name := "profile_cross_provider_non_default_rejected"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("backend_id", some "\"grok-g2\"")]
+    , backends := profileBackends }
+  , { name := "profile_to_account_free_backend_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"chat-a1\"")]
+    , patch := [("backend_id", some "\"local\"")]
+    , backends := profileBackends }
+  , { name := "profile_create_default_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := []
+    , patch := [("backend_id", some "\"grok-original\"")]
+    , backends := profileBackends }
+  , { name := "profile_create_non_default_rejected"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := []
+    , patch := [("backend_id", some "\"chat-a2\"")]
+    , backends := profileBackends }
   , { name := "profile_optional_sampling_clear_accepted"
     , target := .inferenceProfile, guarded := false, validates := true
     , doc := [("sampling_id", "sampling-1")]
