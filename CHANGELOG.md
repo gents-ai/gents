@@ -64,6 +64,10 @@ source consistency checks, not a separate runtime compatibility version.
   `ensure_migrations` with `UnknownLineage` for `OAuthCredential`: reset it
   and sign in again (#2116).
 
+- `codex-login`, `claude-login` and `grok-login` accept only their own
+  `--provider` value. Other values stored a sign-in that no backend read
+  (#2119).
+
 - `Tools.self_config.self_config_dry_run` is renamed `self_config_preview`
   (#2062). It grants the `config` preview verb; it never blocked writes. There
   is no alias: rewrite stored Tools documents and manifests that set the old
@@ -197,6 +201,30 @@ source consistency checks, not a separate runtime compatibility version.
   never enter the sandbox. Bind with `gents pack install --inference-slot SLOT=PROFILE`,
   `gents plugin bind NAME PROFILE` or the desktop Packs panel; `gents plugin
   unbind` and "Not set" leave it unbound, and the plugin runs as before.
+
+- Several accounts per provider from the CLI (#2119). `codex-login`,
+  `claude-login` and `grok-login`, and the sign-ins in `gents init` and the
+  desktop, add the account you signed in to, or refresh it when it is already
+  stored; the result JSON gains `label` and `result` (`added` or `refreshed`),
+  and `--label` names or renames the account. A provider's second and later
+  accounts each get their own backend, from the provider's default endpoint.
+  `gents accounts list|label|disable|remove` manages them; `remove` deletes the
+  tokens on this node and removes the backend sign-in created for the account
+  unless a profile uses it. `gents diagnose` adds an `accounts` array to
+  `checks.chatgpt_auth`, `xai_auth` and `claude_auth` (the existing fields
+  still describe each provider's first account), backend rows name their
+  account, and `codex-auth-probe` and `grok-auth-probe` print one block per
+  account. A browser already signed in to an account may sign in to it again:
+  the command then reports `refreshed` and says how to pick another account.
+  Backends created for added accounts replicate to the agent's other nodes and
+  appear in `gents config export`, but accounts stay on the node that signed
+  in: elsewhere those backends fail closed, and `gents accounts list` marks
+  them "account not on this node". On the desktop, Reconnect to a different
+  account adds it instead of replacing the one shown, and each backend row
+  shows and disconnects the account it references (a backend with no account
+  reference: the provider's original account); add and manage extra accounts
+  from the CLI until the account cards land.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no
@@ -313,8 +341,7 @@ source consistency checks, not a separate runtime compatibility version.
   token refresh; Claude sign-ins at the next sign-in. A sign-in whose tokens do not
   show the account clears it: for ChatGPT and Grok the next refresh whose
   tokens show it fills it again, for Claude only a later sign-in that shows
-  it. A sign-in of a different account still replaces the stored one, as
-  before. Nothing visible changes yet (#2117).
+  it. Nothing visible changes yet (#2117).
 
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
@@ -394,6 +421,11 @@ source consistency checks, not a separate runtime compatibility version.
   operations. Trigger ownership errors no longer recommend the removed plan
   command. Schema-limit errors explain why deleting configuration cannot change
   an installed schema; host-root errors name the exact Tools field.
+
+- A token refresh or a desktop Disconnect no longer re-creates a removed
+  sign-in, re-enables a disabled one, or overwrites a sign-in made while the
+  refresh was in flight (#2119).
+
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to
