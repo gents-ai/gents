@@ -303,3 +303,188 @@ fn endpoint_claude_percent_windows_labels_match_headers_and_nulls_skipped() {
     let from_headers = headers(&[("anthropic-ratelimit-unified-7d_opus-utilization", "0.05")]);
     assert_eq!(from_headers.windows[0].label, "7d opus");
 }
+
+fn window(label: &str, used_pct: f64, observed_at: DateTime<Utc>) -> UsageWindow {
+    UsageWindow {
+        label: label.to_string(),
+        window_minutes: None,
+        used_pct,
+        resets_at: None,
+        source: UsageSource::Header,
+        observed_at,
+    }
+}
+
+fn report(windows: Vec<UsageWindow>) -> UsageReport {
+    UsageReport {
+        windows,
+        ..UsageReport::default()
+    }
+}
+
+fn plan_at(name: &str, observed_at: DateTime<Utc>) -> Option<UsagePlan> {
+    Some(UsagePlan {
+        name: name.to_string(),
+        observed_at,
+    })
+}
+
+#[test]
+fn view_merge_newer_window_per_label_wins() {
+    let earlier = now() - Duration::minutes(5);
+    let stored = report(vec![
+        window("primary", 10.0, earlier),
+        window("secondary", 30.0, earlier),
+    ]);
+    let merged = stored.merge(report(vec![window("primary", 20.0, now())]));
+    assert_eq!(merged.windows.len(), 2, "{merged:?}");
+    assert_eq!(find(&merged, "primary").used_pct, 20.0);
+    assert_eq!(find(&merged, "primary").observed_at, now());
+    assert_eq!(find(&merged, "secondary").used_pct, 30.0);
+}
+
+#[test]
+fn view_merge_older_report_never_replaces_newer() {
+    let stored = report(vec![window("5h", 50.0, now())]);
+    let late = report(vec![window("5h", 10.0, now() - Duration::minutes(1))]);
+    let merged = stored.merge(late);
+    assert_eq!(find(&merged, "5h").used_pct, 50.0);
+    assert_eq!(merged.windows.len(), 1);
+}
+
+#[test]
+fn view_merge_plan_and_credits_by_their_own_time() {
+    let credits = |balance: &str, observed_at| {
+        Some(UsageCredits {
+            has_credits: Some(true),
+            unlimited: None,
+            balance: Some(balance.to_string()),
+            observed_at,
+        })
+    };
+    let newer = UsageReport {
+        windows: vec![window("primary", 10.0, now() - Duration::minutes(10))],
+        credits: credits("5.00", now()),
+        plan: plan_at("pro", now()),
+    };
+    let older_plan_newer_window = UsageReport {
+        windows: vec![window("primary", 20.0, now())],
+        credits: credits("9.00", now() - Duration::minutes(3)),
+        plan: plan_at("plus", now() - Duration::minutes(3)),
+    };
+    let merged = newer.clone().merge(older_plan_newer_window);
+    assert_eq!(find(&merged, "primary").used_pct, 20.0);
+    assert_eq!(merged.plan.as_ref().unwrap().name, "pro");
+    assert_eq!(
+        merged.credits.as_ref().unwrap().balance.as_deref(),
+        Some("5.00")
+    );
+
+    let merged = newer.merge(report(vec![window("primary", 30.0, now())]));
+    assert_eq!(
+        merged.plan.unwrap().name,
+        "pro",
+        "a missing plan never clears one"
+    );
+    assert!(merged.credits.is_some(), "missing credits never clear them");
+}
+
+#[test]
+fn view_header_and_endpoint_same_window_merge_into_one() {
+    let codex_headers = headers(&[
+        ("x-codex-primary-used-percent", "10"),
+        ("x-codex-secondary-used-percent", "20"),
+    ]);
+    let codex_endpoint = codex_usage(
+        &json!({ "rate_limit": { "primary_window": { "used_percent": 15 } } }),
+        now() + Duration::seconds(1),
+    )
+    .unwrap();
+    let merged = codex_headers.merge(codex_endpoint);
+    assert_eq!(merged.windows.len(), 2, "{merged:?}");
+    assert_eq!(find(&merged, "primary").used_pct, 15.0);
+    assert_eq!(find(&merged, "primary").source, UsageSource::Endpoint);
+
+    let claude_headers = headers(&[("anthropic-ratelimit-unified-5h-utilization", "0.1")]);
+    let claude_endpoint = claude_oauth_usage(
+        &json!({ "five_hour": { "utilization": 30.0, "resets_at": null } }),
+        now() + Duration::seconds(1),
+    )
+    .unwrap();
+    let merged = claude_headers.merge(claude_endpoint);
+    assert_eq!(merged.windows.len(), 1, "{merged:?}");
+    assert_eq!(find(&merged, "5h").used_pct, 30.0);
+}
+
+#[test]
+fn view_fresh_until_fifteen_minutes() {
+    let usage = report(vec![
+        window("a", 1.0, now() - Duration::minutes(15)),
+        window("b", 2.0, now()),
+    ]);
+    let visible = visible_windows(&usage, now());
+    assert_eq!(visible.len(), 2);
+    assert!(visible
+        .iter()
+        .all(|(_, freshness)| *freshness == Freshness::Fresh));
+}
+
+#[test]
+fn view_stale_until_sixty_minutes() {
+    let usage = report(vec![window("a", 1.0, now() - Duration::minutes(16))]);
+    let visible = visible_windows(&usage, now());
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].1, Freshness::Stale);
+}
+
+#[test]
+fn view_dropped_after_sixty_minutes() {
+    let usage = report(vec![
+        window("kept", 1.0, now() - Duration::minutes(59)),
+        window("dropped", 2.0, now() - Duration::minutes(61)),
+    ]);
+    let visible = visible_windows(&usage, now());
+    assert_eq!(visible.len(), 1, "{visible:?}");
+    assert_eq!(visible[0].0.label, "kept");
+    assert_eq!(visible[0].1, Freshness::Stale);
+}
+
+#[test]
+fn view_never_past_resets_at() {
+    let mut future = window("future", 1.0, now());
+    future.resets_at = Some(now() + Duration::minutes(1));
+    let mut past = window("past", 2.0, now());
+    past.resets_at = Some(now() - Duration::seconds(1));
+    let usage = report(vec![future, past]);
+    let visible = visible_windows(&usage, now());
+    assert_eq!(visible.len(), 1, "{visible:?}");
+    assert_eq!(visible[0].0.label, "future");
+}
+
+#[test]
+fn view_same_values_ignores_observed_at() {
+    let first = UsageReport {
+        windows: vec![window("primary", 10.0, now())],
+        credits: None,
+        plan: plan_at("plus", now()),
+    };
+    let mut later = first.clone();
+    later.windows[0].observed_at = now() + Duration::seconds(30);
+    later.plan = plan_at("plus", now() + Duration::seconds(30));
+    assert!(first.same_values(&later));
+
+    let mut changed = later.clone();
+    changed.windows[0].used_pct = 11.0;
+    assert!(!first.same_values(&changed));
+    let mut changed = later.clone();
+    changed.plan = plan_at("pro", now());
+    assert!(!first.same_values(&changed));
+    let mut changed = later;
+    changed.credits = Some(UsageCredits {
+        has_credits: Some(false),
+        unlimited: None,
+        balance: None,
+        observed_at: now(),
+    });
+    assert!(!first.same_values(&changed));
+}

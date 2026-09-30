@@ -13,6 +13,16 @@ use serde_json::Value;
 
 use crate::provider_limit::{epoch_seconds, parse_rfc3339};
 
+/// A window observed longer ago than this is shown as last-known, not fresh.
+pub const STALE_AFTER: Duration = Duration::minutes(15);
+/// A window observed longer ago than this is not shown at all.
+pub const LAST_KNOWN_FOR: Duration = Duration::minutes(60);
+/// An on-demand read within this window of the last one is skipped.
+// ponytail: one knob for every provider; make it per provider if one endpoint throttles harder.
+pub const READ_SKIP_WINDOW: Duration = Duration::minutes(5);
+/// Unchanged values are not rewritten until the report is this much newer.
+pub const REWRITE_AFTER: Duration = Duration::seconds(60);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageSource {
@@ -64,10 +74,30 @@ pub struct UsageReport {
     pub plan: Option<UsagePlan>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    Fresh,
+    Stale,
+}
+
 impl UsageReport {
     pub fn is_empty(&self) -> bool {
         self.windows.is_empty() && self.credits.is_none() && self.plan.is_none()
     }
+
+    pub fn merge(self, other: UsageReport) -> UsageReport {
+        other
+    }
+
+    pub fn same_values(&self, other: &UsageReport) -> bool {
+        let _ = other;
+        false
+    }
+}
+
+pub fn visible_windows(report: &UsageReport, now: DateTime<Utc>) -> Vec<(&UsageWindow, Freshness)> {
+    let _ = (report, now);
+    Vec::new()
 }
 
 /// Usage windows from a provider response's headers:
