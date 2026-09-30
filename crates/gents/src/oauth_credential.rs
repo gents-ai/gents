@@ -1637,8 +1637,229 @@ mod sign_in_tests {
 }
 
 #[cfg(test)]
+mod backfill_tests {
+    use super::test_support::{one_shot_token_server, test_node, unsigned_jwt, TOKEN_URL_ENV};
+    use super::*;
+    use crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    use crate::config_client::ConfigAccess;
+    use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+
+    const XAI_ENV: &str = crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
+    const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+
+    /// A token response whose access token carries `access_claims`.
+    fn token_response(access_claims: Value) -> &'static str {
+        let body = json!({
+            "access_token": unsigned_jwt(access_claims),
+            "refresh_token": "refresh-rotated",
+            "expires_in": 900
+        });
+        Box::leak(body.to_string().into_boxed_str())
+    }
+
+    async fn seed_expired_grok(node: &EmbeddedNode, did: &str, key: Option<&str>) {
+        let credential = OAuthCredential {
+            doc_id: None,
+            credential_id: oauth_credential_id(did, XAI_OAUTH_PROVIDER),
+            agent_did: did.to_string(),
+            provider: XAI_OAUTH_PROVIDER.to_string(),
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: Utc::now() - Duration::minutes(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: key.map(str::to_owned),
+        };
+        upsert_oauth_credential(node, &credential).await.unwrap();
+    }
+
+    /// Refresh `did`'s `provider` row once through an owner bearer built
+    /// directly (never the shared registry) and read the stored row back.
+    async fn refresh_once(
+        node: &Arc<EmbeddedNode>,
+        did: &str,
+        provider: &str,
+        kind: OAuthRefreshKind,
+        body: &'static str,
+    ) -> OAuthCredential {
+        let (env, product) = match kind {
+            OAuthRefreshKind::ChatGpt => (CHATGPT_ENV, CHATGPT_OAUTH_PRODUCT),
+            _ => (XAI_ENV, XAI_OAUTH_PRODUCT),
+        };
+        let credential_id = oauth_credential_id(did, provider);
+        let _env = TOKEN_URL_ENV.lock().await;
+        let (url, handle) = one_shot_token_server(200, body).await;
+        std::env::set_var(env, &url);
+        let bearer = DbCredentialBearer::new(
+            node.clone(),
+            did,
+            provider,
+            credential_id.clone(),
+            true,
+            kind,
+            product,
+        );
+        let refreshed = bearer.current_bearer().await;
+        std::env::remove_var(env);
+        handle.await.expect("server");
+        refreshed.expect("refresh");
+        lookup_oauth_credential_by_id(node, &credential_id)
+            .await
+            .unwrap()
+            .expect("stored row")
+    }
+
+    #[tokio::test]
+    async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:zBackfillFill";
+        seed_expired_grok(&node, did, None).await;
+        let body =
+            token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+        let stored =
+            refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
+        assert_eq!(stored.refresh_token, "refresh-rotated");
+        assert_eq!(
+            stored.provider_account_key.as_deref(),
+            Some("user:principal-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_never_changes_a_present_key() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:zBackfillPresent";
+        seed_expired_grok(&node, did, Some("user:principal-old")).await;
+        let body =
+            token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+        let stored =
+            refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
+        assert_eq!(stored.refresh_token, "refresh-rotated");
+        assert_eq!(
+            stored.provider_account_key.as_deref(),
+            Some("user:principal-old")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_leaves_the_key_empty_without_the_claim() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:zBackfillNoClaim";
+        seed_expired_grok(&node, did, None).await;
+        let body = token_response(json!({ "sub": "user-a" }));
+        let stored =
+            refresh_once(&node, did, XAI_OAUTH_PROVIDER, OAuthRefreshKind::Xai, body).await;
+        assert_eq!(stored.refresh_token, "refresh-rotated");
+        assert_eq!(stored.provider_account_key, None);
+    }
+
+    /// Rows stored before #2116, with none of the account fields.
+    async fn seed_upgraded_row(
+        node: &Arc<EmbeddedNode>,
+        did: &str,
+        provider: &str,
+        account_id: &str,
+    ) {
+        let credential_id = oauth_credential_id(did, provider);
+        let mutation = format!(
+            r#"mutation {{ create_OAuthCredential(input: {{
+                credential_id: "{credential_id}"
+                agent_did: "{did}"
+                provider: "{provider}"
+                access_token: "placeholder-access"
+                refresh_token: "placeholder-refresh"
+                {account_id}
+                is_fedramp: false
+                access_token_expires_at: "2020-01-01T00:00:00Z"
+                last_refresh: "2019-12-31T00:00:00Z"
+                enabled: true
+            }}) {{ _docID }} }}"#
+        );
+        ConfigAccess::write_local(node, "test.seed_upgraded_row", &mutation)
+            .await
+            .expect("seed upgraded row");
+    }
+
+    #[tokio::test]
+    async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:zUpgradedRows";
+        let access = ConfigAccess::Local(node.clone());
+        seed_upgraded_row(
+            &node,
+            did,
+            CHATGPT_CODEX_PROVIDER,
+            r#"account_id: "acct-ws""#,
+        )
+        .await;
+        seed_upgraded_row(&node, did, XAI_OAUTH_PROVIDER, "").await;
+        let cases = [
+            (
+                CHATGPT_CODEX_PROVIDER,
+                OAuthRefreshKind::ChatGpt,
+                CHATGPT_OAUTH_PRODUCT,
+                token_response(json!({ "https://api.openai.com/auth": {
+                    "chatgpt_account_id": "acct-ws",
+                    "chatgpt_account_user_id": "member-a"
+                } })),
+                "member-a",
+            ),
+            (
+                XAI_OAUTH_PROVIDER,
+                OAuthRefreshKind::Xai,
+                XAI_OAUTH_PRODUCT,
+                token_response(json!({ "principal_type": "user", "principal_id": "principal-1" })),
+                "user:principal-1",
+            ),
+        ];
+        for (provider, kind, product, body, key) in cases {
+            let resolve = |pick| resolve_oauth_credential(&access, did, provider, pick);
+            let before = resolve(AccountPick::Reference(None))
+                .await
+                .unwrap()
+                .expect("an upgraded row resolves");
+            assert_eq!(before.provider_account_key, None);
+            let default = resolve(AccountPick::ProviderDefault).await.unwrap();
+            assert_eq!(default.as_ref(), Some(&before));
+            let (_, bootstrapped) = crate::oauth_http::bootstrap_oauth_client(
+                node.clone(),
+                did,
+                provider,
+                kind,
+                product,
+                AccountPick::ProviderDefault,
+            )
+            .await
+            .expect("an upgraded row builds a client");
+            assert_eq!(bootstrapped.credential_id, before.credential_id);
+
+            let after = refresh_once(&node, did, provider, kind, body).await;
+            assert_eq!(
+                after.provider_account_key.as_deref(),
+                Some(key),
+                "{provider}"
+            );
+            assert_eq!(after.credential_id, before.credential_id);
+            assert_eq!(after.doc_id, before.doc_id);
+            assert!(after.enabled);
+            assert_eq!(after.account_ref, None);
+            assert_eq!(after.connected_at, None);
+            assert_eq!(after.account_id, before.account_id);
+            let resolved = resolve(AccountPick::ProviderDefault).await.unwrap();
+            assert_eq!(resolved.as_ref(), Some(&after));
+        }
+    }
+}
+
+#[cfg(test)]
 mod cooldown_tests {
-    use super::test_support::{one_shot_token_server, seed_credential, test_node};
+    use super::test_support::{one_shot_token_server, seed_credential, test_node, TOKEN_URL_ENV};
     use super::*;
 
     /// A failed refresh is served from the cooldown on the next call instead
@@ -1653,7 +1874,8 @@ mod cooldown_tests {
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
         let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-        // Process-global; no other lib test refreshes an xAI credential.
+        // Process-global; hold TOKEN_URL_ENV while it is set.
+        let _env = TOKEN_URL_ENV.lock().await;
         std::env::set_var(
             crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             &url,
@@ -1691,7 +1913,8 @@ mod cooldown_tests {
         let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() + Duration::hours(1)).await;
         let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-        // Process-global; no other lib test refreshes a ChatGPT credential.
+        // Process-global; hold TOKEN_URL_ENV while it is set.
+        let _env = TOKEN_URL_ENV.lock().await;
         std::env::set_var(
             gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
             &url,
@@ -1726,6 +1949,9 @@ pub(crate) mod test_support {
     use chrono::{DateTime, Utc};
     use defra_node::EmbeddedNode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Serializes lib tests that set a process-global token-URL override.
+    pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// In-memory node with the gents schemas loaded.
     pub(crate) async fn test_node() -> EmbeddedNode {
