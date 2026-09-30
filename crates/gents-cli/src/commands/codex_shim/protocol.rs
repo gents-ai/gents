@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use gents::usage_observation::StoredUsage;
 use gents::InferenceBackend;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -269,6 +271,22 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
     }
 }
 
+/// `account/rateLimits/read` from the stored usage of the session's account.
+pub(super) fn rate_limits_from_usage(
+    stored: Option<&StoredUsage>,
+    now: DateTime<Utc>,
+) -> codex::RateLimitSnapshot {
+    let _ = (stored, now);
+    codex::RateLimitSnapshot {
+        primary: Some(codex::RateLimitWindow {
+            used_percent: 0,
+            window_duration_mins: None,
+            resets_at: None,
+        }),
+        ..empty_rate_limits()
+    }
+}
+
 pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
     input
         .iter()
@@ -469,5 +487,121 @@ mod tests {
             None,
         );
         assert_eq!(incomplete.duration_ms, None);
+    }
+
+    fn usage_window(
+        label: &str,
+        used_pct: f64,
+        observed_at: DateTime<Utc>,
+    ) -> gents::usage_observation::account_usage::UsageWindow {
+        gents::usage_observation::account_usage::UsageWindow {
+            label: label.to_string(),
+            window_minutes: Some(300),
+            used_pct,
+            resets_at: None,
+            source: gents::usage_observation::account_usage::UsageSource::Header,
+            observed_at,
+        }
+    }
+
+    fn stored(windows: Vec<gents::usage_observation::account_usage::UsageWindow>) -> StoredUsage {
+        StoredUsage {
+            report: gents::usage_observation::account_usage::UsageReport {
+                windows,
+                ..Default::default()
+            },
+            ..StoredUsage::default()
+        }
+    }
+
+    #[test]
+    fn rate_limits_from_usage_maps_primary_and_secondary_slots() {
+        let now = Utc::now();
+        let reset = now + chrono::Duration::hours(2);
+        let mut primary = usage_window("primary", 12.4, now);
+        primary.resets_at = Some(reset);
+        let mut secondary = usage_window("secondary", 40.6, now);
+        secondary.window_minutes = Some(10080);
+        let usage = stored(vec![primary, secondary, usage_window("5h", 90.0, now)]);
+
+        let snapshot = rate_limits_from_usage(Some(&usage), now);
+
+        assert_eq!(
+            snapshot.primary,
+            Some(codex::RateLimitWindow {
+                used_percent: 12,
+                window_duration_mins: Some(300),
+                resets_at: Some(reset.timestamp()),
+            })
+        );
+        assert_eq!(
+            snapshot.secondary,
+            Some(codex::RateLimitWindow {
+                used_percent: 41,
+                window_duration_mins: Some(10080),
+                resets_at: None,
+            })
+        );
+    }
+
+    #[test]
+    fn rate_limits_from_usage_drops_stale_and_past_reset_windows() {
+        let now = Utc::now();
+        let stale = usage_window("primary", 10.0, now - chrono::Duration::minutes(16));
+        let mut reset = usage_window("secondary", 20.0, now);
+        reset.resets_at = Some(now - chrono::Duration::seconds(1));
+        let usage = stored(vec![stale, reset]);
+
+        let snapshot = rate_limits_from_usage(Some(&usage), now);
+
+        assert_eq!(snapshot, empty_rate_limits());
+    }
+
+    #[test]
+    fn rate_limits_from_usage_maps_plan_and_credits() {
+        use gents::usage_observation::account_usage::{UsageCredits, UsagePlan};
+        let now = Utc::now();
+        let mut usage = stored(Vec::new());
+        usage.report.plan = Some(UsagePlan {
+            name: "plus".into(),
+            observed_at: now,
+        });
+        usage.report.credits = Some(UsageCredits {
+            has_credits: Some(true),
+            unlimited: Some(false),
+            balance: Some("3.00".into()),
+            observed_at: now,
+        });
+
+        let snapshot = rate_limits_from_usage(Some(&usage), now);
+        assert_eq!(
+            serde_json::to_value(snapshot.plan_type).unwrap(),
+            json!("plus")
+        );
+        assert_eq!(
+            snapshot.credits,
+            Some(codex::CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("3.00".into()),
+            })
+        );
+
+        usage.report.plan.as_mut().unwrap().name = "not-a-codex-plan".into();
+        usage.report.credits.as_mut().unwrap().unlimited = None;
+        let snapshot = rate_limits_from_usage(Some(&usage), now);
+        assert_eq!(
+            serde_json::to_value(snapshot.plan_type).unwrap(),
+            json!("unknown")
+        );
+        assert_eq!(snapshot.credits, None);
+    }
+
+    #[test]
+    fn rate_limits_from_usage_without_observation_is_empty() {
+        assert_eq!(
+            rate_limits_from_usage(None, Utc::now()),
+            empty_rate_limits()
+        );
     }
 }
