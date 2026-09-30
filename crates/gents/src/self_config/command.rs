@@ -2444,7 +2444,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
         Some("backend") => vec![patch_contract(
             SelfConfigTarget::InferenceBackend,
             json!({
-                "name":"string","provider_kind":"OpenAiCompatible|OpenRouter|ChatGptCodex|XaiGrokOAuth|ClaudeCliSubscription","openai_wire_api":"chat_completions|responses|null","endpoint":"URL string","auth":"{kind:unauthenticated}|{kind:environment,variable:string}|{kind:principal_oauth}; raw api_key values are operator-managed","connect_timeout_secs":"positive integer|null; default 10","discovery_timeout_secs":"positive integer|null; default 10","max_concurrent":"positive integer|null; default 1","max_queue_depth":"integer >= 0|null; default 100","enabled":"boolean; default true","tags":"array<string>; default []"
+                "name":"string","provider_kind":"OpenAiCompatible|OpenRouter|ChatGptCodex|XaiGrokOAuth|ClaudeCliSubscription","openai_wire_api":"chat_completions|responses|null","endpoint":"URL string","auth":"{kind:unauthenticated}|{kind:environment,variable:string}|{kind:principal_oauth}; raw api_key values and principal_oauth account_ref are operator-managed","connect_timeout_secs":"positive integer|null; default 10","discovery_timeout_secs":"positive integer|null; default 10","max_concurrent":"positive integer|null; default 1","max_queue_depth":"integer >= 0|null; default 100","enabled":"boolean; default true","tags":"array<string>; default []"
             }),
         )],
         Some("mcp-service") => vec![patch_contract(

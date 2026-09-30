@@ -775,7 +775,9 @@ pub fn guard_tools_keep_control(
     Ok(())
 }
 /// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
-/// API key. A stored or candidate `auth` that does not decode is rejected.
+/// API key, and a principal-OAuth candidate keeps the stored account reference
+/// (none for a non-OAuth backend). A stored or candidate `auth` that does not
+/// decode is rejected.
 pub fn guard_backend_auth(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
@@ -789,6 +791,16 @@ pub fn guard_backend_auth(
         anyhow::ensure!(
             candidate == stored,
             "raw API keys are operator-managed; select an environment or OAuth reference"
+        );
+    }
+    if let BackendAuth::PrincipalOAuth { account_ref } = &candidate {
+        let stored_ref = match &stored {
+            BackendAuth::PrincipalOAuth { account_ref } => account_ref.as_ref(),
+            _ => None,
+        };
+        anyhow::ensure!(
+            account_ref.as_ref() == stored_ref,
+            "OAuth account references are operator-managed; keep the backend's account_ref as stored"
         );
     }
     Ok(())
