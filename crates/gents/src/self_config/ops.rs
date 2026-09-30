@@ -808,9 +808,25 @@ pub fn guard_backend_auth(
 /// Lean `SelfConfig.backendChoiceAllowed`: whether a model selection may move
 /// from the `current` backend (none on create) to `next`.
 pub fn guard_backend_choice(
-    _current: Option<&crate::InferenceBackend>,
-    _next: &crate::InferenceBackend,
+    current: Option<&crate::InferenceBackend>,
+    next: &crate::InferenceBackend,
 ) -> Result<()> {
+    let BackendAuth::PrincipalOAuth { account_ref } = &next.auth else {
+        return Ok(());
+    };
+    // The #2117 resolver replaces this with the provider's earliest-connected
+    // enabled account; until then the default is the original account.
+    let default_account: Option<&String> = None;
+    let allowed = match current {
+        Some(current) if current.provider_kind == next.provider_kind => current.auth == next.auth,
+        _ => account_ref.as_ref() == default_account,
+    };
+    anyhow::ensure!(
+        allowed,
+        "backend {} selects another {} account; keep the current account, or pick an account-free backend or another provider's default account",
+        next.backend_id,
+        next.provider_kind
+    );
     Ok(())
 }
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
