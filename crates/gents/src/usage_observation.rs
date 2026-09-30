@@ -11,7 +11,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_loop::account_usage::{UsagePlan, UsageReport, UsageSource, REWRITE_AFTER};
+use gents_loop::account_usage::{
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, REWRITE_AFTER,
+};
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
 use serde_json::{json, Value};
@@ -323,7 +325,7 @@ async fn write(
 /// account that client serves.
 pub(crate) struct UsageReporter {
     node: Arc<EmbeddedNode>,
-    account: UsageAccount,
+    pub(crate) account: UsageAccount,
 }
 
 impl std::fmt::Debug for UsageReporter {
@@ -337,8 +339,26 @@ impl UsageReporter {
         Arc::new(Self { node, account })
     }
 
+    /// Parses now and writes in its own task, so a response never waits on
+    /// the node's write gate. The spawned task does not inherit the caller's
+    /// transaction (a task-local), so the write is never nested in it.
+    // ponytail: one task per response, unbounded; most write nothing (no
+    // rewrite of unchanged values). Coalesce per account if the write gate
+    // shows contention.
     pub(crate) fn observe(self: &Arc<Self>, headers: &HeaderMap, source: UsageSource) {
-        let _ = (headers, source);
+        let headers = headers
+            .iter()
+            .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)));
+        let report = usage_from_headers(headers, source, Utc::now());
+        if report.is_empty() {
+            return;
+        }
+        let reporter = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = record_usage(&reporter.node, &reporter.account, report).await {
+                tracing::warn!(error = %error, "recording provider usage failed");
+            }
+        });
     }
 }
 
