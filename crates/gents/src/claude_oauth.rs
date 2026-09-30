@@ -213,6 +213,46 @@ mod tests {
         );
     }
 
+    fn claude_login(
+        organization_uuid: Option<&str>,
+        account_uuid: Option<&str>,
+    ) -> OAuthCredential {
+        let tokens = ClaudeLoginTokens {
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            expires_in: Some(28800),
+            scope: None,
+            account_id: Some("account-1".into()),
+            organization_uuid: organization_uuid.map(str::to_owned),
+            account_uuid: account_uuid.map(str::to_owned),
+        };
+        credential_from_login_tokens(
+            "did:key:z6MkTest",
+            CLAUDE_OAUTH_PROVIDER,
+            &tokens,
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn credential_from_login_tokens_keys_org_and_account() {
+        let credential = claude_login(Some("org-1"), Some("account-1"));
+        assert_eq!(
+            credential.provider_account_key.as_deref(),
+            Some("org-1:account-1")
+        );
+    }
+
+    #[test]
+    fn credential_from_login_tokens_without_both_ids_has_no_key() {
+        for (organization, account) in [(Some("org-1"), None), (None, Some("account-1"))] {
+            assert_eq!(
+                claude_login(organization, account).provider_account_key,
+                None
+            );
+        }
+    }
+
     #[test]
     fn login_tokens_debug_redacts_both_tokens() {
         let tokens = ClaudeLoginTokens {

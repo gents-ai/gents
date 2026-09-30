@@ -1664,6 +1664,16 @@ pub(crate) mod test_support {
             .expect("seed credential");
     }
 
+    /// A JWT with an `alg: none` header. The signature segment stays non-empty:
+    /// `jwt_payload` decodes nothing from a token whose signature is empty.
+    pub(crate) fn unsigned_jwt(payload: serde_json::Value) -> String {
+        use base64::Engine;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.sig")
+    }
+
     /// Accepts exactly one HTTP request, returns its body, and answers with `status` + `body`.
     pub(crate) async fn one_shot_token_server(
         status: u16,

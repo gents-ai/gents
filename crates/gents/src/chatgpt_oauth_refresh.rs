@@ -169,6 +169,7 @@ fn parse_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth_credential::test_support::unsigned_jwt;
 
     #[test]
     fn decodes_nested_chatgpt_claims() {
@@ -218,12 +219,5 @@ mod tests {
             "plain text body",
             "non-JSON body is returned verbatim"
         );
-    }
-
-    fn unsigned_jwt(payload: Value) -> String {
-        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&payload).unwrap());
-        format!("{header}.{payload}.sig")
     }
 }

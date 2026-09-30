@@ -556,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_posts_json_with_state_and_verifier() {
-        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"}}"#).await;
+        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"},"organization":{"uuid":"org-1","name":"Example Org"}}"#).await;
         let opts = LoginOptions {
             token_url: url,
             ..options()
@@ -588,6 +588,8 @@ mod tests {
         assert_eq!(tokens.refresh_token, "refresh-NEW");
         assert_eq!(tokens.expires_in, Some(28800));
         assert_eq!(tokens.account_id.as_deref(), Some("person@example.test"));
+        assert_eq!(tokens.organization_uuid.as_deref(), Some("org-1"));
+        assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
     }
 
     #[tokio::test]

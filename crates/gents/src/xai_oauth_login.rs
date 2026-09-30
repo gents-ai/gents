@@ -329,4 +329,38 @@ mod tests {
             now + chrono::Duration::seconds(900)
         );
     }
+
+    fn grok_login(access_token: String) -> OAuthCredential {
+        let tokens = XaiLoginTokens {
+            access_token,
+            refresh_token: "ref".into(),
+            id_token: None,
+            expires_in: Some(900),
+        };
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        credential_from_login_tokens("did:key:zA", "xai-oauth", &tokens, now)
+    }
+
+    #[test]
+    fn credential_from_tokens_keys_the_access_token_principal() {
+        let access = crate::oauth_credential::test_support::unsigned_jwt(serde_json::json!({
+            "principal_type": "user",
+            "principal_id": "principal-1",
+            "sub": "user-a"
+        }));
+        assert_eq!(
+            grok_login(access).provider_account_key.as_deref(),
+            Some("user:principal-1")
+        );
+    }
+
+    #[test]
+    fn credential_from_tokens_without_principal_has_no_key() {
+        let no_principal = crate::oauth_credential::test_support::unsigned_jwt(
+            serde_json::json!({ "sub": "user-a" }),
+        );
+        for access in [no_principal, "not-a-jwt".to_string()] {
+            assert_eq!(grok_login(access).provider_account_key, None);
+        }
+    }
 }
