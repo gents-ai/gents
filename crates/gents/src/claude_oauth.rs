@@ -61,6 +61,10 @@ pub struct ClaudeLoginTokens {
     pub scope: Option<String>,
     pub account_id: Option<String>,
     /// The organization and account ids of the token response, when present.
+    /// They form the provider account key. They are trusted only as far as the
+    /// TLS-protected token endpoint they came from, only recognize and
+    /// deduplicate an account, and are never an authorization, routing or
+    /// request header input.
     pub organization_uuid: Option<String>,
     pub account_uuid: Option<String>,
 }
@@ -105,7 +109,11 @@ pub fn credential_from_login_tokens(
         enabled: true,
         account_ref: None,
         connected_at: None,
-        provider_account_key: None,
+        provider_account_key: tokens
+            .organization_uuid
+            .as_deref()
+            .zip(tokens.account_uuid.as_deref())
+            .map(|(organization, account)| format!("{organization}:{account}")),
     }
 }
 

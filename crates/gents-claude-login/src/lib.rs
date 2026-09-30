@@ -371,6 +371,10 @@ struct TokenResponse {
     scope: Option<String>,
     #[serde(default)]
     account: Option<serde_json::Value>,
+    /// A `Value` so a malformed block leaves the ids empty instead of failing
+    /// the sign-in. Only its `uuid` is read; the name is never kept.
+    #[serde(default)]
+    organization: Option<serde_json::Value>,
 }
 
 fn account_label(account: &serde_json::Value) -> Option<String> {
@@ -382,6 +386,15 @@ fn account_label(account: &serde_json::Value) -> Option<String> {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     })
+}
+
+fn uuid_of(block: Option<&serde_json::Value>) -> Option<String> {
+    block?
+        .get("uuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 pub(crate) async fn exchange_code(
@@ -427,8 +440,8 @@ pub(crate) async fn exchange_code(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account.as_ref().and_then(account_label),
-        organization_uuid: None,
-        account_uuid: None,
+        organization_uuid: uuid_of(tokens.organization.as_ref()),
+        account_uuid: uuid_of(tokens.account.as_ref()),
     })
 }
 

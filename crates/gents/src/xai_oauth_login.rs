@@ -257,6 +257,29 @@ where
     poll_device_token(http, &challenge, cancel).await
 }
 
+/// The provider account key of a Grok sign-in: `principal_type:principal_id`
+/// from the access token.
+///
+/// The claims are not signature-verified; they are trusted only as far as the
+/// TLS-protected token endpoint they came from. The key only recognizes and
+/// deduplicates an account: it is never an authorization, routing or request
+/// header input. A missing, malformed or non-JWT input gives `None`, never an
+/// error, so a bad claim cannot fail a sign-in or refresh.
+pub fn xai_account_key(access_token: &str) -> Option<String> {
+    let claims = crate::chatgpt_oauth_refresh::jwt_payload(access_token)?;
+    let claim = |name: &str| {
+        claims
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    Some(format!(
+        "{}:{}",
+        claim("principal_type")?,
+        claim("principal_id")?
+    ))
+}
+
 pub fn credential_from_login_tokens(
     agent_did: impl Into<String>,
     provider: impl Into<String>,
@@ -287,7 +310,7 @@ pub fn credential_from_login_tokens(
         enabled: true,
         account_ref: None,
         connected_at: None,
-        provider_account_key: None,
+        provider_account_key: xai_account_key(&tokens.access_token),
     }
 }
 

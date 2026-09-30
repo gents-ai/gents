@@ -45,6 +45,11 @@ impl OAuthCredential {
         let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
             .or(id_claims.expires_at)
             .unwrap_or_else(|| now + Duration::hours(1));
+        let provider_account_key = crate::chatgpt_oauth_refresh::chatgpt_account_key(
+            &access_token,
+            Some(id_token),
+            id_claims.account_id.as_deref(),
+        );
         Self {
             doc_id: None,
             credential_id: oauth_credential_id(&agent_did, &provider),
@@ -61,7 +66,7 @@ impl OAuthCredential {
             enabled: true,
             account_ref: None,
             connected_at: None,
-            provider_account_key: None,
+            provider_account_key,
         }
     }
 }
