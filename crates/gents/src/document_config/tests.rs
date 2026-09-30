@@ -1685,6 +1685,45 @@ fn default_behavior_publication_matches_lean() {
 }
 
 #[test]
+fn oauth_account_scope_matches_lean() {
+    use crate::backend_provider::{BackendProviderKind, BackendProviderOauthExt};
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let cases = snapshot.configuration_scope_cases["oauth_account"]
+        .as_array()
+        .unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let text = case["auth"].as_str().unwrap();
+        let auth: BackendAuth = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&auth).unwrap(), text, "{case}");
+        let scope = case["scope"].as_str().unwrap();
+        let stored_owner = case["stored_owner"].as_str().unwrap();
+        assert!(
+            !text.contains(scope) && !text.contains(stored_owner),
+            "{case}"
+        );
+        let kind: BackendProviderKind =
+            serde_json::from_value(case["provider_kind"].clone()).unwrap();
+        match case["owner"].as_str() {
+            Some(owner) => {
+                assert!(matches!(auth, BackendAuth::PrincipalOAuth { .. }), "{case}");
+                assert_eq!(owner, scope, "{case}");
+                let provider = kind.oauth_provider().unwrap();
+                assert_eq!(
+                    crate::oauth_credential::oauth_credential_id(owner, provider),
+                    format!("{provider}:{scope}"),
+                    "{case}"
+                );
+            }
+            None => assert!(
+                !matches!(auth, BackendAuth::PrincipalOAuth { .. }),
+                "{case}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn unchanged_nested_links_are_validated_without_a_behavior_write() {
     for missing in [
         crate::Collection::Tools,

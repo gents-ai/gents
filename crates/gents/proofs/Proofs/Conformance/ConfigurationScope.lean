@@ -72,6 +72,30 @@ private def defaultBehaviorJson : Json := toJson (defaultBehaviorCases.map
       ("publishable", toJson (defaultBehaviorPublishable reg "alice" defaultId)),
       ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
 
+/-- The Rust wire text of a backend auth, in serde field order. -/
+private def authText : BackendAuth → String
+  | .unauthenticated => "{\"kind\":\"unauthenticated\"}"
+  | .apiKey key => s!"\{\"kind\":\"api_key\",\"key\":{(toJson key).compress}}"
+  | .environment name => s!"\{\"kind\":\"environment\",\"variable\":{(toJson name).compress}}"
+  | .principalOAuth none => "{\"kind\":\"principal_oauth\"}"
+  | .principalOAuth (some a) =>
+    s!"\{\"kind\":\"principal_oauth\",\"account_ref\":{(toJson a).compress}}"
+
+/-- A backend stored under `stored_owner` runs under `scope`: any OAuth account
+reference is looked up under the executing scope, never the stored owner. -/
+private def oauthAccountCases : List (String × String × String × String × BackendAuth) := [
+  ("original_none_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth none),
+  ("reference_under_scope", "alice", "alice", "ChatGptCodex", .principalOAuth (some "acct-1")),
+  ("foreign_stored_owner_uses_executing_scope", "alice", "bob", "ChatGptCodex",
+    .principalOAuth (some "acct-1")),
+  ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY")]
+
+private def oauthAccountJson : Json := toJson (oauthAccountCases.map
+  fun (name, scope, storedOwner, kind, auth) => Json.mkObj
+    [("name", toJson name), ("scope", toJson scope), ("stored_owner", toJson storedOwner),
+     ("provider_kind", toJson kind), ("auth", toJson (authText auth)),
+     ("owner", toJson (oauthLookupOwner scope auth))])
+
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
@@ -82,7 +106,8 @@ def casesJson : String := (Json.mkObj
        ("enabled", toJson true)])),
    ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
    ("context_bounds", contextBoundsJson),
-   ("default_behavior", defaultBehaviorJson)]).compress
+   ("default_behavior", defaultBehaviorJson),
+   ("oauth_account", oauthAccountJson)]).compress
 
 /-- These scope fixtures advertise one model with unknown capabilities. Backend
 owner comes from the containing document, independently of credential scope. -/

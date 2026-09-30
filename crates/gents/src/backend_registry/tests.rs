@@ -75,6 +75,17 @@ fn principal_oauth_has_one_canonical_serde_tag() {
 }
 
 #[test]
+fn principal_oauth_account_ref_round_trips_and_stays_absent_when_none() {
+    for text in [
+        r#"{"kind":"principal_oauth","account_ref":"acct-1"}"#,
+        r#"{"kind":"principal_oauth"}"#,
+    ] {
+        let auth: BackendAuth = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&auth).unwrap(), text);
+    }
+}
+
+#[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     let cases = lean_backend_health_admission_cases();
     assert_eq!(cases.len(), 7);

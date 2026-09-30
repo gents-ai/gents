@@ -38,8 +38,8 @@ theorem backend_step_cannot_set_new_raw_key (decode : Doc → Option BackendAuth
 theorem environment_reference_patch_allowed (old : BackendAuth) (name : String) :
     authPatchAllowed old (.environment name) = true := rfl
 
-theorem oauth_reference_patch_allowed (old : BackendAuth) :
-    authPatchAllowed old .principalOAuth = true := rfl
+theorem oauth_reference_patch_allowed (old : BackendAuth) (a : Option String) :
+    authPatchAllowed old (.principalOAuth a) = true := rfl
 
 /-- Schema publication is additive, separate from document transactions. The
 shared schema owner supplies compatibility and exact-artifact validation;
