@@ -1091,6 +1091,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oauth_account_reference_is_not_probed_with_the_original_credential() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkProbe";
+        seed_credential(
+            &node,
+            did,
+            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            Utc::now() + chrono::Duration::hours(8),
+        )
+        .await;
+        let (options, client, health_map) = (
+            probe_options(),
+            reqwest::Client::new(),
+            BackendHealthMap::new(),
+        );
+        let mut grok = oauth_backend(
+            crate::backend_provider::BackendProviderKind::XaiGrokOAuth,
+            "grok",
+            "https://cli-chat-proxy.grok.com/v1",
+        );
+        grok.agent_did = did.to_string();
+        grok.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-b".into()),
+        };
+        let models = ModelsListener::start();
+        grok.endpoint = models.endpoint();
+        seed_backend_observation(&node, &grok, "unknown").await;
+        let outcome = probe_backends_cycle(
+            &node,
+            &client,
+            std::slice::from_ref(&grok),
+            Utc::now(),
+            &health_map,
+            &options,
+            Some(OAuthProbeContext {
+                node: node.clone(),
+                principal_did: did,
+            }),
+        )
+        .await;
+        assert!(outcome.promotable.is_empty());
+        let error = health_map
+            .get("grok")
+            .await
+            .and_then(|snap| snap.last_error)
+            .unwrap_or_default();
+        assert!(
+            error.contains("account references require the multi-account resolver"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
         let node = Arc::new(test_node().await);
         let did = "did:key:z6MkProbe";
