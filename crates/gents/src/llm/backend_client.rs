@@ -425,6 +425,35 @@ mod tests {
             .expect("test OAuthCredential must persist");
     }
 
+    #[tokio::test]
+    async fn backend_account_reference_fails_closed_before_the_original_credential() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let mut codex = test_behavior(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+        );
+        seed_oauth_credential(
+            node.as_ref(),
+            &codex,
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await;
+        codex.backend_auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-b".into()),
+        };
+        let error = build_backend_client(node, &codex, "key", Duration::from_secs(5))
+            .await
+            .err()
+            .expect("an account reference must not build with the original credential");
+        assert!(
+            format!("{error:#}").contains("account references require the multi-account resolver"),
+            "{error:#}"
+        );
+    }
+
     /// Seed credentials so every OAuth route reaches a concrete client. A
     /// missing-credential assertion cannot distinguish xAI Chat Completions
     /// from Responses because both fail in their shared bootstrap preamble.
