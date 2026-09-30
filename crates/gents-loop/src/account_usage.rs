@@ -7,11 +7,11 @@
 //! Window labels are identities: every source names the same window alike,
 //! so [`UsageReport::merge`] joins a header window and an endpoint window.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::provider_limit::epoch_seconds;
+use crate::provider_limit::{epoch_seconds, parse_rfc3339};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -172,42 +172,156 @@ pub fn usage_from_headers<'a>(
     report
 }
 
-/// ChatGPT `GET /wham/usage`. `None` when malformed.
+/// ChatGPT `GET /wham/usage` (codex-rs/backend-client): `plan_type`,
+/// `rate_limit.{primary,secondary}_window` and `credits`. `None` when the
+/// body has no `rate_limit` object.
 pub fn codex_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
-    let _ = body;
-    Some(inert(now))
+    let rate_limit = body.get("rate_limit").filter(|value| value.is_object())?;
+    let mut report = UsageReport::default();
+    for slot in ["primary", "secondary"] {
+        let Some(window) = rate_limit.get(format!("{slot}_window")) else {
+            continue;
+        };
+        let Some(used) = window
+            .get("used_percent")
+            .and_then(Value::as_f64)
+            .and_then(percent)
+        else {
+            continue;
+        };
+        report.windows.push(UsageWindow {
+            label: slot.to_string(),
+            window_minutes: window
+                .get("limit_window_seconds")
+                .and_then(Value::as_i64)
+                .map(|seconds| seconds / 60),
+            used_pct: used,
+            resets_at: window
+                .get("reset_at")
+                .and_then(Value::as_i64)
+                .and_then(|seconds| epoch_seconds(&seconds.to_string())),
+            source: UsageSource::Endpoint,
+            observed_at: now,
+        });
+    }
+    report.plan = plan(body.get("plan_type"), now);
+    if let Some(credits) = body.get("credits").filter(|value| value.is_object()) {
+        report.credits = Some(UsageCredits {
+            has_credits: credits.get("has_credits").and_then(Value::as_bool),
+            unlimited: credits.get("unlimited").and_then(Value::as_bool),
+            balance: credits.get("balance").and_then(|balance| match balance {
+                Value::String(text) => Some(text.clone()),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            }),
+            observed_at: now,
+        });
+    }
+    Some(report)
 }
 
-/// Grok `GET {cli-chat-proxy}/billing?format=credits`. `None` when malformed.
+/// Grok `GET {cli-chat-proxy}/billing?format=credits` (xai-org/grok-build
+/// `extensions/billing.rs`): one `period` window from
+/// `creditUsagePercent` (0..100) and `currentPeriod`, under `config` or at the
+/// top level, and `subscriptionTier` as the plan. Proto3 JSON omits a zero
+/// percent, so a period without the field is 0 used. `None` for a body with
+/// neither, such as the legacy `monthlyLimit`/`used` shape.
 pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
-    let _ = body;
-    Some(inert(now))
-}
-
-/// OpenRouter `GET /api/v1/key`. `None` when malformed.
-pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
-    let _ = body;
-    Some(inert(now))
-}
-
-/// Claude `GET /api/oauth/usage`. `None` when malformed.
-pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
-    let _ = body;
-    Some(inert(now))
-}
-
-fn inert(now: DateTime<Utc>) -> UsageReport {
-    UsageReport {
+    let config = body
+        .get("config")
+        .filter(|value| value.is_object())
+        .unwrap_or(body);
+    let period = config
+        .get("currentPeriod")
+        .filter(|value| value.is_object());
+    let used = match config.get("creditUsagePercent") {
+        Some(value) => percent(value.as_f64()?)?,
+        None if period.is_some() => 0.0,
+        None => return None,
+    };
+    let time = |name: &str| {
+        period
+            .and_then(|period| period.get(name))
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339)
+    };
+    let (start, end) = (time("start"), time("end"));
+    Some(UsageReport {
         windows: vec![UsageWindow {
-            label: "inert".to_string(),
-            window_minutes: None,
-            used_pct: 0.0,
-            resets_at: None,
+            label: "period".to_string(),
+            window_minutes: start
+                .zip(end)
+                .map(|(start, end)| (end - start).num_minutes()),
+            used_pct: used,
+            resets_at: end,
             source: UsageSource::Endpoint,
             observed_at: now,
         }],
-        ..UsageReport::default()
+        credits: None,
+        plan: plan(body.get("subscriptionTier"), now),
+    })
+}
+
+/// OpenRouter `GET /api/v1/key` (documented): a capped key is one window
+/// named by `limit_reset` (`total` when it never resets), resetting at the
+/// next UTC midnight, Monday or first of the month. An uncapped key gives an
+/// empty report: the key has no cap, which says nothing about the account
+/// balance. `None` without a `data` object.
+pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let data = body.get("data").filter(|value| value.is_object())?;
+    let mut report = UsageReport::default();
+    let limit = data
+        .get("limit")
+        .and_then(Value::as_f64)
+        .filter(|limit| *limit > 0.0);
+    let remaining = data.get("limit_remaining").and_then(Value::as_f64);
+    if let Some(used) = limit
+        .zip(remaining)
+        .and_then(|(limit, remaining)| percent((limit - remaining) / limit * 100.0))
+    {
+        let reset = data.get("limit_reset").and_then(Value::as_str);
+        report.windows.push(UsageWindow {
+            label: reset.unwrap_or("total").to_string(),
+            window_minutes: None,
+            used_pct: used,
+            resets_at: reset.and_then(|reset| next_openrouter_reset(reset, now)),
+            source: UsageSource::Endpoint,
+            observed_at: now,
+        });
     }
+    Some(report)
+}
+
+/// Claude `GET /api/oauth/usage`: `five_hour`, `seven_day` and
+/// `seven_day_<model>`, each `{utilization, resets_at}` or null. Utilization
+/// is read as a percent, as the open-source decoders do (unverified live).
+/// `None` when the body is not an object.
+pub fn claude_oauth_usage(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
+    let mut report = UsageReport::default();
+    for (key, window) in body.as_object()? {
+        let Some(label) = claude_label(key) else {
+            continue;
+        };
+        let Some(used) = window
+            .get("utilization")
+            .and_then(Value::as_f64)
+            .and_then(percent)
+        else {
+            continue;
+        };
+        report.windows.push(UsageWindow {
+            label,
+            window_minutes: None,
+            used_pct: used,
+            resets_at: window
+                .get("resets_at")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339),
+            source: UsageSource::Endpoint,
+            observed_at: now,
+        });
+    }
+    Some(report)
 }
 
 /// One label per Claude window for headers (`5h`, `7d`, `7d_<model>`) and
@@ -222,6 +336,29 @@ fn claude_label(segment: &str) -> Option<String> {
             .filter(|model| !model.is_empty())
             .map(|model| format!("7d {model}")),
     }
+}
+
+fn plan(value: Option<&Value>, now: DateTime<Utc>) -> Option<UsagePlan> {
+    let name = value?.as_str().filter(|name| !name.is_empty())?;
+    Some(UsagePlan {
+        name: name.to_string(),
+        observed_at: now,
+    })
+}
+
+fn next_openrouter_reset(reset: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let today = now.date_naive();
+    let date = match reset {
+        "daily" => today.succ_opt()?,
+        "weekly" => {
+            today + chrono::Days::new(7 - u64::from(today.weekday().num_days_from_monday()))
+        }
+        "monthly" => today
+            .with_day(1)?
+            .checked_add_months(chrono::Months::new(1))?,
+        _ => return None,
+    };
+    Some(Utc.from_utc_datetime(&date.and_time(NaiveTime::MIN)))
 }
 
 /// A provider percent, clamped to 100; `None` for NaN or a negative value.

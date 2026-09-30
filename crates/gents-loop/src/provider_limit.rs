@@ -402,7 +402,7 @@ pub(crate) fn epoch_seconds(value: &str) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(seconds, 0).single()
 }
 
-fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|at| at.with_timezone(&Utc))
