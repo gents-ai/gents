@@ -1004,6 +1004,13 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
         ("fn f(v: &V) { v.oauth_credentials.values().find(|r| r.enabled); }", 0, 1),
         ("fn f(n: &N) { lookup_oauth_credential_by_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),
         ("#[cfg(test)] mod tests { fn f(n: &N) { lookup_oauth_credential(n); list_oauth_credentials(n); } }", 0, 0),
+        // Spacing, an escaped line break, `concat!` and a bare selection set
+        // still read rows; a format placeholder does not.
+        (r#"const Q: &str = "query { OAuthCredential (filter: {}) { _docID } }";"#, 1, 0),
+        (r#"fn f() -> String { format!("{{ OAuthCredential \n (filter: {{}}) {{ _docID }} }}") }"#, 1, 0),
+        (r#"const Q: &str = concat!("query { OAuthCredential", "(filter: {}) { _docID } }");"#, 1, 0),
+        (r#"fn f() -> String { format!("query {{ OAuthCredential {{ _docID }} }}") }"#, 1, 0),
+        (r#"fn f(id: &str) -> String { format!("duplicate OAuthCredential {id}") }"#, 0, 0),
     ] {
         let syntax = syn::parse_file(source).expect("parse snippet");
         let (found, counted) = oauth_pick_findings(&syntax);
