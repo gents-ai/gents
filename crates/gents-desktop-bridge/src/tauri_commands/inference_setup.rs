@@ -1036,6 +1036,8 @@ mod provider_account_tests {
                 .with_timezone(&chrono::Utc),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1061,6 +1063,8 @@ mod provider_account_tests {
                 .with_timezone(&chrono::Utc),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         }
     }
 

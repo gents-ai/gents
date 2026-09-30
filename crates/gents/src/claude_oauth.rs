@@ -100,6 +100,8 @@ pub fn credential_from_login_tokens(
         access_token_expires_at,
         last_refresh: Some(now),
         enabled: true,
+        account_ref: None,
+        connected_at: None,
     }
 }
 

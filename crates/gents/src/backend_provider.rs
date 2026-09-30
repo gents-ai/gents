@@ -667,6 +667,8 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
 
         let models = discover_models(
@@ -706,6 +708,8 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
 
         let models = discover_models(
@@ -761,6 +765,8 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         }
     }
 

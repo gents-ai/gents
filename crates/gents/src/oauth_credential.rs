@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled";
+const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at";
 
 /// Display metadata only. Never use decoded, unverified claims for authorization
 /// or overwrite the account ID used by a provider's authentication headers.
@@ -193,6 +193,14 @@ pub struct OAuthCredential {
     #[serde(default)]
     pub last_refresh: Option<DateTime<Utc>>,
     pub enabled: bool,
+    /// Which of the provider's accounts this row is; `None` is the provider's
+    /// original account (the row upgraded in place).
+    #[serde(default)]
+    pub account_ref: Option<String>,
+    /// When the account was first stored; `None` for rows from before the
+    /// field existed.
+    #[serde(default)]
+    pub connected_at: Option<DateTime<Utc>>,
 }
 
 const REDACTED: &str = "[redacted]";
@@ -547,6 +555,8 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
         )?,
         last_refresh: parse_optional_datetime(row.last_refresh, "last_refresh")?,
         enabled: row.enabled.unwrap_or(true),
+        account_ref: clean_optional(row.account_ref),
+        connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
     })
 }
 
@@ -884,6 +894,8 @@ mod tests {
             access_token_expires_at: DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap(),
             last_refresh: Some(DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap()),
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         }
     }
 
@@ -1272,6 +1284,8 @@ pub(crate) mod test_support {
             access_token_expires_at: expires_at,
             last_refresh: Some(Utc::now()),
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await
