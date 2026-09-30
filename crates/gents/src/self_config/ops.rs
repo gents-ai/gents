@@ -852,6 +852,77 @@ pub(crate) async fn guard_backend_choice_in_txn(
         .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
     guard_backend_choice(current.as_ref(), &next)
 }
+/// Compaction summaries run on the compaction's profile, else the behavior's
+/// (`CompactionConfig::inference_profile_id`). A behavior `context_id` or a
+/// context `compaction_id` edit that moves that backend is a pick too.
+pub(crate) async fn guard_compaction_choice_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    anchor: &BehaviorAnchor,
+    stored: &Map<String, Value>,
+    merged: &Map<String, Value>,
+) -> Result<()> {
+    let field = |doc: &Map<String, Value>, name: &str| {
+        doc.get(name).and_then(Value::as_str).map(ToOwned::to_owned)
+    };
+    let owner = field(&anchor.doc, "agent_did").context("behavior is missing agent_did")?;
+    let read = |collection: SelfConfigTarget, id: Option<String>, name: &'static str| {
+        let owner = owner.clone();
+        async move {
+            Ok::<_, anyhow::Error>(match id {
+                Some(id) => read_owned_doc(txn, collection, &owner, &id)
+                    .await?
+                    .and_then(|(_, doc)| field(&doc, name)),
+                None => None,
+            })
+        }
+    };
+    let (current, next) = match target {
+        SelfConfigTarget::AgentContext => {
+            let profile = field(&anchor.doc, "inference_profile_id");
+            (
+                (field(stored, "compaction_id"), profile.clone()),
+                (field(merged, "compaction_id"), profile),
+            )
+        }
+        SelfConfigTarget::AgentBehavior => {
+            let context = |doc: &Map<String, Value>| {
+                read(
+                    SelfConfigTarget::AgentContext,
+                    field(doc, "context_id"),
+                    "compaction_id",
+                )
+            };
+            (
+                (
+                    context(stored).await?,
+                    field(stored, "inference_profile_id"),
+                ),
+                (
+                    context(merged).await?,
+                    field(merged, "inference_profile_id"),
+                ),
+            )
+        }
+        _ => return Ok(()),
+    };
+    if current == next {
+        return Ok(());
+    }
+    let backend = |(compaction, profile): (Option<String>, Option<String>)| async {
+        let profile = read(
+            SelfConfigTarget::Compaction,
+            compaction,
+            "inference_profile_id",
+        )
+        .await?
+        .or(profile)
+        .context("behavior inference profile is missing")?;
+        profile_backend_id(txn, &owner, &profile).await
+    };
+    let (current, next) = (backend(current).await?, backend(next).await?);
+    guard_backend_choice_in_txn(txn, &owner, Some(&current), &next).await
+}
 /// The backend an owned profile selects.
 pub(crate) async fn profile_backend_id(
     txn: &ConfigApplyTxn<'_>,

@@ -315,6 +315,7 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
                     .await?;
                 require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
             }
+            ops::guard_compaction_choice_in_txn(txn, target, anchor, stored, merged).await?;
             validation.await
         })
     });
