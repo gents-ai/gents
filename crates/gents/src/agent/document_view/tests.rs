@@ -1485,6 +1485,74 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     );
 }
 
+#[tokio::test]
+async fn readiness_follows_the_backend_account_reference() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-ref"));
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    bind_default_behavior_chatgpt_backend(node.as_ref(), identity.did(), &default_behavior_id)
+        .await;
+    insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+    for backend in view.backends.values_mut() {
+        backend.value.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-x".to_string()),
+        };
+    }
+    let ready = |view: DocumentRuntimeView| {
+        let node = node.clone();
+        let resolve_context = &resolve_context;
+        let default_behavior_id = default_behavior_id.clone();
+        async move {
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            match snapshot.unavailable_behaviors.get(&default_behavior_id) {
+                None => true,
+                Some(reason) => {
+                    assert_eq!(
+                        reason.public_reason,
+                        gents_protocol::row::BehaviorReadinessUnavailableReason::CredentialsRequired
+                    );
+                    false
+                }
+            }
+        }
+    };
+
+    assert!(
+        !ready(view.clone()).await,
+        "only the original account is stored, so acct-x does not resolve"
+    );
+
+    let original = view
+        .oauth_credentials
+        .values()
+        .next()
+        .expect("original row")
+        .clone();
+    let mut account = original.clone();
+    account.value.credential_id = format!("{}:acct-x", original.value.credential_id);
+    account.value.account_ref = Some("acct-x".to_string());
+    view.oauth_credentials
+        .insert(account.value.credential_id.clone(), account.clone());
+    assert!(ready(view.clone()).await, "an enabled acct-x row resolves");
+
+    account.value.enabled = false;
+    view.oauth_credentials
+        .insert(account.value.credential_id.clone(), account);
+    assert!(!ready(view).await, "a disabled acct-x row never resolves");
+}
+
 /// Install the canonical chain for `behavior_id` and bind it as the principal's
 /// explicit default, then swap the chain's InferenceBackend to the
 /// ClaudeCliSubscription provider so resolution requires a Claude
