@@ -857,7 +857,7 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
         false,
     )
     .await
-    .map_err(|_| BridgeError::untyped("provider account not found"))?;
+    .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
