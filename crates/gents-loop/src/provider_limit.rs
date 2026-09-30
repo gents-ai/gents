@@ -397,7 +397,7 @@ fn delay_after(now: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
     now.checked_add_signed(chrono::Duration::try_milliseconds(millis)?)
 }
 
-fn epoch_seconds(value: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn epoch_seconds(value: &str) -> Option<DateTime<Utc>> {
     let seconds = value.parse::<i64>().ok().filter(|seconds| *seconds > 0)?;
     Utc.timestamp_opt(seconds, 0).single()
 }

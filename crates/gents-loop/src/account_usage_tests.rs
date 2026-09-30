@@ -109,7 +109,10 @@ fn headers_openai_key_headroom_with_duration_reset() {
 
 #[test]
 fn headers_none_gives_an_empty_report() {
-    let report = headers(&[("content-type", "text/event-stream"), ("request-id", "req-1")]);
+    let report = headers(&[
+        ("content-type", "text/event-stream"),
+        ("request-id", "req-1"),
+    ]);
     assert!(report.is_empty(), "{report:?}");
     assert_eq!(report, UsageReport::default());
 }
