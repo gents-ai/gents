@@ -1,16 +1,19 @@
 use anyhow::{Context, Result};
+use gents::config_client::load_inference_backend_in_txn;
+use gents::usage_observation::usage_for_backend;
 use gents_codex_protocol as codex;
 use serde_json::json;
 
 use super::super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::super::protocol::{
-    empty_rate_limits, initialize_result, send_result, send_typed_json_result,
+    initialize_result, rate_limits_from_usage, send_result, send_typed_json_result,
 };
 use super::super::{Outbound, ShimState};
 use super::models::{
     apply_config_writes, available_model_backends, load_bound_behavior, model_list_entries,
 };
 use super::skills::load_skill_metadata;
+use crate::config_writes::ConfigAccess;
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,
@@ -38,11 +41,14 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::GetAccountRateLimits { request_id, .. } => {
+            let rate_limits = session_rate_limits(state)
+                .await
+                .context("reading the session account's usage for rate limits")?;
             send_result(
                 outbound,
                 request_id,
                 codex::GetAccountRateLimitsResponse {
-                    rate_limits: empty_rate_limits(),
+                    rate_limits,
                     rate_limits_by_limit_id: None,
                 },
             )
@@ -235,6 +241,31 @@ pub(super) async fn handle_basic_request(
             other.method()
         ),
     }
+}
+
+/// The stored usage of the account the session's backend names. Never
+/// reads the provider: on-demand reads belong to the runtime.
+async fn session_rate_limits(state: &ShimState) -> Result<codex::RateLimitSnapshot> {
+    let profile = load_bound_behavior(state).await?.inference_profile;
+    let agent_did = state.agent_did.as_ref();
+    let backend_id = profile.backend_id.as_str();
+    let backend =
+        ConfigAccess::transact_local(state.node.as_ref(), None, "codex.rate_limits", |txn| {
+            Box::pin(async move { load_inference_backend_in_txn(txn, agent_did, backend_id).await })
+        })
+        .await?;
+    let stored = match backend {
+        Some(backend) => {
+            usage_for_backend(
+                &ConfigAccess::Local(state.node.clone()),
+                agent_did,
+                &backend,
+            )
+            .await?
+        }
+        None => None,
+    };
+    Ok(rate_limits_from_usage(stored.as_ref(), chrono::Utc::now()))
 }
 
 #[cfg(test)]

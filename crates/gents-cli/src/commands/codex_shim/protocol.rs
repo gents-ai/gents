@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::usage_observation::account_usage::{visible_windows, Freshness};
 use gents::usage_observation::StoredUsage;
 use gents::InferenceBackend;
 use gents_codex_protocol as codex;
@@ -271,18 +272,42 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
     }
 }
 
-/// `account/rateLimits/read` from the stored usage of the session's account.
+/// `account/rateLimits/read` from the stored usage of the session's account:
+/// fresh windows only (the protocol cannot mark a value as last-known), by
+/// Codex slot label; credits only when both of Codex's booleans are known.
 pub(super) fn rate_limits_from_usage(
     stored: Option<&StoredUsage>,
     now: DateTime<Utc>,
 ) -> codex::RateLimitSnapshot {
-    let _ = (stored, now);
+    let Some(stored) = stored else {
+        return empty_rate_limits();
+    };
+    let visible = visible_windows(&stored.report, now);
+    let slot = |label: &str| {
+        visible
+            .iter()
+            .find(|(window, freshness)| window.label == label && *freshness == Freshness::Fresh)
+            .map(|(window, _)| codex::RateLimitWindow {
+                used_percent: window.used_pct.round() as i32,
+                window_duration_mins: window.window_minutes,
+                resets_at: window.resets_at.map(|at| at.timestamp()),
+            })
+    };
     codex::RateLimitSnapshot {
-        primary: Some(codex::RateLimitWindow {
-            used_percent: 0,
-            window_duration_mins: None,
-            resets_at: None,
+        primary: slot("primary"),
+        secondary: slot("secondary"),
+        credits: stored.report.credits.as_ref().and_then(|credits| {
+            Some(codex::CreditsSnapshot {
+                has_credits: credits.has_credits?,
+                unlimited: credits.unlimited?,
+                balance: credits.balance.clone(),
+            })
         }),
+        plan_type: stored
+            .report
+            .plan
+            .as_ref()
+            .and_then(|plan| serde_json::from_value(json!(plan.name)).ok()),
         ..empty_rate_limits()
     }
 }
