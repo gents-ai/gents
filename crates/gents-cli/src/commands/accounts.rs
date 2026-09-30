@@ -423,6 +423,24 @@ pub(crate) async fn remove_account(
     }))
 }
 
+/// Run `probe` on each enabled account of `provider`, each resolved by its
+/// own reference, and return one block per account, label first. A disabled
+/// account is listed, not probed. A failing probe does not stop the others;
+/// the result is then an error that carries every block and names the
+/// failures.
+pub(crate) async fn probe_each_account<F, Fut>(
+    _access: &ConfigAccess,
+    _agent_did: &str,
+    _provider: &str,
+    _probe: F,
+) -> Result<Vec<String>>
+where
+    F: Fn(gents::oauth_credential::OAuthCredential) -> Fut,
+    Fut: std::future::Future<Output = Result<String>>,
+{
+    anyhow::bail!("not implemented")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +830,69 @@ mod tests {
             .await
             .contains(&format!("{CLAUDE}:{DID}")));
         assert!(backend_ids(&access).await.contains(&"claude".to_string()));
+    }
+
+    #[tokio::test]
+    async fn probe_prints_one_block_per_account_by_its_own_reference() {
+        let access = seeded().await;
+        gents::oauth_credential::set_account_enabled(
+            &access,
+            DID,
+            &format!("{CLAUDE}:{DID}:acct-l2"),
+            false,
+        )
+        .await
+        .unwrap();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let blocks = probe_each_account(&access, DID, CLAUDE, |credential| {
+            seen.lock().unwrap().push(credential.credential_id.clone());
+            async move {
+                Ok(format!(
+                    "probed {}",
+                    credential.account_ref.as_deref().unwrap_or("original")
+                ))
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen.into_inner().unwrap(), [format!("{CLAUDE}:{DID}")]);
+        assert_eq!(blocks.len(), 2);
+        let personal = blocks
+            .iter()
+            .find(|block| block.starts_with("Personal"))
+            .unwrap();
+        assert!(personal.contains("probed original"), "{personal}");
+        let work = blocks
+            .iter()
+            .find(|block| block.starts_with("Work"))
+            .unwrap();
+        assert!(work.contains("disabled, not probed"), "{work}");
+    }
+
+    #[tokio::test]
+    async fn probe_failures_do_not_stop_the_others() {
+        let access = seeded().await;
+        let seen = std::sync::Mutex::new(Vec::new());
+        let error = probe_each_account(&access, DID, GROK, |credential| {
+            seen.lock().unwrap().push(credential.account_ref.clone());
+            async move {
+                match credential.account_ref.as_deref() {
+                    Some("acct-g2") => anyhow::bail!("HTTP 401"),
+                    _ => Ok("models: 3".to_string()),
+                }
+            }
+        })
+        .await
+        .unwrap_err();
+        let mut seen = seen.into_inner().unwrap();
+        seen.sort();
+        assert_eq!(seen, [None, Some("acct-g2".to_string())]);
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("Grok 2") && text.contains("HTTP 401"),
+            "{text}"
+        );
+        assert!(text.contains("models: 3"), "{text}");
     }
 
     #[tokio::test]
