@@ -18,8 +18,9 @@ mod tests;
 mod text_tests;
 
 pub use ops::{
-    apply_tool_grant_selection, guard_behavior_keeps_reach, guard_tools_keep_control,
-    validate_tool_network_selection, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
+    apply_tool_grant_selection, guard_backend_auth, guard_behavior_keeps_reach,
+    guard_tools_keep_control, validate_tool_network_selection, PatchOutcome, SelfConfigCore,
+    EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -462,16 +463,7 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         let stored = stored.clone();
         Box::pin(async move {
             let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
-            if matches!(
-                backend.auth,
-                crate::document_config::BackendAuth::ApiKey { .. }
-            ) {
-                let previous: crate::InferenceBackend = decode_merged("InferenceBackend", &stored)?;
-                anyhow::ensure!(
-                    backend.auth == previous.auth,
-                    "raw API keys are operator-managed; select an environment or OAuth reference"
-                );
-            }
+            guard_backend_auth(&stored, &merged)?;
             backend.validate()
         })
     });

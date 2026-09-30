@@ -22,7 +22,7 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::Tools;
+use crate::document_config::{BackendAuth, Tools};
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
@@ -772,6 +772,25 @@ pub fn guard_tools_keep_control(
         !had_tools || tools,
         "no-lockout guard: self-config must keep the tools category"
     );
+    Ok(())
+}
+/// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
+/// API key. A stored or candidate `auth` that does not decode is rejected.
+pub fn guard_backend_auth(
+    stored: &Map<String, Value>,
+    candidate: &Map<String, Value>,
+) -> Result<()> {
+    let auth = |doc: &Map<String, Value>| {
+        serde_json::from_value::<BackendAuth>(doc.get("auth").cloned().unwrap_or(Value::Null))
+            .map_err(|error| anyhow!("backend auth is not valid: {error}"))
+    };
+    let (stored, candidate) = (auth(stored)?, auth(candidate)?);
+    if matches!(candidate, BackendAuth::ApiKey { .. }) {
+        anyhow::ensure!(
+            candidate == stored,
+            "raw API keys are operator-managed; select an environment or OAuth reference"
+        );
+    }
     Ok(())
 }
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
