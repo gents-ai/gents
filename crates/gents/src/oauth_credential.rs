@@ -600,7 +600,13 @@ impl SignIn {
 
     /// After an add at the original slot: which profiles now use it.
     pub fn profiles_note(&self) -> Option<String> {
-        None
+        (!self.profiles.is_empty()).then(|| {
+            format!(
+                "These profiles now use this account (their backend has no account \
+                 reference): {}",
+                self.profiles.join(", ")
+            )
+        })
     }
 }
 
@@ -948,13 +954,47 @@ async fn store_sign_in_in_txn(
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
     credential.doc_id = Some(doc_id.clone());
     sync_account_backend(txn, &credential, None).await?;
+    let profiles = if rows.is_empty() {
+        original_account_profiles(txn, &credential).await?
+    } else {
+        Vec::new()
+    };
     Ok(SignIn {
         doc_id,
         credential,
         result: SignInResult::Added,
         identity_matched: false,
-        profiles: Vec::new(),
+        profiles,
     })
+}
+
+/// Profiles on `credential`'s provider's backends with no account reference:
+/// the ones its original account serves.
+async fn original_account_profiles(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    credential: &OAuthCredential,
+) -> Result<Vec<String>> {
+    use crate::backend_provider::BackendProviderOauthExt;
+    let backends: Vec<_> =
+        crate::config_client::list_inference_backends_in_txn(txn, &credential.agent_did)
+            .await?
+            .into_iter()
+            .filter(|backend| {
+                matches!(
+                    backend.auth,
+                    crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None }
+                ) && backend.provider_kind.oauth_provider() == Some(credential.provider.as_str())
+            })
+            .map(|backend| backend.backend_id)
+            .collect();
+    Ok(
+        crate::config_client::list_inference_profiles_in_txn(txn, &credential.agent_did)
+            .await?
+            .into_iter()
+            .filter(|profile| backends.contains(&profile.backend_id))
+            .map(|profile| profile.profile_id)
+            .collect(),
+    )
 }
 
 /// One sign-in account as views show it: no token.
