@@ -119,6 +119,22 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 SelfConfigTarget::InferenceBackend => {
                     gents::self_config::guard_backend_auth(&stored, &candidate)
                 }
+                SelfConfigTarget::InferenceProfile => {
+                    let backend = |doc: &Map<String, Value>| {
+                        let id = doc.get("backend_id")?.as_str()?;
+                        case.backends
+                            .iter()
+                            .find(|backend| backend.backend_id == id)
+                            .map(typed_backend)
+                    };
+                    match backend(&candidate) {
+                        Some(next) => gents::self_config::guard_backend_choice(
+                            backend(&stored).as_ref(),
+                            &next,
+                        ),
+                        None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                    }
+                }
                 other => panic!("{}: no runtime guard for {other:?}", case.name),
             };
             assert_eq!(
@@ -129,6 +145,20 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
             );
         }
     }
+}
+
+fn typed_backend(
+    backend: &crate::lean_vocab_test::LeanSelfConfigBackend,
+) -> gents::InferenceBackend {
+    serde_json::from_value(serde_json::json!({
+        "agent_did": "did:key:agent-a",
+        "backend_id": backend.backend_id,
+        "name": backend.backend_id,
+        "provider_kind": backend.provider_kind,
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": parse_nested(Value::String(backend.auth.clone())),
+    }))
+    .unwrap_or_else(|error| panic!("{}: {error}", backend.backend_id))
 }
 
 /// Lean rows abstract nested Tools groups as their canonical JSON text.

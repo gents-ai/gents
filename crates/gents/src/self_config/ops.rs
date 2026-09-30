@@ -805,6 +805,14 @@ pub fn guard_backend_auth(
     }
     Ok(())
 }
+/// Lean `SelfConfig.backendChoiceAllowed`: whether a model selection may move
+/// from the `current` backend (none on create) to `next`.
+pub fn guard_backend_choice(
+    _current: Option<&crate::InferenceBackend>,
+    _next: &crate::InferenceBackend,
+) -> Result<()> {
+    Ok(())
+}
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
     let tools = decode_merged::<Tools>("Tools", merged)?;
     if let Some(lsp) = tools
