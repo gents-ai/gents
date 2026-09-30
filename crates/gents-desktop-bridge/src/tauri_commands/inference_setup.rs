@@ -779,6 +779,9 @@ pub(crate) struct ProviderAccountView {
     /// not a stored account until `desktop_provider_account_retry_save`
     /// succeeds.
     pub pending_save: bool,
+    /// Which of the provider's accounts this is; `None` is the original
+    /// account, which a backend without a reference runs on.
+    pub account_ref: Option<String>,
 }
 
 impl ProviderAccountView {
@@ -802,6 +805,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
             pending_save: false,
+            account_ref: None,
         }
     }
 }
@@ -1629,6 +1633,20 @@ mod provider_account_tests {
             .unwrap();
         assert_eq!(signed.credential.credential_id, second.credential_id);
         assert_ne!(signed.credential.credential_id, first[0].credential_id);
+        let views = observe_provider_accounts(&pending, access(), agent)
+            .await
+            .unwrap();
+        let view = |credential_id: &str| {
+            views
+                .iter()
+                .find(|view| view.credential_id == credential_id)
+                .unwrap()
+                .account_ref
+                .clone()
+        };
+        assert_eq!(view(&first[0].credential_id), None);
+        assert!(second.account_ref.is_some());
+        assert_eq!(view(&second.credential_id), second.account_ref);
     }
 
     #[tokio::test]

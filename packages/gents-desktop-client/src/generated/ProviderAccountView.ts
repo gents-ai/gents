@@ -6,4 +6,9 @@ export type ProviderAccountView = { credentialId: string, agentDid: string, prov
  * not a stored account until `desktop_provider_account_retry_save`
  * succeeds.
  */
-pendingSave: boolean, };
+pendingSave: boolean,
+/**
+ * Which of the provider's accounts this is; `None` is the original
+ * account, which a backend without a reference runs on.
+ */
+accountRef: string | null, };

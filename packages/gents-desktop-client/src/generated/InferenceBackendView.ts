@@ -5,4 +5,9 @@ export type InferenceBackendView = { backendId: string, name: string | null, pro
 /**
  * Canonical provider advertisements for model-specific editing controls.
  */
-advertisedModels: Array<AdvertisedModel>, probeStatus: string | null, };
+advertisedModels: Array<AdvertisedModel>, probeStatus: string | null,
+/**
+ * The account a subscription backend runs on; `None` is the provider's
+ * original account (and every backend that uses no account).
+ */
+accountRef: string | null, };
