@@ -4587,6 +4587,83 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     core.apply(backend_request(endpoint)).await.unwrap();
 }
 
+/// Two ChatGPT accounts and Grok's original account; the behavior's profile
+/// is on the original ChatGPT account. No-lockout stays off.
+async fn account_choice_core(behavior: &str) -> (String, SelfConfigCore) {
+    let node = build_persona_node().await;
+    let owner = persona_identity(behavior).did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    for (id, kind, auth) in [
+        (
+            "chat-original",
+            "ChatGptCodex",
+            json!({"kind":"principal_oauth"}),
+        ),
+        (
+            "chat-b",
+            "ChatGptCodex",
+            json!({"kind":"principal_oauth","account_ref":"acct-b"}),
+        ),
+        (
+            "grok-original",
+            "XaiGrokOAuth",
+            json!({"kind":"principal_oauth"}),
+        ),
+    ] {
+        let backend: crate::InferenceBackend = serde_json::from_value(json!({
+            "agent_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
+            "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
+        }))
+        .unwrap();
+        crate::config_client::write_inference_backend_document(&access, &backend)
+            .await
+            .unwrap();
+    }
+    let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+        "agent_did": owner, "profile_id": format!("{behavior}:inference"),
+        "backend_id": "chat-original", "model_name": "test-model",
+    }))
+    .unwrap();
+    crate::config_client::write_inference_profile_document(&access, &profile)
+        .await
+        .unwrap();
+    let core = SelfConfigCore::new(node, owner.clone(), behavior.into()).unwrap();
+    (owner, core)
+}
+
+async fn assert_account_choice_refused(
+    core: &SelfConfigCore,
+    request: impl Fn() -> ApplyRequest<'static>,
+) {
+    for result in [core.preview(request()).await, core.apply(request()).await] {
+        let error = result.expect_err("switching to another account must be refused");
+        assert!(
+            format!("{error:#}").contains("selects another"),
+            "{error:#}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn profile_self_config_cannot_pick_another_account() {
+    let (owner, core) = account_choice_core("pick").await;
+    let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
+    assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
+    core.preview(profile_request(to("grok-original")))
+        .await
+        .unwrap();
+    core.apply(profile_request(to("grok-original")))
+        .await
+        .unwrap();
+    assert_account_choice_refused(&core, || {
+        let mut patch = to("chat-b");
+        patch.push(("model_name".into(), Some(json!("test-model"))));
+        profile_create_request(owner.clone(), "p-new".into(), patch)
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
     let node = build_persona_node().await;
