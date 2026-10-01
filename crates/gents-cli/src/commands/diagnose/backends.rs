@@ -173,8 +173,8 @@ mod tests {
     #[tokio::test]
     async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
         let owner = "did:key:owner";
-        let access = crate::shared::seed_unsent_xai_effort(owner).await;
-        let mut backend = crate::shared::xai_effort_backend(owner);
+        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
+        let mut backend = crate::shared::test_support::xai_effort_backend(owner);
         let object = backend.as_object_mut().unwrap();
         object.remove("catalogs");
         object.remove("probe_status");
@@ -182,7 +182,7 @@ mod tests {
             "format": "test", "agent_did": owner, "exported_at": "2026-01-01T00:00:00Z",
             "access_mode": "local", "agent_principal": {"agent_did": owner},
             "inference_backends": [backend],
-            "inference_profiles": [crate::shared::xai_effort_profile(owner)],
+            "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
         let reports = diagnose_backends(&access, &bundle).await;
