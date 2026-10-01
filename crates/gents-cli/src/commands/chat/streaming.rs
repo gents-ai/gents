@@ -934,7 +934,7 @@ fn account_problem_lines(
 /// [`account_problem_lines`] for `submitted`'s behavior, read now; a read
 /// failure gives none, since the turn's own error is already printed.
 async fn account_problems(
-    graphql: &str,
+    graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
     behavior_id: Option<&str>,
     failure_reason: &str,
@@ -948,7 +948,7 @@ async fn account_problems(
         return Vec::new();
     };
     let read = async {
-        let (access, _) = crate::resolve_config_access(None, Some(graphql)).await?;
+        let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.agent_did.as_str();
         anyhow::Ok((
             gents::config_client::behavior_accounts(&access, did, behavior_id).await?,
