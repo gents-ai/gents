@@ -426,18 +426,19 @@ pub(crate) async fn request_usage_reads(
         .await
         .context("asking the runtime to read usage")?;
     let status = response.status();
-    let body: Value = response
+    if !status.is_success() {
+        let body: Value = response.json().await.unwrap_or_default();
+        anyhow::bail!(
+            "runtime refused the usage read ({status}): {}",
+            body.get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        );
+    }
+    response
         .json()
         .await
-        .context("decoding the runtime's usage reads")?;
-    anyhow::ensure!(
-        status.is_success(),
-        "runtime refused the usage read ({status}): {}",
-        body.get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown error")
-    );
-    serde_json::from_value(body).context("decoding the runtime's usage reads")
+        .context("decoding the runtime's usage reads")
 }
 
 /// Labels rows with the reads the runtime ran for `agent_did`.
@@ -510,6 +511,8 @@ pub(crate) async fn list_with_usage(
 
 /// `<1m`, `45m`, `2h13m`, `5d3h`.
 fn short_duration(secs: i64) -> String {
+    // A row replicated from a host whose clock runs ahead has a negative age.
+    let secs = secs.max(0);
     let (days, hours, minutes) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);
     match (days, hours, minutes) {
         (0, 0, 0) => "<1m".to_owned(),
