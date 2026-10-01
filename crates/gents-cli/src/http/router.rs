@@ -1290,7 +1290,7 @@ mod tests {
     async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
         let temp = tempfile::tempdir().unwrap();
         let key = |name: &str| -> Arc<dyn gents::AgentIdentity> {
-            Arc::new(gents::KeyIdentity::load_or_create(&temp.path().join(name), None).unwrap())
+            Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
         };
         let (identity, other) = (key("runtime.key"), key("other.key"));
         let node = Arc::new(

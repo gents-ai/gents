@@ -1470,7 +1470,7 @@ mod tests {
         use axum::{routing::post, Json, Router};
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
-            gents::KeyIdentity::load_or_create(&temp.path().join("home.key"), None).unwrap(),
+            gents::KeyIdentity::load_or_create(temp.path().join("home.key"), None).unwrap(),
         );
         let recorded = Arc::new(std::sync::Mutex::new(None::<Value>));
         let app = Router::new().route(
