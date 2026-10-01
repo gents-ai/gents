@@ -130,7 +130,7 @@ fn authoritative_reasoning_capabilities(
     kind: BackendProviderKind,
     advertised: Option<&[ReasoningEffort]>,
 ) -> Option<serde_json::Value> {
-    if kind != BackendProviderKind::ClaudeCliSubscription {
+    if !kind.uses_messages_wire() {
         return params;
     }
     let mut params = params.unwrap_or_else(|| serde_json::json!({}));
@@ -340,9 +340,11 @@ fn reasoning_profile_params(
         (BackendProviderKind::XaiGrokOAuth, _) => None,
         // The Messages serializer admits only supported effort, never arbitrary
         // extra fields or sampling controls.
-        (BackendProviderKind::ClaudeCliSubscription, _) => Some(serde_json::json!({
+        (BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey, _) => {
+            Some(serde_json::json!({
             "output_config": { "effort": reasoning_effort.as_str() }
-        })),
+            }))
+        }
     }
 }
 
@@ -376,7 +378,8 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
         ),
         BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
-        | BackendProviderKind::ClaudeCliSubscription => None,
+        | BackendProviderKind::ClaudeCliSubscription
+        | BackendProviderKind::AnthropicApiKey => None,
     }
 }
 
@@ -389,7 +392,8 @@ fn request_additional_params(
         BackendProviderKind::OpenRouter
         | BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
-        | BackendProviderKind::ClaudeCliSubscription => None,
+        | BackendProviderKind::ClaudeCliSubscription
+        | BackendProviderKind::AnthropicApiKey => None,
     }
 }
 

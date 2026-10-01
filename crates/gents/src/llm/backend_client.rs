@@ -75,6 +75,11 @@ pub(crate) enum BackendClient {
             crate::oauth_credential::DbCredentialBearer,
         >,
     ),
+    AnthropicApiKey(
+        crate::claude_subscription::ClaudeSubscriptionClient<
+            crate::claude_subscription::ApiKeyBearer,
+        >,
+    ),
 }
 
 impl BackendClient {
@@ -92,6 +97,9 @@ impl BackendClient {
             Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
             Self::XaiGrokResponses(client) => client.post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
+            Self::AnthropicApiKey(_) => {
+                return messages_replay_issuer(BackendProviderKind::AnthropicApiKey)
+            }
         }
         .body(())?;
         Ok(
@@ -114,6 +122,7 @@ impl BackendClient {
                 BackendProviderKind::XaiGrokOAuth.as_str()
             }
             Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
+            Self::AnthropicApiKey(_) => BackendProviderKind::AnthropicApiKey.as_str(),
         }
     }
 }
@@ -121,10 +130,17 @@ impl BackendClient {
 /// The Claude subscription posts to its fixed Messages URI.
 pub(crate) fn claude_subscription_replay_issuer(
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
+    messages_replay_issuer(BackendProviderKind::ClaudeCliSubscription)
+}
+
+/// Messages clients post to the fixed Messages URI; `kind` is the family.
+fn messages_replay_issuer(
+    kind: BackendProviderKind,
+) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
     let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI).body(())?;
     Ok(
         gents_loop::rendered_request::transport::replay_issuer_for_destination(
-            BackendProviderKind::ClaudeCliSubscription.as_str(),
+            kind.as_str(),
             request.uri(),
         ),
     )
@@ -287,6 +303,9 @@ pub(crate) async fn build_backend_client(
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
         }
+        BackendProviderKind::AnthropicApiKey => Ok(BackendClient::AnthropicApiKey(
+            crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(api_key.to_owned()),
+        )),
     }
 }
 
@@ -308,6 +327,7 @@ macro_rules! with_backend_client {
             $crate::llm::backend_client::BackendClient::XaiGrokChatCompletions($c) => $body,
             $crate::llm::backend_client::BackendClient::XaiGrokResponses($c) => $body,
             $crate::llm::backend_client::BackendClient::ClaudeSubscription($c) => $body,
+            $crate::llm::backend_client::BackendClient::AnthropicApiKey($c) => $body,
         }
     };
 }

@@ -59,7 +59,8 @@ impl ProviderInputProfile {
             (BackendProviderKind::OpenRouter, _) => Self::OpenRouterChatCompletions,
             (BackendProviderKind::ChatGptCodex, _) => Self::ChatGptCodexResponses,
             (BackendProviderKind::XaiGrokOAuth, OpenAiWireApi::Responses) => Self::XaiResponses,
-            (BackendProviderKind::ClaudeCliSubscription, _) => Self::ClaudeMessages,
+            (BackendProviderKind::ClaudeCliSubscription, _)
+            | (BackendProviderKind::AnthropicApiKey, _) => Self::ClaudeMessages,
         }
     }
 
