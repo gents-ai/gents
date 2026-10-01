@@ -408,12 +408,12 @@ pub(crate) async fn account_rows(
 /// Asks the runtime behind `graphql` to read usage now.
 pub(crate) async fn request_usage_reads(
     identity: &dyn gents::AgentIdentity,
-    graphql: &str,
+    graphql: &gents::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
     provider: Option<&str>,
 ) -> Result<UsageReads> {
     let command = UsageReadCommand::signed(identity, trigger, provider).await?;
-    let mut url = reqwest::Url::parse(graphql).context("parsing runtime GraphQL endpoint")?;
+    let mut url = reqwest::Url::parse(graphql.url()).context("parsing runtime GraphQL endpoint")?;
     url.set_path("/accounts/usage/read");
     url.set_query(None);
     url.set_fragment(None);
@@ -1496,7 +1496,7 @@ mod tests {
 
         let reads = request_usage_reads(
             identity.as_ref(),
-            &format!("{origin}/api/v0/graphql"),
+            &gents::config_client::GraphqlEndpoint::anonymous(format!("{origin}/api/v0/graphql")),
             UsageTrigger::Refresh,
             Some(CLAUDE),
         )
@@ -1618,7 +1618,7 @@ mod tests {
 
         let error = request_usage_reads(
             &identity,
-            &format!("{origin}/api/v0/graphql"),
+            &gents::config_client::GraphqlEndpoint::anonymous(format!("{origin}/api/v0/graphql")),
             UsageTrigger::Open,
             None,
         )
