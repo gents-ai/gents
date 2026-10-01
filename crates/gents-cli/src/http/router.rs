@@ -175,6 +175,7 @@ pub(crate) fn runtime_contract_router(
         .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
+        .route("/accounts/usage/read", post(account_usage_read_handler))
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -287,11 +288,54 @@ async fn wait_for_activation(state: RuntimeHttpState) -> Response {
     }
 }
 
+/// Reads the runtime principal's account usage now. Upstream calls and
+/// sign-in renewals follow, so only the runtime's own operator may ask.
 async fn account_usage_read_handler(
-    State(_state): State<RuntimeHttpState>,
-    axum::Json(_command): axum::Json<crate::commands::accounts::UsageReadCommand>,
+    State(state): State<RuntimeHttpState>,
+    axum::Json(command): axum::Json<crate::commands::accounts::UsageReadCommand>,
 ) -> Response {
-    (StatusCode::NOT_FOUND, axum::Json(json!({"error": "inert"}))).into_response()
+    let error = |status: StatusCode, error: String| {
+        (status, axum::Json(json!({ "error": error }))).into_response()
+    };
+    let Some(service) = state.enrollment_decisions.read().await.clone() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime is not ready".to_string(),
+        );
+    };
+    let authenticated = match command.validate_at(chrono::Utc::now()) {
+        Ok(()) => {
+            service
+                .authenticate_signed(
+                    &command.signer_did,
+                    &command.signing_payload(),
+                    &command.sig,
+                    &command.nonce,
+                )
+                .await
+        }
+        Err(invalid) => Err(invalid),
+    };
+    if let Err(refused) = authenticated {
+        return error(StatusCode::FORBIDDEN, format!("{refused:#}"));
+    }
+    let Some(runtime) = state.activation_runtime.get() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime is not activated yet".to_string(),
+        );
+    };
+    match runtime
+        .read_usage(command.trigger, command.provider.as_deref())
+        .await
+    {
+        Ok(reads) => (
+            StatusCode::OK,
+            axum::Json(json!({ "agent_did": runtime.agent_did(), "reads": reads })),
+        )
+            .into_response(),
+        Err(failed) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{failed:#}")),
+    }
 }
 
 async fn enrollment_decision_handler(

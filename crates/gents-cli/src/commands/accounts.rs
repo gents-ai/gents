@@ -3,7 +3,7 @@
 
 use std::io::{IsTerminal, Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
 use gents::usage_observation::{
@@ -51,24 +51,62 @@ pub(crate) struct UsageReadCommand {
     pub(crate) sig: Vec<u8>,
 }
 
+const USAGE_READ_SIGNATURE_DOMAIN: &str = "gents-account-usage-read-v1";
+
 impl UsageReadCommand {
     pub(crate) async fn signed(
         identity: &dyn gents::AgentIdentity,
         trigger: UsageTrigger,
         provider: Option<&str>,
     ) -> Result<Self> {
-        Ok(Self {
+        let mut command = Self {
             trigger,
             provider: provider.map(str::to_owned),
             signer_did: identity.did().to_owned(),
-            issued_at: String::new(),
-            nonce: String::new(),
+            issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            nonce: uuid::Uuid::new_v4().simple().to_string(),
             sig: Vec::new(),
-        })
+        };
+        command.sig = identity
+            .sign(&command.signing_payload())
+            .await
+            .context("signing the usage read request")?;
+        Ok(command)
     }
 
     pub(crate) fn signing_payload(&self) -> Vec<u8> {
-        Vec::new()
+        let trigger = match self.trigger {
+            UsageTrigger::Open => "open",
+            UsageTrigger::Refresh => "refresh",
+        };
+        gents_protocol::enrollment::canonical_domain_payload(
+            USAGE_READ_SIGNATURE_DOMAIN,
+            [
+                trigger,
+                self.provider.as_deref().unwrap_or_default(),
+                &self.signer_did,
+                &self.issued_at,
+                &self.nonce,
+            ],
+        )
+    }
+
+    /// Issued within the last minute (5 s of clock skew ahead), as the
+    /// enrollment operator commands.
+    pub(crate) fn validate_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        anyhow::ensure!(self.sig.len() == 64, "invalid usage read signature length");
+        let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
+            .context("usage read issued_at")?
+            .with_timezone(&chrono::Utc);
+        anyhow::ensure!(
+            issued <= now + chrono::Duration::seconds(5),
+            "usage read request is issued in the future"
+        );
+        anyhow::ensure!(
+            now - issued <= chrono::Duration::seconds(60),
+            "usage read request expired"
+        );
+        Ok(())
     }
 }
 
@@ -81,13 +119,22 @@ pub(crate) struct UsageReads {
 
 pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
     match command {
-        AccountsCommand::List { target, output } => {
-            let (access, did) = target_access(&target).await?;
-            let rows = account_rows(
+        AccountsCommand::List {
+            target,
+            output,
+            refresh,
+        } => {
+            let (access, home_dir) =
+                resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
+            let did = resolve_agent_did(Some(&home_dir), target.agent_did.as_deref())?;
+            let rows = list_with_usage(
                 &access,
+                &home_dir,
                 &did,
                 target.provider.as_deref(),
+                refresh,
                 chrono::Utc::now(),
+                &mut std::io::stderr(),
             )
             .await?;
             match output
@@ -362,30 +409,107 @@ pub(crate) async fn account_rows(
     Ok(rows)
 }
 
+/// Asks the runtime behind `graphql` to read usage now.
 pub(crate) async fn request_usage_reads(
-    _identity: &dyn gents::AgentIdentity,
-    _graphql: &str,
-    _trigger: UsageTrigger,
-    _provider: Option<&str>,
+    identity: &dyn gents::AgentIdentity,
+    graphql: &str,
+    trigger: UsageTrigger,
+    provider: Option<&str>,
 ) -> Result<UsageReads> {
-    Ok(UsageReads {
-        agent_did: String::new(),
-        reads: Vec::new(),
-    })
+    let command = UsageReadCommand::signed(identity, trigger, provider).await?;
+    let mut url = reqwest::Url::parse(graphql).context("parsing runtime GraphQL endpoint")?;
+    url.set_path("/accounts/usage/read");
+    url.set_query(None);
+    url.set_fragment(None);
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?
+        .post(url)
+        .json(&command)
+        .send()
+        .await
+        .context("asking the runtime to read usage")?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .context("decoding the runtime's usage reads")?;
+    anyhow::ensure!(
+        status.is_success(),
+        "runtime refused the usage read ({status}): {}",
+        body.get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown error")
+    );
+    serde_json::from_value(body).context("decoding the runtime's usage reads")
 }
 
-pub(crate) fn attach_reads(_rows: &mut [AccountRow], _reads: &UsageReads, _agent_did: &str) {}
+/// Labels rows with the reads the runtime ran for `agent_did`.
+pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, agent_did: &str) {
+    if reads.agent_did != agent_did {
+        return;
+    }
+    for read in &reads.reads {
+        let row = rows.iter_mut().find(|row| match &read.backend_id {
+            Some(backend_id) => row.backend_id.as_ref() == Some(backend_id),
+            None => {
+                row.backend_id.is_none()
+                    && row.provider == read.provider
+                    && row.account_ref == read.account_ref
+            }
+        });
+        if let Some(row) = row {
+            row.read = Some(read.outcome.clone());
+        }
+    }
+}
 
+/// The account rows, after the runtime read usage when one is running.
+/// Reads run only in the runtime, which holds the sign-ins' refresh owner.
 pub(crate) async fn list_with_usage(
     access: &ConfigAccess,
-    _home: &std::path::Path,
+    home: &std::path::Path,
     agent_did: &str,
     provider: Option<&str>,
-    _refresh: bool,
+    refresh: bool,
     now: chrono::DateTime<chrono::Utc>,
-    _warnings: &mut impl Write,
+    warnings: &mut impl Write,
 ) -> Result<Vec<AccountRow>> {
-    account_rows(access, agent_did, provider, now).await
+    let reads = match access {
+        ConfigAccess::Graphql(graphql) => {
+            let trigger = if refresh {
+                UsageTrigger::Refresh
+            } else {
+                UsageTrigger::Open
+            };
+            let requested = async {
+                let identity =
+                    crate::commands::p2p::enrollment_admin::resolve_home_identity(Some(home))?;
+                request_usage_reads(identity.as_ref(), graphql, trigger, provider).await
+            }
+            .await;
+            match requested {
+                Ok(reads) => Some(reads),
+                Err(error) if refresh => return Err(error),
+                Err(error) => {
+                    writeln!(warnings, "usage not read: {error:#}")?;
+                    None
+                }
+            }
+        }
+        ConfigAccess::Local(_) => {
+            anyhow::ensure!(
+                !refresh,
+                "usage refresh runs in the runtime; start it with `gents serve` or list without --refresh"
+            );
+            None
+        }
+    };
+    let mut rows = account_rows(access, agent_did, provider, now).await?;
+    if let Some(reads) = reads {
+        attach_reads(&mut rows, &reads, agent_did);
+    }
+    Ok(rows)
 }
 
 /// `<1m`, `45m`, `2h13m`, `5d3h`.
@@ -407,16 +531,22 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
     let Some(usage) = &row.usage else {
         return vec![std::array::from_fn(|_| dash())];
     };
-    let reason = usage
-        .read_error
-        .as_deref()
-        .map(|reason| format!("(read: {reason})"));
+    let reason = match &row.read {
+        Some(UsageRead::Unavailable(reason)) => Some(reason.as_str()),
+        _ => usage.read_error.as_deref(),
+    }
+    .map(|reason| format!("(read: {reason})"));
     if usage.windows.is_empty() {
+        let source = match (reason, &row.read) {
+            (Some(reason), _) => reason,
+            (None, Some(UsageRead::SkippedUntilRefresh)) => "refresh to read".to_owned(),
+            (None, _) => dash(),
+        };
         return vec![[
             dash(),
             usage.note.unwrap_or("unknown").to_owned(),
             dash(),
-            reason.unwrap_or_else(dash),
+            source,
             dash(),
         ]];
     }
