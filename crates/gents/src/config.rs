@@ -98,7 +98,7 @@ impl ResolvedInference {
             .advertised_model
             .as_ref()
             .and_then(|model| model.reasoning_efforts.as_deref());
-        if self.backend.provider_kind == BackendProviderKind::ClaudeCliSubscription {
+        if self.backend.provider_kind.uses_messages_wire() {
             crate::inference_setup::claude_supported_reasoning_efforts(
                 &self.profile.model_name,
                 advertised,
