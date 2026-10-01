@@ -162,7 +162,7 @@ impl Snapshot {
 
     /// The one account `needle` (label, `credential_id` or `account_ref`)
     /// names, among `provider`'s when given.
-    fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
+    pub(crate) fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
         let candidates: Vec<_> = self
             .accounts
             .iter()

@@ -183,6 +183,8 @@ mod tests {
         let expected = |label: &str, state| ServingAccount {
             label: label.into(),
             state,
+            provider: (label != "name-openai")
+                .then_some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
         };
         assert_eq!(
             serving,

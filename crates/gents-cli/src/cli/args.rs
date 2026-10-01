@@ -3160,9 +3160,11 @@ pub(crate) struct InferenceProfileSetArgs {
     /// Canonical InferenceProfile JSON document, including its owning agent DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
-    #[arg(skip)]
+    /// Create or move the profile on this account; fills the document's backend_id.
+    #[arg(long, help = ACCOUNT_HELP)]
     pub(crate) account: Option<String>,
-    #[arg(skip)]
+    /// Narrows --account; alone, picks the provider's earliest-connected enabled account.
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS)]
     pub(crate) provider: Option<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -3172,9 +3174,11 @@ pub(crate) struct InferenceProfileSetArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct InferenceProfileSetAccountArgs {
+    /// The profile_id to move.
     pub(crate) profile: String,
+    #[arg(help = ACCOUNT_HELP)]
     pub(crate) account: String,
-    #[arg(skip)]
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
     pub(crate) provider: Option<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,

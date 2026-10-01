@@ -1071,6 +1071,9 @@ impl Serialize for AccountState {
 pub struct ServingAccount {
     pub label: String,
     pub state: AccountState,
+    /// The sign-in provider of a principal OAuth backend.
+    #[serde(skip)]
+    pub provider: Option<&'static str>,
 }
 
 /// [`backend_account`] as a label and state. A backend that uses no account
@@ -1087,19 +1090,42 @@ pub fn serving_account(
             AccountState::Disabled
         }
     };
-    match backend_account(backend, accounts) {
-        None => ServingAccount {
-            label: backend.name.clone(),
-            state: state(backend.enabled),
-        },
-        Some(None) => ServingAccount {
-            label: backend.name.clone(),
-            state: AccountState::Missing,
-        },
-        Some(Some(account)) => ServingAccount {
-            label: account.label.clone(),
-            state: state(account.enabled),
-        },
+    use crate::backend_provider::BackendProviderOauthExt;
+    let provider = matches!(
+        backend.auth,
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
+    )
+    .then(|| backend.provider_kind.oauth_provider())
+    .flatten();
+    let (label, state) = match backend_account(backend, accounts) {
+        None => (backend.name.clone(), state(backend.enabled)),
+        Some(None) => (backend.name.clone(), AccountState::Missing),
+        Some(Some(account)) => (account.label.clone(), state(account.enabled)),
+    };
+    ServingAccount {
+        label,
+        state,
+        provider,
+    }
+}
+
+/// Where a profile can move instead: `provider`'s enabled accounts by label,
+/// or how to sign one in when there is none.
+pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> String {
+    let product = sign_in_product(provider);
+    let name = product.as_ref().map_or(provider, |product| product.name);
+    let enabled: Vec<_> = accounts
+        .iter()
+        .filter(|account| account.provider == provider && account.enabled)
+        .map(|account| format!("{:?}", account.label))
+        .collect();
+    match (enabled.is_empty(), product) {
+        (false, _) => format!("enabled {name} accounts: {}", enabled.join(", ")),
+        (true, Some(product)) => format!(
+            "no enabled {name} account on this node; sign one in with `gents {}`",
+            product.login_command
+        ),
+        (true, None) => format!("no enabled {name} account on this node"),
     }
 }
 
@@ -2300,7 +2326,8 @@ mod serving_account_tests {
             serving_account(&original, &accounts()),
             ServingAccount {
                 label: "Claude".into(),
-                state: AccountState::Enabled
+                state: AccountState::Enabled,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             }
         );
         let b = backend(
@@ -2313,7 +2340,8 @@ mod serving_account_tests {
             serving_account(&b, &accounts()),
             ServingAccount {
                 label: "label-b".into(),
-                state: AccountState::Disabled
+                state: AccountState::Disabled,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             }
         );
     }
@@ -2330,7 +2358,8 @@ mod serving_account_tests {
             serving_account(&gone, &accounts()),
             ServingAccount {
                 label: "label-gone".into(),
-                state: AccountState::Missing
+                state: AccountState::Missing,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             }
         );
     }
@@ -2349,7 +2378,8 @@ mod serving_account_tests {
                 serving_account(&api, &accounts()),
                 ServingAccount {
                     label: "OpenAI".into(),
-                    state
+                    state,
+                    provider: None,
                 }
             );
         }

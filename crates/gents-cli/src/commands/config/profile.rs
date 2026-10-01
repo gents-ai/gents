@@ -2,9 +2,13 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::{
     ConfigListArgs, ConfigShowArgs, InferenceProfileSetAccountArgs, InferenceProfileSetArgs,
 };
+use crate::commands::accounts::{snapshot, Snapshot};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
+use gents::oauth_credential::{
+    backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
+};
 use serde_json::{json, Value};
 
 fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
@@ -44,19 +48,49 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
     )
 }
 
-/// Write the profile `contents` holds, on `account`'s backend when given.
+/// Write the profile `contents` holds. `account` (narrowed by `provider`), or
+/// `provider`'s default account when only `provider` is given, fills the
+/// profile's `backend_id`.
 async fn set_profile(
     access: &ConfigAccess,
     contents: &[u8],
     account: Option<&str>,
     provider: Option<&str>,
 ) -> Result<Value> {
-    let _ = (account, provider);
-    let profile = decode_profile(contents)?;
-    let doc_id = gents::config_client::write_inference_profile_document(access, &profile).await?;
-    Ok(
-        json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name}),
-    )
+    if account.is_none() && provider.is_none() {
+        let profile = decode_profile(contents)?;
+        let snapshot = snapshot(access, &profile.agent_did).await?;
+        return write_checked(access, &snapshot, &profile, false).await;
+    }
+    let mut value: Value =
+        serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
+    let agent_did = value["agent_did"]
+        .as_str()
+        .context("the profile document names no agent_did")?
+        .to_owned();
+    let snapshot = snapshot(access, &agent_did).await?;
+    let summary = match (account, provider) {
+        (Some(account), provider) => snapshot.pick(account, provider)?,
+        (None, Some(provider)) => snapshot
+            .accounts
+            .iter()
+            .find(|account| account.provider == provider && account.default)
+            .with_context(|| {
+                gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+            })?,
+        (None, None) => unreachable!("handled above"),
+    };
+    let backend_id = account_backend(&snapshot, summary)?;
+    match value["backend_id"].as_str() {
+        Some(named) if named != backend_id => anyhow::bail!(
+            "the file names backend {named:?}, but account {:?} runs on {backend_id:?}; \
+             drop backend_id from the file or the account flags",
+            summary.label
+        ),
+        _ => value["backend_id"] = json!(backend_id),
+    }
+    let profile = decode_profile(&serde_json::to_vec(&value)?)?;
+    write_checked(access, &snapshot, &profile, account.is_none()).await
 }
 
 /// Move `profile_id` to `account`'s backend; nothing else changes.
@@ -67,8 +101,89 @@ async fn set_account(
     account: &str,
     provider: Option<&str>,
 ) -> Result<Value> {
-    let _ = (access, agent_did, profile_id, account, provider);
-    anyhow::bail!("not implemented")
+    let snapshot = snapshot(access, agent_did).await?;
+    let mut profile = snapshot
+        .profiles
+        .iter()
+        .find(|profile| profile.profile_id == profile_id)
+        .with_context(|| {
+            format!("no profile {profile_id:?}; `gents config profile list` shows them")
+        })?
+        .clone();
+    profile.backend_id = account_backend(&snapshot, snapshot.pick(account, provider)?)?;
+    write_checked(access, &snapshot, &profile, false).await
+}
+
+/// The one backend that runs on `account`.
+fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<String> {
+    let backends: Vec<_> = snapshot
+        .backends
+        .iter()
+        .filter(|backend| {
+            matches!(
+                backend_account(backend, std::slice::from_ref(account)),
+                Some(Some(_))
+            )
+        })
+        .map(|backend| backend.backend_id.clone())
+        .collect();
+    match backends.as_slice() {
+        [one] => Ok(one.clone()),
+        [] if account.account_ref.is_some() => anyhow::bail!(
+            "account {:?} has no backend; signing in again does not restore it, so create one \
+             with `gents config backend set`",
+            account.label
+        ),
+        [] => anyhow::bail!(
+            "account {:?} has no backend; create one with `gents config backend set`",
+            account.label
+        ),
+        many => anyhow::bail!(
+            "account {:?} runs several backends: {}; name one as backend_id in the profile file",
+            account.label,
+            many.join(", ")
+        ),
+    }
+}
+
+/// Write `profile`, refusing to create it on, or move it to, an account that
+/// cannot serve it. Other edits of a profile on such an account are allowed.
+async fn write_checked(
+    access: &ConfigAccess,
+    snapshot: &Snapshot,
+    profile: &InferenceProfile,
+    picked_default: bool,
+) -> Result<Value> {
+    let account = snapshot
+        .backends
+        .iter()
+        .find(|backend| backend.backend_id == profile.backend_id)
+        .map(|backend| serving_account(backend, &snapshot.accounts));
+    let moved = !snapshot.profiles.iter().any(|stored| {
+        stored.profile_id == profile.profile_id && stored.backend_id == profile.backend_id
+    });
+    if let Some(ServingAccount {
+        label,
+        state,
+        provider: Some(provider),
+    }) = &account
+    {
+        anyhow::ensure!(
+            !moved || *state == AccountState::Enabled,
+            "account {label:?} is {}; {}",
+            state.as_str(),
+            gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+        );
+    }
+    let doc_id = gents::config_client::write_inference_profile_document(access, profile).await?;
+    let mut output = json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
+    if let Some(account) = account {
+        output["account"] = serde_json::to_value(account)?;
+    }
+    if picked_default {
+        output["picked"] = json!("default");
+    }
+    Ok(output)
 }
 
 async fn target(
@@ -128,17 +243,14 @@ async fn profile_rows(
     let mut rows =
         super::crud::query_collection(access, super::crud::PROFILE_SPEC, agent_did, id).await?;
     rows.sort_by(|a, b| a["profile_id"].as_str().cmp(&b["profile_id"].as_str()));
-    let snapshot = crate::commands::accounts::snapshot(access, agent_did).await?;
+    let snapshot = snapshot(access, agent_did).await?;
     for row in &mut rows {
         if let Some(backend) = snapshot
             .backends
             .iter()
             .find(|backend| row["backend_id"].as_str() == Some(backend.backend_id.as_str()))
         {
-            row["account"] = serde_json::to_value(gents::oauth_credential::serving_account(
-                backend,
-                &snapshot.accounts,
-            ))?;
+            row["account"] = serde_json::to_value(serving_account(backend, &snapshot.accounts))?;
         }
     }
     Ok(rows)

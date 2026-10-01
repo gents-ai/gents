@@ -420,6 +420,7 @@ mod tests {
                 ServingAccount {
                     label: label.into(),
                     state,
+                    provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
                 },
             )
         };
