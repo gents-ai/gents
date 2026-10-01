@@ -511,6 +511,46 @@ mod tests {
     }
 
     #[test]
+    fn unsent_reasoning_effort_explains_the_omission() {
+        const XAI: &str = "https://api.x.ai/v1";
+        const G45: &[&str] = &["low", "medium", "high", "xhigh"];
+        let warning = |endpoint, model, effort, catalogued, observed: bool| {
+            let (backend, profile, observation) =
+                xai_effort_fixtures(endpoint, model, effort, catalogued);
+            unsent_reasoning_effort(&backend, &profile, observed.then_some(&observation))
+        };
+        let text = warning(
+            XAI,
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+            true,
+        )
+        .expect("grok-4.20 warns");
+        assert!(text.contains("grok-4.20-0309-reasoning"), "{text}");
+        assert!(text.contains("no reasoning effort"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("none"), Some(G45), true).expect("grok-4.5 none");
+        assert!(text.contains("low, medium, high, xhigh"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("low"), Some(G45), false).expect("no observation");
+        assert!(text.contains("no discovered catalog"), "{text}");
+        let text = warning(XAI, "grok-4.5", Some("low"), None, true).expect("stale catalog");
+        assert!(text.contains("predates effort discovery"), "{text}");
+        let g43: &[&str] = &["none", "low", "medium", "high", "xhigh"];
+        assert_eq!(warning(XAI, "grok-4.3", Some("low"), Some(g43), true), None);
+        assert_eq!(warning(XAI, "grok-4.5", None, Some(G45), true), None);
+        assert_eq!(
+            warning(
+                "https://api.openai.com/v1",
+                "grok-4.20-0309-reasoning",
+                Some("low"),
+                Some(&[]),
+                true
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn xai_api_key_profile_admits_an_unadvertised_effort() {
         let (backend, profile, observation) = xai_effort_fixtures(
             "https://api.x.ai/v1",
