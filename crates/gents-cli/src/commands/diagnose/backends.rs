@@ -159,6 +159,7 @@ mod tests {
             enabled: true,
             default: false,
             access_token_expires_at: chrono::Utc::now(),
+            connected_at: None,
         }
     }
 

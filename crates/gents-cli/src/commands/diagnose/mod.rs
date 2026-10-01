@@ -502,6 +502,7 @@ mod tests {
             default: false,
             access_token_expires_at: chrono::Utc::now()
                 + chrono::Duration::minutes(expires_in_minutes),
+            connected_at: None,
         }
     }
 

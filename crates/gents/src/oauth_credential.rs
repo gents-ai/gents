@@ -1013,6 +1013,9 @@ pub struct AccountSummary {
     /// The provider's default account ([`AccountPick::ProviderDefault`]).
     pub default: bool,
     pub access_token_expires_at: DateTime<Utc>,
+    /// When this sign-in took its slot; `None` for a row stored before the
+    /// field existed.
+    pub connected_at: Option<DateTime<Utc>>,
 }
 
 /// The account a principal OAuth backend runs on, among `accounts` (one
@@ -1167,6 +1170,7 @@ pub async fn list_accounts(
             enabled: row.enabled,
             default: defaults.contains(&row.credential_id),
             access_token_expires_at: row.access_token_expires_at,
+            connected_at: None,
         })
         .collect())
 }
@@ -2258,6 +2262,7 @@ mod serving_account_tests {
             enabled,
             default: account_ref.is_none(),
             access_token_expires_at: Utc::now(),
+            connected_at: None,
         }
     }
 
