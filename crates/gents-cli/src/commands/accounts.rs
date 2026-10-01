@@ -1598,4 +1598,30 @@ mod tests {
         assert!(command(-61).validate_at(now).is_err());
         assert!(command(6).validate_at(now).is_err());
     }
+
+    #[test]
+    fn short_duration_of_a_future_observation_is_under_a_minute() {
+        assert_eq!(short_duration(-180), "<1m");
+    }
+
+    #[tokio::test]
+    async fn usage_reads_a_runtime_without_the_route_names_the_status() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            gents::KeyIdentity::load_or_create(temp.path().join("home.key"), None).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, axum::Router::new()).await });
+
+        let error = request_usage_reads(
+            &identity,
+            &format!("{origin}/api/v0/graphql"),
+            UsageTrigger::Open,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("404"), "{error:#}");
+    }
 }
