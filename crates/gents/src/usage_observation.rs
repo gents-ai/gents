@@ -13,7 +13,8 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, UsageWindow, READ_SKIP_WINDOW,
+    REWRITE_AFTER,
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
@@ -132,27 +133,54 @@ pub struct WindowView {
     pub last_known: bool,
 }
 
+/// `stored` for an account of `kind` at `now`.
 pub fn usage_view(
-    _stored: Option<&StoredUsage>,
-    _kind: crate::BackendProviderKind,
+    stored: Option<&StoredUsage>,
+    kind: crate::BackendProviderKind,
     now: DateTime<Utc>,
 ) -> UsageView {
+    use crate::BackendProviderKind as Kind;
+    let empty = StoredUsage::default();
+    let stored = stored.unwrap_or(&empty);
+    let visible = account_usage::visible_windows(&stored.report, now);
+    // Claude's `/api/oauth/usage` scale is unverified live (percent or
+    // fraction); its windows stay hidden until a live check confirms it.
+    let unverified = |window: &UsageWindow| {
+        kind == Kind::ClaudeCliSubscription && window.source == UsageSource::Endpoint
+    };
+    let windows: Vec<_> = visible
+        .iter()
+        .filter(|(window, _)| !unverified(window))
+        .map(|(window, freshness)| WindowView {
+            label: window.label.clone(),
+            window_minutes: window.window_minutes,
+            used_pct: window.used_pct,
+            resets_at: window.resets_at,
+            resets_in_secs: window.resets_at.map(|at| (at - now).num_seconds()),
+            source: window.source,
+            observed_at: window.observed_at,
+            age_secs: (now - window.observed_at).num_seconds(),
+            last_known: *freshness == account_usage::Freshness::Stale,
+        })
+        .collect();
+    let read_ok = stored.read_at.is_some() && stored.read_error.is_none();
+    let note = match kind {
+        _ if !windows.is_empty() => None,
+        _ if visible.iter().any(|(window, _)| unverified(window)) => Some("not verified"),
+        Kind::OpenAiCompatible if stored.report.is_empty() && stored.read_at.is_none() => {
+            Some("not reported")
+        }
+        Kind::OpenRouter if read_ok && stored.report.windows.is_empty() => {
+            Some("no cap on this key")
+        }
+        _ => Some("unknown"),
+    };
     UsageView {
-        windows: vec![WindowView {
-            label: "inert".to_string(),
-            window_minutes: None,
-            used_pct: 0.0,
-            resets_at: None,
-            resets_in_secs: None,
-            source: UsageSource::Header,
-            observed_at: now,
-            age_secs: 0,
-            last_known: false,
-        }],
-        plan: None,
-        note: None,
-        read_at: None,
-        read_error: None,
+        windows,
+        plan: stored.report.plan.as_ref().map(|plan| plan.name.clone()),
+        note,
+        read_at: stored.read_at,
+        read_error: stored.read_error.clone(),
     }
 }
 
