@@ -1722,3 +1722,92 @@ async fn principal_read_outcomes_hold_no_secrets() {
     assert!(!json.contains("SECRET") && !json.contains("TEST"), "{json}");
     assert!(!json.contains("did:"), "{json}");
 }
+
+/// Account `acct-a` with usage under its fallback key (before its key was
+/// known) and under its key, account `acct-b`, and an API-key backend.
+async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, String) {
+    let mut first = credential(A, Some("acct-a"), None);
+    first.connected_at = Some(Utc::now());
+    let doc_id = seed(node, &first).await;
+    let account = UsageAccount::for_credential(&first);
+    let now = Utc::now();
+    record_usage(node, &account, report(vec![window("primary", 10.0, now)]))
+        .await
+        .unwrap();
+    let keyed = OAuthCredential {
+        provider_account_key: Some("acct-key-a".into()),
+        ..first
+    };
+    seed(node, &keyed).await;
+    record_usage(
+        node,
+        &account,
+        report(vec![window("primary", 20.0, now + Duration::minutes(2))]),
+    )
+    .await
+    .unwrap();
+    let mut other = credential(A, Some("acct-b"), Some("acct-key-b"));
+    other.connected_at = Some(Utc::now());
+    seed(node, &other).await;
+    record_usage(
+        node,
+        &UsageAccount::for_credential(&other),
+        report(vec![window("primary", 30.0, now)]),
+    )
+    .await
+    .unwrap();
+    record_usage(
+        node,
+        &api_key_account(A),
+        report(vec![window("requests", 5.0, now)]),
+    )
+    .await
+    .unwrap();
+    let fallback = format!("ref:acct-a:{doc_id}");
+    let keys: Vec<_> = rows(node).await.into_iter().map(|row| row.2).collect();
+    for key in [
+        fallback.as_str(),
+        "acct-key-a",
+        "acct-key-b",
+        "backend-usage-a",
+    ] {
+        assert!(keys.iter().any(|stored| stored == key), "{key}: {keys:?}");
+    }
+    (keyed, fallback)
+}
+
+async fn remove(node: &Arc<EmbeddedNode>, credential_id: &str) {
+    local(node)
+        .transact("test.remove_account", |txn| {
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn remove_deletes_the_accounts_usage_rows() {
+    let node = node().await;
+    let (removed, _) = seed_remove_fixture(&node).await;
+
+    remove(&node, &removed.credential_id).await;
+
+    let keys: Vec<_> = rows(&node).await.into_iter().map(|row| row.2).collect();
+    assert_eq!(keys, ["backend-usage-a", "acct-key-b"]);
+}
+
+#[tokio::test]
+async fn remove_of_a_disabled_account_deletes_its_usage_rows() {
+    let node = node().await;
+    let (removed, _) = seed_remove_fixture(&node).await;
+    crate::oauth_credential::set_account_enabled(&local(&node), A, &removed.credential_id, false)
+        .await
+        .unwrap();
+
+    remove(&node, &removed.credential_id).await;
+
+    let keys: Vec<_> = rows(&node).await.into_iter().map(|row| row.2).collect();
+    assert_eq!(keys, ["backend-usage-a", "acct-key-b"]);
+}
