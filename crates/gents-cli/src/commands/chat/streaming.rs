@@ -77,7 +77,7 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 limit: 2
             ) {{
                 _docID agent_did requester_did session_id
-                request_id
+                request_id behavior_id
                 lifecycle_state
                 failure_reason
                 execution_generation
@@ -456,6 +456,12 @@ pub(crate) async fn stream_turn_progress(
                     let error_message = failure_reason.trim();
                     if !error_message.is_empty() {
                         println!("[agent error] {error_message}");
+                        let behavior_id = request.behavior_id.as_deref();
+                        for line in
+                            account_problems(graphql, submitted, behavior_id, error_message).await
+                        {
+                            println!("[account] {line}");
+                        }
                         println!("[inspect] gents response show {}", submitted.request_id);
                         io::stdout().flush()?;
                     } else if matches!(
@@ -905,8 +911,57 @@ fn account_problem_lines(
     accounts: &[(String, gents::oauth_credential::ServingAccount)],
     all: &[gents::oauth_credential::AccountSummary],
 ) -> Vec<String> {
-    let _ = (failure_reason, accounts, all);
-    Vec::new()
+    if !gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(failure_reason.trim())
+    {
+        return Vec::new();
+    }
+    accounts
+        .iter()
+        .filter(|(_, account)| account.state != gents::oauth_credential::AccountState::Enabled)
+        .filter_map(|(profile, account)| {
+            let provider = account.provider?;
+            Some(format!(
+                "profile {profile} uses account {:?} ({}); move it: gents config profile \
+                 set-account {profile} <account> ({})",
+                account.label,
+                account.state.as_str(),
+                gents::oauth_credential::enabled_accounts_note(provider, all),
+            ))
+        })
+        .collect()
+}
+
+/// [`account_problem_lines`] for `submitted`'s behavior, read now; a read
+/// failure gives none, since the turn's own error is already printed.
+async fn account_problems(
+    graphql: &str,
+    submitted: &SubmittedRequest,
+    behavior_id: Option<&str>,
+    failure_reason: &str,
+) -> Vec<String> {
+    let (Some(behavior_id), true) = (
+        behavior_id,
+        gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(
+            failure_reason.trim(),
+        ),
+    ) else {
+        return Vec::new();
+    };
+    let read = async {
+        let (access, _) = crate::resolve_config_access(None, Some(graphql)).await?;
+        let did = submitted.agent_did.as_str();
+        anyhow::Ok((
+            gents::config_client::behavior_accounts(&access, did, behavior_id).await?,
+            gents::oauth_credential::list_accounts(&access, did).await?,
+        ))
+    };
+    match read.await {
+        Ok((accounts, all)) => account_problem_lines(failure_reason, &accounts, &all),
+        Err(error) => {
+            tracing::debug!(%error, "accounts of a refused turn unavailable");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
