@@ -450,6 +450,53 @@ mod tests {
     }
 
     #[test]
+    fn xai_api_catalog_records_effort_lists_and_context_length() {
+        use crate::config::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+        let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
+        let grok_4_3 = || {
+            record(serde_json::json!({
+                "id":"grok-4.3", "object":"model", "context_length":1000000,
+                "capabilities":{"reasoning_effort":["none","low","medium","high","xhigh"],
+                    "default_reasoning_effort":"low"}
+            }))
+        };
+        let grok_4_5 = record(serde_json::json!({
+            "id":"grok-4.5", "object":"model", "context_length":2000000,
+            "capabilities":{"reasoning_effort":["low","medium","high","xhigh"],
+                "default_reasoning_effort":"high"}
+        }));
+        let grok_4_20 = record(serde_json::json!({
+            "id":"grok-4.20-0309-reasoning", "object":"model", "context_length":2000000
+        }));
+        let xai = |record: OpenAiModelRecord| {
+            record
+                .into_advertised(BackendProviderKind::OpenAiCompatible, true)
+                .unwrap()
+        };
+        let advertised = xai(grok_4_3());
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Off, Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(1000000));
+        let advertised = xai(grok_4_5);
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(2000000));
+        let advertised = xai(grok_4_20);
+        assert_eq!(advertised.reasoning_efforts, Some(vec![]));
+        assert_eq!(advertised.context_window, Some(2000000));
+
+        let other = grok_4_3()
+            .into_advertised(BackendProviderKind::OpenAiCompatible, false)
+            .unwrap();
+        assert_eq!(other.reasoning_efforts, None);
+        assert_eq!(other.context_window, None);
+    }
+
+    #[test]
     fn codex_catalog_preserves_context_and_supported_efforts() {
         let record: ChatGptCodexModelRecord = serde_json::from_value(serde_json::json!({
             "slug": "gpt-5.6-sol", "display_name": "GPT-5.6 Sol",
