@@ -4,6 +4,7 @@
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
+use gents::backend_provider::BackendProviderOauthExt;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
 use gents::usage_observation::{
@@ -306,14 +307,6 @@ fn provider_kind_name(backend: &InferenceBackend) -> String {
         .unwrap_or_default()
 }
 
-/// The backend kind whose sign-ins are `provider`'s accounts.
-fn account_kind(provider: &str) -> Option<BackendProviderKind> {
-    use gents::backend_provider::BackendProviderOauthExt;
-    BackendProviderKind::ALL
-        .into_iter()
-        .find(|kind| kind.oauth_provider() == Some(provider))
-}
-
 async fn stored_view(
     access: &ConfigAccess,
     account: &UsageAccount,
@@ -340,7 +333,10 @@ pub(crate) async fn account_rows(
         .iter()
         .filter(|account| provider.is_none_or(|provider| account.provider == provider))
     {
-        let usage = match account_kind(&account.provider) {
+        let kind = BackendProviderKind::ALL
+            .into_iter()
+            .find(|kind| kind.oauth_provider() == Some(account.provider.as_str()));
+        let usage = match kind {
             Some(kind) if account.enabled => {
                 let usage_account = UsageAccount::Credential {
                     agent_did: agent_did.to_owned(),
