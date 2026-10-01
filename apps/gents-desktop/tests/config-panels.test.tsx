@@ -494,6 +494,24 @@ describe("configuration panels", () => {
       });
     }
 
+    for (const [item, auth] of [
+      ["claude-2", { kind: "principal_oauth", account_ref: "acct-2" }],
+      ["claude", { kind: "principal_oauth" }],
+    ] as const) {
+      it(`saving ${item} keeps its account reference`, async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue([]);
+        render(
+          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
+        );
+        const user = await replace("Name", `${item} edited`);
+        await user.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+        const { patches } = api.patchConfigComponents.mock.calls[0][0];
+        expect(patches[0].changes.auth).toEqual(auth);
+      });
+    }
+
     it("says a backend's account is not on this node and offers no reconnect", async () => {
       const { api, shell } = harness();
       api.listProviderAccounts.mockResolvedValue([
