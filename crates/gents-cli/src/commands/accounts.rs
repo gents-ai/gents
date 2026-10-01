@@ -6,9 +6,11 @@ use std::io::{IsTerminal, Write};
 use anyhow::Result;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
-use gents::usage_observation::{load_usage, usage_view, UsageAccount, UsageView};
+use gents::usage_observation::{
+    load_usage, usage_view, AccountUsageRead, UsageAccount, UsageRead, UsageTrigger, UsageView,
+};
 use gents::{BackendProviderKind, InferenceBackend};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
@@ -32,6 +34,49 @@ pub(crate) struct AccountRow {
     pub(crate) profiles: Vec<String>,
     /// `None` for a disabled account or backend and an account not on this node.
     pub(crate) usage: Option<UsageView>,
+    /// This listing's on-demand read, when the runtime ran one.
+    pub(crate) read: Option<UsageRead>,
+}
+
+/// A usage read request for the runtime, signed by the operator identity
+/// like the enrollment operator commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UsageReadCommand {
+    pub(crate) trigger: UsageTrigger,
+    pub(crate) provider: Option<String>,
+    pub(crate) signer_did: String,
+    pub(crate) issued_at: String,
+    pub(crate) nonce: String,
+    pub(crate) sig: Vec<u8>,
+}
+
+impl UsageReadCommand {
+    pub(crate) async fn signed(
+        identity: &dyn gents::AgentIdentity,
+        trigger: UsageTrigger,
+        provider: Option<&str>,
+    ) -> Result<Self> {
+        Ok(Self {
+            trigger,
+            provider: provider.map(str::to_owned),
+            signer_did: identity.did().to_owned(),
+            issued_at: String::new(),
+            nonce: String::new(),
+            sig: Vec::new(),
+        })
+    }
+
+    pub(crate) fn signing_payload(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// The runtime's answer to a [`UsageReadCommand`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct UsageReads {
+    pub(crate) agent_did: String,
+    pub(crate) reads: Vec<AccountUsageRead>,
 }
 
 pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
@@ -276,6 +321,7 @@ pub(crate) async fn account_rows(
             backend_id: None,
             profiles: snapshot.account_profiles(account),
             usage,
+            read: None,
         });
     }
     if provider.is_some() {
@@ -310,9 +356,36 @@ pub(crate) async fn account_rows(
             backend_id: Some(backend.backend_id.clone()),
             profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
             usage,
+            read: None,
         });
     }
     Ok(rows)
+}
+
+pub(crate) async fn request_usage_reads(
+    _identity: &dyn gents::AgentIdentity,
+    _graphql: &str,
+    _trigger: UsageTrigger,
+    _provider: Option<&str>,
+) -> Result<UsageReads> {
+    Ok(UsageReads {
+        agent_did: String::new(),
+        reads: Vec::new(),
+    })
+}
+
+pub(crate) fn attach_reads(_rows: &mut [AccountRow], _reads: &UsageReads, _agent_did: &str) {}
+
+pub(crate) async fn list_with_usage(
+    access: &ConfigAccess,
+    _home: &std::path::Path,
+    agent_did: &str,
+    provider: Option<&str>,
+    _refresh: bool,
+    now: chrono::DateTime<chrono::Utc>,
+    _warnings: &mut impl Write,
+) -> Result<Vec<AccountRow>> {
+    account_rows(access, agent_did, provider, now).await
 }
 
 /// `<1m`, `45m`, `2h13m`, `5d3h`.
@@ -1246,5 +1319,140 @@ mod tests {
             .find(|line| line.contains("Work") && line.contains("disabled"))
             .expect("work line");
         assert!(!work.contains("10%"), "{work}");
+    }
+
+    fn usage_read(
+        provider: &str,
+        account_ref: Option<&str>,
+        backend_id: Option<&str>,
+        outcome: UsageRead,
+    ) -> AccountUsageRead {
+        AccountUsageRead {
+            provider: provider.to_owned(),
+            account_ref: account_ref.map(str::to_owned),
+            backend_id: backend_id.map(str::to_owned),
+            outcome,
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_reads_post_the_trigger_to_the_runtime() {
+        use axum::{routing::post, Json, Router};
+        let temp = tempfile::tempdir().unwrap();
+        let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
+            gents::KeyIdentity::load_or_create(&temp.path().join("home.key"), None).unwrap(),
+        );
+        let recorded = Arc::new(std::sync::Mutex::new(None::<Value>));
+        let app = Router::new().route(
+            "/accounts/usage/read",
+            post({
+                let recorded = recorded.clone();
+                move |Json(body): Json<Value>| async move {
+                    *recorded.lock().unwrap() = Some(body);
+                    Json(json!({
+                        "agent_did": DID,
+                        "reads": [{
+                            "provider": CLAUDE,
+                            "account_ref": null,
+                            "backend_id": null,
+                            "outcome": { "outcome": "read" },
+                        }],
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let reads = request_usage_reads(
+            identity.as_ref(),
+            &format!("{origin}/api/v0/graphql"),
+            UsageTrigger::Refresh,
+            Some(CLAUDE),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(reads.agent_did, DID);
+        assert_eq!(
+            reads.reads,
+            [usage_read(CLAUDE, None, None, UsageRead::Read)]
+        );
+        let body = recorded.lock().unwrap().clone().expect("posted");
+        assert_eq!(body["trigger"], "refresh");
+        assert_eq!(body["provider"], CLAUDE);
+        assert_eq!(body["signer_did"], identity.did());
+        let command: UsageReadCommand = serde_json::from_value(body).unwrap();
+        assert!(identity
+            .verify(identity.did(), &command.signing_payload(), &command.sig)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn usage_reads_refresh_without_a_runtime_is_an_error() {
+        let access = seeded().await;
+        let home = tempfile::tempdir().unwrap();
+        let mut warnings = Vec::new();
+        let now = chrono::Utc::now();
+
+        let error = list_with_usage(&access, home.path(), DID, None, true, now, &mut warnings)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("gents serve"), "{error}");
+
+        let rows = list_with_usage(&access, home.path(), DID, None, false, now, &mut warnings)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 10);
+        assert!(warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn usage_reads_outcomes_label_their_rows() {
+        let access = seeded().await;
+        let mut rows = account_rows(&access, DID, None, chrono::Utc::now())
+            .await
+            .unwrap();
+        let mut reads = UsageReads {
+            agent_did: "did:key:z6MkSomeoneElse".to_owned(),
+            reads: vec![
+                usage_read(
+                    GROK,
+                    Some("acct-g2"),
+                    None,
+                    UsageRead::Unavailable("throttled".to_owned()),
+                ),
+                usage_read(CLAUDE, None, None, UsageRead::SkippedUntilRefresh),
+                usage_read("OpenRouter", None, Some("openrouter"), UsageRead::Read),
+            ],
+        };
+        attach_reads(&mut rows, &reads, DID);
+        assert!(rows.iter().all(|row| row.read.is_none()));
+
+        reads.agent_did = DID.to_owned();
+        attach_reads(&mut rows, &reads, DID);
+        assert_eq!(
+            row(&rows, "Grok 2").read,
+            Some(UsageRead::Unavailable("throttled".to_owned()))
+        );
+        assert_eq!(
+            row(&rows, "Personal").read,
+            Some(UsageRead::SkippedUntilRefresh)
+        );
+        assert_eq!(row(&rows, "OpenRouter").read, Some(UsageRead::Read));
+        assert_eq!(row(&rows, "Grok").read, None);
+
+        let table = render_table(&rows);
+        let line = |label: &str| {
+            table
+                .lines()
+                .find(|line| line.contains(label))
+                .unwrap_or_else(|| panic!("{label}: {table}"))
+                .to_owned()
+        };
+        assert!(line("Grok 2").contains("(read: throttled)"), "{table}");
+        assert!(line("Personal").contains("refresh to read"), "{table}");
     }
 }
