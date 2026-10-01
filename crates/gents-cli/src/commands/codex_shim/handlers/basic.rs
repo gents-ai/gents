@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use gents::config_client::load_inference_backend_in_txn;
-use gents::usage_observation::usage_for_backend;
+use gents::usage_observation::{usage_for_backend, StoredUsage};
 use gents_codex_protocol as codex;
 use serde_json::json;
 
 use super::super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::super::protocol::{
-    empty_rate_limits, initialize_result, rate_limits_from_usage, send_result,
+    account_from_usage, initialize_result, rate_limits_from_usage, send_result,
     send_typed_json_result,
 };
 use super::super::{Outbound, ShimState};
@@ -35,18 +35,15 @@ pub(super) async fn handle_basic_request(
                 outbound,
                 request_id,
                 codex::GetAccountResponse {
-                    account: Some(codex::Account::ApiKey {}),
+                    account: Some(account_from_usage(session_usage(state).await.as_ref())),
                     requires_openai_auth: false,
                 },
             )
             .await
         }
         codex::ClientRequest::GetAccountRateLimits { request_id, .. } => {
-            // Usage gates nothing: a failed read answers as before usage existed.
-            let rate_limits = session_rate_limits(state).await.unwrap_or_else(|error| {
-                tracing::warn!(error = %format!("{error:#}"), "reading the session account's usage for rate limits failed");
-                empty_rate_limits()
-            });
+            let rate_limits =
+                rate_limits_from_usage(session_usage(state).await.as_ref(), chrono::Utc::now());
             send_result(
                 outbound,
                 request_id,
@@ -248,28 +245,36 @@ pub(super) async fn handle_basic_request(
 
 /// The stored usage of the account the session's ChatGPT backend names;
 /// other providers' usage is not Codex's to report. Never reads the
-/// provider: on-demand reads belong to the runtime.
-async fn session_rate_limits(state: &ShimState) -> Result<codex::RateLimitSnapshot> {
-    let profile = load_bound_behavior(state).await?.inference_profile;
-    let agent_did = state.agent_did.as_ref();
-    let backend_id = profile.backend_id.as_str();
-    let backend =
-        ConfigAccess::transact_local(state.node.as_ref(), None, "codex.rate_limits", |txn| {
-            Box::pin(async move { load_inference_backend_in_txn(txn, agent_did, backend_id).await })
-        })
-        .await?;
-    let stored = match backend {
-        Some(backend) if backend.provider_kind == gents::BackendProviderKind::ChatGptCodex => {
-            usage_for_backend(
-                &ConfigAccess::Local(state.node.clone()),
-                agent_did,
-                &backend,
-            )
-            .await?
+/// provider: on-demand reads belong to the runtime. Usage gates nothing, so
+/// a failed load answers as if nothing were stored.
+async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
+    let load = async {
+        let profile = load_bound_behavior(state).await?.inference_profile;
+        let agent_did = state.agent_did.as_ref();
+        let backend_id = profile.backend_id.as_str();
+        let backend =
+            ConfigAccess::transact_local(state.node.as_ref(), None, "codex.usage", |txn| {
+                Box::pin(
+                    async move { load_inference_backend_in_txn(txn, agent_did, backend_id).await },
+                )
+            })
+            .await?;
+        match backend {
+            Some(backend) if backend.provider_kind == gents::BackendProviderKind::ChatGptCodex => {
+                usage_for_backend(
+                    &ConfigAccess::Local(state.node.clone()),
+                    agent_did,
+                    &backend,
+                )
+                .await
+            }
+            _ => Ok(None),
         }
-        _ => None,
     };
-    Ok(rate_limits_from_usage(stored.as_ref(), chrono::Utc::now()))
+    load.await.unwrap_or_else(|error: anyhow::Error| {
+        tracing::warn!(error = %format!("{error:#}"), "reading the session account's usage failed");
+        None
+    })
 }
 
 #[cfg(test)]

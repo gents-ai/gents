@@ -316,8 +316,21 @@ pub(super) fn rate_limits_from_usage(
     }
 }
 
-pub(super) fn account_from_usage(_stored: Option<&StoredUsage>) -> codex::Account {
-    codex::Account::ApiKey {}
+/// `account/read` from the stored usage of the session's account: ChatGPT
+/// with a known plan, never with an email (no sign-in identity leaves the
+/// node); otherwise an API key, as before usage existed.
+pub(super) fn account_from_usage(stored: Option<&StoredUsage>) -> codex::Account {
+    let plan_type = stored
+        .and_then(|stored| stored.report.plan.as_ref())
+        .and_then(|plan| serde_json::from_value(json!(plan.name)).ok())
+        .filter(|plan_type| serde_json::to_value(plan_type).ok() != Some(json!("unknown")));
+    match plan_type {
+        Some(plan_type) => codex::Account::Chatgpt {
+            email: String::new(),
+            plan_type,
+        },
+        None => codex::Account::ApiKey {},
+    }
 }
 
 pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
