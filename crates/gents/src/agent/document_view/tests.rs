@@ -1639,6 +1639,145 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     assert!(ready_on(None).await, "the other account keeps running");
 }
 
+#[tokio::test]
+async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
+    use crate::config_client::ConfigAccess;
+    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    use gents_protocol::behavior_readiness::is_behavior_unavailable_rejection;
+    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-rejection"));
+    let did = identity.did().to_string();
+    let x = crate::default_behavior_id_for_agent(&did);
+    bind_default_behavior_claude_backend(node.as_ref(), &did, &x).await;
+    let access = ConfigAccess::Local(node.clone());
+    let sign_in = |who: &str| {
+        crate::claude_oauth::credential_from_login_tokens(
+            did.clone(),
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: format!("access-{who}"),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    };
+    store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b_backend = format!(
+        "{}-{}",
+        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        b.credential
+            .account_ref
+            .as_deref()
+            .expect("b has a reference")
+    );
+    crate::backend_registry::set_backend_probe_status(node.as_ref(), &did, &b_backend, "healthy")
+        .await
+        .unwrap();
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let on_a = format!("{x}:inference");
+    let on_b = format!("{x}:inference-b");
+    let y = "behavior-y".to_string();
+    // X runs on B's backend, or on A with its compaction profile on B; Y runs on A.
+    let reasons = |compaction_on_b: bool| {
+        let node = node.clone();
+        let did = did.clone();
+        let resolve_context = &resolve_context;
+        let (x, y, on_a, on_b, b_backend) = (
+            x.clone(),
+            y.clone(),
+            on_a.clone(),
+            on_b.clone(),
+            b_backend.clone(),
+        );
+        async move {
+            let mut view = load_document_runtime_view(node.as_ref(), &did)
+                .await
+                .expect("document view");
+            let mut b_profile = view.inference_profiles[&on_a].clone();
+            b_profile.value.profile_id = on_b.clone();
+            b_profile.value.backend_id = b_backend;
+            view.inference_profiles.insert(on_b.clone(), b_profile);
+            let mut y_record = view.behaviors[&x].clone();
+            y_record.value.behavior_id = y.clone();
+            view.behaviors.insert(y.clone(), y_record);
+            let x_record = view.behaviors.get_mut(&x).unwrap();
+            if compaction_on_b {
+                let compaction: crate::document_config::CompactionConfig =
+                    serde_json::from_value(serde_json::json!({
+                        "compaction_id": "compaction-b", "agent_did": did,
+                        "inference_profile_id": on_b,
+                    }))
+                    .unwrap();
+                view.compactions.insert(
+                    "compaction-b".into(),
+                    DocumentRecord {
+                        doc_id: "compaction-b".into(),
+                        value: compaction,
+                    },
+                );
+                let mut context =
+                    view.contexts[x_record.value.context_id.as_deref().unwrap()].clone();
+                context.value.context_id = "context-x".into();
+                context.value.compaction_id = Some("compaction-b".into());
+                view.contexts.insert("context-x".into(), context);
+                x_record.value.context_id = Some("context-x".into());
+            } else {
+                x_record.value.inference_profile_id = on_b;
+            }
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            let reason = |id: &str| {
+                snapshot
+                    .unavailable_behaviors
+                    .get(id)
+                    .map(|unavailable| unavailable.public_reason)
+            };
+            (reason(&x), reason(&y))
+        }
+    };
+    assert_eq!(reasons(false).await, (None, None));
+    assert_eq!(reasons(true).await, (None, None));
+
+    let rejected_only_x = |(x_reason, y_reason): (Option<Reason>, Option<Reason>),
+                           expected: Reason| {
+        assert_eq!(x_reason, Some(expected));
+        assert!(is_behavior_unavailable_rejection(expected.public_message()));
+        assert_eq!(y_reason, None, "Y on A keeps running");
+    };
+    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+        .await
+        .unwrap();
+    rejected_only_x(reasons(false).await, Reason::CredentialsRequired);
+    rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
+
+    access
+        .transact("test.remove_account", |txn| {
+            let did = did.clone();
+            let credential_id = b.credential.credential_id.clone();
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    rejected_only_x(reasons(false).await, Reason::CredentialsRequired);
+    rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
+}
+
 /// Install the canonical chain for `behavior_id` and bind it as the principal's
 /// explicit default, then swap the chain's InferenceBackend to the
 /// ClaudeCliSubscription provider so resolution requires a Claude

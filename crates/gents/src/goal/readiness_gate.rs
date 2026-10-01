@@ -466,4 +466,24 @@ mod tests {
         };
         assert_eq!(goal_failure_cause(&dead), GoalFailureCause::Attempt);
     }
+
+    #[test]
+    fn a_credentials_rejection_is_behavior_unavailable() {
+        for reason in [
+            BehaviorReadinessUnavailableReason::CredentialsRequired,
+            BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+        ] {
+            let rejected = AgentRequestRow {
+                request_id: "child".into(),
+                lifecycle_state: Some(RequestLifecycleState::Failed),
+                failure_reason: Some(reason.public_message().into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                goal_failure_cause(&rejected),
+                GoalFailureCause::BehaviorUnavailable,
+                "{reason:?}"
+            );
+        }
+    }
 }
