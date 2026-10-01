@@ -110,5 +110,6 @@ mod tests {
         assert!(!text.contains("SECRET"), "{text}");
         assert_eq!(json["label"], "Work");
         assert_eq!(json["result"], "refreshed");
+        assert_eq!(json["profiles"], serde_json::json!([]));
     }
 }

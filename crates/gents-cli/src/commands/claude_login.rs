@@ -186,7 +186,7 @@ mod tests {
                 credential,
                 result: gents::oauth_credential::SignInResult::Added,
                 identity_matched: false,
-                profiles: Vec::new(),
+                profiles: vec!["default-profile".into()],
             },
         });
         let text = json.to_string();
@@ -195,5 +195,6 @@ mod tests {
         assert_eq!(json["login"], "completed");
         assert_eq!(json["label"], "Claude");
         assert_eq!(json["result"], "added");
+        assert_eq!(json["profiles"], serde_json::json!(["default-profile"]));
     }
 }
