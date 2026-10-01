@@ -293,7 +293,19 @@ source consistency checks, not a separate runtime compatibility version.
   and top_p 0.95 (#2123). On the Responses wire only, requests to that
   endpoint now send `store: false` and request encrypted reasoning, as the
   Grok subscription transport already does, so xAI is asked not to retain
-  them and reasoning still replays on the next turn. Backends on Chat
+  them and reasoning still replays on the next turn.
+  On that wire a profile's reasoning effort is sent only when the model's
+  discovered catalog lists it (xAI advertises `capabilities.reasoning_effort`
+  per model; grok-4.20 lists none and rejects any effort); otherwise it is
+  omitted, the model's default applies, and `config profile show` and
+  `diagnose` warn. Discovery at that endpoint now records each model's effort
+  list and its `context_length` as the context window, so a profile without
+  its own context window uses the advertised one after the next discovery,
+  and compaction then starts relative to that window (set `context_window`
+  on the profile to keep the old budget). Existing xAI backends send efforts
+  again only after their next discovery (daemon startup probe or
+  `gents config backend discover-models`); until then efforts are omitted.
+  Other OpenAI-compatible servers are discovered as before. Backends on Chat
   Completions are relabelled but send the same requests as before, and
   runtimes older than this release keep sending stored requests from the
   same backend document.
