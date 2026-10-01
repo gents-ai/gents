@@ -206,6 +206,25 @@ impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
     }
 }
 
+/// An Anthropic API key as the bearer. No `Debug`, so the key cannot reach logs.
+pub struct ApiKeyBearer(String);
+
+impl ApiKeyBearer {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+}
+
+impl BearerSource for ApiKeyBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        Ok(self.0.clone())
+    }
+
+    fn is_oauth(&self) -> bool {
+        false
+    }
+}
+
 /// Test bearer: a fixed token, or a fixed error; counts calls and invalidations.
 #[cfg(test)]
 pub(crate) struct StaticBearer {
