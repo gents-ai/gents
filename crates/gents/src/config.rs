@@ -787,6 +787,20 @@ pub fn backend_catalog<'a>(
         .flatten())
 }
 
+/// Whether a profile's reasoning effort is admitted against its model's
+/// advertised list. An `OpenAiCompatible` backend at the xAI API endpoint
+/// admits any effort: the request omits an unadvertised one instead
+/// ([`crate::inference_setup::sent_reasoning_effort`]).
+pub fn admits_reasoning_effort(
+    backend: &crate::document_config::InferenceBackend,
+    effort: ReasoningEffort,
+    advertised: &[ReasoningEffort],
+) -> bool {
+    advertised.contains(&effort)
+        || (backend.provider_kind == BackendProviderKind::OpenAiCompatible
+            && crate::inference_setup::is_xai_api_endpoint(&backend.endpoint))
+}
+
 /// The advertised model a profile selects on its backend, admitted against
 /// that advertisement: the model must be advertised exactly once, support the
 /// selected reasoning effort, and accept the profile's context window
@@ -821,7 +835,7 @@ pub fn advertised_model_for_profile(
         (profile.reasoning_effort, model.reasoning_efforts.as_ref())
     {
         anyhow::ensure!(
-            supported.contains(&effort),
+            admits_reasoning_effort(backend, effort, supported),
             "model {} does not advertise selected reasoning effort {effort:?}",
             profile.model_name
         );
