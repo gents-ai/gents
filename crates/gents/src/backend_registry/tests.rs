@@ -278,6 +278,37 @@ fn inference_backend_validation_reports_every_violation() {
 }
 
 #[test]
+fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
+    let endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+    let mut backend = base_backend();
+    backend.provider_kind = BackendProviderKind::AnthropicApiKey;
+    backend.endpoint = endpoint.into();
+    for auth in [
+        BackendAuth::ApiKey {
+            key: "placeholder-key".into(),
+        },
+        BackendAuth::Environment {
+            variable: "ANTHROPIC_API_KEY".into(),
+        },
+        BackendAuth::Unauthenticated,
+    ] {
+        backend.auth = auth;
+        backend.validate().unwrap();
+    }
+    backend.auth = BackendAuth::PrincipalOAuth;
+    assert!(backend.validate().is_err());
+
+    backend.auth = BackendAuth::Environment {
+        variable: "ANTHROPIC_API_KEY".into(),
+    };
+    backend.endpoint = format!("{endpoint}/");
+    backend.validate().unwrap();
+    backend.endpoint = "https://proxy.example.invalid/v1".into();
+    let error = backend.validate().unwrap_err().to_string();
+    assert!(error.contains(endpoint), "{error}");
+}
+
+#[test]
 fn inference_backend_validation_requires_provider_compatible_auth() {
     let mut backend = base_backend();
     backend.auth = BackendAuth::PrincipalOAuth;
