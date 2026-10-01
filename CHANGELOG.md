@@ -359,6 +359,13 @@ source consistency checks, not a separate runtime compatibility version.
   operations. Trigger ownership errors no longer recommend the removed plan
   command. Schema-limit errors explain why deleting configuration cannot change
   an installed schema; host-root errors name the exact Tools field.
+- An OpenRouter 402 no longer spends the transport retry budget. An exhausted
+  key limit or credit balance (`error.metadata.limit_source`
+  `openrouter_key_limit` or `openrouter_credits`, or a plain "Insufficient
+  credits" 402) fails the turn at once with `provider usage limit reached
+  (reset time not reported)`, and Goals pause as usage-limited. An in-flight
+  budget 402 retries after its `Retry-After`; without one it is unchanged
+  (#2118).
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to
