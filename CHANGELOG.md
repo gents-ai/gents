@@ -225,8 +225,10 @@ source consistency checks, not a separate runtime compatibility version.
   reference: the provider's original account); add and manage extra accounts
   from the CLI until the account cards land. After you remove a provider's
   last account, the next sign-in becomes its original account again, and
-  backends with no account reference use it, deliberately: the sign-in prints
-  the profiles that now use it, and the result JSON lists them in `profiles`.
+  backends with no account reference use it, deliberately. Any sign-in that
+  becomes a provider's original account (the first one on a node, or the first
+  after removing the last) prints the profiles that use it, and the result JSON
+  lists them in `profiles`.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
