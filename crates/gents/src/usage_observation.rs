@@ -18,7 +18,7 @@ use gents_loop::account_usage::{
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
@@ -435,7 +435,8 @@ impl UsageReporter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UsageTrigger {
     /// The account list was opened.
     Open,
@@ -443,7 +444,8 @@ pub enum UsageTrigger {
     Refresh,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", content = "reason", rename_all = "snake_case")]
 pub enum UsageRead {
     Read,
     SkippedRecent,
@@ -606,6 +608,27 @@ pub async fn read_account_usage(
             Ok(UsageRead::Unavailable(error))
         }
     }
+}
+
+/// One on-demand read's outcome for an account (`account_ref`, no
+/// `backend_id`) or an account-free backend (`backend_id`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUsageRead {
+    pub provider: String,
+    pub account_ref: Option<String>,
+    pub backend_id: Option<String>,
+    pub outcome: UsageRead,
+}
+
+pub async fn read_principal_usage(
+    _node: Arc<EmbeddedNode>,
+    _agent_did: &str,
+    _trigger: UsageTrigger,
+    _provider: Option<&str>,
+    _endpoints: &UsageEndpoints,
+    _now: DateTime<Utc>,
+) -> Result<Vec<AccountUsageRead>> {
+    Ok(Vec::new())
 }
 
 fn unavailable(reason: &str) -> UsageRead {
