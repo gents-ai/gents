@@ -200,7 +200,11 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
                 crate::OpenAiWireApi::ChatCompletions,
                 Some(crate::config::ReasoningEffort::Max),
             ),
-            provider_additional_params(BackendProviderKind::OpenAiCompatible),
+            provider_additional_params(
+                BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::inference_setup::OPENAI_ENDPOINT,
+            ),
         ),
         SamplingConfig::default().additional_params(),
     );
@@ -242,15 +246,24 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
 
 #[test]
 fn openrouter_additional_params_require_parameters() {
-    let value = provider_additional_params(BackendProviderKind::OpenRouter)
-        .expect("OpenRouter should contribute additional params");
+    let value = provider_additional_params(
+        BackendProviderKind::OpenRouter,
+        crate::OpenAiWireApi::Responses,
+        crate::inference_setup::OPENAI_ENDPOINT,
+    )
+    .expect("OpenRouter should contribute additional params");
 
     assert_eq!(value["provider"]["require_parameters"], true);
 }
 
 #[test]
 fn openai_compatible_has_no_provider_specific_additional_params() {
-    assert!(provider_additional_params(BackendProviderKind::OpenAiCompatible).is_none());
+    assert!(provider_additional_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::Responses,
+        crate::inference_setup::OPENAI_ENDPOINT,
+    )
+    .is_none());
 }
 
 #[test]
@@ -320,7 +333,11 @@ fn sampling_additional_params_merge_with_provider_params() {
     };
 
     let value = merge_optional_params(
-        provider_additional_params(BackendProviderKind::OpenRouter),
+        provider_additional_params(
+            BackendProviderKind::OpenRouter,
+            crate::OpenAiWireApi::Responses,
+            crate::inference_setup::OPENAI_ENDPOINT,
+        ),
         sampling.additional_params(),
     )
     .expect("sampling params should be present");

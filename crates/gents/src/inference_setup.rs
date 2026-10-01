@@ -19,6 +19,7 @@ pub const LOCAL_DEFAULT_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
 pub const GROK_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1";
 pub const CLAUDE_ENDPOINT: &str = "claude-cli://subscription";
 pub const CODEX_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
+pub const XAI_API_ENDPOINT: &str = "https://api.x.ai/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -371,6 +372,14 @@ pub fn provider_selection_for_backend(
             InferenceAuthMethod::OptionalApiKey,
         ),
     }
+}
+
+/// Exact xAI API endpoint, ignoring ASCII case and trailing `/`
+/// (`PromptAssembly.ResponsesStorage.atXaiApi`).
+pub(crate) fn is_xai_api_endpoint(endpoint: &str) -> bool {
+    endpoint
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(XAI_API_ENDPOINT)
 }
 
 fn reasoning_model(model: &str) -> bool {
