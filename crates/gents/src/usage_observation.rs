@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use crate::backend_provider::BackendProviderOauthExt;
 use crate::config::ResolvedBehavior;
 use crate::config_client::ConfigAccess;
-use crate::document_config::InferenceBackend;
+use crate::document_config::{BackendAuth, InferenceBackend};
 use crate::graphql::escape_graphql_string;
 use crate::oauth_credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
@@ -65,15 +65,16 @@ impl UsageAccount {
         })
     }
 
-    /// The account `backend` names for `agent_did` (account = backend).
+    /// The account `backend` names for `agent_did` (account = backend): a
+    /// sign-in only for principal OAuth, as [`crate::oauth_credential::backend_account`].
     fn for_backend(agent_did: &str, backend: &InferenceBackend) -> Self {
-        match backend.provider_kind.oauth_provider() {
-            Some(provider) => Self::Credential {
+        match (backend.provider_kind.oauth_provider(), &backend.auth) {
+            (Some(provider), BackendAuth::PrincipalOAuth { account_ref }) => Self::Credential {
                 agent_did: agent_did.to_string(),
                 provider: provider.to_string(),
-                account_ref: backend.auth.oauth_account_ref().map(str::to_string),
+                account_ref: account_ref.clone(),
             },
-            None => Self::Backend {
+            _ => Self::Backend {
                 agent_did: agent_did.to_string(),
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
@@ -620,15 +621,73 @@ pub struct AccountUsageRead {
     pub outcome: UsageRead,
 }
 
+/// Reads the usage of each of `agent_did`'s accounts and account-free
+/// backends once, concurrently: `provider` keeps only that provider's
+/// accounts. A disabled account gets no read; an account not on this node
+/// is left out. One account's store error never hides the others.
 pub async fn read_principal_usage(
-    _node: Arc<EmbeddedNode>,
-    _agent_did: &str,
-    _trigger: UsageTrigger,
-    _provider: Option<&str>,
-    _endpoints: &UsageEndpoints,
-    _now: DateTime<Utc>,
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    trigger: UsageTrigger,
+    provider: Option<&str>,
+    endpoints: &UsageEndpoints,
+    now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
-    Ok(Vec::new())
+    let access = ConfigAccess::Local(node.clone());
+    let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
+    let mut backends = access
+        .transact("usage_observation.read_principal", |txn| {
+            Box::pin(async move {
+                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+            })
+        })
+        .await?;
+    // An enabled backend claims a shared account first: a disabled one reads
+    // as `Disabled` without looking at the account.
+    backends.sort_by_key(|backend| !backend.enabled);
+    let mut seen = std::collections::HashSet::new();
+    let mut reads = Vec::new();
+    for backend in &backends {
+        let (entry, account_enabled) =
+            match crate::oauth_credential::backend_account(backend, &accounts) {
+                Some(None) => continue,
+                Some(Some(account)) => {
+                    if provider.is_some_and(|provider| provider != account.provider)
+                        || !seen.insert(account.credential_id.as_str())
+                    {
+                        continue;
+                    }
+                    let entry = AccountUsageRead {
+                        provider: account.provider.clone(),
+                        account_ref: account.account_ref.clone(),
+                        backend_id: None,
+                        outcome: UsageRead::Disabled,
+                    };
+                    (entry, account.enabled)
+                }
+                None if provider.is_some() => continue,
+                None => {
+                    let entry = AccountUsageRead {
+                        provider: backend.provider_kind.as_str().to_string(),
+                        account_ref: None,
+                        backend_id: Some(backend.backend_id.clone()),
+                        outcome: UsageRead::Disabled,
+                    };
+                    (entry, true)
+                }
+            };
+        let node = node.clone();
+        reads.push(async move {
+            if !account_enabled {
+                return entry;
+            }
+            let outcome = read_account_usage(node, agent_did, backend, trigger, endpoints, now)
+                .await
+                .unwrap_or_else(|_| unavailable("store error"));
+            AccountUsageRead { outcome, ..entry }
+        });
+    }
+    Ok(futures::future::join_all(reads).await)
 }
 
 fn unavailable(reason: &str) -> UsageRead {

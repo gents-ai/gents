@@ -340,6 +340,23 @@ impl Gents {
         &self.principal.agent_did
     }
 
+    /// Reads this principal's account usage from its providers now.
+    pub async fn read_usage(
+        &self,
+        trigger: crate::usage_observation::UsageTrigger,
+        provider: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
+        crate::usage_observation::read_principal_usage(
+            self.node.clone(),
+            self.agent_did(),
+            trigger,
+            provider,
+            &Default::default(),
+            chrono::Utc::now(),
+        )
+        .await
+    }
+
     pub fn default_behavior_id(&self) -> &str {
         &self.principal.default_behavior_id
     }
