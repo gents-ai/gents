@@ -140,6 +140,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_responses_storage_cases_drive_loop_config",
         },
         ConformanceConsumer::RustTest {
+            id: "completion_factory::tests::generated_responses_effort_cases_drive_loop_config",
+            package: "gents",
+            source_path: "crates/gents/src/completion_factory/tests.rs",
+            module_path: "completion_factory::tests",
+            function: "generated_responses_effort_cases_drive_loop_config",
+        },
+        ConformanceConsumer::RustTest {
             id: "streaming::auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication",
             package: "gents",
             source_path: "crates/gents/src/streaming/auxiliary_tests.rs",

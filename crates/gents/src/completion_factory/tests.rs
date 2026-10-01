@@ -323,6 +323,57 @@ fn generated_responses_storage_cases_drive_loop_config() {
 }
 
 #[test]
+fn generated_responses_effort_cases_drive_loop_config() {
+    use crate::config::ReasoningEffort;
+    use crate::lean_vocab_test::lean_prompt_assembly_responses_effort_cases;
+
+    let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
+    let cases = lean_prompt_assembly_responses_effort_cases();
+    assert!(!cases.is_empty());
+    let mut mismatches = Vec::new();
+    for case in cases {
+        let mut behavior = behavior_with_retry(Default::default());
+        behavior.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
+        behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
+        behavior.backend_endpoint = case.endpoint.clone();
+        behavior.sampling.reasoning_effort = case.requested.as_ref().map(parse);
+        behavior.resolved_reasoning_efforts = case
+            .advertised
+            .as_ref()
+            .map(|values| values.iter().map(parse).collect());
+        let config = loop_config(
+            &behavior,
+            "preamble".to_string(),
+            0,
+            CaptureScopeKind::Inference,
+        );
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("project body");
+        let sent = body
+            .pointer("/reasoning/effort")
+            .and_then(serde_json::Value::as_str);
+        if sent != case.expected.as_deref() {
+            mismatches.push(format!("{}: effort {sent:?}", case.name));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn sampling_additional_params_merge_with_provider_params() {
     let sampling = SamplingConfig {
         temperature: Some(0.1),
