@@ -222,6 +222,18 @@ pub(crate) struct LeanPromptAssemblyResponsesStorageCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyResponsesEffortCase {
+    pub(crate) name: String,
+    pub(crate) endpoint: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) advertised: Option<Vec<String>>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) requested: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) expected: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeWireThinkingStart {
     pub(crate) index: u64,
     pub(crate) thinking: String,
