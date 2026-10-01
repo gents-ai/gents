@@ -262,6 +262,25 @@ source consistency checks, not a separate runtime compatibility version.
   time. The Codex app-server shim answers `account/rateLimits/read` from the
   stored usage of the session's account without calling the provider. Earlier
   builds open the store unchanged and ignore the new collection.
+- `gents accounts list` shows each account's usage (#1525): the window, the
+  percent used, the reset time with a countdown, where the number came from
+  and how old it is, or "unknown", "not reported", "no cap on this key" or
+  "not verified" when there is no number. `--output json` adds `usage` and
+  `read` to every row. With a runtime running, listing asks it to read
+  ChatGPT, Grok and OpenRouter usage, skipping disabled accounts and accounts
+  read in the last five minutes; `--refresh` also reads Claude and needs a
+  running runtime. The request is signed with the home identity and accepted
+  only from the runtime's own operator, once. Claude windows read from its
+  usage endpoint are not shown until their scale is verified. The model's
+  config tool gains `backend accounts`, a read-only list of accounts and
+  account-free backends with their state, the profiles that use them and
+  their last stored usage; it shows no tokens, sign-in identities or ids,
+  contacts no provider and cannot change accounts. `gents accounts remove`
+  also deletes the removed account's stored usage. The Codex shim's
+  `account/read` reports a ChatGPT session's stored plan (with no email)
+  instead of an API key, and `account/rateLimits/read` reports only fresh
+  credits, only a ChatGPT session's plan, and answers empty when usage
+  cannot be read.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
