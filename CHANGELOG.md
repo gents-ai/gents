@@ -223,7 +223,10 @@ source consistency checks, not a separate runtime compatibility version.
   account adds it instead of replacing the one shown, and each backend row
   shows and disconnects the account it references (a backend with no account
   reference: the provider's original account); add and manage extra accounts
-  from the CLI until the account cards land.
+  from the CLI until the account cards land. After you remove a provider's
+  last account, the next sign-in becomes its original account again, and
+  backends with no account reference use it, deliberately: the sign-in prints
+  the profiles that now use it, and the result JSON lists them in `profiles`.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
@@ -424,7 +427,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 - A token refresh or a desktop Disconnect no longer re-creates a removed
   sign-in, re-enables a disabled one, or overwrites a sign-in made while the
-  refresh was in flight (#2119).
+  refresh was in flight (#2119). A rebuilt behavior on a re-created sign-in
+  uses it, not the removed sign-in's cached token.
 
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
