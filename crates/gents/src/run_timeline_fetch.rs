@@ -109,8 +109,56 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
                 timeline.background_completion_diagnostics_error = Some(error.to_string());
             }
         }
+        // Best effort, like the diagnostics above: the call rows stand alone.
+        if let Err(error) = name_serving_accounts(access, agent_did, &mut timeline.events).await {
+            tracing::debug!(%error, "timeline call accounts unavailable");
+        }
     }
     Ok(timeline)
+}
+
+/// Label each call with the account its `backend_id` runs on now. A call that
+/// started before that account's sign-in took the slot (a slot reused after
+/// every account was removed) gets none, as does one with no start time.
+async fn name_serving_accounts(
+    access: &ConfigAccess,
+    agent_did: &str,
+    events: &mut [crate::run_timeline::RunTimelineEvent],
+) -> Result<()> {
+    let accounts = crate::oauth_credential::list_accounts(access, agent_did).await?;
+    let backends = access
+        .transact("timeline.serving_accounts", |txn| {
+            Box::pin(async move {
+                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+            })
+        })
+        .await?;
+    for event in events {
+        let crate::run_timeline::RunTimelineEvent::InferenceCall(call) = event else {
+            continue;
+        };
+        let Some(backend) = backends
+            .iter()
+            .find(|backend| call.backend_id.as_deref() == Some(backend.backend_id.as_str()))
+        else {
+            continue;
+        };
+        let Some(at) = call
+            .started_at
+            .as_deref()
+            .or(call.queued_at.as_deref())
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        else {
+            continue;
+        };
+        let since = crate::oauth_credential::backend_account(backend, &accounts)
+            .flatten()
+            .and_then(|account| account.connected_at);
+        if since.is_none_or(|since| at >= since) {
+            call.account = Some(crate::oauth_credential::serving_account(backend, &accounts).label);
+        }
+    }
+    Ok(())
 }
 
 /// Load the prompt-free subset of ordinary timeline rows needed by live run

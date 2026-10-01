@@ -1170,7 +1170,7 @@ pub async fn list_accounts(
             enabled: row.enabled,
             default: defaults.contains(&row.credential_id),
             access_token_expires_at: row.access_token_expires_at,
-            connected_at: None,
+            connected_at: row.connected_at,
         })
         .collect())
 }
