@@ -892,6 +892,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cycle_probes_anthropic_key_backends_independently() {
+        let options = probe_options();
+        let client = reqwest::Client::builder()
+            .timeout(options.probe_timeout)
+            .build()
+            .unwrap();
+        let health_map = BackendHealthMap::new();
+        let node = Arc::new(test_node().await);
+        let listener = ModelsListener::start();
+        let key_backend = |backend_id: &str, endpoint: String| {
+            let mut backend = backend(backend_id, endpoint);
+            backend.provider_kind = crate::backend_provider::BackendProviderKind::AnthropicApiKey;
+            backend.auth = crate::document_config::BackendAuth::ApiKey {
+                key: "placeholder-key".to_string(),
+            };
+            backend
+        };
+        let backends = vec![
+            key_backend("a", listener.endpoint()),
+            key_backend("b", "http://127.0.0.1:1/v1".to_string()),
+        ];
+
+        probe_backends_cycle(
+            &node,
+            &client,
+            &backends,
+            Utc::now(),
+            &health_map,
+            &options,
+            None,
+        )
+        .await;
+
+        let a = health_map.get("a").await.expect("a probed");
+        assert_eq!(a.state, BackendHealthState::Healthy);
+        assert_eq!(a.failure_count, 0);
+        let b = health_map.get("b").await.expect("b probed");
+        assert_eq!(b.failure_count, 1);
+        assert_ne!(b.state, BackendHealthState::Healthy);
+        listener.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn cycle_marks_reachable_unknown_backends_promotable() {
         let options = probe_options();
         let client = reqwest::Client::new();
