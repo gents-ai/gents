@@ -245,6 +245,7 @@ impl std::fmt::Debug for OAuthCredential {
             .field("enabled", &self.enabled)
             .field("account_ref", &self.account_ref)
             .field("connected_at", &self.connected_at)
+            .field("provider_account_key", &self.provider_account_key)
             .finish()
     }
 }
@@ -1066,7 +1067,7 @@ mod tests {
             assert!(!debug.contains(token), "{token} leaked: {debug}");
         }
         assert!(debug.contains("acct-1"), "{debug}");
-        for field in ["account_ref", "connected_at"] {
+        for field in ["account_ref", "connected_at", "provider_account_key"] {
             assert!(debug.contains(field), "{field} missing: {debug}");
         }
     }
