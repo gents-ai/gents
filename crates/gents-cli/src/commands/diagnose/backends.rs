@@ -42,6 +42,25 @@ pub(super) async fn diagnose_backends(
                 report["error"] = Value::String(error.to_string());
             }
         }
+        let observation = crate::shared::load_backend_observation(
+            access,
+            &backend.agent_did,
+            &backend.backend_id,
+        )
+        .await
+        .ok();
+        let warnings = bundle
+            .config
+            .inference_profiles
+            .iter()
+            .filter(|profile| profile.backend_id == backend.backend_id)
+            .filter_map(|profile| {
+                gents::config::unsent_reasoning_effort(backend, profile, observation.as_ref())
+            })
+            .collect::<Vec<_>>();
+        if !warnings.is_empty() {
+            report["warnings"] = json!(warnings);
+        }
         reports.push(report);
     }
     for (backend_id, required) in models {
