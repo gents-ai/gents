@@ -623,6 +623,21 @@ mod tests {
     }
 
     #[test]
+    fn rate_limits_from_usage_drops_stale_credits() {
+        use gents::usage_observation::account_usage::UsageCredits;
+        let now = Utc::now();
+        let mut usage = stored(Vec::new());
+        usage.report.credits = Some(UsageCredits {
+            has_credits: Some(true),
+            unlimited: Some(false),
+            balance: Some("3.00".into()),
+            observed_at: now - chrono::Duration::minutes(16),
+        });
+
+        assert_eq!(rate_limits_from_usage(Some(&usage), now).credits, None);
+    }
+
+    #[test]
     fn rate_limits_from_usage_without_observation_is_empty() {
         assert_eq!(
             rate_limits_from_usage(None, Utc::now()),

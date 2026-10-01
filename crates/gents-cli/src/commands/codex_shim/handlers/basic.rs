@@ -489,6 +489,89 @@ mod tests {
         assert_eq!(stored.read_at, None, "the shim never reads upstream");
     }
 
+    fn credential(provider: &str, plan: Option<&str>) -> OAuthCredential {
+        OAuthCredential {
+            doc_id: None,
+            credential_id: oauth_credential_id(DID, provider),
+            agent_did: DID.into(),
+            provider: provider.into(),
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: plan.map(str::to_owned),
+            is_fedramp: false,
+            access_token_expires_at: Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: Some("acct-key-a".into()),
+            label: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn shim_usage_non_codex_account_sends_no_plan() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        upsert_oauth_credential(&node, &credential("xai-oauth", None))
+            .await
+            .unwrap();
+        bind(
+            &node,
+            backend(
+                BackendProviderKind::XaiGrokOAuth,
+                BackendAuth::PrincipalOAuth { account_ref: None },
+            ),
+        )
+        .await;
+        record_usage(
+            &node,
+            &UsageAccount::Credential {
+                agent_did: DID.into(),
+                provider: "xai-oauth".into(),
+                account_ref: None,
+            },
+            UsageReport {
+                plan: Some(gents::usage_observation::account_usage::UsagePlan {
+                    name: "tier-a".into(),
+                    observed_at: Utc::now(),
+                }),
+                ..UsageReport::default()
+            },
+        )
+        .await
+        .unwrap();
+        let state = state(node, &tempdir);
+
+        assert_eq!(rate_limits(&state).await["planType"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn shim_usage_failed_load_answers_empty() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        // No behavior is bound, so loading the session's account fails.
+        let state = state(node, &tempdir);
+        let (outbound, mut received) = mpsc::unbounded_channel();
+        let request: codex::ClientRequest =
+            serde_json::from_value(json!({ "id": 1, "method": "account/rateLimits/read" }))
+                .expect("request");
+
+        let handled = handle_basic_request(&outbound, &state, request).await;
+
+        assert!(handled.is_ok(), "{handled:?}");
+        let response: Value =
+            serde_json::from_str(&received.recv().await.expect("response")).expect("json");
+        assert_eq!(
+            response["result"]["rateLimits"],
+            serde_json::to_value(super::super::super::protocol::empty_rate_limits()).unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn shim_usage_non_codex_backend_answers_as_before() {
         let tempdir = tempfile::tempdir().unwrap();
