@@ -55,6 +55,9 @@ pub(crate) async fn run_grok_login(
     if let Some(hint) = sign_in.account_chooser_hint() {
         eprintln!("{hint}");
     }
+    if let Some(note) = sign_in.profiles_note() {
+        eprintln!("{note}");
+    }
     Ok(GrokLoginOutcome { sign_in })
 }
 
@@ -64,6 +67,7 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
         "doc_id": outcome.sign_in.doc_id,
         "label": gents::oauth_credential::effective_account_label(credential),
         "result": outcome.sign_in.result,
+        "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
         "agent_did": credential.agent_did,
         "provider": credential.provider,
