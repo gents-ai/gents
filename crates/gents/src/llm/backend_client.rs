@@ -399,6 +399,28 @@ mod tests {
         );
     }
 
+    /// An Anthropic API key builds its Messages client from the key alone.
+    #[tokio::test]
+    async fn anthropic_api_key_builds_a_key_messages_client_without_io() {
+        let node = test_node().await;
+        let behavior = test_behavior(
+            BackendProviderKind::AnthropicApiKey,
+            crate::OpenAiWireApi::ChatCompletions,
+        );
+        let client =
+            build_backend_client(node, &behavior, "placeholder-key", Duration::from_secs(1))
+                .await
+                .expect("key client builds without I/O");
+        assert!(matches!(&client, BackendClient::AnthropicApiKey(_)));
+        assert_eq!(client.provider_family(), "AnthropicApiKey");
+        let issuer = client.replay_issuer().expect("built URI").expect("route");
+        let sign_in = claude_subscription_replay_issuer()
+            .expect("sign-in URI")
+            .expect("route");
+        assert_eq!(issuer.family, "AnthropicApiKey");
+        assert_eq!(issuer.endpoint, sign_in.endpoint);
+    }
+
     async fn seed_oauth_credential(
         node: &EmbeddedNode,
         behavior: &ResolvedBehavior,
