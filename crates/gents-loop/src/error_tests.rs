@@ -319,3 +319,63 @@ fn http_429_uses_retry_after_instead_of_a_fixed_delay() {
         other => panic!("expected throttle, got {other:?}"),
     }
 }
+
+fn http_402(body: String) -> InferenceError {
+    classify_completion_error(&rig::agent::StreamingError::Completion(
+        rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "402".parse().expect("valid status"),
+                body,
+            ),
+        ),
+    ))
+}
+
+#[test]
+fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
+    use crate::completion_retry::{failure_class, FailureClass};
+    use crate::provider_limit::tests::{
+        OPENROUTER_INSUFFICIENT_CREDITS, OPENROUTER_KEY_LIMIT, OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
+    };
+    for body in [
+        OPENROUTER_INSUFFICIENT_CREDITS,
+        OPENROUTER_KEY_LIMIT,
+        OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
+    ] {
+        let error = http_402(body.to_string());
+        assert!(
+            matches!(error, InferenceError::UsageLimited(_)),
+            "{body}: {error:?}"
+        );
+        assert!(!error.is_retryable());
+        assert_eq!(
+            failure_class(&error, &error.to_string()),
+            FailureClass::Permanent
+        );
+    }
+}
+
+#[test]
+fn openrouter_in_flight_402_waits_for_retry_after() {
+    use crate::completion_retry::{failure_class, FailureClass};
+    let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let error = http_402(format!(
+        "{} [provider-limit retry-at={retry_at}]",
+        crate::provider_limit::tests::OPENROUTER_IN_FLIGHT
+    ));
+    match &error {
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } => assert!(
+            *wait <= std::time::Duration::from_secs(20)
+                && *wait >= std::time::Duration::from_secs(18),
+            "{wait:?}"
+        ),
+        other => panic!("expected throttle, got {other:?}"),
+    }
+    assert_eq!(
+        failure_class(&error, &error.to_string()),
+        FailureClass::Transport
+    );
+}

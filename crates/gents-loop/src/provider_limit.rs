@@ -414,4 +414,4 @@ fn rfc3339(at: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 #[path = "provider_limit_tests.rs"]
-mod tests;
+pub(crate) mod tests;

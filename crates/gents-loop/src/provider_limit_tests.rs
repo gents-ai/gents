@@ -14,6 +14,21 @@ fn rejected(status_line: &str, body: &str, headers: &[(&str, &str)]) -> String {
 
 const RIG_429: &str = "HttpError: Invalid status code 429 Too Many Requests with message: ";
 
+const RIG_402: &str = "HttpError: Invalid status code 402 Payment Required with message: ";
+
+/// OpenRouter's documented credits message (errors page; SDK
+/// `PaymentRequiredResponseError`).
+pub(crate) const OPENROUTER_INSUFFICIENT_CREDITS: &str = r#"{"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#;
+/// OpenRouter's documented in-flight budget 402 (limits page, "In-flight
+/// spending budget").
+pub(crate) const OPENROUTER_IN_FLIGHT: &str = r#"{"error":{"code":402,"message":"This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget","remedy_hint":"Retry after your in-flight requests settle (see the Retry-After header). Adding credits at https://openrouter.ai/settings/credits raises your in-flight budget, up to a capped ceiling."}}}"#;
+/// `limit_source` documented (limits page, "Handling 402 errors"); the
+/// message and hint are illustrative.
+pub(crate) const OPENROUTER_KEY_LIMIT: &str = r#"{"error":{"code":402,"message":"Key limit exceeded.","metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise this key's credit limit."}}}"#;
+/// `reason` and `limit_source` documented (limits page); the message and hint
+/// are illustrative.
+pub(crate) const OPENROUTER_WEIGHT_EXCEEDS_BUDGET: &str = r#"{"error":{"code":402,"message":"This request costs more than your in-flight budget.","metadata":{"reason":"weight_exceeds_budget","limit_source":"openrouter_credits","remedy_hint":"Lower max_tokens or add credits."}}}"#;
+
 /// #1422 live repro: Claude subscription seat capped until 11:40 local.
 const ANTHROPIC_ACCOUNT_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_011CeoNrgs1EJvDwA2YxXE7R"}"#;
 
@@ -356,4 +371,80 @@ fn marker_survives_body_bounding() {
     assert!(body.ends_with('x'));
     assert_eq!(marker, " [provider-limit retry-at=2026-09-25T16:00:03Z]");
     assert_eq!(ProviderLimitHeaders::default().annotate("x"), "x");
+}
+
+#[test]
+fn openrouter_key_limit_and_credits_402_are_usage_limits_without_reset() {
+    for body in [
+        OPENROUTER_KEY_LIMIT,
+        OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
+        OPENROUTER_INSUFFICIENT_CREDITS,
+    ] {
+        let message = serde_json::from_str::<serde_json::Value>(body).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let text = rejected(RIG_402, body, &[]);
+        let Some(ProviderLimit::UsageExhausted(limit)) = classify_provider_limit(&text, now())
+        else {
+            panic!("expected usage limit: {text}");
+        };
+        assert_eq!(limit.resets_at, None, "{body}");
+        assert_eq!(limit.detail, message);
+        assert!(limit
+            .to_string()
+            .starts_with("provider usage limit reached (reset time not reported): "));
+    }
+}
+
+#[test]
+fn openrouter_in_flight_402_honors_retry_after() {
+    let text = rejected(RIG_402, OPENROUTER_IN_FLIGHT, &[("retry-after", "60")]);
+    assert_eq!(
+        classify_provider_limit(&text, now()),
+        Some(ProviderLimit::Throttled {
+            retry_after: Some(Duration::from_secs(60))
+        })
+    );
+    let text = rejected(RIG_402, OPENROUTER_IN_FLIGHT, &[("retry-after", "600")]);
+    let Some(ProviderLimit::UsageExhausted(limit)) = classify_provider_limit(&text, now()) else {
+        panic!("expected usage limit: {text}");
+    };
+    assert_eq!(limit.resets_at, Some(now() + chrono::Duration::seconds(600)));
+}
+
+#[test]
+fn openrouter_credits_402_record_reclassifies_as_usage_limit() {
+    let recorded = persisted_failure_reason(
+        &format!("{RIG_402}{OPENROUTER_INSUFFICIENT_CREDITS}"),
+        now(),
+    );
+    assert_eq!(
+        recorded,
+        "provider usage limit reached (reset time not reported): Insufficient credits. Add more using https://openrouter.ai/credits"
+    );
+    assert!(matches!(
+        classify_provider_limit(&recorded, now()),
+        Some(ProviderLimit::UsageExhausted(_))
+    ));
+}
+
+#[test]
+fn openrouter_in_flight_402_without_retry_after_is_unchanged() {
+    let text = format!("{RIG_402}{OPENROUTER_IN_FLIGHT}");
+    assert_eq!(classify_provider_limit(&text, now()), None);
+}
+
+#[test]
+fn openrouter_unknown_or_unrelated_402_is_unchanged() {
+    let unknown = OPENROUTER_KEY_LIMIT.replace("openrouter_key_limit", "openrouter_future_limit");
+    for text in [
+        format!("{RIG_402}{unknown}"),
+        format!(r#"{RIG_402}{{"error":{{"code":402,"message":"Payment required"}}}}"#),
+        format!(
+            "HttpError: Invalid status code 400 Bad Request with message: {OPENROUTER_WEIGHT_EXCEEDS_BUDGET}"
+        ),
+    ] {
+        assert_eq!(classify_provider_limit(&text, now()), None, "{text}");
+    }
 }
