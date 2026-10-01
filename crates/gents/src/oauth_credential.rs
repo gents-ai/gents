@@ -1563,6 +1563,25 @@ fn refresh_update_mutation(
     )
 }
 
+const MOVE_OFF_ACCOUNT: &str =
+    "Move a profile off it: gents config profile set-account <profile> <account> (gents accounts list).";
+
+/// `<Product> account "<label>" is <state>.` A label that reads as a provider
+/// limit or a context-length error is replaced by the product name: bearer
+/// errors reach the limit classifiers, and a label is free text.
+fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
+    let lower = label.to_ascii_lowercase();
+    let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
+        || lower.contains("context_length_exceeded")
+        || lower.contains("maximum context length")
+    {
+        product.name
+    } else {
+        label
+    };
+    format!("{} account \"{label}\" is {state}.", product.name)
+}
+
 pub struct DbCredentialBearer {
     node: Arc<EmbeddedNode>,
     agent_did: String,
@@ -1628,19 +1647,27 @@ impl DbCredentialBearer {
     }
 
     async fn load_credential(&self) -> Result<OAuthCredential> {
-        let credential = lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(classify_oauth_auth_error(
-                    &self.product,
-                    &self.agent_did,
-                    &self.provider,
-                    &OAuthAuthProblem::Missing,
-                ))
-            })?;
+        let Some(credential) =
+            lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id).await?
+        else {
+            let label = self.cached().await.map_or_else(
+                || self.product.name.to_owned(),
+                |cached| effective_account_label(&cached),
+            );
+            anyhow::bail!(
+                "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
+                 this one.",
+                account_failure(&self.product, &label, "removed from this node"),
+            );
+        };
         if !credential.enabled {
             anyhow::bail!(
-                "{}",
+                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                account_failure(
+                    &self.product,
+                    &effective_account_label(&credential),
+                    "disabled"
+                ),
                 classify_oauth_auth_error(
                     &self.product,
                     &self.agent_did,
@@ -1720,13 +1747,24 @@ impl DbCredentialBearer {
         Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
     }
 
-    fn auth_error(&self, problem: &OAuthAuthProblem) -> anyhow::Error {
-        anyhow::anyhow!(classify_oauth_auth_error(
-            &self.product,
-            &self.agent_did,
-            &self.provider,
-            problem,
-        ))
+    /// `credential` is the row being refreshed, never the cache: after a
+    /// remove and a new sign-in at this `credential_id` the cache can still
+    /// hold the removed account.
+    fn auth_error(
+        &self,
+        credential: &OAuthCredential,
+        problem: &OAuthAuthProblem,
+    ) -> anyhow::Error {
+        let state = match problem {
+            OAuthAuthProblem::Expired => "signed out (expired or revoked)",
+            OAuthAuthProblem::NotEntitled => "not entitled",
+            _ => "unusable",
+        };
+        anyhow::anyhow!(
+            "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+            account_failure(&self.product, &effective_account_label(credential), state),
+            classify_oauth_auth_error(&self.product, &self.agent_did, &self.provider, problem),
+        )
     }
 
     async fn refresh_tokens(
@@ -1804,14 +1842,14 @@ impl BearerSource for DbCredentialBearer {
 
         if let Some((failed_at, problem)) = last_failure.as_ref() {
             if failed_at.elapsed() < REFRESH_FAILURE_COOLDOWN {
-                return Err(self.auth_error(problem));
+                return Err(self.auth_error(&credential, problem));
             }
         }
 
         let refreshed = match self.refresh_tokens(&credential.refresh_token).await {
             Ok(refreshed) => refreshed,
             Err(problem) => {
-                let error = self.auth_error(&problem);
+                let error = self.auth_error(&credential, &problem);
                 *last_failure = Some((std::time::Instant::now(), problem));
                 return Err(error);
             }
