@@ -1509,6 +1509,11 @@ def caseCoverage : List CoverageEntry :=
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
+      "prompt_assembly_responses_storage_cases"
+      "PromptAssemblyResponsesStorageCases"
+      "Consumed by completion_factory::tests::generated_responses_storage_cases_drive_loop_config (next change). Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
       "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
