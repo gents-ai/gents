@@ -1599,14 +1599,39 @@ async fn principal_read_disabled_backend_does_not_hide_the_account() {
         ],
     )
     .await;
-    let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
+    let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
 
     let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
 
     assert_eq!(reads.len(), 2, "{reads:?}");
     assert_eq!(outcome(&reads, None), &UsageRead::Read);
-    assert_eq!(outcome(&reads, Some("acct-g2")), &UsageRead::Disabled);
-    handle.await.unwrap();
+    assert_eq!(outcome(&reads, Some("acct-g2")), &UsageRead::Read);
+}
+
+#[tokio::test]
+async fn principal_read_reads_an_enabled_account_no_backend_names() {
+    let did = "did:key:z6MkUsageSurfNoBackend";
+    let node = node().await;
+    sign_in(&node, did, GROK, Utc::now() + Duration::hours(1), None).await;
+    sign_in_ref(&node, did, GROK, "acct-g2", true).await;
+    store_backends(
+        &node,
+        &[oauth_backend(
+            did,
+            "XaiGrokOAuth",
+            "backend-usage-a",
+            None,
+            true,
+        )],
+    )
+    .await;
+    let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
+
+    let reads = principal_read(&node, did, UsageTrigger::Open, None, &grok_endpoints(&url)).await;
+
+    assert_eq!(reads.len(), 2, "{reads:?}");
+    assert_eq!(outcome(&reads, None), &UsageRead::Read);
+    assert_eq!(outcome(&reads, Some("acct-g2")), &UsageRead::Read);
 }
 
 #[test]
