@@ -484,11 +484,14 @@ pub async fn read_account_usage(
                         .headers(crate::xai_grok_oauth::build_xai_grok_oauth_headers()?),
                     account_usage::grok_billing,
                 ),
-                _ => (
+                Kind::ClaudeCliSubscription => (
                     http.get(&endpoints.claude_usage)
                         .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
                     account_usage::claude_oauth_usage,
                 ),
+                // Returned above; listed so a new kind fails to compile
+                // instead of sending its bearer to another provider.
+                Kind::OpenAiCompatible | Kind::OpenRouter => return Ok(UsageRead::NotReported),
             };
             (request.bearer_auth(token), parse)
         }
