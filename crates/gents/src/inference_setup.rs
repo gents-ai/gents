@@ -416,6 +416,29 @@ pub(crate) fn is_xai_api_endpoint(endpoint: &str) -> bool {
         .eq_ignore_ascii_case(XAI_API_ENDPOINT)
 }
 
+/// The reasoning effort a request sends. An `OpenAiCompatible` Responses
+/// backend at the xAI API endpoint sends only an effort the model's discovered
+/// catalog advertises: xAI returns 400 "does not support parameter
+/// reasoningEffort" for any effort on the other models. Unknown support omits
+/// it too, so the model default applies
+/// (`PromptAssembly.ResponsesStorage.sentEffort`).
+pub(crate) fn sent_reasoning_effort(
+    kind: BackendProviderKind,
+    wire: OpenAiWireApi,
+    endpoint: &str,
+    advertised: Option<&[ReasoningEffort]>,
+    effort: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    if kind == BackendProviderKind::OpenAiCompatible
+        && wire == OpenAiWireApi::Responses
+        && is_xai_api_endpoint(endpoint)
+    {
+        effort.filter(|effort| advertised.is_some_and(|list| list.contains(effort)))
+    } else {
+        effort
+    }
+}
+
 fn reasoning_model(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     model.starts_with("o1")
@@ -625,6 +648,29 @@ mod tests {
             max_context_window: None,
             max_output_tokens: None,
             reasoning_efforts: None,
+        }
+    }
+
+    #[test]
+    fn sent_reasoning_effort_leaves_other_kinds_and_wires_alone() {
+        for (kind, wire) in [
+            (
+                BackendProviderKind::OpenAiCompatible,
+                OpenAiWireApi::ChatCompletions,
+            ),
+            (BackendProviderKind::OpenRouter, OpenAiWireApi::Responses),
+        ] {
+            assert_eq!(
+                sent_reasoning_effort(
+                    kind,
+                    wire,
+                    XAI_API_ENDPOINT,
+                    Some(&[]),
+                    Some(ReasoningEffort::Low)
+                ),
+                Some(ReasoningEffort::Low),
+                "{kind:?} {wire:?}"
+            );
         }
     }
 
