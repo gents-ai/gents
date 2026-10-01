@@ -243,10 +243,10 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-/// The stored usage of the account the session's ChatGPT backend names;
-/// other providers' usage is not Codex's to report. Never reads the
-/// provider: on-demand reads belong to the runtime. Usage gates nothing, so
-/// a failed load answers as if nothing were stored.
+/// The stored usage of the account the session's backend names, with a
+/// plan only for ChatGPT: other providers' plans are not Codex plan types.
+/// Never reads the provider: on-demand reads belong to the runtime. Usage
+/// gates nothing, so a failed load answers as if nothing were stored.
 async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
     let load = async {
         let profile = load_bound_behavior(state).await?.inference_profile;
@@ -259,17 +259,21 @@ async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
                 )
             })
             .await?;
-        match backend {
-            Some(backend) if backend.provider_kind == gents::BackendProviderKind::ChatGptCodex => {
-                usage_for_backend(
-                    &ConfigAccess::Local(state.node.clone()),
-                    agent_did,
-                    &backend,
-                )
-                .await
+        let Some(backend) = backend else {
+            return Ok(None);
+        };
+        let mut stored = usage_for_backend(
+            &ConfigAccess::Local(state.node.clone()),
+            agent_did,
+            &backend,
+        )
+        .await?;
+        if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
+            if let Some(stored) = stored.as_mut() {
+                stored.report.plan = None;
             }
-            _ => Ok(None),
         }
+        Ok(stored)
     };
     load.await.unwrap_or_else(|error: anyhow::Error| {
         tracing::warn!(error = %format!("{error:#}"), "reading the session account's usage failed");
