@@ -665,23 +665,41 @@ fn account_backend(
     credential: &OAuthCredential,
     account_ref: &str,
 ) -> Result<crate::InferenceBackend> {
+    preset_account_backend(
+        &credential.agent_did,
+        &credential.provider,
+        Some(account_ref),
+        effective_account_label(credential),
+    )
+}
+
+/// `provider`'s preset connection for `agent_did`'s account `account_ref`.
+pub(crate) fn preset_account_backend(
+    agent_did: &str,
+    provider: &str,
+    account_ref: Option<&str>,
+    name: String,
+) -> Result<crate::InferenceBackend> {
     use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
-    let (provider, auth) = match credential.provider.as_str() {
+    let (provider_id, auth) = match provider {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
         crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
         other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
     };
-    let spec = crate::inference_setup::connection_spec(provider, auth, "")?;
+    let spec = crate::inference_setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
-        agent_did: credential.agent_did.clone(),
-        backend_id: format!("{}-{account_ref}", credential.provider),
-        name: effective_account_label(credential),
+        agent_did: agent_did.to_owned(),
+        backend_id: match account_ref {
+            Some(account_ref) => format!("{provider}-{account_ref}"),
+            None => provider.to_owned(),
+        },
+        name,
         provider_kind: spec.provider_kind,
         openai_wire_api: spec.openai_wire_api,
         endpoint: spec.endpoint,
         auth: crate::document_config::BackendAuth::PrincipalOAuth {
-            account_ref: Some(account_ref.to_owned()),
+            account_ref: account_ref.map(str::to_owned),
         },
         connect_timeout_secs: None,
         discovery_timeout_secs: None,

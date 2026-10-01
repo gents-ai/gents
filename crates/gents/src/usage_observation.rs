@@ -670,35 +670,29 @@ pub async fn read_principal_usage(
 ) -> Result<Vec<AccountUsageRead>> {
     let access = ConfigAccess::Local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
-    let mut backends = access
+    let backends = access
         .transact("usage_observation.read_principal", |txn| {
             Box::pin(async move {
                 crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
             })
         })
         .await?;
-    // An enabled backend claims a shared account first: a disabled one reads
-    // as `Disabled` without looking at the account.
-    backends.sort_by_key(|backend| !backend.enabled);
+    // An enabled backend claims its account; an enabled account no enabled
+    // backend names is read through its provider's preset connection.
     let mut seen = std::collections::HashSet::new();
-    let mut reads = Vec::new();
+    let mut jobs = Vec::new();
     for backend in &backends {
         let (entry, account_enabled) =
             match crate::oauth_credential::backend_account(backend, &accounts) {
                 Some(None) => continue,
                 Some(Some(account)) => {
-                    if provider.is_some_and(|provider| provider != account.provider)
+                    if !backend.enabled
+                        || provider.is_some_and(|provider| provider != account.provider)
                         || !seen.insert(account.credential_id.as_str())
                     {
                         continue;
                     }
-                    let entry = AccountUsageRead {
-                        provider: account.provider.clone(),
-                        account_ref: account.account_ref.clone(),
-                        backend_id: None,
-                        outcome: UsageRead::Disabled,
-                    };
-                    (entry, account.enabled)
+                    (account_entry(account), account.enabled)
                 }
                 None if provider.is_some() => continue,
                 None => {
@@ -711,18 +705,44 @@ pub async fn read_principal_usage(
                     (entry, true)
                 }
             };
+        jobs.push((entry, account_enabled, backend.clone()));
+    }
+    for account in &accounts {
+        if provider.is_some_and(|provider| provider != account.provider)
+            || seen.contains(account.credential_id.as_str())
+        {
+            continue;
+        }
+        let backend = crate::oauth_credential::preset_account_backend(
+            agent_did,
+            &account.provider,
+            account.account_ref.as_deref(),
+            account.label.clone(),
+        )?;
+        jobs.push((account_entry(account), account.enabled, backend));
+    }
+    let reads = jobs.into_iter().map(|(entry, account_enabled, backend)| {
         let node = node.clone();
-        reads.push(async move {
+        async move {
             if !account_enabled {
                 return entry;
             }
-            let outcome = read_account_usage(node, agent_did, backend, trigger, endpoints, now)
+            let outcome = read_account_usage(node, agent_did, &backend, trigger, endpoints, now)
                 .await
                 .unwrap_or_else(|_| unavailable("store error"));
             AccountUsageRead { outcome, ..entry }
-        });
-    }
+        }
+    });
     Ok(futures::future::join_all(reads).await)
+}
+
+fn account_entry(account: &crate::oauth_credential::AccountSummary) -> AccountUsageRead {
+    AccountUsageRead {
+        provider: account.provider.clone(),
+        account_ref: account.account_ref.clone(),
+        backend_id: None,
+        outcome: UsageRead::Disabled,
+    }
 }
 
 fn unavailable(reason: &str) -> UsageRead {
