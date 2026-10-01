@@ -150,4 +150,28 @@ mod tests {
             .await
             .is_err());
     }
+
+    #[tokio::test]
+    async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
+        let owner = "did:key:owner";
+        let access = crate::shared::seed_unsent_xai_effort(owner).await;
+        let mut backend = crate::shared::xai_effort_backend(owner);
+        let object = backend.as_object_mut().unwrap();
+        object.remove("catalogs");
+        object.remove("probe_status");
+        let bundle: ConfigExportBundle = serde_json::from_value(json!({
+            "format": "test", "agent_did": owner, "exported_at": "2026-01-01T00:00:00Z",
+            "access_mode": "local", "agent_principal": {"agent_did": owner},
+            "inference_backends": [backend],
+            "inference_profiles": [crate::shared::xai_effort_profile(owner)],
+        }))
+        .unwrap();
+        let reports = diagnose_backends(&access, &bundle).await;
+        let warnings = reports[0]["warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "{reports:#?}");
+        assert!(
+            warnings[0].as_str().unwrap().contains("profile grok"),
+            "{warnings:?}"
+        );
+    }
 }
