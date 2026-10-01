@@ -1508,10 +1508,11 @@ def caseCoverage : List CoverageEntry :=
       "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
       "PromptAssemblyResponsesStorageCases"
-      "Consumed by completion_factory::tests::generated_responses_storage_cases_drive_loop_config (next change). Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
+      "completion_factory::tests::generated_responses_storage_cases_drive_loop_config"
+      "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, so wire params and accounting are checked together. Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_reducer_cases"

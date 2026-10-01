@@ -254,6 +254,62 @@ fn openai_compatible_has_no_provider_specific_additional_params() {
 }
 
 #[test]
+fn generated_responses_storage_cases_drive_loop_config() {
+    use crate::lean_vocab_test::lean_prompt_assembly_responses_storage_cases;
+
+    let cases = lean_prompt_assembly_responses_storage_cases();
+    assert!(!cases.is_empty());
+    let mut mismatches = Vec::new();
+    for case in cases {
+        let mut behavior = behavior_with_retry(Default::default());
+        behavior.backend_provider_kind =
+            BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
+        behavior.openai_wire_api =
+            serde_json::from_value(serde_json::Value::String(case.wire.clone()))
+                .expect("Lean wire");
+        behavior.backend_endpoint = case.endpoint.clone();
+        let config = loop_config(
+            &behavior,
+            "preamble".to_string(),
+            0,
+            CaptureScopeKind::Inference,
+        );
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("project body");
+        let store = body.get("store").and_then(serde_json::Value::as_bool);
+        let encrypted_include = body
+            .get("include")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|include| {
+                include.iter().any(|item| {
+                    item.as_str() == Some(gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE)
+                })
+            });
+        if (store, encrypted_include) != (case.store, case.encrypted_include) {
+            mismatches.push(format!(
+                "{}: store {store:?} include {encrypted_include}",
+                case.name
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn sampling_additional_params_merge_with_provider_params() {
     let sampling = SamplingConfig {
         temperature: Some(0.1),
