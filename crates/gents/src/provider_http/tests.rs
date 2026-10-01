@@ -209,3 +209,69 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
         other => panic!("expected transient failure, got {other:?}"),
     }
 }
+
+/// Runs one streamed completion through Rig's OpenRouter client, built as
+/// `BackendClient::OpenRouter` is, and returns its first error.
+async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
+    let client: rig::providers::openrouter::Client<
+        crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
+    > = rig::providers::openrouter::Client::builder()
+        .api_key("test-key")
+        .base_url(url)
+        .http_client(
+            crate::rendered_request::RenderedRequestCapturingHttpClient::<ProviderHttpClient>::default(),
+        )
+        .build()
+        .expect("client");
+    let model = client.completion_model("test/model");
+    let request = model.completion_request("hi").build();
+    match model.stream(request).await {
+        Err(error) => error,
+        Ok(mut stream) => stream
+            .next()
+            .await
+            .expect("stream item")
+            .err()
+            .expect("402 error"),
+    }
+}
+
+#[tokio::test]
+async fn openrouter_credits_402_is_a_usage_limit() {
+    let url = one_shot_server(
+        "402 Payment Required",
+        &[],
+        r#"{"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
+    )
+    .await;
+    let error = openrouter_stream_error(&url).await;
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
+        InferenceError::UsageLimited(limit) => assert!(
+            limit.to_string().starts_with(
+                "provider usage limit reached (reset time not reported): Insufficient credits"
+            ),
+            "{limit}"
+        ),
+        other => panic!("expected usage limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn openrouter_in_flight_402_waits_for_retry_after() {
+    let url = one_shot_server(
+        "402 Payment Required",
+        &[("retry-after", "30")],
+        r#"{"error":{"code":402,"message":"This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget","remedy_hint":"Retry after your in-flight requests settle (see the Retry-After header). Adding credits at https://openrouter.ai/settings/credits raises your in-flight budget, up to a capped ceiling."}}}"#,
+    )
+    .await;
+    let error = openrouter_stream_error(&url).await;
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } => assert!(
+            wait <= Duration::from_secs(30) && wait >= Duration::from_secs(28),
+            "{wait:?}"
+        ),
+        other => panic!("expected throttle, got {other:?}"),
+    }
+}
