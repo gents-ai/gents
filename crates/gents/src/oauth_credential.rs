@@ -1036,6 +1036,54 @@ pub fn backend_account<'a>(
     )
 }
 
+/// Whether the account a backend runs on can serve it. `Missing` covers an
+/// account removed from this node and one signed in on another node: stored
+/// rows cannot tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountState {
+    Enabled,
+    Disabled,
+    Missing,
+}
+
+impl AccountState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+            Self::Missing => "account not on this node",
+        }
+    }
+}
+
+impl Serialize for AccountState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// The account a backend runs on, as views show it: a label, never an
+/// identity or token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServingAccount {
+    pub label: String,
+    pub state: AccountState,
+}
+
+/// [`backend_account`] as a label and state. A backend that uses no account
+/// is its own account; one whose account is not on this node keeps its
+/// backend name, which for an added account is its label.
+pub fn serving_account(
+    backend: &crate::InferenceBackend,
+    accounts: &[AccountSummary],
+) -> ServingAccount {
+    let _ = accounts;
+    ServingAccount {
+        label: backend.name.clone(),
+        state: AccountState::Missing,
+    }
+}
+
 /// The providers whose sign-ins are accounts: the ones a backend reads.
 const ACCOUNT_PROVIDERS: [&str; 3] = [
     crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
@@ -2134,6 +2182,142 @@ mod tests {
             "tier gate should not push re-login as the fix: {msg}"
         );
         assert!(msg.contains("api.x.ai"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod serving_account_tests {
+    use super::*;
+    use crate::document_config::BackendAuth;
+
+    fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!(
+                "claude-subscription:did:key:z6MkTest{}",
+                account_ref.unwrap_or("")
+            ),
+            provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+            account_ref: account_ref.map(str::to_owned),
+            label: label.into(),
+            identity: Some("IDENTITY".into()),
+            plan: None,
+            enabled,
+            default: account_ref.is_none(),
+            access_token_expires_at: Utc::now(),
+        }
+    }
+
+    fn backend(
+        name: &str,
+        provider_kind: &str,
+        auth: BackendAuth,
+        enabled: bool,
+    ) -> crate::InferenceBackend {
+        serde_json::from_value(json!({
+            "agent_did": "did:key:z6MkTest", "backend_id": name, "name": name,
+            "provider_kind": provider_kind, "endpoint": "http://127.0.0.1:1/v1",
+            "auth": auth, "enabled": enabled,
+        }))
+        .unwrap()
+    }
+
+    fn oauth(account_ref: Option<&str>) -> BackendAuth {
+        BackendAuth::PrincipalOAuth {
+            account_ref: account_ref.map(str::to_owned),
+        }
+    }
+
+    fn accounts() -> Vec<AccountSummary> {
+        vec![
+            account(None, "Claude", true),
+            account(Some("acct-b"), "label-b", false),
+        ]
+    }
+
+    #[test]
+    fn an_account_backend_names_its_account() {
+        let original = backend("claude", "ClaudeCliSubscription", oauth(None), true);
+        assert_eq!(
+            serving_account(&original, &accounts()),
+            ServingAccount {
+                label: "Claude".into(),
+                state: AccountState::Enabled
+            }
+        );
+        let b = backend(
+            "label-b",
+            "ClaudeCliSubscription",
+            oauth(Some("acct-b")),
+            true,
+        );
+        assert_eq!(
+            serving_account(&b, &accounts()),
+            ServingAccount {
+                label: "label-b".into(),
+                state: AccountState::Disabled
+            }
+        );
+    }
+
+    #[test]
+    fn a_backend_whose_account_is_gone_is_missing_by_its_name() {
+        let gone = backend(
+            "label-gone",
+            "ClaudeCliSubscription",
+            oauth(Some("acct-other")),
+            true,
+        );
+        assert_eq!(
+            serving_account(&gone, &accounts()),
+            ServingAccount {
+                label: "label-gone".into(),
+                state: AccountState::Missing
+            }
+        );
+    }
+
+    #[test]
+    fn an_api_key_backend_is_its_own_account() {
+        let key = BackendAuth::ApiKey {
+            key: "key-SECRET".into(),
+        };
+        for (enabled, state) in [
+            (true, AccountState::Enabled),
+            (false, AccountState::Disabled),
+        ] {
+            let api = backend("OpenAI", "OpenAiCompatible", key.clone(), enabled);
+            assert_eq!(
+                serving_account(&api, &accounts()),
+                ServingAccount {
+                    label: "OpenAI".into(),
+                    state
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_serving_account_holds_no_identity() {
+        for backend in [
+            backend("claude", "ClaudeCliSubscription", oauth(None), true),
+            backend(
+                "label-gone",
+                "ClaudeCliSubscription",
+                oauth(Some("acct-other")),
+                true,
+            ),
+        ] {
+            let json = serde_json::to_value(serving_account(&backend, &accounts())).unwrap();
+            let text = json.to_string();
+            assert!(
+                !text.contains("IDENTITY") && !text.contains("SECRET"),
+                "{text}"
+            );
+            assert_eq!(
+                json["state"],
+                serving_account(&backend, &accounts()).state.as_str()
+            );
+        }
     }
 }
 
