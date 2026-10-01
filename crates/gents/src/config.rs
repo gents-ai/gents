@@ -496,6 +496,33 @@ mod tests {
         })
     }
 
+    #[test]
+    fn anthropic_key_resolves_claude_reasoning_efforts() {
+        let inference = ResolvedInference {
+            backend: serde_json::from_value(serde_json::json!({
+                "agent_did": "did:key:backend-owner",
+                "backend_id": "anthropic-key",
+                "name": "Anthropic API",
+                "provider_kind": "AnthropicApiKey",
+                "endpoint": crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+                "auth": {"kind": "environment", "variable": "ANTHROPIC_API_KEY"}
+            }))
+            .unwrap(),
+            profile: serde_json::from_value(serde_json::json!({
+                "agent_did": "did:key:backend-owner",
+                "profile_id": "opus",
+                "backend_id": "anthropic-key",
+                "model_name": "claude-opus-5-5"
+            }))
+            .unwrap(),
+            sampling: None,
+            execution: None,
+            retry_policy: None,
+            advertised_model: None,
+        };
+        assert!(inference.resolved_reasoning_efforts().is_some());
+    }
+
     fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedBehavior {
         ResolvedBehavior {
             behavior_id: "general".to_string(),

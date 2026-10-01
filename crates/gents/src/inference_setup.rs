@@ -808,10 +808,58 @@ mod tests {
     fn incompatible_provider_auth_pairs_fail_closed() {
         assert!(connection_spec(
             InferenceProviderId::Anthropic,
-            InferenceAuthMethod::ApiKey,
+            InferenceAuthMethod::GrokOauth,
             ""
         )
         .is_err());
+    }
+
+    #[test]
+    fn anthropic_key_backends_recover_an_api_key_contract() {
+        let endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+        assert_eq!(
+            provider_selection_for_backend(BackendProviderKind::AnthropicApiKey, endpoint),
+            (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
+        );
+        let spec = connection_spec(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            "",
+        )
+        .unwrap();
+        assert_eq!(spec.provider_kind, BackendProviderKind::AnthropicApiKey);
+        assert_eq!(spec.endpoint, endpoint);
+        assert!(spec.api_key_required);
+        assert_eq!(spec.oauth_provider, None);
+        assert!(connection_spec(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            "https://proxy.example.invalid/v1"
+        )
+        .is_err());
+
+        let opus = recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            &advertised("claude-opus-5-5"),
+        )
+        .unwrap();
+        assert_eq!(opus.context_window.unwrap().recommended, 1_000_000);
+        assert_eq!(
+            opus.reasoning_effort.unwrap().recommended,
+            ReasoningEffort::Medium
+        );
+
+        let catalog = inference_setup_catalog();
+        let anthropic = catalog
+            .providers
+            .iter()
+            .find(|provider| provider.id == InferenceProviderId::Anthropic)
+            .unwrap();
+        assert_eq!(
+            anthropic.auth_methods,
+            vec![InferenceAuthMethod::ClaudeOauth]
+        );
     }
 
     #[test]
