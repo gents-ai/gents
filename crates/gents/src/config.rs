@@ -868,6 +868,61 @@ pub fn admits_reasoning_effort(
             && crate::inference_setup::is_xai_api_endpoint(&backend.endpoint))
 }
 
+/// Why a profile's reasoning effort will not be sent, or `None` when it is
+/// (or none is set). Only an xAI API-key Responses backend omits an effort
+/// ([`crate::inference_setup::sent_reasoning_effort`]); the model default
+/// applies then.
+pub fn unsent_reasoning_effort(
+    backend: &crate::document_config::InferenceBackend,
+    profile: &crate::document_config::InferenceProfile,
+    observation: Option<&crate::document_config::InferenceBackendObservation>,
+) -> Option<String> {
+    let effort = profile.reasoning_effort?;
+    let fields = backend.backend_fields();
+    let model = backend_catalog(backend, observation)
+        .ok()
+        .flatten()
+        .and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.model_name == profile.model_name)
+        });
+    let advertised = model.and_then(|model| model.reasoning_efforts.as_deref());
+    crate::inference_setup::sent_reasoning_effort(
+        fields.backend_provider_kind,
+        fields.openai_wire_api,
+        &fields.backend_endpoint,
+        advertised,
+        Some(effort),
+    )
+    .is_none()
+    .then(|| {
+        let reason = match (model, advertised) {
+            (None, _) => "has no discovered catalog; run `gents config backend discover-models`"
+                .to_string(),
+            (Some(_), None) => {
+                "catalog predates effort discovery; run `gents config backend discover-models`"
+                    .to_string()
+            }
+            (Some(_), Some([])) => "advertises no reasoning effort".to_string(),
+            (Some(_), Some(list)) => format!(
+                "advertises {}",
+                list.iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        format!(
+            "profile {} reasoning effort {} is not sent: model {} {reason}; the model default applies",
+            profile.profile_id,
+            effort.as_str(),
+            profile.model_name
+        )
+    })
+}
+
 /// The advertised model a profile selects on its backend, admitted against
 /// that advertisement: the model must be advertised exactly once, support the
 /// selected reasoning effort, and accept the profile's context window
