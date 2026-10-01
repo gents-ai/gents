@@ -887,6 +887,56 @@ mod tests {
     }
 
     #[test]
+    fn grok_api_key_connects_to_the_xai_responses_endpoint() {
+        let spec =
+            connection_spec(InferenceProviderId::Grok, InferenceAuthMethod::ApiKey, "").unwrap();
+        assert_eq!(spec.provider_kind, BackendProviderKind::OpenAiCompatible);
+        assert_eq!(spec.openai_wire_api, Some(OpenAiWireApi::Responses));
+        assert_eq!(spec.endpoint, XAI_API_ENDPOINT);
+        assert!(spec.api_key_required);
+        assert!(spec.oauth_provider.is_none());
+
+        let explicit = connection_spec(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::ApiKey,
+            "https://proxy.example/v1",
+        )
+        .unwrap();
+        assert_eq!(explicit.endpoint, "https://proxy.example/v1");
+
+        let oauth = connection_spec(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::GrokOauth,
+            "",
+        )
+        .unwrap();
+        assert_eq!(oauth.provider_kind, BackendProviderKind::XaiGrokOAuth);
+        assert_eq!(oauth.endpoint, GROK_ENDPOINT);
+        assert_eq!(
+            oauth.oauth_provider,
+            Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER)
+        );
+    }
+
+    #[test]
+    fn existing_xai_api_backends_recover_grok_api_key() {
+        for endpoint in ["https://api.x.ai/v1", "https://api.x.ai/v1/"] {
+            assert_eq!(
+                provider_selection_for_backend(BackendProviderKind::OpenAiCompatible, endpoint),
+                (InferenceProviderId::Grok, InferenceAuthMethod::ApiKey)
+            );
+        }
+        let recommendation = recommendation_for_model(
+            InferenceProviderId::Grok,
+            InferenceAuthMethod::ApiKey,
+            &advertised("grok-model"),
+        )
+        .unwrap();
+        assert_eq!(recommendation.max_concurrent.recommended, 8);
+        assert_eq!(recommendation.top_p.unwrap().recommended, 0.95);
+    }
+
+    #[test]
     fn existing_backends_recover_the_same_provider_contract() {
         assert_eq!(
             provider_selection_for_backend(
