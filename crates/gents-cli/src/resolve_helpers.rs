@@ -34,7 +34,7 @@ pub(crate) fn resolve_backend_config_with_preset(
 
     let endpoint = resolve_backend_endpoint(explicit_endpoint, preset, mode)?;
     let provider_kind = resolve_backend_provider_kind(explicit_provider_kind, preset)?;
-    let openai_wire_api = if provider_kind == BackendProviderKind::ClaudeCliSubscription {
+    let openai_wire_api = if provider_kind.uses_messages_wire() {
         // Claude is not an OpenAI-wire provider. Never persist a sticky wire
         // value when migrating an existing OpenAiCompatible backend.
         None
