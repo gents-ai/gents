@@ -1570,6 +1570,68 @@ mod tests {
     /// write-free on the settled re-tick (the float-display byte-stability
     /// this fences).
     #[tokio::test]
+    async fn graphql_tick_skips_behaviors_on_an_unknown_provider_kind() -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let seed = r#"mutation {
+            create_AgentPrincipal(input: {
+                agent_did: "did:key:mixed", display_name: "Mixed",
+                enabled: true, created_at: "2026-07-23T00:00:00Z"
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "known", agent_did: "did:key:mixed",
+                inference_profile_id: "known-profile", enabled: true
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "known-profile", agent_did: "did:key:mixed",
+                backend_id: "openai", model_name: "gpt-5"
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "openai", agent_did: "did:key:mixed", name: "OpenAI",
+                provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000",
+                auth: { kind: "unauthenticated" }, enabled: true
+            }) { _docID }
+            create_AgentBehavior(input: {
+                behavior_id: "future", agent_did: "did:key:mixed",
+                inference_profile_id: "future-profile", enabled: true
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "future-profile", agent_did: "did:key:mixed",
+                backend_id: "future", model_name: "future-model"
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "future", agent_did: "did:key:mixed", name: "Future",
+                provider_kind: "FutureProviderKind", endpoint: "https://example.invalid/v1",
+                auth: { kind: "unauthenticated" }, enabled: true
+            }) { _docID }
+        }"#;
+        let response = node.execute(seed).await;
+        ensure_no_errors(&response, "seed mixed provider kinds")?;
+
+        let snapshot = GraphqlDirectoryStore::new(node.clone(), None)
+            .load_source_snapshot()
+            .await?;
+        let behaviors = snapshot
+            .behaviors
+            .get("did:key:mixed")
+            .expect("principal behaviors")
+            .iter()
+            .map(|info| info.behavior_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(behaviors, ["known"]);
+        let profiles = &snapshot.options["did:key:mixed"].available_profiles;
+        assert!(
+            profiles.iter().all(|entry| !entry.starts_with("future-profile|")),
+            "{profiles:?}"
+        );
+        assert!(
+            profiles.iter().any(|entry| entry.starts_with("known-profile|")),
+            "{profiles:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn graphql_tick_converges_runtime_less_principal_and_retracts_on_removal() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
