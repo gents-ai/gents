@@ -1000,11 +1000,7 @@ impl ConfigCommandTool {
         }
         if verb == "accounts" {
             ParsedArgs::parse(&argv[1..])?.reject_mutation_flags()?;
-            return ordered! {
-                "resource": "accounts",
-                "items": Vec::<Value>::new(),
-            }
-            .pretty();
+            return self.account_inventory().await;
         }
         let create_args = match verb {
             "create" => Some(&argv[1..]),
@@ -1997,6 +1993,110 @@ impl ConfigCommandTool {
                 )
             })?;
         ordered! {"resource": target.collection_name(), "document": document}.pretty()
+    }
+
+    /// Each account and account-free backend: provider, label, state, the
+    /// profiles that use it and its last stored usage. Store reads only: it
+    /// never contacts a provider or renews a sign-in, and shows no token,
+    /// sign-in identity, credential id or account reference.
+    async fn account_inventory(&self) -> Result<String> {
+        use crate::backend_provider::BackendProviderOauthExt;
+        use crate::oauth_credential::backend_account;
+        use crate::usage_observation::{load_usage, usage_view, UsageAccount};
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let agent_did = self.agent_did.as_str();
+        let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
+        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.account_inventory",
+            |txn| {
+                Box::pin(async move {
+                    Ok((
+                        crate::config_client::list_inference_backends_in_txn(txn, agent_did)
+                            .await?,
+                        crate::config_client::list_inference_profiles_in_txn(txn, agent_did)
+                            .await?,
+                    ))
+                })
+            },
+        )
+        .await?;
+        let profiles_on = |backend_ids: &[&str]| {
+            profiles
+                .iter()
+                .filter(|profile| backend_ids.contains(&profile.backend_id.as_str()))
+                .map(|profile| profile.profile_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let now = chrono::Utc::now();
+        let mut items = Vec::new();
+        for account in &accounts {
+            let serving: Vec<_> = backends
+                .iter()
+                .filter(|backend| {
+                    matches!(
+                        backend_account(backend, std::slice::from_ref(account)),
+                        Some(Some(_))
+                    )
+                })
+                .map(|backend| backend.backend_id.as_str())
+                .collect();
+            let kind = crate::BackendProviderKind::ALL
+                .into_iter()
+                .find(|kind| kind.oauth_provider() == Some(account.provider.as_str()));
+            let usage = match kind {
+                Some(kind) if account.enabled => {
+                    let usage_account = UsageAccount::Credential {
+                        agent_did: agent_did.to_string(),
+                        provider: account.provider.clone(),
+                        account_ref: account.account_ref.clone(),
+                    };
+                    let stored = load_usage(&access, &usage_account).await?;
+                    Some(usage_view(stored.as_ref(), kind, now))
+                }
+                _ => None,
+            };
+            items.push(json!({
+                "provider": account.provider,
+                "label": account.label,
+                "state": if account.enabled { "enabled" } else { "disabled" },
+                "profiles": profiles_on(&serving),
+                "usage": usage,
+            }));
+        }
+        for backend in &backends {
+            let state = match backend_account(backend, &accounts) {
+                Some(Some(_)) => continue,
+                Some(None) => "account not on this node",
+                None if backend.enabled => "enabled",
+                None => "disabled",
+            };
+            let usage = if state == "enabled" {
+                let usage_account = UsageAccount::Backend {
+                    agent_did: agent_did.to_string(),
+                    provider: backend.provider_kind.as_str().to_string(),
+                    backend_id: backend.backend_id.clone(),
+                };
+                let stored = load_usage(&access, &usage_account).await?;
+                Some(usage_view(stored.as_ref(), backend.provider_kind, now))
+            } else {
+                None
+            };
+            items.push(json!({
+                "provider": backend.provider_kind.as_str(),
+                "label": backend.name,
+                "state": state,
+                "profiles": profiles_on(&[backend.backend_id.as_str()]),
+                "usage": usage,
+            }));
+        }
+        ordered! {
+            "resource": "accounts",
+            "items": items,
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage is the last stored observation; this view contacts no provider.",
+        }
+        .pretty()
     }
 
     async fn inference_inventory(
