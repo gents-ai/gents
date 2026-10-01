@@ -239,7 +239,7 @@ pub(crate) async fn account_rows(
     for backend in &snapshot.backends {
         let status = match backend_account(backend, &snapshot.accounts) {
             Some(Some(_)) => continue,
-            Some(None) => "account not on this node",
+            Some(None) => gents::oauth_credential::AccountState::Missing.as_str(),
             None if backend.enabled => "enabled",
             None => "disabled",
         };

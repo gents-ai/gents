@@ -1077,10 +1077,26 @@ pub fn serving_account(
     backend: &crate::InferenceBackend,
     accounts: &[AccountSummary],
 ) -> ServingAccount {
-    let _ = accounts;
-    ServingAccount {
-        label: backend.name.clone(),
-        state: AccountState::Missing,
+    let state = |enabled| {
+        if enabled {
+            AccountState::Enabled
+        } else {
+            AccountState::Disabled
+        }
+    };
+    match backend_account(backend, accounts) {
+        None => ServingAccount {
+            label: backend.name.clone(),
+            state: state(backend.enabled),
+        },
+        Some(None) => ServingAccount {
+            label: backend.name.clone(),
+            state: AccountState::Missing,
+        },
+        Some(Some(account)) => ServingAccount {
+            label: account.label.clone(),
+            state: state(account.enabled),
+        },
     }
 }
 
