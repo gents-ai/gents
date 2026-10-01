@@ -1790,6 +1790,7 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         callback_modules: Default::default(),
         repository_placements: Default::default(),
         backend_observations: Default::default(),
+        unknown_kind_backends: Default::default(),
     }
 }
 

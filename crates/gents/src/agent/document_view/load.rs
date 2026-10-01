@@ -26,6 +26,7 @@ pub(crate) async fn load_document_runtime_view(
                 let principal = principals
                     .remove(&owner)
                     .context("scoped principal is missing")?;
+                let mut unknown_kind_backends = HashMap::new();
                 let (package_artifacts, graph_digests) =
                     crate::graph_pipeline::load_runtime_graph_artifacts_in_txn(txn, &owner).await?;
                 let mut view = DocumentRuntimeView {
@@ -55,7 +56,13 @@ pub(crate) async fn load_document_runtime_view(
                         Collection::InferenceRetryPolicy,
                     )
                     .await?,
-                    backends: load_records(txn, &owner, Collection::InferenceBackend).await?,
+                    backends: load_records_skipping(
+                        txn,
+                        &owner,
+                        Collection::InferenceBackend,
+                        &mut unknown_kind_backends,
+                    )
+                    .await?,
                     tasks: load_records(txn, &owner, Collection::Task).await?,
                     schedules: load_records(txn, &owner, Collection::Schedule).await?,
                     triggers: load_records(txn, &owner, Collection::Trigger).await?,
@@ -81,6 +88,7 @@ pub(crate) async fn load_document_runtime_view(
                     )
                     .await?,
                     backend_observations: HashMap::new(),
+                    unknown_kind_backends,
                     oauth_credentials: HashMap::new(),
                 };
                 // Retain ordinary authored documents. Reserved package and graph
@@ -106,6 +114,7 @@ pub(crate) async fn load_document_runtime_view(
                     inference_execution,
                     inference_retry_policies,
                     backends,
+                    unknown_kind_backends,
                     tasks,
                     schedules,
                     triggers,
@@ -174,6 +183,17 @@ async fn load_records<T: DeserializeOwned>(
     owner: &str,
     collection: Collection,
 ) -> Result<HashMap<String, DocumentRecord<T>>> {
+    load_records_skipping(txn, owner, collection, &mut HashMap::new()).await
+}
+
+/// `load_records`, except a backend of a provider kind this build does not
+/// know is skipped and recorded in `unknown_kinds` (ID to kind).
+async fn load_records_skipping<T: DeserializeOwned>(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    collection: Collection,
+    unknown_kinds: &mut HashMap<String, String>,
+) -> Result<HashMap<String, DocumentRecord<T>>> {
     let name = collection.graphql_type();
     let (fields, _) = config_projection(collection, None)?;
     let response = txn
@@ -208,6 +228,17 @@ async fn load_records<T: DeserializeOwned>(
             .filter(|id| !id.trim().is_empty())
             .with_context(|| format!("{name} missing logical key"))?
             .to_owned();
+        if collection == Collection::InferenceBackend {
+            if let Some(kind) = crate::backend_registry::unknown_provider_kind(&row) {
+                tracing::warn!(
+                    backend_id = id,
+                    provider_kind = kind,
+                    "skipping backend of a provider kind this build does not know"
+                );
+                unknown_kinds.insert(id, kind.to_owned());
+                continue;
+            }
+        }
         let (_, canonical) = config_projection(collection, Some(&row))?;
         let value = decode_record(name, &id, canonical.context("missing canonical config")?)?;
         anyhow::ensure!(
