@@ -81,6 +81,19 @@ async fn profile_rows(
     let mut rows =
         super::crud::query_collection(access, super::crud::PROFILE_SPEC, agent_did, id).await?;
     rows.sort_by(|a, b| a["profile_id"].as_str().cmp(&b["profile_id"].as_str()));
+    let snapshot = crate::commands::accounts::snapshot(access, agent_did).await?;
+    for row in &mut rows {
+        if let Some(backend) = snapshot
+            .backends
+            .iter()
+            .find(|backend| row["backend_id"].as_str() == Some(backend.backend_id.as_str()))
+        {
+            row["account"] = serde_json::to_value(gents::oauth_credential::serving_account(
+                backend,
+                &snapshot.accounts,
+            ))?;
+        }
+    }
     Ok(rows)
 }
 
@@ -101,7 +114,13 @@ fn render_profile_table(rows: &[Value]) -> String {
                 Some(text(&row["display_name"]))
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| text(&row["name"])),
-                String::new(),
+                match (
+                    row["account"]["label"].as_str(),
+                    row["account"]["state"].as_str(),
+                ) {
+                    (Some(label), Some(state)) => format!("{label} ({state})"),
+                    _ => String::new(),
+                },
             ]
         })
         .collect();

@@ -111,13 +111,13 @@ async fn target_access(target: &AccountsTargetArgs) -> Result<(crate::CommandAcc
 }
 
 /// The principal's accounts and the configuration that uses them.
-struct Snapshot {
-    accounts: Vec<AccountSummary>,
-    backends: Vec<InferenceBackend>,
-    profiles: Vec<InferenceProfile>,
+pub(crate) struct Snapshot {
+    pub(crate) accounts: Vec<AccountSummary>,
+    pub(crate) backends: Vec<InferenceBackend>,
+    pub(crate) profiles: Vec<InferenceProfile>,
 }
 
-async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
+pub(crate) async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
     let accounts = gents::oauth_credential::list_accounts(access, agent_did).await?;
     let (backends, profiles) = access
         .transact("accounts.config", |txn| {
