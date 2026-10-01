@@ -410,7 +410,10 @@ fn openrouter_in_flight_402_honors_retry_after() {
     let Some(ProviderLimit::UsageExhausted(limit)) = classify_provider_limit(&text, now()) else {
         panic!("expected usage limit: {text}");
     };
-    assert_eq!(limit.resets_at, Some(now() + chrono::Duration::seconds(600)));
+    assert_eq!(
+        limit.resets_at,
+        Some(now() + chrono::Duration::seconds(600))
+    );
 }
 
 #[test]

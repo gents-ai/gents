@@ -231,8 +231,7 @@ async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError 
             .next()
             .await
             .expect("stream item")
-            .err()
-            .expect("402 error"),
+            .expect_err("402 error"),
     }
 }
 

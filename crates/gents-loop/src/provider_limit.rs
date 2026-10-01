@@ -263,18 +263,23 @@ pub enum ProviderLimit {
 /// A bare 429 is a throttle. Usage evidence is body wording, or rejected usage
 /// headers or a wait beyond [`LONG_RATE_LIMIT_WAIT`] on a rate-limit rejection;
 /// usage headers on any other status (an overloaded 529, a 500) are ignored.
+/// An OpenRouter 402 is classified by `error.metadata.limit_source`
+/// (https://openrouter.ai/docs/api-reference/limits, "Handling 402 errors").
 pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
     let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
     let lower = body.to_ascii_lowercase();
-    let usage_text = USAGE_NEEDLES.iter().any(|needle| lower.contains(needle));
+    let body_json = embedded_json(body);
+    let payment = openrouter_payment_required(&lower, body_json.as_ref());
+    let usage_text = USAGE_NEEDLES.iter().any(|needle| lower.contains(needle))
+        || payment == Some(PaymentRequired::Exhausted);
     let throttle = THROTTLE_NEEDLES.iter().any(|needle| lower.contains(needle))
-        || has_status(&lower, Some("429"));
+        || has_status(&lower, Some("429"))
+        || (payment == Some(PaymentRequired::InFlight) && headers.retry_at.is_some());
     if !(usage_text || throttle) {
         return None;
     }
 
-    let body_json = embedded_json(body);
     if usage_text || headers.usage_exhausted {
         let resets_at = body_json
             .as_ref()
@@ -299,6 +304,38 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
         }));
     }
     Some(ProviderLimit::Throttled { retry_after })
+}
+
+/// OpenRouter's 402 cases.
+#[derive(PartialEq)]
+enum PaymentRequired {
+    /// A key cap or the credit balance: no wait helps.
+    Exhausted,
+    /// The in-flight spending budget: transient, retry after `Retry-After`.
+    InFlight,
+}
+
+/// Branches on `error.metadata.limit_source`, never on `remedy_hint` (log text
+/// per OpenRouter). Without one only the documented "Insufficient credits"
+/// wording counts; an unknown source keeps the generic rules.
+fn openrouter_payment_required(
+    lower: &str,
+    json: Option<&serde_json::Value>,
+) -> Option<PaymentRequired> {
+    if !has_status(lower, Some("402")) {
+        return None;
+    }
+    match json
+        .and_then(|json| json.pointer("/error/metadata/limit_source"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("openrouter_key_limit" | "openrouter_credits") => Some(PaymentRequired::Exhausted),
+        Some("openrouter_in_flight_budget") => Some(PaymentRequired::InFlight),
+        Some(_) => None,
+        None => lower
+            .contains("insufficient credits")
+            .then_some(PaymentRequired::Exhausted),
+    }
 }
 
 /// A status rendering followed by a three-digit code (`code` when given).
