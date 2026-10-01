@@ -344,6 +344,49 @@ async fn store_new_first_account_never_shows_the_removed_accounts_usage() {
     assert_eq!(for_backend, None);
 }
 
+/// Remove-all then sign in again within the same second: `connected_at` has
+/// seconds precision, so only a key the new sign-in does not inherit keeps
+/// the removed account's usage apart.
+#[tokio::test]
+async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
+    let node = node().await;
+    let access = local(&node);
+    let removed = crate::oauth_credential::store_sign_in(&access, credential(A, None, None), None)
+        .await
+        .unwrap()
+        .credential;
+    let account = UsageAccount::for_credential(&removed);
+    record_usage(
+        &node,
+        &account,
+        report(vec![window("primary", 70.0, Utc::now())]),
+    )
+    .await
+    .unwrap();
+    assert!(load_usage(&access, &account).await.unwrap().is_some());
+
+    let credential_id = removed.credential_id.as_str();
+    access
+        .transact("test.remove_account", |txn| {
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    let mut next = credential(A, None, None);
+    next.access_token = "access-TEST-2".into();
+    crate::oauth_credential::store_sign_in(&access, next, None)
+        .await
+        .unwrap();
+
+    let stored = load_usage(&access, &account).await.unwrap();
+    assert_eq!(
+        stored, None,
+        "the removed account's usage shows: {stored:?}"
+    );
+}
+
 #[tokio::test]
 async fn store_disabled_account_writes_and_loads_nothing() {
     let node = node().await;
