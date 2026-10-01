@@ -1581,4 +1581,21 @@ mod tests {
         assert!(line("Grok 2").contains("(read: throttled)"), "{table}");
         assert!(line("Personal").contains("refresh to read"), "{table}");
     }
+
+    #[test]
+    fn usage_read_command_is_valid_for_one_minute_and_five_seconds_ahead() {
+        let now = chrono::Utc::now();
+        let command = |offset: i64| UsageReadCommand {
+            trigger: UsageTrigger::Open,
+            provider: None,
+            signer_did: DID.to_owned(),
+            issued_at: (now + chrono::Duration::seconds(offset))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            nonce: "nonce-a".to_owned(),
+            sig: vec![0; 64],
+        };
+        assert!(command(-59).validate_at(now).is_ok());
+        assert!(command(-61).validate_at(now).is_err());
+        assert!(command(6).validate_at(now).is_err());
+    }
 }
