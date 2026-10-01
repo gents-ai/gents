@@ -330,6 +330,18 @@ def promptAssemblyResponsesStorageCasesJson : String :=
   jsonArray (PromptAssembly.ResponsesStorage.cases.map
     promptAssemblyResponsesStorageCaseJson)
 
+def promptAssemblyResponsesEffortCaseJson
+    (witness : PromptAssembly.ResponsesStorage.EffortCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"endpoint\":" ++ jsonString witness.endpoint ++
+    ",\"advertised\":" ++ jsonOptionalStringArray witness.advertised ++
+    ",\"requested\":" ++ jsonOptionalString witness.requested ++
+    ",\"expected\":" ++ jsonOptionalString witness.expected ++ "}"
+
+def promptAssemblyResponsesEffortCasesJson : String :=
+  jsonArray (PromptAssembly.ResponsesStorage.effortCases.map
+    promptAssemblyResponsesEffortCaseJson)
+
 private def claudeReplayInputBlockJson :
     CanonicalOutput.MessageBlock (List UInt8) → String
   | .text payload =>

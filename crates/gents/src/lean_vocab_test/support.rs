@@ -232,6 +232,7 @@ pub(crate) struct LeanContractSnapshot {
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
     pub(crate) prompt_assembly_responses_storage_cases: Vec<LeanPromptAssemblyResponsesStorageCase>,
+    pub(crate) prompt_assembly_responses_effort_cases: Vec<LeanPromptAssemblyResponsesEffortCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
     pub(crate) prompt_assembly_reasoning_suffix_cases: Vec<LeanPromptAssemblyReasoningSuffixCase>,
@@ -1849,6 +1850,11 @@ pub(crate) fn lean_prompt_assembly_claude_wire_start_cases(
 pub(crate) fn lean_prompt_assembly_responses_storage_cases(
 ) -> &'static [LeanPromptAssemblyResponsesStorageCase] {
     &lean_contract_snapshot().prompt_assembly_responses_storage_cases
+}
+
+pub(crate) fn lean_prompt_assembly_responses_effort_cases(
+) -> &'static [LeanPromptAssemblyResponsesEffortCase] {
+    &lean_contract_snapshot().prompt_assembly_responses_effort_cases
 }
 
 pub(crate) fn lean_prompt_assembly_claude_replay_cases(
