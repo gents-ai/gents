@@ -6,8 +6,8 @@ use std::io::{IsTerminal, Write};
 use anyhow::Result;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
-use gents::usage_observation::UsageView;
-use gents::InferenceBackend;
+use gents::usage_observation::{load_usage, usage_view, UsageAccount, UsageView};
+use gents::{BackendProviderKind, InferenceBackend};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -214,18 +214,52 @@ fn provider_kind_name(backend: &InferenceBackend) -> String {
         .unwrap_or_default()
 }
 
+/// The backend kind whose sign-ins are `provider`'s accounts.
+fn account_kind(provider: &str) -> Option<BackendProviderKind> {
+    use gents::backend_provider::BackendProviderOauthExt;
+    BackendProviderKind::ALL
+        .into_iter()
+        .find(|kind| kind.oauth_provider() == Some(provider))
+}
+
+async fn stored_view(
+    access: &ConfigAccess,
+    account: &UsageAccount,
+    kind: BackendProviderKind,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<UsageView> {
+    Ok(usage_view(
+        load_usage(access, account).await?.as_ref(),
+        kind,
+        now,
+    ))
+}
+
 pub(crate) async fn account_rows(
     access: &ConfigAccess,
     agent_did: &str,
     provider: Option<&str>,
-    _now: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AccountRow>> {
     let snapshot = snapshot(access, agent_did).await?;
-    let mut rows: Vec<_> = snapshot
+    let mut rows = Vec::new();
+    for account in snapshot
         .accounts
         .iter()
         .filter(|account| provider.is_none_or(|provider| account.provider == provider))
-        .map(|account| AccountRow {
+    {
+        let usage = match account_kind(&account.provider) {
+            Some(kind) if account.enabled => {
+                let usage_account = UsageAccount::Credential {
+                    agent_did: agent_did.to_owned(),
+                    provider: account.provider.clone(),
+                    account_ref: account.account_ref.clone(),
+                };
+                Some(stored_view(access, &usage_account, kind, now).await?)
+            }
+            _ => None,
+        };
+        rows.push(AccountRow {
             provider: account.provider.clone(),
             label: account.label.clone(),
             identity: account.identity.clone(),
@@ -241,9 +275,9 @@ pub(crate) async fn account_rows(
             account_ref: account.account_ref.clone(),
             backend_id: None,
             profiles: snapshot.account_profiles(account),
-            usage: None,
-        })
-        .collect();
+            usage,
+        });
+    }
     if provider.is_some() {
         return Ok(rows);
     }
@@ -253,6 +287,16 @@ pub(crate) async fn account_rows(
             Some(None) => gents::oauth_credential::AccountState::Missing.as_str(),
             None if backend.enabled => "enabled",
             None => "disabled",
+        };
+        let usage = if status == "enabled" {
+            let usage_account = UsageAccount::Backend {
+                agent_did: agent_did.to_owned(),
+                provider: backend.provider_kind.as_str().to_owned(),
+                backend_id: backend.backend_id.clone(),
+            };
+            Some(stored_view(access, &usage_account, backend.provider_kind, now).await?)
+        } else {
+            None
         };
         rows.push(AccountRow {
             provider: provider_kind_name(backend),
@@ -265,15 +309,91 @@ pub(crate) async fn account_rows(
             account_ref: backend.auth.oauth_account_ref().map(str::to_owned),
             backend_id: Some(backend.backend_id.clone()),
             profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
-            usage: None,
+            usage,
         });
     }
     Ok(rows)
 }
 
+/// `<1m`, `45m`, `2h13m`, `5d3h`.
+fn short_duration(secs: i64) -> String {
+    let (days, hours, minutes) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => "<1m".to_owned(),
+        (0, 0, minutes) => format!("{minutes}m"),
+        (0, hours, 0) => format!("{hours}h"),
+        (0, hours, minutes) => format!("{hours}h{minutes}m"),
+        (days, 0, _) => format!("{days}d"),
+        (days, hours, _) => format!("{days}d{hours}h"),
+    }
+}
+
+/// WINDOW, USED, RESETS, SOURCE and AGE: one line per visible window.
+fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
+    let dash = || "-".to_owned();
+    let Some(usage) = &row.usage else {
+        return vec![std::array::from_fn(|_| dash())];
+    };
+    let reason = usage
+        .read_error
+        .as_deref()
+        .map(|reason| format!("(read: {reason})"));
+    if usage.windows.is_empty() {
+        return vec![[
+            dash(),
+            usage.note.unwrap_or("unknown").to_owned(),
+            dash(),
+            reason.unwrap_or_else(dash),
+            dash(),
+        ]];
+    }
+    usage
+        .windows
+        .iter()
+        .enumerate()
+        .map(|(index, window)| {
+            let label = match window
+                .window_minutes
+                .map(|minutes| short_duration(minutes * 60))
+            {
+                Some(short) if short != window.label => format!("{} ({short})", window.label),
+                _ => window.label.clone(),
+            };
+            let resets = window.resets_at.map_or_else(dash, |at| {
+                format!(
+                    "{} (in {})",
+                    at.format("%Y-%m-%d %H:%MZ"),
+                    short_duration(window.resets_in_secs.unwrap_or_default())
+                )
+            });
+            let source = match window.source {
+                gents::usage_observation::account_usage::UsageSource::Header => "headers",
+                gents::usage_observation::account_usage::UsageSource::Endpoint => "read",
+                gents::usage_observation::account_usage::UsageSource::Error => "rejected",
+            };
+            let source = match (&reason, index) {
+                (Some(reason), 0) => format!("{source} {reason}"),
+                _ => source.to_owned(),
+            };
+            let mut age = short_duration(window.age_secs);
+            if window.last_known {
+                age.push_str(", last known");
+            }
+            [
+                label,
+                format!("{}%", window.used_pct.round()),
+                resets,
+                source,
+                age,
+            ]
+        })
+        .collect()
+}
+
 pub(crate) fn render_table(rows: &[AccountRow]) -> String {
     let headers = [
-        "PROVIDER", "LABEL", "IDENTITY", "PLAN", "STATUS", "DEFAULT", "PROFILES",
+        "PROVIDER", "LABEL", "IDENTITY", "PLAN", "STATUS", "DEFAULT", "PROFILES", "WINDOW", "USED",
+        "RESETS", "SOURCE", "AGE",
     ];
     let cell = |value: Option<&str>| {
         value
@@ -281,38 +401,44 @@ pub(crate) fn render_table(rows: &[AccountRow]) -> String {
             .unwrap_or("-")
             .to_owned()
     };
-    let rendered: Vec<[String; 7]> = rows
-        .iter()
-        .map(|row| {
-            [
-                row.provider.clone(),
-                row.label.clone(),
-                cell(row.identity.as_deref()),
-                cell(row.plan.as_deref()),
-                row.status.clone(),
-                if row.default { "yes" } else { "-" }.to_owned(),
-                cell(Some(&row.profiles.join(","))),
-            ]
-        })
-        .collect();
-    let mut widths = headers.map(str::len);
-    for row in &rendered {
-        for (width, value) in widths.iter_mut().zip(row) {
+    let mut lines: Vec<Vec<String>> = vec![headers.map(str::to_owned).to_vec()];
+    for row in rows {
+        let account = [
+            row.provider.clone(),
+            row.label.clone(),
+            cell(row.identity.as_deref()),
+            cell(row.plan.as_deref()),
+            row.status.clone(),
+            if row.default { "yes" } else { "-" }.to_owned(),
+            cell(Some(&row.profiles.join(","))),
+        ];
+        for (index, usage) in usage_cells(row).into_iter().enumerate() {
+            let lead = if index == 0 {
+                account.clone()
+            } else {
+                Default::default()
+            };
+            lines.push(lead.into_iter().chain(usage).collect());
+        }
+    }
+    let mut widths = vec![0; headers.len()];
+    for line in &lines {
+        for (width, value) in widths.iter_mut().zip(line) {
             *width = (*width).max(value.chars().count());
         }
     }
-    let line = |cells: &[String; 7]| {
-        let mut line = cells
-            .iter()
-            .zip(widths)
-            .map(|(value, width)| format!("{value:<width$}"))
-            .collect::<Vec<_>>()
-            .join("  ");
-        line.truncate(line.trim_end().len());
-        line + "\n"
-    };
-    std::iter::once(line(&headers.map(str::to_owned)))
-        .chain(rendered.iter().map(line))
+    lines
+        .iter()
+        .map(|cells| {
+            let mut line = cells
+                .iter()
+                .zip(&widths)
+                .map(|(value, &width)| format!("{value:<width$}"))
+                .collect::<Vec<_>>()
+                .join("  ");
+            line.truncate(line.trim_end().len());
+            line + "\n"
+        })
         .collect()
 }
 
