@@ -478,9 +478,10 @@ mod tests {
     #[tokio::test]
     async fn the_missing_state_reads_the_same_in_accounts_and_profiles() {
         let (access, _, _) = seeded().await;
-        let accounts = crate::commands::accounts::account_rows(&access, DID, None)
-            .await
-            .unwrap();
+        let accounts =
+            crate::commands::accounts::account_rows(&access, DID, None, chrono::Utc::now())
+                .await
+                .unwrap();
         let gone = accounts
             .iter()
             .find(|row| row.backend_id.as_deref() == Some("gone"))

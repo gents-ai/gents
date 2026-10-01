@@ -6,6 +6,7 @@ use std::io::{IsTerminal, Write};
 use anyhow::Result;
 use gents::document_config::InferenceProfile;
 use gents::oauth_credential::{backend_account, AccountSummary};
+use gents::usage_observation::UsageView;
 use gents::InferenceBackend;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -17,7 +18,7 @@ use crate::{print_json, resolve_agent_did, resolve_config_access};
 
 /// One `accounts list` row: a sign-in account, a backend that uses no
 /// account, or a subscription backend whose account is not on this node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AccountRow {
     pub(crate) provider: String,
     pub(crate) label: String,
@@ -29,13 +30,21 @@ pub(crate) struct AccountRow {
     pub(crate) account_ref: Option<String>,
     pub(crate) backend_id: Option<String>,
     pub(crate) profiles: Vec<String>,
+    /// `None` for a disabled account or backend and an account not on this node.
+    pub(crate) usage: Option<UsageView>,
 }
 
 pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
     match command {
         AccountsCommand::List { target, output } => {
             let (access, did) = target_access(&target).await?;
-            let rows = account_rows(&access, &did, target.provider.as_deref()).await?;
+            let rows = account_rows(
+                &access,
+                &did,
+                target.provider.as_deref(),
+                chrono::Utc::now(),
+            )
+            .await?;
             match output
                 .ensure_supported("accounts list", &[OutputFormat::Table, OutputFormat::Json])?
             {
@@ -209,6 +218,7 @@ pub(crate) async fn account_rows(
     access: &ConfigAccess,
     agent_did: &str,
     provider: Option<&str>,
+    _now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AccountRow>> {
     let snapshot = snapshot(access, agent_did).await?;
     let mut rows: Vec<_> = snapshot
@@ -231,6 +241,7 @@ pub(crate) async fn account_rows(
             account_ref: account.account_ref.clone(),
             backend_id: None,
             profiles: snapshot.account_profiles(account),
+            usage: None,
         })
         .collect();
     if provider.is_some() {
@@ -254,6 +265,7 @@ pub(crate) async fn account_rows(
             account_ref: backend.auth.oauth_account_ref().map(str::to_owned),
             backend_id: Some(backend.backend_id.clone()),
             profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
+            usage: None,
         });
     }
     Ok(rows)
@@ -678,7 +690,9 @@ mod tests {
     #[tokio::test]
     async fn list_shows_every_account_and_backend() {
         let access = seeded().await;
-        let rows = account_rows(&access, DID, None).await.unwrap();
+        let rows = account_rows(&access, DID, None, chrono::Utc::now())
+            .await
+            .unwrap();
         let mut labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
         labels.sort();
         assert_eq!(
@@ -729,7 +743,9 @@ mod tests {
             "{table}"
         );
 
-        let claude_only = account_rows(&access, DID, Some(CLAUDE)).await.unwrap();
+        let claude_only = account_rows(&access, DID, Some(CLAUDE), chrono::Utc::now())
+            .await
+            .unwrap();
         let mut labels: Vec<_> = claude_only.iter().map(|row| row.label.as_str()).collect();
         labels.sort();
         assert_eq!(labels, ["Personal", "Work"]);
@@ -748,7 +764,9 @@ mod tests {
             ),
         )
         .await;
-        let rows = account_rows(&access, DID, None).await.unwrap();
+        let rows = account_rows(&access, DID, None, chrono::Utc::now())
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 11);
         let missing = row(&rows, "Remote Grok");
         assert_eq!(missing.status, "account not on this node");
@@ -819,7 +837,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["label"], "Office");
-        let rows = account_rows(&access, DID, None).await.unwrap();
+        let rows = account_rows(&access, DID, None, chrono::Utc::now())
+            .await
+            .unwrap();
         assert_eq!(row(&rows, "Office").profiles, ["work-profile"]);
         let ConfigAccess::Local(node) = &access else {
             unreachable!()
@@ -844,7 +864,9 @@ mod tests {
         assert_eq!(result["profiles"], json!(["work-profile"]));
         let warnings = String::from_utf8(warnings).unwrap();
         assert!(warnings.contains("work-profile"), "{warnings}");
-        let rows = account_rows(&access, DID, None).await.unwrap();
+        let rows = account_rows(&access, DID, None, chrono::Utc::now())
+            .await
+            .unwrap();
         assert_eq!(row(&rows, "Work").status, "disabled");
         assert!(stored_ids(&access)
             .await
@@ -963,5 +985,140 @@ mod tests {
         assert!(stored_ids(&access)
             .await
             .contains(&format!("{GROK}:{DID}:acct-g2")));
+    }
+
+    fn usage_window(
+        label: &str,
+        used_pct: f64,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> gents::usage_observation::account_usage::UsageWindow {
+        gents::usage_observation::account_usage::UsageWindow {
+            label: label.to_owned(),
+            window_minutes: Some(300),
+            used_pct,
+            resets_at: None,
+            source: gents::usage_observation::account_usage::UsageSource::Header,
+            observed_at,
+        }
+    }
+
+    async fn record(
+        access: &ConfigAccess,
+        provider: &str,
+        account_ref: Option<&str>,
+        windows: Vec<gents::usage_observation::account_usage::UsageWindow>,
+    ) {
+        let ConfigAccess::Local(node) = access else {
+            unreachable!()
+        };
+        gents::usage_observation::record_usage(
+            node,
+            &gents::usage_observation::UsageAccount::Credential {
+                agent_did: DID.to_owned(),
+                provider: provider.to_owned(),
+                account_ref: account_ref.map(str::to_owned),
+            },
+            gents::usage_observation::account_usage::UsageReport {
+                windows,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Personal at 42% of a 5h window that resets in 2h13m, seen 4m ago;
+    /// Work last seen 40m ago; ChatGPT 2 with a Codex primary window.
+    async fn seeded_usage() -> (ConfigAccess, chrono::DateTime<chrono::Utc>) {
+        let access = seeded().await;
+        let now = chrono::Utc::now();
+        let mut personal = usage_window("5h", 42.0, now - chrono::Duration::minutes(4));
+        personal.resets_at = Some(now + chrono::Duration::minutes(133));
+        record(&access, CLAUDE, None, vec![personal]).await;
+        record(
+            &access,
+            CLAUDE,
+            Some("acct-l2"),
+            vec![usage_window(
+                "5h",
+                10.0,
+                now - chrono::Duration::minutes(40),
+            )],
+        )
+        .await;
+        record(
+            &access,
+            CHATGPT,
+            Some("acct-c2"),
+            vec![usage_window("primary", 12.0, now)],
+        )
+        .await;
+        (access, now)
+    }
+
+    #[tokio::test]
+    async fn usage_columns_rows_carry_their_accounts_usage() {
+        let (access, now) = seeded_usage().await;
+        let rows = account_rows(&access, DID, None, now).await.unwrap();
+        let personal = row(&rows, "Personal").usage.as_ref().expect("usage");
+        assert_eq!(personal.windows[0].used_pct, 42.0);
+        assert_eq!(
+            row(&rows, "OpenAI").usage.as_ref().expect("usage").note,
+            Some("not reported")
+        );
+        assert_eq!(
+            row(&rows, "OpenRouter").usage.as_ref().expect("usage").note,
+            Some("unknown")
+        );
+        let chatgpt = row(&rows, "ChatGPT 2").usage.as_ref().expect("usage");
+        assert_eq!(chatgpt.windows[0].label, "primary");
+        assert!(render_table(&rows).contains("primary (5h)"));
+    }
+
+    #[tokio::test]
+    async fn usage_columns_table_has_window_used_resets_source_age() {
+        let (access, now) = seeded_usage().await;
+        let rows = account_rows(&access, DID, None, now).await.unwrap();
+        let table = render_table(&rows);
+        for text in [
+            "WINDOW",
+            "USED",
+            "RESETS",
+            "SOURCE",
+            "AGE",
+            "42%",
+            "(in 2h13m)",
+            "headers",
+            "4m",
+            "40m, last known",
+            "not reported",
+        ] {
+            assert!(table.contains(text), "{text}: {table}");
+        }
+        let json = serde_json::to_string(&rows).unwrap();
+        for text in [&json, &table] {
+            assert!(!text.contains("SECRET"), "{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_columns_disabled_account_shows_no_usage() {
+        let (access, now) = seeded_usage().await;
+        gents::oauth_credential::set_account_enabled(
+            &access,
+            DID,
+            &format!("{CLAUDE}:{DID}:acct-l2"),
+            false,
+        )
+        .await
+        .unwrap();
+        let rows = account_rows(&access, DID, None, now).await.unwrap();
+        assert_eq!(row(&rows, "Work").usage, None);
+        let table = render_table(&rows);
+        let work = table
+            .lines()
+            .find(|line| line.contains("Work") && line.contains("disabled"))
+            .expect("work line");
+        assert!(!work.contains("10%"), "{work}");
     }
 }
