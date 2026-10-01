@@ -822,6 +822,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discover_models_reads_anthropic_key_models_without_oauth_beta() {
+        let (endpoint, requests) = spawn_model_discovery_server(
+            r#"{"data":[{"id":"claude-fable-5-1","display_name":"Claude Fable 5.1","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true}}},"type":"model"},{"id":"claude-opus-5","type":"model"},{"id":"claude-sonnet-5","type":"model"}],"has_more":false}"#,
+        )
+        .await;
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::AnthropicApiKey,
+            &format!("{endpoint}/v1"),
+            Some("placeholder-key"),
+            None,
+        )
+        .await
+        .expect("Anthropic key model discovery should read /v1/models");
+
+        assert_eq!(
+            model_names(&models),
+            vec!["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"]
+        );
+        assert_eq!(models[0].context_window, Some(1_000_000));
+        assert_eq!(models[0].max_output_tokens, Some(128_000));
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Fable 5.1"));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                [
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                ]
+                .as_slice()
+            )
+        );
+        let requests = requests.lock().expect("requests lock");
+        let request = requests
+            .first()
+            .expect("captured request")
+            .to_ascii_lowercase();
+        assert!(
+            request.starts_with("get /v1/models?limit=100 "),
+            "key discovery must query /v1/models?limit=100: {request}"
+        );
+        for header in [
+            "authorization: bearer placeholder-key",
+            "anthropic-version: 2023-06-01",
+        ] {
+            assert!(request.contains(header), "{header} missing from {request}");
+        }
+        assert!(!request.contains("anthropic-beta"), "{request}");
+    }
+
+    #[tokio::test]
     async fn discover_models_claude_401_is_an_auth_error() {
         let (endpoint, _requests) = spawn_model_discovery_server_with_status(
             "401 Unauthorized",
