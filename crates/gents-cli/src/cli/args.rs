@@ -3027,6 +3027,11 @@ pub(crate) struct ToolsSetArgs {
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
     Set(InferenceProfileSetArgs),
+    #[command(
+        name = "set-account",
+        about = "Move a profile to one of your accounts (gents accounts list)"
+    )]
+    SetAccount(InferenceProfileSetAccountArgs),
     #[command(name = "list", about = "List InferenceProfile documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceProfile document")]
@@ -3155,6 +3160,22 @@ pub(crate) struct InferenceProfileSetArgs {
     /// Canonical InferenceProfile JSON document, including its owning agent DID.
     #[arg(long)]
     pub(crate) file: PathBuf,
+    #[arg(skip)]
+    pub(crate) account: Option<String>,
+    #[arg(skip)]
+    pub(crate) provider: Option<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct InferenceProfileSetAccountArgs {
+    pub(crate) profile: String,
+    pub(crate) account: String,
+    #[arg(skip)]
+    pub(crate) provider: Option<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]

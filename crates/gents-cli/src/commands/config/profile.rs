@@ -1,5 +1,7 @@
 use crate::cli::output_format::OutputFormat;
-use crate::cli::{ConfigListArgs, ConfigShowArgs, InferenceProfileSetArgs};
+use crate::cli::{
+    ConfigListArgs, ConfigShowArgs, InferenceProfileSetAccountArgs, InferenceProfileSetArgs,
+};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
@@ -13,15 +15,60 @@ fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
 }
 
 pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Result<()> {
-    let profile = decode_profile(
-        &std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?,
-    )?;
+    let contents =
+        std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let doc_id = gents::config_client::write_inference_profile_document(&access, &profile).await?;
     crate::print_json(
-        &json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name}),
+        &set_profile(
+            &access,
+            &contents,
+            args.account.as_deref(),
+            args.provider.as_deref(),
+        )
+        .await?,
     )
+}
+
+pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) -> Result<()> {
+    let (access, agent_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    crate::print_json(
+        &set_account(
+            &access,
+            &agent_did,
+            &args.profile,
+            &args.account,
+            args.provider.as_deref(),
+        )
+        .await?,
+    )
+}
+
+/// Write the profile `contents` holds, on `account`'s backend when given.
+async fn set_profile(
+    access: &ConfigAccess,
+    contents: &[u8],
+    account: Option<&str>,
+    provider: Option<&str>,
+) -> Result<Value> {
+    let _ = (account, provider);
+    let profile = decode_profile(contents)?;
+    let doc_id = gents::config_client::write_inference_profile_document(access, &profile).await?;
+    Ok(
+        json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name}),
+    )
+}
+
+/// Move `profile_id` to `account`'s backend; nothing else changes.
+async fn set_account(
+    access: &ConfigAccess,
+    agent_did: &str,
+    profile_id: &str,
+    account: &str,
+    provider: Option<&str>,
+) -> Result<Value> {
+    let _ = (access, agent_did, profile_id, account, provider);
+    anyhow::bail!("not implemented")
 }
 
 async fn target(
@@ -339,5 +386,221 @@ mod tests {
         assert!(table.contains("label-c (disabled)"), "{table}");
         assert!(table.contains("Gone (account not on this node)"), "{table}");
         assert_redacted(&table);
+    }
+
+    async fn stored_profiles(access: &ConfigAccess) -> Vec<InferenceProfile> {
+        crate::commands::accounts::snapshot(access, DID)
+            .await
+            .unwrap()
+            .profiles
+    }
+
+    async fn stored(access: &ConfigAccess, profile_id: &str) -> Option<InferenceProfile> {
+        stored_profiles(access)
+            .await
+            .into_iter()
+            .find(|profile| profile.profile_id == profile_id)
+    }
+
+    fn file(profile_id: &str, backend_id: Option<&str>) -> Vec<u8> {
+        let mut value =
+            json!({"agent_did": DID, "profile_id": profile_id, "model_name": "model-x"});
+        if let Some(backend_id) = backend_id {
+            value["backend_id"] = json!(backend_id);
+        }
+        serde_json::to_vec(&value).unwrap()
+    }
+
+    async fn disable(access: &ConfigAccess, credential_id: &str) {
+        gents::oauth_credential::set_account_enabled(access, DID, credential_id, false)
+            .await
+            .unwrap();
+    }
+
+    fn original_id() -> String {
+        gents::oauth_credential::oauth_credential_id(DID, CLAUDE)
+    }
+
+    #[tokio::test]
+    async fn set_with_an_account_uses_its_backend() {
+        let (access, b_backend, _) = seeded().await;
+        let mut grok = claude_sign_in("g");
+        grok.provider = "xai-oauth".into();
+        grok.credential_id = format!("xai-oauth:{DID}:acct-g");
+        grok.account_ref = Some("acct-g".into());
+        grok.label = Some("label-b".into());
+        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+            .await
+            .unwrap();
+
+        let output = set_profile(&access, &file("new-p", None), Some("label-b"), Some(CLAUDE))
+            .await
+            .unwrap();
+        assert_eq!(output["backend_id"], json!(b_backend));
+        assert_eq!(
+            output["account"],
+            json!({"label": "label-b", "state": "enabled"})
+        );
+        assert_eq!(
+            stored(&access, "new-p").await.unwrap().backend_id,
+            b_backend
+        );
+
+        let error = set_profile(&access, &file("new-q", None), Some("label-b"), None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pass --provider"), "{error}");
+        assert!(stored(&access, "new-q").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_with_a_provider_picks_the_default_account_and_says_so() {
+        let (access, b_backend, _) = seeded().await;
+        let output = set_profile(&access, &file("new-p", None), None, Some(CLAUDE))
+            .await
+            .unwrap();
+        assert_eq!(output["backend_id"], json!("claude"));
+        assert_eq!(output["picked"], json!("default"));
+        disable(&access, &original_id()).await;
+        let output = set_profile(&access, &file("new-q", None), None, Some(CLAUDE))
+            .await
+            .unwrap();
+        assert_eq!(
+            output["backend_id"],
+            json!(b_backend),
+            "never the disabled first account"
+        );
+        assert_eq!(
+            output["account"],
+            json!({"label": "label-b", "state": "enabled"})
+        );
+    }
+
+    #[tokio::test]
+    async fn creating_on_an_unavailable_account_is_refused_with_the_enabled_list() {
+        let (access, b_backend, _) = seeded().await;
+        let error = set_profile(&access, &file("new-p", None), Some("label-c"), Some(CLAUDE))
+            .await
+            .unwrap_err()
+            .to_string();
+        for needle in ["\"label-c\"", "disabled", "\"Claude\"", "\"label-b\""] {
+            assert!(error.contains(needle), "{needle}: {error}");
+        }
+        let error = set_profile(&access, &file("new-p", Some("gone")), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("\"Gone\" is account not on this node"),
+            "{error}"
+        );
+        assert!(stored(&access, "new-p").await.is_none());
+
+        disable(&access, &original_id()).await;
+        let b = stored_profiles(&access).await;
+        let b_id = crate::commands::accounts::snapshot(&access, DID)
+            .await
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|account| account.label == "label-b")
+            .unwrap()
+            .credential_id;
+        disable(&access, &b_id).await;
+        let error = set_profile(&access, &file("new-p", Some(&b_backend)), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("claude-login"), "{error}");
+        assert_eq!(stored_profiles(&access).await, b, "nothing written");
+    }
+
+    #[tokio::test]
+    async fn other_edits_on_a_disabled_account_are_allowed() {
+        let (access, _, c_backend) = seeded().await;
+        let mut value: Value = serde_json::from_slice(&file("p-c", Some(&c_backend))).unwrap();
+        value["max_output_tokens"] = json!(99);
+        set_profile(&access, &serde_json::to_vec(&value).unwrap(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored(&access, "p-c").await.unwrap().max_output_tokens,
+            Some(99)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_naming_another_backend_conflicts_with_account() {
+        let (access, _, _) = seeded().await;
+        let error = set_profile(
+            &access,
+            &file("new-p", Some("openai")),
+            Some("label-b"),
+            Some(CLAUDE),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("openai"), "{error}");
+        assert!(stored(&access, "new-p").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_account_with_several_backends_is_ambiguous() {
+        let (access, _, _) = seeded().await;
+        gents::config_client::write_inference_backend_document(
+            &access,
+            &serde_json::from_value(backend(
+                "claude-2",
+                "Claude 2",
+                "ClaudeCliSubscription",
+                json!({"kind": "principal_oauth"}),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let error = set_profile(&access, &file("new-p", None), Some("Claude"), Some(CLAUDE))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("claude") && error.contains("claude-2"),
+            "{error}"
+        );
+        assert!(stored(&access, "new-p").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_account_moves_only_the_backend() {
+        let (access, b_backend, _) = seeded().await;
+        let before = stored(&access, "p-original").await.unwrap();
+        let output = set_account(&access, DID, "p-original", "label-b", Some(CLAUDE))
+            .await
+            .unwrap();
+        assert_eq!(
+            output["account"],
+            json!({"label": "label-b", "state": "enabled"})
+        );
+        let after = stored(&access, "p-original").await.unwrap();
+        assert_eq!(
+            after,
+            InferenceProfile {
+                backend_id: b_backend,
+                ..before.clone()
+            }
+        );
+        let error = set_account(&access, DID, "p-original", "label-c", Some(CLAUDE))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("disabled"), "{error}");
+        let error = set_account(&access, DID, "p-original", "label-unknown", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no account"), "{error}");
+        assert_eq!(stored(&access, "p-original").await.unwrap(), after);
     }
 }

@@ -48,6 +48,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
+            InferenceProfileCommand::SetAccount(args) => profile::profile_set_account(args).await,
             InferenceProfileCommand::List(args) => profile::profile_list(args).await,
             InferenceProfileCommand::Show(args) => profile::profile_show(args).await,
             InferenceProfileCommand::Rm(args) => crud::config_rm(crud::PROFILE_SPEC, args).await,
