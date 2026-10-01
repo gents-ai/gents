@@ -69,9 +69,12 @@ pub(crate) use desired_state::{
 };
 pub(crate) use inference_backend::write_inference_backend_in_txn;
 pub use inference_backend::{
-    list_inference_backends_in_txn, load_inference_backend_in_txn, write_inference_backend_document,
+    list_inference_backends_in_txn, load_inference_backend_in_txn, serving_accounts,
+    write_inference_backend_document,
 };
-pub use inference_profile::{list_inference_profiles_in_txn, write_inference_profile_document};
+pub use inference_profile::{
+    behavior_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
+};
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::SchemaFieldDelta;
 pub(crate) use schema_install::SchemaInstallMismatch;

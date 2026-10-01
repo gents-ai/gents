@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::collection::Collection;
 use crate::document_config::InferenceProfile;
+use crate::oauth_credential::ServingAccount;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
@@ -55,6 +56,18 @@ pub async fn write_inference_profile_document(
             })
         })
         .await
+}
+
+/// The accounts a behavior's turns need: its profile's, then its context's
+/// compaction profile's, the chain readiness walks. A profile or backend
+/// that is not stored is left out.
+pub async fn behavior_accounts(
+    access: &ConfigAccess,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<Vec<(String, ServingAccount)>> {
+    let _ = (access, agent_did, behavior_id);
+    Ok(Vec::new())
 }
 
 #[cfg(test)]
@@ -288,6 +301,91 @@ mod tests {
         };
         crate::agent::document_view::load_document_runtime_view(node, did).await?;
         assert_eq!(profiles().await, before, "view load");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn behavior_accounts_follow_profile_and_compaction() -> Result<()> {
+        use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
+        let did = "did:key:z6MkTestBehaviorAccounts";
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        crate::ensure_agent_principal(&node, did).await?;
+        let access = ConfigAccess::Local(node);
+        let spec = crate::inference_setup::connection_spec(
+            crate::inference_setup::InferenceProviderId::Anthropic,
+            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+            "",
+        )?;
+        let original = json!({
+            "agent_did": did, "backend_id": "claude", "name": "Claude",
+            "provider_kind": spec.provider_kind, "endpoint": spec.endpoint,
+            "auth": {"kind": "principal_oauth"},
+        });
+        super::super::write_inference_backend_document(&access, &serde_json::from_value(original)?)
+            .await?;
+        store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
+        let b = store_sign_in(&access, claude_sign_in(did, "b"), Some("label-b")).await?;
+        let b_backend = format!(
+            "{}-{}",
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            b.credential.account_ref.as_deref().unwrap()
+        );
+        let documents = [
+            (Collection::InferenceProfile, json!({"agent_did": did, "profile_id": "profile-a", "backend_id": "claude", "model_name": "model-x"})),
+            (Collection::InferenceProfile, json!({"agent_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
+            (Collection::Compaction, json!({"agent_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
+            (Collection::AgentContext, json!({"agent_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
+            (Collection::AgentBehavior, json!({"agent_did": did, "behavior_id": "behavior-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
+            (Collection::AgentBehavior, json!({"agent_did": did, "behavior_id": "behavior-y", "inference_profile_id": "profile-a"})),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+        let plan = DesiredStateApplyPlan::new(documents)?;
+        access
+            .transact("test.behavior_accounts", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    super::super::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await?;
+        let expected = |profile: &str, label: &str, state| {
+            (
+                profile.to_string(),
+                ServingAccount {
+                    label: label.into(),
+                    state,
+                },
+            )
+        };
+
+        assert_eq!(
+            behavior_accounts(&access, did, "behavior-x").await?,
+            [
+                expected("profile-b", "label-b", AccountState::Enabled),
+                expected("profile-a", "Claude", AccountState::Enabled),
+            ]
+        );
+        set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
+        assert_eq!(
+            behavior_accounts(&access, did, "behavior-x").await?[0],
+            expected("profile-b", "label-b", AccountState::Disabled)
+        );
+        assert_eq!(
+            behavior_accounts(&access, did, "behavior-y").await?,
+            [expected("profile-a", "Claude", AccountState::Enabled)]
+        );
+        assert!(behavior_accounts(&access, did, "behavior-unknown")
+            .await
+            .is_err());
         Ok(())
     }
 }
