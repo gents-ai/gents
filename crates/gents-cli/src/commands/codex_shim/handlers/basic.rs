@@ -6,7 +6,8 @@ use serde_json::json;
 
 use super::super::bound_behavior::load_bound_model_selection_id_for_state;
 use super::super::protocol::{
-    initialize_result, rate_limits_from_usage, send_result, send_typed_json_result,
+    empty_rate_limits, initialize_result, rate_limits_from_usage, send_result,
+    send_typed_json_result,
 };
 use super::super::{Outbound, ShimState};
 use super::models::{
@@ -41,9 +42,11 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::GetAccountRateLimits { request_id, .. } => {
-            let rate_limits = session_rate_limits(state)
-                .await
-                .context("reading the session account's usage for rate limits")?;
+            // Usage gates nothing: a failed read answers as before usage existed.
+            let rate_limits = session_rate_limits(state).await.unwrap_or_else(|error| {
+                tracing::warn!(error = %format!("{error:#}"), "reading the session account's usage for rate limits failed");
+                empty_rate_limits()
+            });
             send_result(
                 outbound,
                 request_id,
@@ -243,8 +246,9 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-/// The stored usage of the account the session's backend names. Never
-/// reads the provider: on-demand reads belong to the runtime.
+/// The stored usage of the account the session's ChatGPT backend names;
+/// other providers' usage is not Codex's to report. Never reads the
+/// provider: on-demand reads belong to the runtime.
 async fn session_rate_limits(state: &ShimState) -> Result<codex::RateLimitSnapshot> {
     let profile = load_bound_behavior(state).await?.inference_profile;
     let agent_did = state.agent_did.as_ref();
@@ -255,7 +259,7 @@ async fn session_rate_limits(state: &ShimState) -> Result<codex::RateLimitSnapsh
         })
         .await?;
     let stored = match backend {
-        Some(backend) => {
+        Some(backend) if backend.provider_kind == gents::BackendProviderKind::ChatGptCodex => {
             usage_for_backend(
                 &ConfigAccess::Local(state.node.clone()),
                 agent_did,
@@ -263,7 +267,7 @@ async fn session_rate_limits(state: &ShimState) -> Result<codex::RateLimitSnapsh
             )
             .await?
         }
-        None => None,
+        _ => None,
     };
     Ok(rate_limits_from_usage(stored.as_ref(), chrono::Utc::now()))
 }
