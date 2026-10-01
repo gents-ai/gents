@@ -130,4 +130,164 @@ mod tests {
             .await?;
         Ok(())
     }
+
+    fn claude_sign_in(did: &str, who: &str) -> crate::oauth_credential::OAuthCredential {
+        crate::claude_oauth::credential_from_login_tokens(
+            did,
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: "access-TEST".into(),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn account_events_never_repoint_a_profile() -> Result<()> {
+        use crate::oauth_credential::{
+            remove_account_in_txn, resolve_oauth_credential, set_account_enabled, store_sign_in,
+            AccountPick,
+        };
+        let did = "did:key:z6MkTestProfileEvents";
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        crate::ensure_agent_principal(&node, did).await?;
+        let access = ConfigAccess::Local(node);
+        let spec = crate::inference_setup::connection_spec(
+            crate::inference_setup::InferenceProviderId::Anthropic,
+            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+            "",
+        )?;
+        let original = crate::InferenceBackend {
+            agent_did: did.to_owned(),
+            backend_id: "claude".into(),
+            name: "Claude".into(),
+            provider_kind: spec.provider_kind,
+            openai_wire_api: spec.openai_wire_api,
+            endpoint: spec.endpoint,
+            auth: crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+            connect_timeout_secs: None,
+            discovery_timeout_secs: None,
+            max_concurrent: None,
+            max_queue_depth: None,
+            enabled: true,
+            tags: Vec::new(),
+        };
+        super::super::write_inference_backend_document(&access, &original).await?;
+        let a = store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
+        let b = store_sign_in(&access, claude_sign_in(did, "b"), None).await?;
+        let b_backend = format!(
+            "{}-{}",
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            b.credential.account_ref.as_deref().unwrap()
+        );
+        for (profile_id, backend_id) in [
+            ("on-a", "claude"),
+            ("on-b", b_backend.as_str()),
+            ("compaction", b_backend.as_str()),
+        ] {
+            let profile: InferenceProfile = serde_json::from_value(json!({
+                "agent_did": did, "profile_id": profile_id, "backend_id": backend_id,
+                "model_name": "model-x",
+            }))?;
+            write_inference_profile_document(&access, &profile).await?;
+        }
+        let profiles = || async {
+            access
+                .transact("test.profiles", |txn| {
+                    Box::pin(async move {
+                        let mut records = Vec::new();
+                        for id in ["on-a", "on-b", "compaction"] {
+                            records.push(
+                                super::super::desired_state::read_record(
+                                    txn,
+                                    Collection::InferenceProfile,
+                                    did,
+                                    id,
+                                )
+                                .await?
+                                .expect("profile"),
+                            );
+                        }
+                        Ok(records)
+                    })
+                })
+                .await
+                .unwrap()
+        };
+        let before = profiles().await;
+        let remove = |credential_id: String| {
+            let access = &access;
+            async move {
+                access
+                    .transact("test.remove", |txn| {
+                        let credential_id = credential_id.clone();
+                        Box::pin(
+                            async move { remove_account_in_txn(txn, did, &credential_id).await },
+                        )
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+
+        store_sign_in(&access, claude_sign_in(did, "c"), None).await?;
+        assert_eq!(profiles().await, before, "add C");
+        store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
+        assert_eq!(profiles().await, before, "refresh A");
+        store_sign_in(&access, claude_sign_in(did, "b"), Some("label-b2")).await?;
+        assert_eq!(profiles().await, before, "relabel B");
+        set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
+        assert_eq!(profiles().await, before, "disable B");
+        remove(a.credential.credential_id.clone()).await;
+        assert_eq!(profiles().await, before, "remove A");
+        let d = store_sign_in(&access, claude_sign_in(did, "d"), None).await?;
+        assert!(
+            d.credential.account_ref.is_some(),
+            "B remains, so D is added"
+        );
+        assert_eq!(profiles().await, before, "sign in D");
+
+        for account in crate::oauth_credential::list_accounts(&access, did).await? {
+            remove(account.credential_id).await;
+        }
+        let reused = store_sign_in(&access, claude_sign_in(did, "e"), None).await?;
+        assert_eq!(reused.credential.account_ref, None, "the original slot");
+        assert_eq!(reused.profiles, ["on-a"]);
+        assert_eq!(profiles().await, before, "remove all, then sign in");
+        let resolved = resolve_oauth_credential(
+            &access,
+            did,
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            AccountPick::Reference(None),
+        )
+        .await?
+        .expect("the original slot resolves");
+        assert_eq!(resolved.doc_id.as_deref(), Some(reused.doc_id.as_str()));
+
+        let backends = access
+            .transact("test.backends", |txn| {
+                Box::pin(
+                    async move { super::super::list_inference_backends_in_txn(txn, did).await },
+                )
+            })
+            .await?;
+        for backend in &backends {
+            crate::backend_registry::record_discovered_catalog_on(&access, backend, Vec::new())
+                .await?;
+        }
+        assert_eq!(profiles().await, before, "catalog refresh");
+        let ConfigAccess::Local(node) = &access else {
+            unreachable!()
+        };
+        crate::agent::document_view::load_document_runtime_view(node, did).await?;
+        assert_eq!(profiles().await, before, "view load");
+        Ok(())
+    }
 }
