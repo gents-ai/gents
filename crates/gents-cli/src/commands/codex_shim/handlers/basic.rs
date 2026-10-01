@@ -544,6 +544,14 @@ mod tests {
                 account_ref: None,
             },
             UsageReport {
+                windows: vec![UsageWindow {
+                    label: "primary".into(),
+                    window_minutes: Some(300),
+                    used_pct: 30.0,
+                    resets_at: None,
+                    source: UsageSource::Header,
+                    observed_at: Utc::now(),
+                }],
                 plan: Some(gents::usage_observation::account_usage::UsagePlan {
                     name: "tier-a".into(),
                     observed_at: Utc::now(),
@@ -555,7 +563,9 @@ mod tests {
         .unwrap();
         let state = state(node, &tempdir);
 
-        assert_eq!(rate_limits(&state).await["planType"], Value::Null);
+        let limits = rate_limits(&state).await;
+        assert_eq!(limits["planType"], Value::Null);
+        assert_eq!(limits["primary"]["usedPercent"], json!(30));
     }
 
     #[tokio::test]
