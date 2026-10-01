@@ -6000,3 +6000,201 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
         .unwrap();
     assert_eq!(rows["data"]["GraphRun"], json!([]));
 }
+
+/// Every `OAuthCredential`, `InferenceBackend` and `ProviderAccountUsage` row, as stored.
+async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> Value {
+    let response = node
+        .execute(
+            "{ OAuthCredential { _docID credential_id enabled label access_token } \
+               InferenceBackend { _docID backend_id enabled auth } \
+               ProviderAccountUsage { _docID usage_key report read_at } }",
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.expect("data")
+}
+
+async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owner: &str) {
+    use crate::oauth_credential::{oauth_credential_id, upsert_oauth_credential, OAuthCredential};
+    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    let account = |account_ref: Option<&str>, label: &str, enabled: bool| OAuthCredential {
+        doc_id: None,
+        credential_id: match account_ref {
+            Some(account_ref) => format!("{}:{account_ref}", oauth_credential_id(owner, provider)),
+            None => oauth_credential_id(owner, provider),
+        },
+        agent_did: owner.to_string(),
+        provider: provider.to_string(),
+        access_token: "access-SECRET".into(),
+        refresh_token: "refresh-SECRET".into(),
+        id_token: None,
+        account_id: Some("identity-SECRET".into()),
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled,
+        account_ref: account_ref.map(str::to_string),
+        connected_at: account_ref.map(|_| chrono::Utc::now()),
+        provider_account_key: None,
+        label: Some(label.to_string()),
+    };
+    upsert_oauth_credential(node, &account(None, "Personal", true))
+        .await
+        .unwrap();
+    upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
+        .await
+        .unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    for (backend_id, kind, auth, endpoint) in [
+        (
+            "backend-usage-claude",
+            "ClaudeCliSubscription",
+            json!({ "kind": "principal_oauth" }),
+            "claude-cli://subscription",
+        ),
+        (
+            "backend-usage-work",
+            "ClaudeCliSubscription",
+            json!({ "kind": "principal_oauth", "account_ref": "acct-l2" }),
+            "claude-cli://subscription",
+        ),
+        (
+            "backend-usage-key",
+            "OpenRouter",
+            json!({ "kind": "api_key", "key": "key-SECRET" }),
+            "http://127.0.0.1:9/api/v1",
+        ),
+    ] {
+        let backend: crate::InferenceBackend = serde_json::from_value(json!({
+            "agent_did": owner,
+            "backend_id": backend_id,
+            "name": backend_id,
+            "provider_kind": kind,
+            "endpoint": endpoint,
+            "auth": auth,
+        }))
+        .unwrap();
+        crate::config_client::write_inference_backend_document(&access, &backend)
+            .await
+            .unwrap();
+    }
+    let profile = serde_json::from_value(json!({
+        "agent_did": owner,
+        "profile_id": "profile-usage-a",
+        "backend_id": "backend-usage-claude",
+        "model_name": "model-x",
+    }))
+    .unwrap();
+    crate::config_client::write_inference_profile_document(&access, &profile)
+        .await
+        .unwrap();
+    crate::usage_observation::record_usage(
+        node,
+        &crate::usage_observation::UsageAccount::Credential {
+            agent_did: owner.to_string(),
+            provider: provider.to_string(),
+            account_ref: None,
+        },
+        crate::usage_observation::account_usage::UsageReport {
+            windows: vec![crate::usage_observation::account_usage::UsageWindow {
+                label: "5h".into(),
+                window_minutes: Some(300),
+                used_pct: 42.0,
+                resets_at: None,
+                source: crate::usage_observation::account_usage::UsageSource::Header,
+                observed_at: chrono::Utc::now(),
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("config-accounts");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "alpha").await;
+    seed_account_view(&node, &owner).await;
+    let mut tool_config = config(&["persona", "profile", "backend"]);
+    tool_config.behavior_id = "alpha".into();
+    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &tool_config);
+    let config = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let before = account_state_rows(&node).await;
+
+    let text = config
+        .call(json!({"argv":["backend", "accounts"]}).to_string())
+        .await
+        .unwrap();
+
+    let view: Value = serde_json::from_str(&text).unwrap();
+    let items = view["items"].as_array().expect("items");
+    let item = |label: &str| {
+        items
+            .iter()
+            .find(|item| item["label"] == label)
+            .unwrap_or_else(|| panic!("no {label}: {text}"))
+    };
+    let personal = item("Personal");
+    assert_eq!(personal["provider"], "claude-subscription");
+    assert_eq!(personal["state"], "enabled");
+    assert_eq!(personal["profiles"], json!(["profile-usage-a"]));
+    assert_eq!(personal["usage"]["windows"][0]["used_pct"], 42.0);
+    let work = item("Work");
+    assert_eq!(work["state"], "disabled");
+    assert_eq!(work["usage"], Value::Null);
+    let key = item("backend-usage-key");
+    assert_eq!(key["provider"], "OpenRouter");
+    assert_eq!(key["state"], "enabled");
+    assert_eq!(key["usage"]["note"], "unknown");
+    assert!(
+        view["note"].as_str().unwrap().contains("Read-only"),
+        "{text}"
+    );
+    for hidden in [
+        "SECRET",
+        "identity-",
+        "did:key",
+        "credential_id",
+        "account_ref",
+        "acct-l2",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}: {text}");
+    }
+    assert_eq!(account_state_rows(&node).await, before);
+
+    let help = config
+        .call(json!({"argv":["help", "backend"]}).to_string())
+        .await
+        .unwrap();
+    assert!(help.contains("backend accounts"), "{help}");
+    assert!(config
+        .call(json!({"argv":["backend", "accounts", "--set", "x"]}).to_string())
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn config_backend_accounts_needs_the_backend_grant() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("config-accounts-grant");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "alpha").await;
+    let mut tool_config = config(&["persona", "profile"]);
+    tool_config.behavior_id = "alpha".into();
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let config = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    assert!(config
+        .call(json!({"argv":["backend", "accounts"]}).to_string())
+        .await
+        .is_err());
+}
