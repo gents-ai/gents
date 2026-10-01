@@ -23,15 +23,19 @@ pub enum BackendProviderKind {
     /// `gents claude-login`.
     #[serde(rename = "ClaudeCliSubscription")]
     ClaudeCliSubscription,
+    /// Anthropic API key over Messages HTTP; `api_key` or `environment` auth.
+    #[serde(rename = "AnthropicApiKey")]
+    AnthropicApiKey,
 }
 
 impl BackendProviderKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::OpenAiCompatible,
         Self::OpenRouter,
         Self::ChatGptCodex,
         Self::XaiGrokOAuth,
         Self::ClaudeCliSubscription,
+        Self::AnthropicApiKey,
     ];
 
     pub fn parse_optional(value: Option<&str>) -> Result<Self> {
@@ -42,6 +46,7 @@ impl BackendProviderKind {
             Some("ChatGptCodex") => Ok(Self::ChatGptCodex),
             Some("XaiGrokOAuth") => Ok(Self::XaiGrokOAuth),
             Some("ClaudeCliSubscription") => Ok(Self::ClaudeCliSubscription),
+            Some("AnthropicApiKey") => Ok(Self::AnthropicApiKey),
             Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
         }
     }
@@ -53,6 +58,7 @@ impl BackendProviderKind {
             Self::ChatGptCodex => "ChatGptCodex",
             Self::XaiGrokOAuth => "XaiGrokOAuth",
             Self::ClaudeCliSubscription => "ClaudeCliSubscription",
+            Self::AnthropicApiKey => "AnthropicApiKey",
         }
     }
 
@@ -63,6 +69,11 @@ impl BackendProviderKind {
             self,
             Self::ChatGptCodex | Self::XaiGrokOAuth | Self::ClaudeCliSubscription
         )
+    }
+
+    /// Kinds that speak the native Anthropic Messages wire.
+    pub fn uses_messages_wire(self) -> bool {
+        matches!(self, Self::ClaudeCliSubscription | Self::AnthropicApiKey)
     }
 }
 

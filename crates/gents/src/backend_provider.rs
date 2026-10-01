@@ -46,6 +46,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
         BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
         BackendProviderKind::ClaudeCliSubscription => "Claude CLI subscription",
+        BackendProviderKind::AnthropicApiKey => "Anthropic API key",
     }
 }
 
@@ -55,7 +56,7 @@ const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 /// Claude subscription catalog base. The backend document's endpoint is the
 /// `claude-cli://subscription` placeholder; an `http(s)://` endpoint (tests)
 /// overrides this.
-const CLAUDE_MODELS_BASE: &str = "https://api.anthropic.com/v1";
+const CLAUDE_MODELS_BASE: &str = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
 
 fn claude_models_base(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {

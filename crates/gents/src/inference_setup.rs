@@ -356,6 +356,9 @@ pub fn provider_selection_for_backend(
             InferenceProviderId::Anthropic,
             InferenceAuthMethod::ClaudeOauth,
         ),
+        BackendProviderKind::AnthropicApiKey => {
+            (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
+        }
         BackendProviderKind::OpenRouter => {
             (InferenceProviderId::OpenRouter, InferenceAuthMethod::ApiKey)
         }
