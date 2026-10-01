@@ -3887,6 +3887,92 @@ mod backfill_tests {
         assert!(request.contains("refresh-signed-in"), "{request}");
     }
 
+    /// Q1 (i): remove-all then a first sign-in re-creates the row at the same
+    /// `credential_id` while a refresh of the removed row is in flight.
+    #[tokio::test]
+    async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRaceReplaced";
+        seed_expired_grok(&node, did, None).await;
+        let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+        let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+            did,
+            XAI_OAUTH_PROVIDER,
+            &crate::xai_oauth_login::XaiLoginTokens {
+                access_token: unsigned_jwt(
+                    json!({ "principal_type": "user", "principal_id": "principal-2" }),
+                ),
+                refresh_token: "refresh-replaced".into(),
+                id_token: None,
+                expires_in: Some(900),
+            },
+            Utc::now(),
+        );
+        let access = ConfigAccess::Local(node.clone());
+        refresh_racing(&node, did, async {
+            ConfigAccess::write_local(
+                &node,
+                "test.remove",
+                &format!(
+                    r#"mutation {{ delete_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
+            let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
+            assert_eq!(signed.result, SignInResult::Added);
+            assert_eq!(signed.credential.credential_id, credential_id);
+        })
+        .await;
+        let stored = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.refresh_token, "refresh-replaced");
+        assert_eq!(stored.access_token, sign_in.access_token);
+        assert_eq!(
+            stored.provider_account_key.as_deref(),
+            Some("user:principal-2")
+        );
+    }
+
+    /// A cached removed document is never refreshed once its slot holds
+    /// another document, even when the cached expiry is the later one.
+    #[tokio::test]
+    async fn a_refresh_adopts_a_replaced_document() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRefreshReplaced";
+        seed_expired_grok(&node, did, None).await;
+        let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
+        let mut removed = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        removed.doc_id = Some("doc-removed".into());
+        removed.refresh_token = "refresh-removed".into();
+        removed.access_token_expires_at = Utc::now() - Duration::seconds(30);
+        let _env = TOKEN_URL_ENV.lock().await;
+        let body =
+            token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
+        let (url, handle) = one_shot_token_server(200, body).await;
+        std::env::set_var(XAI_ENV, &url);
+        let bearer = DbCredentialBearer::with_cache(
+            node.clone(),
+            did,
+            XAI_OAUTH_PROVIDER,
+            credential_id,
+            true,
+            Some(removed),
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        );
+        let refreshed = bearer.current_bearer().await;
+        std::env::remove_var(XAI_ENV);
+        let request = handle.await.expect("server");
+        refreshed.expect("refresh");
+        assert!(request.contains("refresh-TEST"), "{request}");
+    }
+
     /// Rows stored before #2116, with none of the account fields.
     async fn seed_upgraded_row(
         node: &Arc<EmbeddedNode>,
