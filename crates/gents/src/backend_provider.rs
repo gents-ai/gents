@@ -119,7 +119,7 @@ impl OpenAiModelRecord {
 
     /// Preserve provider-advertised limits without inferring them from model IDs.
     fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
-        let reasoning_efforts = if kind == BackendProviderKind::ClaudeCliSubscription {
+        let reasoning_efforts = if kind.uses_messages_wire() {
             self.capabilities.as_ref().map(|caps| {
                 ["low", "medium", "high", "xhigh", "max"]
                     .into_iter()
@@ -136,7 +136,7 @@ impl OpenAiModelRecord {
                 BackendProviderKind::XaiGrokOAuth | BackendProviderKind::OpenRouter
             ) {
                 self.name.clone()
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.display_name.clone()
             } else {
                 None
@@ -147,7 +147,7 @@ impl OpenAiModelRecord {
                 self.context_length
             } else if kind == BackendProviderKind::OpenAiCompatible {
                 self.max_model_len
-            } else if kind == BackendProviderKind::ClaudeCliSubscription {
+            } else if kind.uses_messages_wire() {
                 self.max_input_tokens
             } else {
                 None
@@ -158,7 +158,7 @@ impl OpenAiModelRecord {
                 .as_ref()
                 .and_then(|provider| provider.max_completion_tokens)
                 .filter(|value| *value > 0)
-        } else if kind == BackendProviderKind::ClaudeCliSubscription {
+        } else if kind.uses_messages_wire() {
             self.max_tokens.filter(|value| *value > 0)
         } else {
             None
@@ -324,6 +324,16 @@ pub async fn discover_models(
                     crate::claude_messages::ANTHROPIC_VERSION,
                 )
                 .header("anthropic-beta", crate::claude_messages::OAUTH_BETA)
+                .query(&[("limit", "100")]);
+        } else if kind == BackendProviderKind::AnthropicApiKey {
+            if let Some(api_key) = api_key {
+                request = request.bearer_auth(api_key);
+            }
+            request = request
+                .header(
+                    "anthropic-version",
+                    crate::claude_messages::ANTHROPIC_VERSION,
+                )
                 .query(&[("limit", "100")]);
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
