@@ -1725,7 +1725,11 @@ impl BearerSource for DbCredentialBearer {
 
         let db_credential = self.load_credential().await?;
         let stored_refresh_token = db_credential.refresh_token.clone();
-        if db_credential.access_token_expires_at >= credential.access_token_expires_at {
+        // Another document at this `credential_id` replaced the cached one
+        // (remove, then a sign-in): never refresh the removed account.
+        if db_credential.doc_id != credential.doc_id
+            || db_credential.access_token_expires_at >= credential.access_token_expires_at
+        {
             credential = db_credential;
             if !forced && token_is_fresh(credential.access_token_expires_at) {
                 self.cache_credential(&credential).await;
