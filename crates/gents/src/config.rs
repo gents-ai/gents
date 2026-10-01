@@ -479,6 +479,65 @@ mod tests {
     use super::*;
     use crate::identity::KeyIdentity;
 
+    fn xai_effort_fixtures(
+        endpoint: &str,
+        model: &str,
+        effort: Option<&str>,
+        catalogued_efforts: Option<&[&str]>,
+    ) -> (
+        crate::document_config::InferenceBackend,
+        crate::document_config::InferenceProfile,
+        crate::document_config::InferenceBackendObservation,
+    ) {
+        let backend = serde_json::from_value(serde_json::json!({
+            "agent_did":"did:key:test", "backend_id":"xai", "name":"xAI",
+            "provider_kind":"OpenAiCompatible", "openai_wire_api":"responses",
+            "endpoint":endpoint,
+            "auth":{"kind":"environment","variable":"XAI_API_KEY"}
+        }))
+        .unwrap();
+        let profile = serde_json::from_value(serde_json::json!({
+            "agent_did":"did:key:test", "profile_id":"grok", "backend_id":"xai",
+            "model_name":model, "reasoning_effort":effort
+        }))
+        .unwrap();
+        let observation = serde_json::from_value(serde_json::json!({
+            "backend_id":"xai", "probe_status":"healthy",
+            "catalogs":[{"agent_did":null,"observed_at":"2026-01-01T00:00:00Z",
+                "models":[{"model_name":model,"reasoning_efforts":catalogued_efforts}]}]
+        }))
+        .unwrap();
+        (backend, profile, observation)
+    }
+
+    #[test]
+    fn xai_api_key_profile_admits_an_unadvertised_effort() {
+        let (backend, profile, observation) = xai_effort_fixtures(
+            "https://api.x.ai/v1",
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+        );
+        assert!(
+            advertised_model_for_profile(&backend, &profile, Some(&observation))
+                .unwrap()
+                .is_some()
+        );
+        let (backend, profile, observation) = xai_effort_fixtures(
+            "https://api.openai.com/v1",
+            "grok-4.20-0309-reasoning",
+            Some("low"),
+            Some(&[]),
+        );
+        let error = advertised_model_for_profile(&backend, &profile, Some(&observation))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("does not advertise selected reasoning effort"),
+            "{error}"
+        );
+    }
+
     fn stub_principal() -> Arc<RuntimePrincipal> {
         let identity = Arc::new(
             KeyIdentity::load_or_create(
