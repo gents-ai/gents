@@ -1246,3 +1246,159 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
     );
     never_called(handle).await;
 }
+
+fn view_now() -> DateTime<Utc> {
+    "2026-10-01T16:00:00Z".parse().expect("now")
+}
+
+fn stored_with(windows: Vec<UsageWindow>) -> StoredUsage {
+    StoredUsage {
+        report: report(windows),
+        ..StoredUsage::default()
+    }
+}
+
+#[test]
+fn usage_view_fresh_window_has_countdown_and_age() {
+    use crate::BackendProviderKind as Kind;
+    let now = view_now();
+    let mut fresh = window("5h", 42.0, now - Duration::minutes(4));
+    fresh.resets_at = Some(now + Duration::minutes(133));
+    let view = usage_view(
+        Some(&stored_with(vec![fresh])),
+        Kind::ClaudeCliSubscription,
+        now,
+    );
+    assert_eq!(view.note, None);
+    let [shown] = view.windows.as_slice() else {
+        panic!("one window: {view:?}");
+    };
+    assert_eq!(shown.label, "5h");
+    assert_eq!(shown.used_pct, 42.0);
+    assert_eq!(shown.resets_in_secs, Some(133 * 60));
+    assert_eq!(shown.age_secs, 4 * 60);
+    assert!(!shown.last_known);
+    assert_eq!(shown.source, UsageSource::Header);
+}
+
+#[test]
+fn usage_view_stale_window_is_last_known() {
+    let now = view_now();
+    let stale = window("primary", 10.0, now - Duration::minutes(20));
+    let view = usage_view(
+        Some(&stored_with(vec![stale])),
+        crate::BackendProviderKind::ChatGptCodex,
+        now,
+    );
+    assert!(view.windows[0].last_known, "{view:?}");
+    assert_eq!(view.windows[0].age_secs, 20 * 60);
+}
+
+#[test]
+fn usage_view_past_reset_or_old_windows_are_dropped_to_unknown() {
+    let now = view_now();
+    let mut past = window("5h", 90.0, now);
+    past.resets_at = Some(now - Duration::seconds(1));
+    let old = window("7d", 50.0, now - Duration::minutes(61));
+    let view = usage_view(
+        Some(&stored_with(vec![past, old])),
+        crate::BackendProviderKind::ClaudeCliSubscription,
+        now,
+    );
+    assert!(view.windows.is_empty(), "{view:?}");
+    assert_eq!(view.note, Some("unknown"));
+}
+
+#[test]
+fn usage_view_nothing_stored_is_unknown() {
+    use crate::BackendProviderKind as Kind;
+    for kind in [
+        Kind::ChatGptCodex,
+        Kind::ClaudeCliSubscription,
+        Kind::XaiGrokOAuth,
+        Kind::OpenRouter,
+    ] {
+        let view = usage_view(None, kind, view_now());
+        assert!(view.windows.is_empty(), "{kind:?}");
+        assert_eq!(view.note, Some("unknown"), "{kind:?}");
+    }
+}
+
+#[test]
+fn usage_view_openai_compatible_never_seen_is_not_reported() {
+    let kind = crate::BackendProviderKind::OpenAiCompatible;
+    let now = view_now();
+    assert_eq!(usage_view(None, kind, now).note, Some("not reported"));
+    assert_eq!(
+        usage_view(Some(&StoredUsage::default()), kind, now).note,
+        Some("not reported")
+    );
+    let seen = usage_view(
+        Some(&stored_with(vec![window("requests", 7.0, now)])),
+        kind,
+        now,
+    );
+    assert_eq!(seen.note, None);
+    assert_eq!(seen.windows[0].label, "requests");
+}
+
+#[test]
+fn usage_view_uncapped_openrouter_is_no_cap_on_this_key() {
+    let kind = crate::BackendProviderKind::OpenRouter;
+    let now = view_now();
+    let read = StoredUsage {
+        read_at: Some(now - Duration::minutes(1)),
+        ..StoredUsage::default()
+    };
+    assert_eq!(
+        usage_view(Some(&read), kind, now).note,
+        Some("no cap on this key")
+    );
+    let failed = StoredUsage {
+        read_error: Some("throttled".into()),
+        ..read.clone()
+    };
+    assert_eq!(usage_view(Some(&failed), kind, now).note, Some("unknown"));
+    let aged_out = StoredUsage {
+        report: report(vec![window("daily", 25.0, now - Duration::minutes(61))]),
+        ..read
+    };
+    assert_eq!(usage_view(Some(&aged_out), kind, now).note, Some("unknown"));
+}
+
+#[test]
+fn usage_view_plan_and_read_state_carry_over() {
+    let now = view_now();
+    let mut stored = stored_with(vec![window("primary", 5.0, now)]);
+    stored.report.plan = Some(UsagePlan {
+        name: "plus".into(),
+        observed_at: now,
+    });
+    stored.read_at = Some(now - Duration::minutes(2));
+    stored.read_error = Some("throttled".into());
+    let view = usage_view(Some(&stored), crate::BackendProviderKind::ChatGptCodex, now);
+    assert_eq!(view.plan.as_deref(), Some("plus"));
+    assert_eq!(view.read_at, stored.read_at);
+    assert_eq!(view.read_error.as_deref(), Some("throttled"));
+}
+
+#[test]
+fn usage_view_claude_endpoint_windows_are_not_verified() {
+    let kind = crate::BackendProviderKind::ClaudeCliSubscription;
+    let now = view_now();
+    let mut endpoint = window("5h", 0.4, now);
+    endpoint.source = UsageSource::Endpoint;
+    let view = usage_view(Some(&stored_with(vec![endpoint.clone()])), kind, now);
+    assert!(view.windows.is_empty(), "{view:?}");
+    assert_eq!(view.note, Some("not verified"));
+
+    let header = window("7d", 30.0, now);
+    let view = usage_view(Some(&stored_with(vec![endpoint, header])), kind, now);
+    let labels: Vec<_> = view
+        .windows
+        .iter()
+        .map(|shown| shown.label.as_str())
+        .collect();
+    assert_eq!(labels, ["7d"]);
+    assert_eq!(view.note, None);
+}

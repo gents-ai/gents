@@ -17,6 +17,7 @@ use gents_loop::account_usage::{
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
@@ -102,6 +103,56 @@ impl StoredUsage {
             read_at,
             read_error,
         }
+    }
+}
+
+/// Stored usage as a surface shows it: visible windows with their reset
+/// countdown and age, or a note saying why there is no number.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UsageView {
+    pub windows: Vec<WindowView>,
+    pub plan: Option<String>,
+    /// Only when `windows` is empty: never a percentage, never "unlimited".
+    pub note: Option<&'static str>,
+    pub read_at: Option<DateTime<Utc>>,
+    pub read_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WindowView {
+    pub label: String,
+    pub window_minutes: Option<i64>,
+    pub used_pct: f64,
+    pub resets_at: Option<DateTime<Utc>>,
+    pub resets_in_secs: Option<i64>,
+    pub source: UsageSource,
+    pub observed_at: DateTime<Utc>,
+    pub age_secs: i64,
+    /// Older than [`account_usage::STALE_AFTER`]: the last known value.
+    pub last_known: bool,
+}
+
+pub fn usage_view(
+    _stored: Option<&StoredUsage>,
+    _kind: crate::BackendProviderKind,
+    now: DateTime<Utc>,
+) -> UsageView {
+    UsageView {
+        windows: vec![WindowView {
+            label: "inert".to_string(),
+            window_minutes: None,
+            used_pct: 0.0,
+            resets_at: None,
+            resets_in_secs: None,
+            source: UsageSource::Header,
+            observed_at: now,
+            age_secs: 0,
+            last_known: false,
+        }],
+        plan: None,
+        note: None,
+        read_at: None,
+        read_error: None,
     }
 }
 
