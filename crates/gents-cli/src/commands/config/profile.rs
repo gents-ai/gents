@@ -55,7 +55,7 @@ mod tests {
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
         let owner = "did:key:owner";
-        let access = crate::shared::seed_unsent_xai_effort(owner).await;
+        let access = crate::shared::test_support::seed_unsent_xai_effort(owner).await;
         let row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
                 .await
