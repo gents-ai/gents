@@ -1514,10 +1514,11 @@ def caseCoverage : List CoverageEntry :=
       "completion_factory::tests::generated_responses_storage_cases_drive_loop_config"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, so wire params and accounting are checked together. Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "prompt_assembly_responses_effort_cases"
       "PromptAssemblyResponsesEffortCases"
-      "Consumed by completion_factory::tests::generated_responses_effort_cases_drive_loop_config (next change). Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
+      "completion_factory::tests::generated_responses_effort_cases_drive_loop_config"
+      "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, comparing the projected reasoning.effort. Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_reducer_cases"
