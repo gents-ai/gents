@@ -339,3 +339,22 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) pruned: ConfigApplyCounts,
     pub(crate) remaining: desired_state::DesiredStateDiffCollectionsCounts,
 }
+
+/// The runtime observation (catalogs and probe status) of one backend row.
+pub(crate) async fn load_backend_observation(
+    access: &gents::config_client::ConfigAccess,
+    agent_did: &str,
+    backend_id: &str,
+) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
+    let query = format!(
+        "{{ InferenceBackend(filter: {{agent_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
+        gents::graphql::escape_graphql_string(agent_did),
+        gents::graphql::escape_graphql_string(backend_id),
+    );
+    let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "backend observation is missing or ambiguous"
+    );
+    Ok(serde_json::from_value(rows[0].clone())?)
+}

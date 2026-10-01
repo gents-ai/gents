@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::document_config::{BackendAuth, InferenceBackend, InferenceBackendObservation};
+use gents::document_config::{BackendAuth, InferenceBackend};
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -58,17 +58,9 @@ async fn backend_check(
     required: &BTreeSet<&str>,
 ) -> Result<Value> {
     backend.validate()?;
-    let query = format!(
-        "{{ InferenceBackend(filter: {{agent_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
-        gents::graphql::escape_graphql_string(&backend.agent_did),
-        gents::graphql::escape_graphql_string(&backend.backend_id),
-    );
-    let rows = crate::graphql_rows(access, "InferenceBackend", &query).await?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "backend observation is missing or ambiguous"
-    );
-    let observation: InferenceBackendObservation = serde_json::from_value(rows[0].clone())?;
+    let observation =
+        crate::shared::load_backend_observation(access, &backend.agent_did, &backend.backend_id)
+            .await?;
     anyhow::ensure!(
         gents::document_configured_from_fields(
             backend.enabled,
