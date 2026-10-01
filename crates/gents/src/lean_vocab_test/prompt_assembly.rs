@@ -211,6 +211,17 @@ pub(crate) struct LeanPromptAssemblyClaudeWireStartCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyResponsesStorageCase {
+    pub(crate) name: String,
+    pub(crate) family: String,
+    pub(crate) wire: String,
+    pub(crate) endpoint: String,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) store: Option<bool>,
+    pub(crate) encrypted_include: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeWireThinkingStart {
     pub(crate) index: u64,
     pub(crate) thinking: String,
