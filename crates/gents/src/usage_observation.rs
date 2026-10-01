@@ -103,20 +103,6 @@ impl StoredUsage {
             read_error,
         }
     }
-
-    /// Only what was observed at or after `since`.
-    fn since(mut self, since: DateTime<Utc>) -> StoredUsage {
-        let report = &mut self.report;
-        report.windows.retain(|window| window.observed_at >= since);
-        report.credits = report.credits.take().filter(|c| c.observed_at >= since);
-        report.plan = report.plan.take().filter(|plan| plan.observed_at >= since);
-        self.observed_at = report.observed_at();
-        if self.read_at.is_some_and(|read_at| read_at < since) {
-            self.read_at = None;
-            self.read_error = None;
-        }
-        self
-    }
 }
 
 /// Where an account's usage is stored.
@@ -125,12 +111,11 @@ struct Target {
     provider: String,
     /// Written here: the provider account key, else `reference`.
     key: String,
-    /// `ref:<account_ref>` or `ref:original`, DID-free, for usage seen before
-    /// the key is known. A new first sign-in after every account was removed
-    /// reuses the reference, so its observations from before the sign-in's
-    /// `connected_at` belong to the removed account.
+    /// `ref:<account_ref or original>:<_docID>`, DID-free, for usage seen
+    /// before the key is known. The `_docID` keeps a new first sign-in after
+    /// every account was removed, which reuses the reference, apart from the
+    /// removed account.
     reference: Option<String>,
-    connected_at: Option<DateTime<Utc>>,
     /// The plan the sign-in carries, for a report that has none.
     plan: Option<UsagePlan>,
 }
@@ -148,7 +133,6 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             provider: provider.clone(),
             key: backend_id.clone(),
             reference: None,
-            connected_at: None,
             plan: None,
         })),
         UsageAccount::Credential {
@@ -161,7 +145,11 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             else {
                 return Ok(None);
             };
-            let reference = format!("ref:{}", account_ref.as_deref().unwrap_or("original"));
+            let reference = format!(
+                "ref:{}:{}",
+                account_ref.as_deref().unwrap_or("original"),
+                row.doc_id.as_deref().context("sign-in without _docID")?
+            );
             Ok(Some(Target {
                 agent_did: agent_did.clone(),
                 provider: provider.clone(),
@@ -169,7 +157,6 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
                     .provider_account_key
                     .unwrap_or_else(|| reference.clone()),
                 reference: Some(reference),
-                connected_at: row.connected_at,
                 plan: row.chatgpt_plan_type.map(|name| UsagePlan {
                     name,
                     observed_at: row.last_refresh.unwrap_or_default(),
@@ -219,15 +206,9 @@ async fn load(access: &ConfigAccess, target: &Target) -> Result<Option<StoredUsa
     let mut loaded: Option<StoredUsage> = None;
     for key in keys {
         let response = access.execute(&row_query(target, key)).await?;
-        let Some((_, mut stored)) = stored_row(&response)? else {
+        let Some((_, stored)) = stored_row(&response)? else {
             continue;
         };
-        if let Some(since) = target
-            .connected_at
-            .filter(|_| Some(key) == target.reference.as_deref())
-        {
-            stored = stored.since(since);
-        }
         loaded = Some(match loaded {
             Some(loaded) => loaded.merge(stored),
             None => stored,

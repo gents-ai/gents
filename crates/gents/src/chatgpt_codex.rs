@@ -1043,9 +1043,10 @@ mod tests {
         if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
             let _ = futures::StreamExt::next(&mut stream).await;
         }
+        let reference = format!("ref:original:{}", row.doc_id.as_deref().unwrap());
         assert_eq!(
-            usage_keys_until(&node, did, "ref:original").await,
-            vec!["ref:original"]
+            usage_keys_until(&node, did, &reference).await,
+            vec![reference.clone()]
         );
 
         row.provider_account_key = Some("acct-key-a".into());
@@ -1057,7 +1058,7 @@ mod tests {
         }
         assert_eq!(
             usage_keys_until(&node, did, "acct-key-a").await,
-            vec!["acct-key-a", "ref:original"]
+            vec!["acct-key-a".to_string(), reference]
         );
 
         let backend: crate::document_config::InferenceBackend =

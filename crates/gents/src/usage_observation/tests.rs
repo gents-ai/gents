@@ -237,8 +237,8 @@ async fn store_key_falls_back_to_the_account_reference() {
     let node = node().await;
     let original = credential(A, None, None);
     let second = credential(A, Some("acct-ref-2"), None);
-    seed(&node, &original).await;
-    seed(&node, &second).await;
+    let original_doc = seed(&node, &original).await;
+    let second_doc = seed(&node, &second).await;
     let now = Utc::now();
     for row in [&original, &second] {
         record_usage(
@@ -251,7 +251,13 @@ async fn store_key_falls_back_to_the_account_reference() {
     }
 
     let keys: Vec<String> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(keys, vec!["ref:acct-ref-2", "ref:original"]);
+    assert_eq!(
+        keys,
+        vec![
+            format!("ref:acct-ref-2:{second_doc}"),
+            format!("ref:original:{original_doc}")
+        ]
+    );
     assert!(keys.iter().all(|key| !key.contains("did:")));
 }
 
@@ -259,7 +265,7 @@ async fn store_key_falls_back_to_the_account_reference() {
 async fn store_key_is_read_when_the_write_happens() {
     let node = node().await;
     let mut row = credential(A, None, None);
-    seed(&node, &row).await;
+    let doc = seed(&node, &row).await;
     let account = UsageAccount::for_credential(&row);
     let now = Utc::now();
     record_usage(
@@ -281,7 +287,10 @@ async fn store_key_is_read_when_the_write_happens() {
     .unwrap();
 
     let keys: Vec<String> = rows(&node).await.into_iter().map(|row| row.2).collect();
-    assert_eq!(keys, vec!["acct-key-a", "ref:original"]);
+    assert_eq!(
+        keys,
+        vec!["acct-key-a".to_string(), format!("ref:original:{doc}")]
+    );
     let stored = load_usage(&local(&node), &account).await.unwrap().unwrap();
     assert_eq!(used(&stored, "primary"), Some(10.0));
     assert_eq!(used(&stored, "secondary"), Some(20.0));
