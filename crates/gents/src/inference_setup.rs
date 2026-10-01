@@ -307,6 +307,19 @@ pub fn connection_spec(
             oauth_provider: Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
             api_key_required: false,
         },
+        (Grok, ApiKey) => InferenceConnectionSpec {
+            backend_name: "xAI",
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: Some(OpenAiWireApi::Responses),
+            endpoint: if requested.is_empty() {
+                XAI_API_ENDPOINT
+            } else {
+                requested
+            }
+            .into(),
+            oauth_provider: None,
+            api_key_required: true,
+        },
         (Local, OptionalApiKey) => InferenceConnectionSpec {
             backend_name: "Local server",
             provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -366,6 +379,9 @@ pub fn provider_selection_for_backend(
                 .eq_ignore_ascii_case(OPENAI_ENDPOINT) =>
         {
             (InferenceProviderId::OpenAi, InferenceAuthMethod::ApiKey)
+        }
+        BackendProviderKind::OpenAiCompatible if is_xai_api_endpoint(endpoint) => {
+            (InferenceProviderId::Grok, InferenceAuthMethod::ApiKey)
         }
         BackendProviderKind::OpenAiCompatible => (
             InferenceProviderId::Local,
