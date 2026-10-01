@@ -230,6 +230,25 @@ source consistency checks, not a separate runtime compatibility version.
   after removing the last) prints the profiles that use it, and the result JSON
   lists them in `profiles`.
 
+- A profile names the account it runs on (#2120). `gents config profile set
+  --file <profile.json> --account <account>` creates a profile on one of your
+  accounts (by label, `credential_id` or `account_ref`; `--provider` narrows
+  a label two providers share), `--provider <provider>` alone picks the
+  provider's earliest-connected enabled account and says so, and
+  `gents config profile set-account <profile> <account>` moves a profile.
+  Creating a profile on, or moving it to, a disabled account or one that is
+  not on this node is refused, and the error lists the enabled accounts; other
+  edits of such a profile are allowed. `config profile list` and `show` name
+  each profile's account and whether it is enabled, disabled or not on this
+  node. When a turn is refused because its profile's (or its compaction
+  profile's) account is disabled or not on this node, `gents chat` names the
+  account and the `set-account` command; a sign-in whose refresh fails
+  (expired or revoked), or that was disabled or removed while in use, fails
+  with an error that names the account. `gents trace timeline` call rows gain
+  `account`, the label of the account that served the call; a call from
+  before the account was signed in at its backend shows none. Nothing moves a
+  profile to another account except these commands.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no
