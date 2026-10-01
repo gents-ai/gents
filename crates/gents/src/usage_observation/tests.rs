@@ -924,6 +924,7 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
     assert_eq!(result, UsageRead::Read);
     token_handle.await.unwrap();
     let request = usage_handle.await.unwrap();
+    assert_eq!(first_line(&request), "GET /wham/usage HTTP/1.1");
     assert!(request.contains(&format!("Bearer {token}")), "{request}");
     let stored = usage_for_backend(&local(&node), did, &codex)
         .await
