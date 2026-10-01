@@ -66,8 +66,65 @@ pub async fn behavior_accounts(
     agent_did: &str,
     behavior_id: &str,
 ) -> Result<Vec<(String, ServingAccount)>> {
-    let _ = (access, agent_did, behavior_id);
-    Ok(Vec::new())
+    let profile_backends = access
+        .transact("config.behavior_accounts", |txn| {
+            Box::pin(async move {
+                let behavior: crate::document_config::AgentBehavior =
+                    read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+                        .await?
+                        .with_context(|| format!("behavior {behavior_id:?} not found"))?;
+                let mut profile_ids = vec![behavior.inference_profile_id];
+                let context: Option<crate::document_config::AgentContext> =
+                    match behavior.context_id.as_deref() {
+                        Some(id) => read(txn, Collection::AgentContext, agent_did, id).await?,
+                        None => None,
+                    };
+                let compaction: Option<crate::document_config::CompactionConfig> =
+                    match context.and_then(|context| context.compaction_id) {
+                        Some(id) => read(txn, Collection::Compaction, agent_did, &id).await?,
+                        None => None,
+                    };
+                if let Some(id) = compaction.and_then(|compaction| compaction.inference_profile_id)
+                {
+                    if !profile_ids.contains(&id) {
+                        profile_ids.push(id);
+                    }
+                }
+                let mut profile_backends = Vec::new();
+                for profile_id in profile_ids {
+                    let profile: Option<InferenceProfile> =
+                        read(txn, Collection::InferenceProfile, agent_did, &profile_id).await?;
+                    if let Some(profile) = profile {
+                        profile_backends.push((profile_id, profile.backend_id));
+                    }
+                }
+                Ok(profile_backends)
+            })
+        })
+        .await?;
+    let serving = super::serving_accounts(access, agent_did).await?;
+    Ok(profile_backends
+        .into_iter()
+        .filter_map(|(profile_id, backend_id)| {
+            serving
+                .get(&backend_id)
+                .map(|account| (profile_id, account.clone()))
+        })
+        .collect())
+}
+
+async fn read<T: serde::de::DeserializeOwned>(
+    txn: &super::ConfigApplyTxn<'_>,
+    collection: Collection,
+    agent_did: &str,
+    id: &str,
+) -> Result<Option<T>> {
+    super::desired_state::read_record(txn, collection, agent_did, id)
+        .await?
+        .map(|(_, value)| {
+            serde_json::from_value(value).with_context(|| format!("decoding scoped {collection:?}"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]

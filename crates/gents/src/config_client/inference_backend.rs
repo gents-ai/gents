@@ -82,8 +82,21 @@ pub async fn serving_accounts(
     access: &ConfigAccess,
     agent_did: &str,
 ) -> Result<BTreeMap<String, ServingAccount>> {
-    let _ = (access, agent_did);
-    Ok(BTreeMap::new())
+    let accounts = crate::oauth_credential::list_accounts(access, agent_did).await?;
+    let backends = access
+        .transact("config.serving_accounts", |txn| {
+            Box::pin(async move { list_inference_backends_in_txn(txn, agent_did).await })
+        })
+        .await?;
+    Ok(backends
+        .iter()
+        .map(|backend| {
+            (
+                backend.backend_id.clone(),
+                crate::oauth_credential::serving_account(backend, &accounts),
+            )
+        })
+        .collect())
 }
 
 #[cfg(test)]
