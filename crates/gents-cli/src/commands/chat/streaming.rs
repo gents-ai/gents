@@ -897,6 +897,18 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
     (value.len(), hasher.finish())
 }
 
+/// One line per profile of a refused turn whose account cannot serve it,
+/// naming the account, its state and the move; none unless `failure_reason`
+/// is a behavior-unavailable rejection.
+fn account_problem_lines(
+    failure_reason: &str,
+    accounts: &[(String, gents::oauth_credential::ServingAccount)],
+    all: &[gents::oauth_credential::AccountSummary],
+) -> Vec<String> {
+    let _ = (failure_reason, accounts, all);
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1342,5 +1354,114 @@ mod tests {
         assert!(!spinner_enabled(true, false));
         assert!(!spinner_enabled(false, true));
         assert!(!spinner_enabled(false, false));
+    }
+
+    mod account_problem {
+        use super::*;
+        use gents::oauth_credential::{AccountState, AccountSummary, ServingAccount};
+        use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+
+        const CLAUDE: &str = "claude-subscription";
+
+        fn on(profile: &str, label: &str, state: AccountState) -> (String, ServingAccount) {
+            (
+                profile.into(),
+                ServingAccount {
+                    label: label.into(),
+                    state,
+                    provider: Some(CLAUDE),
+                },
+            )
+        }
+
+        fn summary(label: &str, enabled: bool) -> AccountSummary {
+            AccountSummary {
+                credential_id: format!("{CLAUDE}:did:key:z6MkTest:{label}"),
+                provider: CLAUDE.into(),
+                account_ref: None,
+                label: label.into(),
+                identity: Some("IDENTITY".into()),
+                plan: None,
+                enabled,
+                default: false,
+                access_token_expires_at: chrono::Utc::now(),
+                connected_at: None,
+            }
+        }
+
+        fn all() -> Vec<AccountSummary> {
+            vec![summary("Claude", true), summary("label-b", false)]
+        }
+
+        #[test]
+        fn account_problem_lines_name_the_disabled_account() {
+            let lines = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-b", AccountState::Disabled)],
+                &all(),
+            );
+            assert_eq!(
+                lines,
+                [
+                    "profile p uses account \"label-b\" (disabled); move it: gents config profile \
+                  set-account p <account> (enabled Claude accounts: \"Claude\")"
+                ]
+            );
+        }
+
+        #[test]
+        fn account_problem_lines_name_a_missing_account_or_the_login() {
+            let missing = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-gone", AccountState::Missing)],
+                &all(),
+            );
+            assert_eq!(missing.len(), 1);
+            assert!(
+                missing[0].contains("(account not on this node)"),
+                "{missing:?}"
+            );
+            let none = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-b", AccountState::Disabled)],
+                &[summary("label-b", false)],
+            );
+            assert!(none[0].contains("gents claude-login"), "{none:?}");
+        }
+
+        #[test]
+        fn account_problem_lines_name_the_compaction_profile() {
+            let lines = account_problem_lines(
+                Reason::ToolConfigurationInvalid.public_message(),
+                &[
+                    on("p", "Claude", AccountState::Enabled),
+                    on("p-compaction", "label-b", AccountState::Disabled),
+                ],
+                &all(),
+            );
+            assert_eq!(lines.len(), 1);
+            assert!(
+                lines[0].starts_with("profile p-compaction uses account \"label-b\""),
+                "{lines:?}"
+            );
+        }
+
+        #[test]
+        fn account_problem_lines_are_silent_otherwise() {
+            let disabled = [on("p", "label-b", AccountState::Disabled)];
+            assert!(account_problem_lines("provider returned 500", &disabled, &all()).is_empty());
+            assert!(account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "Claude", AccountState::Enabled)],
+                &all(),
+            )
+            .is_empty());
+            let lines = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &disabled,
+                &all(),
+            );
+            assert!(!format!("{lines:?}").contains("IDENTITY"));
+        }
     }
 }
