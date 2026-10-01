@@ -246,7 +246,7 @@ async fn query_collection(
     Ok(rows)
 }
 
-async fn load_one(
+pub(super) async fn load_one(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     agent_did: &str,

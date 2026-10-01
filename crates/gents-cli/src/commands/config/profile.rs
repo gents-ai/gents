@@ -25,6 +25,19 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
+        let owner = "did:key:owner";
+        let access = crate::shared::seed_unsent_xai_effort(owner).await;
+        let row =
+            super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
+                .await
+                .unwrap();
+        let warning = profile_effort_warning(&access, owner, &row)
+            .await
+            .expect("warning");
+        assert!(warning.contains("profile grok"), "{warning}");
+    }
     #[test]
     fn canonical_model_effort_and_policy_links_are_preserved() {
         let profile=decode_profile(br#"{"agent_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
