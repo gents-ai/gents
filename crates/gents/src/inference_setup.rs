@@ -293,6 +293,21 @@ pub fn connection_spec(
             oauth_provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             api_key_required: false,
         },
+        (Anthropic, ApiKey) => {
+            let fixed = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+            anyhow::ensure!(
+                requested.is_empty() || requested.trim_end_matches('/') == fixed,
+                "the Anthropic API endpoint is fixed at {fixed}"
+            );
+            InferenceConnectionSpec {
+                backend_name: "Anthropic API",
+                provider_kind: BackendProviderKind::AnthropicApiKey,
+                openai_wire_api: None,
+                endpoint: fixed.into(),
+                oauth_provider: None,
+                api_key_required: true,
+            }
+        }
         (Grok, GrokOauth) => InferenceConnectionSpec {
             backend_name: "Grok",
             provider_kind: BackendProviderKind::XaiGrokOAuth,
@@ -441,7 +456,7 @@ pub fn recommendation_for_model(
 ) -> Result<InferenceModelRecommendation> {
     let spec = connection_spec(provider, auth, "")?;
     let is_reasoning = reasoning_model(&advertised.model_name);
-    let is_claude = spec.provider_kind == BackendProviderKind::ClaudeCliSubscription;
+    let is_claude = spec.provider_kind.uses_messages_wire();
     let is_codex = spec.provider_kind == BackendProviderKind::ChatGptCodex;
     let is_grok = provider == InferenceProviderId::Grok;
     let claude_defaults = is_claude
