@@ -97,7 +97,13 @@ pub(crate) fn loop_config(
                     reasoning_profile_params(
                         behavior.backend_provider_kind,
                         behavior.openai_wire_api,
-                        behavior.sampling.reasoning_effort,
+                        crate::inference_setup::sent_reasoning_effort(
+                            behavior.backend_provider_kind,
+                            behavior.openai_wire_api,
+                            &behavior.backend_endpoint,
+                            behavior.resolved_reasoning_efforts.as_deref(),
+                            behavior.sampling.reasoning_effort,
+                        ),
                     ),
                     provider_additional_params(
                         behavior.backend_provider_kind,
