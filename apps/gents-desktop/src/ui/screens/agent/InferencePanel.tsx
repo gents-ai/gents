@@ -394,7 +394,11 @@ export function BackendEditor({
       { min: 1 },
     );
     let auth: InferenceBackend["auth"] | undefined;
-    if (isSubscriptionKind(next.providerKind)) auth = { kind: "principal_oauth" };
+    if (isSubscriptionKind(next.providerKind))
+      auth = {
+        kind: "principal_oauth",
+        ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
+      };
     else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
     else if (next.apiKeyEnvVar.trim())
       auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
