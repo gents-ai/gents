@@ -225,10 +225,9 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             else {
                 return Ok(None);
             };
-            let reference = format!(
-                "ref:{}:{}",
-                account_ref.as_deref().unwrap_or("original"),
-                row.doc_id.as_deref().context("sign-in without _docID")?
+            let reference = fallback_key(
+                account_ref.as_deref(),
+                row.doc_id.as_deref().context("sign-in without _docID")?,
             );
             Ok(Some(Target {
                 agent_did: agent_did.clone(),
@@ -244,6 +243,42 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             }))
         }
     }
+}
+
+/// The key of usage seen before the account's key is known: DID-free, and
+/// apart from an earlier account that reused the reference.
+pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
+    format!("ref:{}:{doc_id}", account_ref.unwrap_or("original"))
+}
+
+/// Deletes `agent_did`'s `provider` usage rows under `keys` in the caller's
+/// transaction, for an account's remove. This is the one usage write
+/// outside the runtime (with a runtime up the CLI writes over HTTP). It is
+/// safe because a delete creates nothing, so it cannot race the unique
+/// create the runtime-only writer guards; a runtime write racing it lands
+/// before it (deleted) or after it (a row no enabled account resolves to).
+// ponytail: rows under an account's earlier key (a key change) stay behind,
+// unreachable and token-free; sweep by key prefix if row counts show.
+pub(crate) async fn delete_usage_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+    keys: &[String],
+) -> Result<()> {
+    let response = txn
+        .execute(&format!(
+            r#"mutation {{ delete_{COLLECTION}(filter: {{ agent_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _in: {} }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(provider),
+            crate::graphql::graphql_string_list_literal(keys.iter().map(String::as_str)),
+        ))
+        .await?;
+    anyhow::ensure!(
+        response.get("errors").is_none_or(Value::is_null),
+        "deleting provider usage failed: {}",
+        response["errors"]
+    );
+    Ok(())
 }
 
 fn row_query(target: &Target, key: &str) -> String {

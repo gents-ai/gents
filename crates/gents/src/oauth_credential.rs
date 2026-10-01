@@ -1270,19 +1270,43 @@ pub async fn set_account_enabled(
     ensure_matched(&response, "update_OAuthCredential", credential_id)
 }
 
-/// Delete an account's row inside the caller's transaction.
+/// Delete an account's row and its usage rows inside the caller's
+/// transaction.
 pub async fn remove_account_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
     credential_id: &str,
 ) -> Result<()> {
+    let filter = account_filter(agent_did, Some(credential_id));
     let response = txn
         .execute(&format!(
-            "mutation {{ delete_OAuthCredential(filter: {}) {{ _docID }} }}",
-            account_filter(agent_did, Some(credential_id)),
+            "query {{ OAuthCredential(filter: {filter}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}"
         ))
         .await?;
-    ensure_matched(&response, "delete_OAuthCredential", credential_id)
+    let row = oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .ok_or_else(|| account_not_found(credential_id))??;
+    let response = txn
+        .execute(&format!(
+            "mutation {{ delete_OAuthCredential(filter: {filter}) {{ _docID }} }}"
+        ))
+        .await?;
+    ensure_matched(&response, "delete_OAuthCredential", credential_id)?;
+    let doc_id = row
+        .doc_id
+        .as_deref()
+        .context("stored OAuthCredential has no _docID")?;
+    let keys: Vec<_> = row
+        .provider_account_key
+        .iter()
+        .cloned()
+        .chain([crate::usage_observation::fallback_key(
+            row.account_ref.as_deref(),
+            doc_id,
+        )])
+        .collect();
+    crate::usage_observation::delete_usage_in_txn(txn, agent_did, &row.provider, &keys).await
 }
 
 fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {
