@@ -98,6 +98,13 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
     )
     .await?;
     let row = load_one(&access, spec, &agent_did, &id).await?;
+    if spec.collection == Collection::InferenceProfile {
+        if let Some(warning) =
+            super::profile::profile_effort_warning(&access, &agent_did, &row).await
+        {
+            eprintln!("warning: {warning}");
+        }
+    }
 
     match args
         .output
