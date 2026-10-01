@@ -204,6 +204,11 @@ source consistency checks, not a separate runtime compatibility version.
   setup wizard does not offer it yet. Nodes on a build without the tolerant
   backend decode (under Changed) fail to list backends once a peer has one.
 
+- An xAI API key is a named backend option (#2123). `--backend-preset xai`
+  configures an `OpenAiCompatible` backend at `https://api.x.ai/v1` on the
+  Responses wire that reads its key from `XAI_API_KEY`; `--model-name` is
+  required. The inference setup contract gains a Grok API-key connection.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no
@@ -302,6 +307,17 @@ source consistency checks, not a separate runtime compatibility version.
   they are reported unavailable (not pending). Looking up that backend by ID
   and `gents config` export still fail, naming the kind. Update older nodes
   before adding a backend of a new kind.
+
+- Existing `OpenAiCompatible` backends at `https://api.x.ai/v1` (any case,
+  trailing slash ignored; no other xAI host) are edited as Grok with an API
+  key instead of as a local server, so their recommended concurrency is 8
+  and top_p 0.95 (#2123). On the Responses wire only, requests to that
+  endpoint now send `store: false` and request encrypted reasoning, as the
+  Grok subscription transport already does, so xAI is asked not to retain
+  them and reasoning still replays on the next turn. Backends on Chat
+  Completions are relabelled but send the same requests as before, and
+  runtimes older than this release keep sending stored requests from the
+  same backend document.
 
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
