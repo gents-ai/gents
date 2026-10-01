@@ -577,6 +577,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn account_read_comes_from_the_session_account() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        upsert_oauth_credential(&node, &credential("chatgpt-codex", Some("plus")))
+            .await
+            .unwrap();
+        bind(
+            &node,
+            backend(
+                BackendProviderKind::ChatGptCodex,
+                BackendAuth::PrincipalOAuth { account_ref: None },
+            ),
+        )
+        .await;
+        let state = state(node, &tempdir);
+        let (outbound, mut received) = mpsc::unbounded_channel();
+        let request: codex::ClientRequest =
+            serde_json::from_value(json!({ "id": 1, "method": "account/read", "params": {} }))
+                .expect("request");
+
+        handle_basic_request(&outbound, &state, request)
+            .await
+            .expect("handled");
+
+        let response = received.recv().await.expect("response");
+        assert!(!response.contains("TEST"), "{response}");
+        let response: Value = serde_json::from_str(&response).expect("json");
+        assert_eq!(
+            response["result"],
+            json!({
+                "account": { "type": "chatgpt", "email": "", "planType": "plus" },
+                "requiresOpenaiAuth": false,
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn shim_usage_non_codex_backend_answers_as_before() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

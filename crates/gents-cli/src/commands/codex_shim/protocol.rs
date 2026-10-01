@@ -316,6 +316,10 @@ pub(super) fn rate_limits_from_usage(
     }
 }
 
+pub(super) fn account_from_usage(_stored: Option<&StoredUsage>) -> codex::Account {
+    codex::Account::ApiKey {}
+}
+
 pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
     input
         .iter()
@@ -639,6 +643,36 @@ mod tests {
         });
 
         assert_eq!(rate_limits_from_usage(Some(&usage), now).credits, None);
+    }
+
+    #[test]
+    fn account_read_with_a_stored_plan_is_chatgpt_with_no_email() {
+        let mut usage = stored(Vec::new());
+        usage.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
+            name: "plus".into(),
+            observed_at: Utc::now(),
+        });
+        assert_eq!(
+            serde_json::to_value(account_from_usage(Some(&usage))).unwrap(),
+            json!({ "type": "chatgpt", "email": "", "planType": "plus" })
+        );
+    }
+
+    #[test]
+    fn account_read_without_a_plan_is_api_key() {
+        let api_key = json!({ "type": "apiKey" });
+        let mut unknown = stored(Vec::new());
+        unknown.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
+            name: "not-a-codex-plan".into(),
+            observed_at: Utc::now(),
+        });
+        for usage in [None, Some(stored(Vec::new())), Some(unknown)] {
+            assert_eq!(
+                serde_json::to_value(account_from_usage(usage.as_ref())).unwrap(),
+                api_key,
+                "{usage:?}"
+            );
+        }
     }
 
     #[test]
