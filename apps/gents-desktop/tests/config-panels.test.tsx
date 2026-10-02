@@ -622,6 +622,31 @@ describe("configuration panels", () => {
         expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
       });
 
+      it("offers Add another on every subscription row", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [
+            { id: "openai", displayName: "OpenAI" },
+            { id: "anthropic", displayName: "Anthropic" },
+            { id: "grok", displayName: "Grok" },
+          ],
+        });
+        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        const user = userEvent.setup();
+        for (const [row, item] of [
+          ["Claude", "Add another Anthropic"],
+          ["Side", "Add another Grok"],
+          ["Team", "Add another OpenAI"],
+        ] as const) {
+          await user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+          expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+        }
+      });
+
       it("opens a disabled account's row with its identity and Reconnect", async () => {
         const { api, shell } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);

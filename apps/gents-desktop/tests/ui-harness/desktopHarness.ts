@@ -2224,6 +2224,7 @@ export function createDesktopUiHarness(
         isFedramp: false,
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "ChatGPT", accountRef: null, hint: null },
       };
       return result;
     },
@@ -2236,6 +2237,7 @@ export function createDesktopUiHarness(
         provider: "grok",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "Grok", accountRef: null, hint: null },
       };
       return result;
     },
@@ -2248,6 +2250,7 @@ export function createDesktopUiHarness(
         provider: "claude-subscription",
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
         enabled: true,
+        signIn: { result: "added", label: "Claude", accountRef: null, hint: null },
       };
     },
     async cancelClaudeLogin() {},
