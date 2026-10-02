@@ -78,7 +78,9 @@ async fn require_reachable_configuration(
 
 /// Stores a sign-in; its label names the account only when the sign-in adds
 /// one, since a desktop label is typed for a new account and must never
-/// rename the stored account the browser happened to return.
+/// rename the stored account the browser happened to return. The account is
+/// stored before its label is set, so a label that fails keeps the default
+/// one rather than reporting a stored account as unsaved.
 async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
@@ -88,14 +90,23 @@ async fn upsert_through(
     let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
     if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
         let stored = &signed.credential;
-        gents::oauth_credential::set_account_label(
+        match gents::oauth_credential::set_account_label(
             &access,
             &stored.agent_did,
             &stored.credential_id,
             &label,
         )
-        .await?;
-        signed.credential.label = Some(label);
+        .await
+        {
+            Ok(()) => signed.credential.label = Some(label),
+            Err(error) => tracing::warn!(
+                target: LOG_TARGET,
+                agent_did = %stored.agent_did,
+                provider = %stored.provider,
+                error = %format!("{error:#}"),
+                "labelling the added account failed; it keeps its default label"
+            ),
+        }
     }
     Ok(signed)
 }
