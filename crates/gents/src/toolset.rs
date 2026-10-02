@@ -76,10 +76,11 @@ pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
     build_session_history_tool, load_pinned_request_context_observation,
     load_request_context_observation, load_session_context_details, load_session_history_snapshot,
-    load_session_inference_observation, load_session_investigation, RequestContextObservation,
-    SessionCompactionEvent, SessionContextDetails, SessionHistoryRow, SessionHistorySnapshot,
-    SessionInferenceObservation, SessionInvestigationSnapshot, SessionRequestEvent,
-    SessionTokenUsage, SessionToolCallStats, SESSION_HISTORY_TOOL_NAME,
+    load_session_history_snapshot_with_access, load_session_inference_observation,
+    load_session_investigation, RequestContextObservation, SessionCompactionEvent,
+    SessionContextDetails, SessionHistoryRow, SessionHistorySnapshot, SessionInferenceObservation,
+    SessionInvestigationSnapshot, SessionRequestEvent, SessionTokenUsage, SessionToolCallStats,
+    SESSION_HISTORY_TOOL_NAME,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;

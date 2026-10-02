@@ -1,0 +1,25 @@
+{
+  "agent_principal": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-sessions",
+      "comparability_version": 2,
+      "title": "Engineer session investigation",
+      "subject": {
+        "kind": "behavior",
+        "inference_slots": [
+          "engineer"
+        ]
+      },
+      "cases": [
+        "./cases/discover-old.json",
+        "./cases/count-closed.json",
+        "./cases/wrong-id.json",
+        "./cases/filtered-discovery.json",
+        "./cases/transcript-evidence.json",
+        "./cases/archive-evidence.json",
+        "./cases/foreign-session-refusal.json"
+      ]
+    }
+  ]
+}

@@ -102,6 +102,19 @@
       ],
       "title": "Graph authoring capability probe",
       "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
+    },
+    {
+      "id": "sessions",
+      "definition_id": "engineer-sessions",
+      "path": "sessions",
+      "subject": "sessions/subject",
+      "coverage": [
+        "canonical discovery",
+        "exact scoped count",
+        "wrong ID recovery",
+        "filtered discovery"
+      ],
+      "title": "Engineer sessions"
     }
   ]
 }

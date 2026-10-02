@@ -240,6 +240,19 @@ for level in "${SELECTED[@]}"; do
   SUITE_PATH=$(python3 -c 'import json,sys; print(next(s["path"] for s in json.load(open(sys.argv[1]))["suites"] if s["id"]==sys.argv[2]))' "$MATRIX" "$level")
   DEFINITION_ID=$(python3 -c 'import json,sys; print(next(s["definition_id"] for s in json.load(open(sys.argv[1]))["suites"] if s["id"]==sys.argv[2]))' "$MATRIX" "$level")
   RUN_SUBJECT=$SUBJECT
+  if [ "$level" = sessions ]; then
+    RUN_SUBJECT="$EVAL_HOME/sessions_subject-$SHA"
+    rm -rf "$RUN_SUBJECT"
+    cp -R "$FIXTURES/sessions/subject" "$RUN_SUBJECT"
+    cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$RUN_SUBJECT/agent_behaviors/engineer/system_prompt.md"
+    python3 - "$RUN_SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PYSESSIONS'
+import json, sys
+config, grant = sys.argv[1:]
+c = json.load(open(config))
+c["tools"][0]["self_config"] = json.load(open(grant))
+json.dump(c, open(config, "w"), indent=2)
+PYSESSIONS
+  fi
   if [ "$level" = factory-setup ]; then
     RUN_SUBJECT="$EVAL_HOME/factory_subject-$SHA"
     rm -rf "$RUN_SUBJECT"

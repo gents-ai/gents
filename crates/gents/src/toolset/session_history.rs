@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 mod context_details;
+mod discovery;
 pub use context_details::{load_session_context_details, SessionContextDetails};
 
 use crate::llm::tool::ToolDefinition;
@@ -28,13 +29,9 @@ pub(crate) fn is_current_session(
 
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 1000;
-const REQUEST_SCAN_LIMIT: usize = 5000;
-const _: () = assert!(
-    REQUEST_SCAN_LIMIT >= MAX_LIMIT,
-    "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
-);
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionHistoryParams {
     #[serde(default)]
     pub action: Option<String>,
@@ -42,13 +39,20 @@ pub struct SessionHistoryParams {
     pub limit: Option<usize>,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub filter: Option<discovery::SessionFilter>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub details: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionHistorySnapshot {
     pub agent_did: String,
     pub limit: usize,
-    pub request_scan_limit: usize,
     pub sessions: Vec<SessionHistoryRow>,
 }
 
@@ -331,9 +335,9 @@ pub struct SessionCompactionEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct RequestScanEnvelope {
-    #[serde(rename = "AgentRequest", default)]
-    requests: Vec<AgentRequestRow>,
+struct SessionIndexEnvelope {
+    #[serde(rename = "AgentSession", default)]
+    sessions: Vec<SessionRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -542,78 +546,40 @@ impl Tool for SessionHistoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description:
-                "List this agent's recent persisted sessions or investigate one session's \
-                request timeline, tool aggregates, provider token usage, exact latest context \
-                accounting, compaction events, and subagent linkage."
-                    .to_string(),
+            description: "Discover, count and search your persisted sessions; inspect canonical transcript evidence. Call action=help for syntax.".into(),
             parameters: json!({
-                "type": "object",
-                "additionalProperties": false,
+                "type":"object", "additionalProperties":false,
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["list", "get"],
-                        "description": "Action to run. Defaults to list."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_LIMIT,
-                        "description": "Maximum number of recent sessions to return."
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Required for get; the session to investigate."
-                    }
+                    "action":{"type":"string","enum":["help","list","count","search","get","transcript"]},
+                    "limit":{"type":"integer","minimum":1,"maximum":100},
+                    "session_id":{"type":"string"},
+                    "filter":{"type":"object","additionalProperties":false,"properties":{
+                        "behavior_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
+                        "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string"}
+                    }},
+                    "cursor":{"type":"string"},"query":{"type":"string"},"details":{"type":"boolean"}
                 }
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let action = validate_action(args.action.as_deref())?;
-        let output = match action {
-            SessionHistoryAction::List => {
-                let mut snapshot =
-                    load_session_history_snapshot(&self.node, &self.agent_did, args.limit).await?;
-                let current = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
-                for row in &mut snapshot.sessions {
-                    row.is_current = current.as_ref().is_some_and(|context| {
-                        context
-                            .agent_did
-                            .as_deref()
-                            .zip(context.session_id.as_deref())
-                            .is_some_and(|(owner, session)| {
-                                is_current_session(
-                                    owner,
-                                    session,
-                                    &snapshot.agent_did,
-                                    &row.session_id,
-                                )
-                            })
-                    });
-                }
-                serde_json::to_value(snapshot)
+        let action = args.action.as_deref().unwrap_or("list").trim();
+        if !["help", "list", "count", "search", "get", "transcript"].contains(&action) {
+            return Err(anyhow!(
+                "unsupported sessions action; next call: sessions {{\"action\":\"help\"}}"
+            )
+            .into());
+        }
+        let value = discovery::run(self, &args, action).await.map_err(|error| {
+            if format!("{error:#}").contains("next call:") {
+                error
+            } else {
+                anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
             }
-            SessionHistoryAction::Get => {
-                let session_id = args
-                    .session_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| anyhow!("sessions get requires session_id"))?;
-                serde_json::to_value(
-                    load_session_investigation(&self.node, &self.agent_did, session_id).await?,
-                )
-            }
-        };
-        let output = output.map_err(anyhow::Error::from)?;
-        serde_json::to_string_pretty(&output).map_err(|error| {
-            SessionHistoryToolError(anyhow!(
-                "failed to serialize session history output: {error}"
-            ))
-        })
+        })?;
+        Ok(serde_json::to_string(&discovery::AnswerFirst(&value))
+            .context("serialize sessions result")?)
     }
 }
 
@@ -629,39 +595,61 @@ pub async fn load_session_history_snapshot(
     agent_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
-    let agent_did = agent_did.trim();
-    if agent_did.is_empty() {
-        bail!("sessions tool requires a running agent DID");
-    }
+    let agent = agent_did.trim().to_owned();
+    anyhow::ensure!(
+        !agent.is_empty(),
+        "session history requires a principal DID"
+    );
+    crate::config_client::ConfigAccess::transact_local(node, None, "session.history", move |txn| {
+        let agent = agent.clone();
+        Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
+    })
+    .await
+}
 
+pub async fn load_session_history_snapshot_with_access(
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    limit: Option<usize>,
+) -> Result<SessionHistorySnapshot> {
+    let agent = agent_did.trim().to_owned();
+    anyhow::ensure!(
+        !agent.is_empty(),
+        "session history requires a principal DID"
+    );
+    access
+        .transact("session.history", move |txn| {
+            let agent = agent.clone();
+            Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
+        })
+        .await
+}
+
+async fn load_session_history_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    limit: Option<usize>,
+) -> Result<SessionHistorySnapshot> {
     let limit = clamp_limit(limit);
-    let resp = graphql_with_transaction_retry(
-        node,
-        &request_scan_query(agent_did),
-        "loading session history request scan",
-    )
-    .await?;
-    let envelope: RequestScanEnvelope = decode(resp.data.as_ref(), "session history request scan")?;
-    let session_ids = recent_session_ids(&envelope.requests, limit);
-
-    let sessions = if session_ids.is_empty() {
+    let response = txn.execute(&session_index_query(agent_did, limit)).await?;
+    let envelope: SessionIndexEnvelope = decode(response.get("data"), "session index")?;
+    let ids = envelope
+        .sessions
+        .into_iter()
+        .map(|row| row.session_id)
+        .collect::<Vec<_>>();
+    let sessions = if ids.is_empty() {
         Vec::new()
     } else {
-        let resp = graphql_with_transaction_retry(
-            node,
-            &session_detail_query(agent_did, &session_ids),
-            "loading session history details",
+        let response = txn.execute(&session_detail_query(agent_did, &ids)).await?;
+        build_session_rows(
+            &ids,
+            decode(response.get("data"), "session history details")?,
         )
-        .await?;
-        let envelope: SessionDetailEnvelope =
-            decode(resp.data.as_ref(), "session history details")?;
-        build_session_rows(&session_ids, envelope)
     };
-
     Ok(SessionHistorySnapshot {
-        agent_did: agent_did.to_string(),
+        agent_did: agent_did.to_owned(),
         limit,
-        request_scan_limit: REQUEST_SCAN_LIMIT,
         sessions,
     })
 }
@@ -727,11 +715,29 @@ pub async fn load_session_investigation(
 }
 
 fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
+    session_investigation_scoped_query(agent_did, session_id, None)
+}
+
+fn session_investigation_scoped_query(
+    agent_did: &str,
+    session_id: &str,
+    requester: Option<Option<&str>>,
+) -> String {
+    let requester_filter = requester
+        .map(|did| {
+            format!(
+                "{{requester_did: {{_eq: {}}}}},",
+                did.map(|did| format!("\"{}\"", escape_graphql_string(did)))
+                    .unwrap_or_else(|| "null".into())
+            )
+        })
+        .unwrap_or_default();
     let agent_did = escape_graphql_string(agent_did);
     let session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
             AgentSession(filter: {{ _and: [
+                {requester_filter}
                 {{ agent_did: {{ _eq: "{agent_did}" }} }},
                 {{ session_id: {{ _eq: "{session_id}" }} }}
             ] }}) {{
@@ -740,6 +746,7 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             }}
             AgentRequest(
                 filter: {{ _and: [
+                {requester_filter}
                     {{ purpose: {{ _eq: "normal" }} }},
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
@@ -763,6 +770,7 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             }}
             AgentToolCall(
                 filter: {{ _and: [
+                {requester_filter}
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }}
@@ -774,6 +782,7 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             }}
             CompactionEntry(
                 filter: {{ _and: [
+                {requester_filter}
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
@@ -788,6 +797,7 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
             }}
             ProviderContextReduction(
                 filter: {{ _and: [
+                {requester_filter}
                     {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
@@ -824,6 +834,24 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
 const INFERENCE_DETAIL_FIELDS: &str = "request_doc_id request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens context_accounting_json";
 
 fn session_investigation_calls_query(agent_did: &str, request_doc_ids: &[String]) -> String {
+    session_investigation_calls_scoped_query(agent_did, request_doc_ids, None)
+}
+
+fn session_investigation_calls_scoped_query(
+    agent_did: &str,
+    request_doc_ids: &[String],
+    requester: Option<Option<&str>>,
+) -> String {
+    let child_scope = requester
+        .map(|did| {
+            format!(
+                "agent_did: {{_eq: \"{}\"}}, requester_did: {{_eq: {}}},",
+                escape_graphql_string(agent_did),
+                did.map(|did| format!("\"{}\"", escape_graphql_string(did)))
+                    .unwrap_or_else(|| "null".into())
+            )
+        })
+        .unwrap_or_default();
     let agent_did = escape_graphql_string(agent_did);
     let request_doc_ids = quoted_graphql_list(request_doc_ids);
     format!(
@@ -838,7 +866,7 @@ fn session_investigation_calls_query(agent_did: &str, request_doc_ids: &[String]
                 {INFERENCE_DETAIL_FIELDS}
             }}
             AgentRequest(
-                filter: {{ purpose: {{ _eq: "normal" }}, caused_by_parent_request_doc_id: {{ _in: [{request_doc_ids}] }} }},
+                filter: {{ {child_scope} purpose: {{ _eq: "normal" }}, caused_by_parent_request_doc_id: {{ _in: [{request_doc_ids}] }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -1109,33 +1137,14 @@ fn latest_context_from_detail_rows(
     }))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SessionHistoryAction {
-    List,
-    Get,
-}
-
-fn validate_action(action: Option<&str>) -> Result<SessionHistoryAction> {
-    match action.map(str::trim).filter(|action| !action.is_empty()) {
-        None | Some("list") => Ok(SessionHistoryAction::List),
-        Some("get") => Ok(SessionHistoryAction::Get),
-        Some(other) => bail!("unsupported sessions action '{other}'; supported actions: list, get"),
-    }
-}
-
 fn clamp_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
 
-fn request_scan_query(agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn session_index_query(agent_did: &str, limit: usize) -> String {
     format!(
-        r#"{{
-            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {REQUEST_SCAN_LIMIT}) {{
-                request_id
-                session_id
-            }}
-        }}"#
+        r#"{{AgentSession(filter: {{agent_did: {{_eq: "{}"}}}}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: {limit}) {{session_id}}}}"#,
+        escape_graphql_string(agent_did)
     )
 }
 
@@ -1200,23 +1209,6 @@ fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> 
         .cloned()
         .with_context(|| format!("{label} query response missing object data"))?;
     serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
-}
-
-fn recent_session_ids(requests: &[AgentRequestRow], limit: usize) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut ids = Vec::new();
-    for request in requests {
-        let Some(session_id) = clean(request.session_id.as_ref()) else {
-            continue;
-        };
-        if seen.insert(session_id.clone()) {
-            ids.push(session_id);
-            if ids.len() >= limit {
-                break;
-            }
-        }
-    }
-    ids
 }
 
 fn build_session_rows(
@@ -2131,22 +2123,19 @@ mod tests {
                     action: Some("list".into()),
                     limit: Some(10),
                     session_id: None,
+                    ..Default::default()
                 },
             )
             .await
             .unwrap();
-            let snapshot: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
-            assert_eq!(snapshot.agent_did, owner.did());
-            assert_eq!(snapshot.sessions.len(), 2);
-            assert!(snapshot.sessions.iter().all(|row| {
-                row.behavior_id.as_deref() == Some("shared-behavior")
-                    && row.latest_request_id.as_deref() != Some("foreign-latest-request")
-            }));
-            snapshot
-                .sessions
-                .into_iter()
-                .filter(|row| row.is_current)
-                .map(|row| row.session_id)
+            let snapshot: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(snapshot["scope"]["agent_did"], owner.did());
+            snapshot["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["is_current"] == true)
+                .map(|row| row["session_id"].as_str().unwrap().to_owned())
                 .collect::<Vec<_>>()
         };
         let scoped_list = |agent_did: String, session_id: &str| {
@@ -2171,9 +2160,23 @@ mod tests {
         );
         assert_eq!(a, vec!["session-a"]);
         assert_eq!(b, vec!["session-b"]);
-        assert!(scoped_list(other.did().to_owned(), "session-a")
-            .await
-            .is_empty());
+        let unauthorized = scope_tool_request_identity(
+            Some(other.did().to_owned()),
+            Some(other.did().to_owned()),
+            None,
+            None,
+            scope_request_tool_execution_with_session(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                Some("session-a".to_owned()),
+                Tool::call(&tool, SessionHistoryParams::default()),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(unauthorized.to_string().contains("running principal"));
         assert!(list().await.is_empty());
     }
 
@@ -2185,24 +2188,15 @@ mod tests {
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         );
 
-        let output = Tool::call(
-            &tool,
-            SessionHistoryParams {
-                action: Some("list".to_string()),
-                limit: Some(2),
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        let snapshot: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
+        let snapshot = load_session_history_snapshot(&tool.node, &tool.agent_did, Some(2))
+            .await
+            .unwrap();
 
         assert_eq!(
             snapshot.agent_did,
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
         );
         assert_eq!(snapshot.limit, 2);
-        assert_eq!(snapshot.request_scan_limit, REQUEST_SCAN_LIMIT);
         assert_eq!(
             snapshot
                 .sessions
@@ -2253,6 +2247,7 @@ mod tests {
                 action: Some("read".to_string()),
                 limit: None,
                 session_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -2475,17 +2470,9 @@ mod tests {
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         );
 
-        let output = Tool::call(
-            &tool,
-            SessionHistoryParams {
-                action: Some("get".to_string()),
-                limit: None,
-                session_id: Some("session-a".to_string()),
-            },
-        )
-        .await
-        .unwrap();
-        let parsed: SessionInvestigationSnapshot = serde_json::from_str(&output).unwrap();
+        let parsed = load_session_investigation(&tool.node, &tool.agent_did, "session-a")
+            .await
+            .unwrap();
 
         assert_eq!(parsed.session_id, "session-a");
         assert_eq!(parsed.requests.len(), 2);
