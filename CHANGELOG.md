@@ -283,8 +283,8 @@ source consistency checks, not a separate runtime compatibility version.
   cannot be read.
 
 - The desktop draws every signed-in account as its own backend row (#2124):
-  its label, whether it is signed in, disabled or not on this node, and a
-  usage bar from the last stored observation. Opening the row shows each usage
+  its label, whether it is signed in, disabled or not on this node (or "off"
+  when the backend is switched off), and a usage bar from the last stored observation. Opening the row shows each usage
   window with its reset countdown, source and age, or "unknown", "not
   reported" or "no cap on this key", and a Refresh button, after which
   Claude's windows show;

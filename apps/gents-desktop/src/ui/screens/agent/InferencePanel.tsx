@@ -1167,7 +1167,7 @@ export function InferencePanel({
         : "";
     const cred = sub
       ? stored
-        ? `${label}${stored.enabled ? "signed in" : "disabled"}`
+        ? `${label}${b.enabled === false ? "off" : stored.enabled ? "signed in" : "disabled"}`
         : b.accountRef
           ? "account not on this node"
           : "not signed in"
