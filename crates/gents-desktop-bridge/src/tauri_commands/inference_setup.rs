@@ -2340,6 +2340,13 @@ mod provider_account_tests {
                     now - minutes(70),
                     now + minutes(600),
                 ),
+                window(
+                    "1d",
+                    55.0,
+                    UsageSource::Header,
+                    now - minutes(20),
+                    now + minutes(300),
+                ),
             ]),
         )
         .await
@@ -2408,8 +2415,14 @@ mod provider_account_tests {
         };
 
         let work = view(&b_backend);
-        assert_eq!(work.windows.len(), 1, "{work:?}");
-        let five_hours = &work.windows[0];
+        assert_eq!(work.windows.len(), 2, "{work:?}");
+        let window = |label: &str| {
+            work.windows
+                .iter()
+                .find(|window| window.label == label)
+                .unwrap_or_else(|| panic!("no {label} window: {work:?}"))
+        };
+        let five_hours = window("5h");
         assert_eq!(five_hours.label, "5h");
         assert_eq!(five_hours.used_pct, 40.0);
         assert_eq!(five_hours.source, "header");
@@ -2419,6 +2432,10 @@ mod provider_account_tests {
             Some((now + minutes(133)).to_rfc3339().as_str())
         );
         assert!(!five_hours.last_known);
+        assert!(
+            window("1d").last_known,
+            "a window seen 20 minutes ago is last known"
+        );
         assert_eq!(work.note, None);
         assert_eq!(work.read.as_deref(), Some("skipped_until_refresh"));
 
