@@ -5,28 +5,154 @@ mod concepts;
 mod indexes;
 mod lenses;
 
-pub(super) fn page(path: &[String]) -> Result<&'static str> {
-    if let Ok(page) = lookup(path) {
-        return Ok(page);
-    }
-    for start in 1..path.len() {
-        if lookup(&path[start..]).is_ok() {
-            let mut next = vec!["help".to_owned()];
-            next.extend_from_slice(&path[start..]);
-            bail!("this topic lives at argv:{}", serde_json::to_string(&next)?);
+pub(super) const PATHS: &[&str] = &[
+    "collections",
+    "collections policy",
+    "collections branchable",
+    "collections governed",
+    "collections downsample",
+    "views",
+    "views virtual",
+    "views materialized",
+    "views refresh",
+    "fields",
+    "fields types",
+    "fields nullability",
+    "fields arrays",
+    "fields defaults",
+    "fields crdt",
+    "fields immutable",
+    "fields constraints",
+    "relationships",
+    "relationships one-to-many",
+    "relationships one-to-one",
+    "relationships named",
+    "relationships self",
+    "evolution",
+    "evolution additive",
+    "evolution versions",
+    "evolution migrations",
+    "indexes",
+    "indexes ordered",
+    "indexes unique",
+    "indexes composite",
+    "indexes vector",
+    "indexes vector dimensions",
+    "indexes vector metrics",
+    "indexes vector hnsw",
+    "indexes vector flat",
+    "indexes vector ivfpq",
+    "indexes vector ivfflat",
+    "indexes vector ssg",
+    "indexes fulltext",
+    "indexes encrypted",
+    "embeddings",
+    "embeddings generation",
+    "embeddings indexing",
+    "migration workflow",
+    "migration authoring",
+    "migration authoring rust",
+    "migration build",
+    "migration contract",
+    "migration contract memory",
+    "migration contract documents",
+    "migration arguments",
+    "migration inverse",
+    "migration versions",
+    "migration verify",
+    "migration verify host",
+    "migration recovery",
+    "batch",
+    "collection",
+    "collection list",
+    "collection get",
+    "collection create",
+    "collection update",
+    "collection materialize",
+    "version",
+    "version list",
+    "version get",
+    "version activate",
+    "migration",
+    "migration set",
+    "view",
+    "view create",
+];
+
+fn equivalent(left: &str, right: &str) -> bool {
+    fn normalize(word: &str) -> &str {
+        match word {
+            "collection" | "collections" => "collection",
+            "view" | "views" => "view",
+            "index" | "indexes" => "index",
+            "field" | "fields" => "field",
+            "relationship" | "relationships" => "relationship",
+            "embedding" | "embeddings" => "embedding",
+            "version" | "versions" => "version",
+            "migration" | "migrations" => "migration",
+            other => other,
         }
+    }
+    normalize(left) == normalize(right)
+}
+
+pub(super) fn resolve(path: &[String]) -> Option<Vec<String>> {
+    if !path.is_empty()
+        && path
+            .iter()
+            .all(|word| matches!(word.to_ascii_lowercase().as_str(), "concepts" | "sdl"))
+    {
+        return Some(Vec::new());
+    }
+    if lookup(path).is_ok() {
+        return Some(path.to_vec());
+    }
+    for start in 0..path.len() {
+        let requested = &path[start..];
+        let matches: Vec<Vec<String>> = PATHS
+            .iter()
+            .filter_map(|candidate| {
+                let words: Vec<_> = candidate.split_whitespace().map(str::to_owned).collect();
+                (words.len() >= requested.len()
+                    && words[words.len() - requested.len()..]
+                        .iter()
+                        .zip(requested)
+                        .all(|(actual, requested)| equivalent(actual, requested)))
+                .then_some(words)
+            })
+            .collect();
+        if matches.len() == 1 {
+            return matches.into_iter().next();
+        }
+        if start == 0 && matches.len() > 1 {
+            break;
+        }
+    }
+    None
+}
+
+pub(super) fn recovery_path(path: &[String]) -> Vec<String> {
+    if let Some(path) = resolve(path) {
+        return path;
     }
     for depth in (1..path.len()).rev() {
-        if lookup(&path[..depth]).is_ok() {
-            let mut next = vec!["help".to_owned()];
-            next.extend_from_slice(&path[..depth]);
-            bail!(
-                "unknown schema help path; read available topics with argv:{}",
-                serde_json::to_string(&next)?
-            );
+        if let Some(parent) = resolve(&path[..depth]) {
+            return parent;
         }
     }
-    bail!("unknown schema help path; use [\"help\"]")
+    Vec::new()
+}
+
+pub(super) fn page(path: &[String]) -> Result<&'static str> {
+    if let Some(canonical) = resolve(path) {
+        return lookup(&canonical);
+    }
+    let mut next = vec!["help".to_owned()];
+    next.extend(recovery_path(path));
+    bail!(
+        "unknown or ambiguous schema help topic; read available topics with argv:{}",
+        serde_json::to_string(&next)?
+    )
 }
 
 fn lookup(path: &[String]) -> Result<&'static str> {
@@ -39,7 +165,7 @@ fn lookup(path: &[String]) -> Result<&'static str> {
         return Ok(page);
     }
     match words.as_slice() {
-        [] => Ok("schema RESOURCE VERB; IDs follow the verb or use target_id, inputs go in options.\ncollection: list, get, create, update, materialize\nversion: list, get, activate\nmigration: set\nview: create\nbatch: ordered calls in options.operations\nSDL concepts: help collections | fields | relationships | indexes | embeddings | evolution | views. Add subtopics to narrow the help, e.g. help indexes vector hnsw. Each page lists its children.\nCommand inputs: RESOURCE VERB --help.\nMutations require RESOURCE preview VERB first; inspect the effect, then use the returned next_call with options.digest. Changed inputs or schemas require a new preview. Reads need neither. Gents-managed schemas evolve through product releases. This tool changes definitions, not document permissions."),
+        [] => Ok("schema RESOURCE VERB; inputs go in options. Names for collection/view create come from options.sdl: omit IDs. Other commands that take an ID accept it after the verb or in target_id.\ncollection: list, get, create, update, materialize\nversion: list, get, activate\nmigration: set\nview: create\nbatch: ordered calls in options.operations\nSDL concepts: help collections | fields | relationships | indexes | embeddings | evolution | views. Add subtopics to narrow the help, e.g. help indexes vector hnsw. Each page lists its children.\nCommand inputs: RESOURCE VERB --help.\nMutations require RESOURCE preview VERB first; inspect the effect, then use the returned next_call with options.digest. Changed inputs or schemas require a new preview. Reads need neither. Gents-managed schemas evolve through product releases. This tool changes definitions, not document permissions."),
         ["batch"] => Ok("batch takes options.operations: 1–64 schema calls. Calls run in order; the first error stops the batch, earlier changes remain, and later calls are not attempted. Nested batches are rejected. Each mutation needs its own preview result. Preview dependent operations after their dependencies commit."),
         ["collection"] => Ok("collection defines stored document fields. list and get inspect definitions; create installs new definitions; update patches existing ones; materialize advances cached documents through registered migrations. Use collection VERB --help for inputs. SDL: help collections, help fields, help relationships, help indexes, help embeddings. Changes to existing definitions: help evolution. Collection deletion is not exposed by this tool."),
         ["collection", "list"] => Ok("collection list: no ID or options. Returns collection names; inspect one with collection get NAME."),
