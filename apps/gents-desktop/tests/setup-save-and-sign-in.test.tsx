@@ -260,7 +260,11 @@ describe("add another account", () => {
     accountRef: null,
     label: "Personal",
   });
-  const signedIn = (result: string, hint: string | null = null) =>
+  const signedIn = (
+    result: string,
+    hint: string | null = null,
+    accountRef: string | null = "acct-2",
+  ) =>
     vi.fn().mockResolvedValue({
       docId: "credential-doc",
       credentialId: "credential-work",
@@ -271,7 +275,7 @@ describe("add another account", () => {
       isFedramp: false,
       accessTokenExpiresAt: "2099-01-01T00:00:00Z",
       enabled: true,
-      signIn: { result, label: "Work", accountRef: "acct-2", hint },
+      signIn: { result, label: "Work", accountRef, hint },
     });
   function addForm(
     provider: keyof typeof KIND,
@@ -316,6 +320,20 @@ describe("add another account", () => {
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
     expect(await screen.findByText(hint)).toBeVisible();
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps Sign in offered after a sign-in refreshes the original account", async () => {
+    const hint = "This is the account already stored as Personal.";
+    const { api, onDone } = addForm("anthropic", {
+      claudeLogin: signedIn("refreshed", hint, null),
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(hint)).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
   it("refuses a label another account of the provider shows", async () => {
