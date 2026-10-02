@@ -139,10 +139,6 @@
               },
               {
                 "field": "results",
-                "contains": "SEAL-2"
-              },
-              {
-                "field": "results",
                 "contains": "pump seals"
               }
             ]

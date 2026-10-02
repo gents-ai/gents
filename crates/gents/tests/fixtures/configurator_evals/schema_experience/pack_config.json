@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-schema-experience",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Engineer schema experience",
       "subject": {
         "kind": "behavior",
