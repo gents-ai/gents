@@ -1129,6 +1129,16 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_repeated_tool_failure_cases_drive_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginModelSlotCases"
+      "pack::tests::generated_plugin_model_slots_require_optional_behavior_free_declarations")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginResourceCases"
+      "plugin::tests::generated_plugin_resource_cases_bind_budget_and_consent")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
       "tool_surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution")

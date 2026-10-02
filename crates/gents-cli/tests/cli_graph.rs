@@ -1,5 +1,8 @@
-//! Checkout-independent binary acceptance for bundled graph discovery and
-//! revision-backed installation. Runtime/model execution has its own live
+//! Checkout-independent binary acceptance for pack resolution, install, and
+//! revision-backed graph running. Every case resolves a fixture pack from
+//! its own directory (never a name this binary would have to have compiled
+//! in); an unroutable registry keeps an accidental network fallback from
+//! hanging instead of failing fast. Runtime/model execution has its own live
 //! fixture; these cases keep the package boundary honest in the ordinary CLI.
 
 mod support;
@@ -8,9 +11,15 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use support::{
-    agent_did_from_init, allocate_port, run_cli_failure_stderr, run_cli_json, run_cli_text,
-    run_init_json, spawn_server_with_ready_json,
+    agent_did_from_init, allocate_port, copy_dir_all, first_graphql_row, fixture_pack_dir,
+    graphql_query, run_cli_failure_stderr, run_cli_json, run_cli_text, run_init_json,
+    spawn_server_with_ready_json,
 };
+
+/// Unroutable: a connection to it fails immediately rather than timing out,
+/// so a test that must never reach the network still runs fast if it
+/// accidentally does.
+const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:9";
 
 fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
     let mut current = value;
@@ -24,44 +33,32 @@ fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
         .with_context(|| format!("JSON path {} is not a string", path.join(".")))
 }
 
+fn dir_arg(path: &std::path::Path) -> &str {
+    path.to_str().expect("fixture path is not UTF-8")
+}
+
+/// No pack ships inside this binary any more: an empty home lists nothing,
+/// and a name it does not hold fails with the store/registry sentence
+/// instead of a compiled-in catalog hit.
 #[test]
-fn all_pack_kinds_are_available_without_a_checkout() -> Result<()> {
+fn the_binary_embeds_no_packs() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let catalog = run_cli_json(temp.path(), &["pack", "list"])?;
-    anyhow::ensure!(catalog["packs"].as_array().context("packs")?.len() >= 11);
-    for name in ["code_review", "pipeline", "mailbox", "graph_pipeline"] {
-        let shown = run_cli_json(temp.path(), &["pack", "show", name])?;
-        anyhow::ensure!(shown["manifest"]["name"] == name);
-    }
-    let root = temp.path().join("assets");
-    let root_arg = root.to_str().context("path")?;
+    let listed = run_cli_json(temp.path(), &["pack", "list"])?;
+    anyhow::ensure!(listed["packs"] == serde_json::json!([]), "{listed}");
     let denial = run_cli_failure_stderr(
         temp.path(),
         &[
-            "pack", "install", "mailbox", "--home", root_arg, "--output", "text",
+            "pack",
+            "show",
+            "code_review",
+            "--registry",
+            UNROUTABLE_REGISTRY,
         ],
     )?;
-    anyhow::ensure!(denial.contains("unsupported --output text"), "{denial}");
-    anyhow::ensure!(!root.exists(), "invalid output format wrote pack assets");
-    for flag in ["--force-rebind-concrete-did", "--agent-did"] {
-        let mut invalid = vec!["pack", "install", "mailbox", "--home", root_arg, flag];
-        if flag == "--agent-did" {
-            invalid.push("did:key:unused");
-        }
-        let denial = run_cli_failure_stderr(temp.path(), &invalid)?;
-        anyhow::ensure!(denial.contains("binding flags do not apply"), "{denial}");
-        anyhow::ensure!(!root.exists(), "invalid options wrote pack assets");
-    }
-    let args = ["pack", "install", "mailbox", "--home", root_arg];
-    let first = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(run_cli_json(temp.path(), &args)? == first);
-    let installed = std::path::Path::new(required_str(&first, &["installed_assets"])?);
-    anyhow::ensure!(installed
-        .join("datastore_tool_surfaces/mailbox_writes/object.json")
-        .is_file());
-    std::fs::write(installed.join("README.md"), "operator edit")?;
-    let denial = run_cli_failure_stderr(temp.path(), &args)?;
-    anyhow::ensure!(denial.contains("installed asset was modified"));
+    anyhow::ensure!(
+        denial.contains("is not in the pack store of") && denial.contains("could not be reached"),
+        "{denial}"
+    );
     Ok(())
 }
 
@@ -74,16 +71,17 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
         temp.path(),
         &["--agent-name", "pack-installer", "--home", home_arg],
     )?;
+    let pack = fixture_pack_dir("documents_fixture");
     let args = [
         "pack",
         "install",
-        "pipeline",
+        dir_arg(&pack),
         "--home",
         home_arg,
         "--force-rebind-concrete-did",
     ];
     let first = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(first["apply"]["counts"]["AgentBehavior"] == 2, "{first}");
+    anyhow::ensure!(first["apply"]["counts"]["AgentBehavior"] == 1, "{first}");
     let before_root = temp.path().join("before");
     run_cli_text(
         temp.path(),
@@ -125,7 +123,8 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
 }
 
 /// A documents pack that ships a plugin: install stores the plugin and
-/// records it, and remove takes back exactly what the install created.
+/// records it, and remove takes back exactly what the install created. Every
+/// pack here is scaffolded on the fly, so this needs no fixture at all.
 #[test]
 fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -227,52 +226,9 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     Ok(())
 }
 
-#[test]
-fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
-    let catalog = run_cli_json(tempdir.path(), &["pack", "show", "code_review"])?;
-    let package = &catalog["manifest"];
-    anyhow::ensure!(
-        package.get("name").and_then(Value::as_str) == Some("code_review"),
-        "catalog did not return code_review: {catalog}"
-    );
-    anyhow::ensure!(
-        std::fs::read_dir(tempdir.path())?.next().is_none(),
-        "read-only catalog created files in a clean working directory"
-    );
-    Ok(())
-}
-
-#[test]
-fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
-    let catalog = run_cli_json(tempdir.path(), &["pack", "show", "web_deep_research"])?;
-    let package = &catalog["manifest"];
-    anyhow::ensure!(
-        package.get("name").and_then(Value::as_str) == Some("web_deep_research"),
-        "catalog did not return web_deep_research: {catalog}"
-    );
-    anyhow::ensure!(
-        package.get("config").and_then(Value::as_str) == Some("pack_config.json"),
-        "catalog package did not expose its canonical config: {catalog}"
-    );
-    let dependencies = package
-        .get("external_dependencies")
-        .and_then(Value::as_array)
-        .context("catalog package did not expose external dependencies")?;
-    anyhow::ensure!(
-        dependencies.len() == 1
-            && dependencies[0].get("service_id").and_then(Value::as_str)
-                == Some("web-research-mcp")
-            && dependencies[0]
-                .get("install_command")
-                .and_then(Value::as_str)
-                == Some("./scripts/stack install-mcp"),
-        "catalog package exposed the wrong external dependency: {catalog}"
-    );
-    Ok(())
-}
-
+/// Every declared inference-slot install, activate, disable/enable cycle on
+/// a graph pack resolved from its own directory: `review_graph` never
+/// shipped a plan, so this also proves fresh compilation at install time.
 #[test]
 fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph install tempdir")?;
@@ -295,10 +251,11 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     let coordinator = format!("coordinator={profile}");
     let worker = format!("worker={profile}");
     let verifier = format!("verifier={profile}");
+    let pack = fixture_pack_dir("review_graph");
     let install_args = [
         "pack",
         "install",
-        "code_review",
+        dir_arg(&pack),
         "--home",
         home_arg,
         "--output",
@@ -328,7 +285,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         &[
             "pack",
             "install",
-            "code_review",
+            dir_arg(&pack),
             "--home",
             home_arg,
             "--agent-did",
@@ -345,7 +302,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         &[
             "graph",
             "disable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -358,7 +315,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         &[
             "graph",
             "enable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -371,7 +328,8 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
 
 /// A documents pack whose graph dependency installs into the same offline
 /// home under the one store claim the pack install holds, while a second
-/// holder of that home is still refused.
+/// holder of that home is still refused. The dependency is pre-stored with
+/// `pack fetch --store` first, so the whole install runs with no registry.
 #[test]
 fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
@@ -382,19 +340,43 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         &["--agent-name", "port-installer", "--home", home_arg],
     )?;
     let owner_did = agent_did_from_init(&initialized)?;
+
+    let review_graph = fixture_pack_dir("review_graph");
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "fetch",
+            dir_arg(&review_graph),
+            "--store",
+            "--home",
+            home_arg,
+        ],
+    )?;
+
     let profile = format!("{owner_did}:default-profile");
-    let slots: Vec<String> = ["coordinator", "worker", "verifier", "reviewer"]
+    let slots: Vec<String> = ["coordinator", "worker", "verifier"]
         .iter()
         .map(|slot| format!("{slot}={profile}"))
         .collect();
-    let mut install_args = vec!["pack", "install", "grok_tui_port", "--home", home_arg];
+    let dependent = fixture_pack_dir("dependent_fixture");
+    let mut install_args = vec![
+        "pack".to_owned(),
+        "install".to_owned(),
+        dir_arg(&dependent).to_owned(),
+        "--home".to_owned(),
+        home_arg.to_owned(),
+        "--registry".to_owned(),
+        UNROUTABLE_REGISTRY.to_owned(),
+    ];
     for slot in &slots {
-        install_args.extend(["--inference-slot", slot.as_str()]);
+        install_args.extend(["--inference-slot".to_owned(), slot.clone()]);
     }
+    let install_args_ref: Vec<&str> = install_args.iter().map(String::as_str).collect();
 
-    let installed = run_cli_json(tempdir.path(), &install_args)?;
+    let installed = run_cli_json(tempdir.path(), &install_args_ref)?;
     anyhow::ensure!(
-        installed["dependencies"] == serde_json::json!(["code_review"])
+        installed["dependencies"] == serde_json::json!(["fixture/review_graph"])
             && installed["owner"] == owner_did.as_str(),
         "pack install did not report its graph dependency: {installed}"
     );
@@ -403,7 +385,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         &[
             "graph",
             "enable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -416,7 +398,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
     );
 
     let _held = gents::home::lock_store(&home, &gents::home::default_data_dir(&home))?;
-    let denial = run_cli_failure_stderr(tempdir.path(), &install_args)?;
+    let denial = run_cli_failure_stderr(tempdir.path(), &install_args_ref)?;
     anyhow::ensure!(
         denial.contains("another Gents runtime")
             && denial.contains(&format!("process {}", std::process::id())),
@@ -432,13 +414,18 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("assets-home");
     let home_arg = home.to_str().context("path")?;
+    let pack = fixture_pack_dir("assets_fixture");
 
     let install = run_cli_json(
         temp.path(),
-        &["pack", "install", "mailbox", "--home", home_arg],
+        &["pack", "install", dir_arg(&pack), "--home", home_arg],
     )?;
     let installed_assets = std::path::Path::new(required_str(&install, &["installed_assets"])?);
     anyhow::ensure!(installed_assets.is_dir(), "{install}");
+    anyhow::ensure!(
+        installed_assets.join("data/nested.json").is_file(),
+        "{install}"
+    );
     anyhow::ensure!(
         !home.join("data").exists(),
         "an assets-only install never opens a node"
@@ -446,7 +433,13 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
 
     let removed = run_cli_json(
         temp.path(),
-        &["pack", "remove", "mailbox", "--home", home_arg],
+        &[
+            "pack",
+            "remove",
+            "fixture/assets_fixture",
+            "--home",
+            home_arg,
+        ],
     )?;
     anyhow::ensure!(
         removed["removed"]["assets"]
@@ -464,7 +457,13 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
 
     let again = run_cli_failure_stderr(
         temp.path(),
-        &["pack", "remove", "mailbox", "--home", home_arg],
+        &[
+            "pack",
+            "remove",
+            "fixture/assets_fixture",
+            "--home",
+            home_arg,
+        ],
     )?;
     anyhow::ensure!(again.contains("is not installed"), "{again}");
     Ok(())
@@ -483,10 +482,11 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
     )?;
     let owner_did = agent_did_from_init(&initialized)?;
     let profile = format!("{owner_did}:default-profile");
+    let pack = fixture_pack_dir("review_graph");
     let install_args = [
         "pack",
         "install",
-        "code_review",
+        dir_arg(&pack),
         "--home",
         home_arg,
         "--inference-slot",
@@ -500,7 +500,7 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
 
     let removed = run_cli_json(
         tempdir.path(),
-        &["pack", "remove", "code_review", "--home", home_arg],
+        &["pack", "remove", "fixture/review_graph", "--home", home_arg],
     )?;
     let retained = removed["removed"]["retained"]
         .as_array()
@@ -518,7 +518,7 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
         &[
             "graph",
             "enable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -549,16 +549,33 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
     )?;
     let owner_did = agent_did_from_init(&initialized)?;
     let profile = format!("{owner_did}:default-profile");
-    let slots: Vec<String> = ["coordinator", "worker", "verifier", "reviewer"]
+    let slots: Vec<String> = ["coordinator", "worker", "verifier"]
         .iter()
         .map(|slot| format!("{slot}={profile}"))
         .collect();
+
+    let review_graph = fixture_pack_dir("review_graph");
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "fetch",
+            dir_arg(&review_graph),
+            "--store",
+            "--home",
+            home_arg,
+        ],
+    )?;
+
+    let dependent = fixture_pack_dir("dependent_fixture");
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),
-        "grok_tui_port".to_owned(),
+        dir_arg(&dependent).to_owned(),
         "--home".to_owned(),
         home_arg.to_owned(),
+        "--registry".to_owned(),
+        UNROUTABLE_REGISTRY.to_owned(),
     ];
     for slot in &slots {
         install_args.push("--inference-slot".to_owned());
@@ -569,16 +586,22 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
 
     let denial = run_cli_failure_stderr(
         tempdir.path(),
-        &["pack", "remove", "code_review", "--home", home_arg],
+        &["pack", "remove", "fixture/review_graph", "--home", home_arg],
     )?;
-    anyhow::ensure!(denial.contains("gents/grok_tui_port"), "{denial}");
+    anyhow::ensure!(denial.contains("fixture/dependent_fixture"), "{denial}");
 
     let removed = run_cli_json(
         tempdir.path(),
-        &["pack", "remove", "grok_tui_port", "--home", home_arg],
+        &[
+            "pack",
+            "remove",
+            "fixture/dependent_fixture",
+            "--home",
+            home_arg,
+        ],
     )?;
     anyhow::ensure!(
-        removed["removed"]["dependencies"][0]["pack"] == "gents/code_review",
+        removed["removed"]["dependencies"][0]["pack"] == "fixture/review_graph",
         "{removed}"
     );
 
@@ -587,7 +610,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         &[
             "graph",
             "enable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -601,10 +624,10 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
 
     // An explicit install of the (now-removed) dependency survives a later
     // removal of the dependent that names it again.
-    let explicit_code_review = [
+    let explicit_review_graph = [
         "pack",
         "install",
-        "code_review",
+        dir_arg(&review_graph),
         "--home",
         home_arg,
         "--inference-slot",
@@ -614,18 +637,24 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         "--inference-slot",
         &format!("verifier={profile}"),
     ];
-    run_cli_json(tempdir.path(), &explicit_code_review)?;
+    run_cli_json(tempdir.path(), &explicit_review_graph)?;
     run_cli_json(tempdir.path(), &install_args_ref)?;
     run_cli_json(
         tempdir.path(),
-        &["pack", "remove", "grok_tui_port", "--home", home_arg],
+        &[
+            "pack",
+            "remove",
+            "fixture/dependent_fixture",
+            "--home",
+            home_arg,
+        ],
     )?;
     let enabled = run_cli_json(
         tempdir.path(),
         &[
             "graph",
             "enable",
-            "code_review",
+            "fixture/review_graph",
             "--home",
             home_arg,
             "--agent-did",
@@ -635,6 +664,323 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
     anyhow::ensure!(
         enabled.get("enabled") == Some(&Value::Bool(true)),
         "an explicit install of the dependency must survive removing its dependent: {enabled}"
+    );
+    Ok(())
+}
+
+/// `graph run` compares the installed record, not a name it trusts blindly.
+/// Corrupting the record's digest directly is out of scope for a CLI test,
+/// so this proves the coordinate lookup itself is exact: a wrong namespace
+/// names no installation record even though the plan resolves by bare name,
+/// and removing the pack (which deletes the record) is refused distinctly
+/// from a plain "not installed".
+#[test]
+fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating graph run tempdir")?;
+    let home = tempdir.path().join("agent-home");
+    let home_arg = home.to_str().context("path")?;
+    let initialized = run_init_json(
+        tempdir.path(),
+        &["--agent-name", "graph-runner", "--home", home_arg],
+    )?;
+    let owner_did = agent_did_from_init(&initialized)?;
+    let port = allocate_port()?;
+    let (_server, readiness) =
+        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
+    anyhow::ensure!(
+        readiness.get("status").and_then(Value::as_str) == Some("serving"),
+        "server did not become ready: {readiness}"
+    );
+    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let profile = format!("{owner_did}:default-profile");
+    let pack = fixture_pack_dir("review_graph");
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--inference-slot",
+            &format!("coordinator={profile}"),
+            "--inference-slot",
+            &format!("worker={profile}"),
+            "--inference-slot",
+            &format!("verifier={profile}"),
+        ],
+    )?;
+
+    // The plan is found by name alone (`review_graph` matches, whatever
+    // namespace the caller typed), but the run check reads the installed
+    // record under the exact coordinate: a wrong namespace names no such
+    // record, and must be refused there rather than silently running the
+    // revision installed under a different coordinate.
+    let denial = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "graph",
+            "run",
+            "review_graph",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+        ],
+    )?;
+    anyhow::ensure!(
+        denial.contains("gents/review_graph") && denial.contains("has no installation record"),
+        "a bare-namespace run must be refused by its own coordinate, not the installed one: {denial}"
+    );
+
+    // Removing the pack deletes its graph definition along with the
+    // record (proven by `a_graph_pack_removes_completely_and_reinstalls`),
+    // so a run afterward is refused at the plan lookup, before the record
+    // check this test exercises above ever runs.
+    run_cli_json(
+        tempdir.path(),
+        &["pack", "remove", "fixture/review_graph", "--home", home_arg],
+    )?;
+    let denial = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "graph",
+            "run",
+            "fixture/review_graph",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+        ],
+    )?;
+    anyhow::ensure!(denial.contains("graph is not installed"), "{denial}");
+    Ok(())
+}
+
+/// A generic entry's declared `input_schema` is enforced through the CLI,
+/// independent of the compiled-in catalog this binary no longer has.
+#[test]
+fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating schema validation tempdir")?;
+    let home = tempdir.path().join("agent-home");
+    let home_arg = home.to_str().context("path")?;
+    let initialized = run_init_json(
+        tempdir.path(),
+        &["--agent-name", "schema-runner", "--home", home_arg],
+    )?;
+    let owner_did = agent_did_from_init(&initialized)?;
+    let port = allocate_port()?;
+    let (_server, readiness) =
+        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
+    anyhow::ensure!(
+        readiness.get("status").and_then(Value::as_str) == Some("serving"),
+        "server did not become ready: {readiness}"
+    );
+    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let profile = format!("{owner_did}:default-profile");
+
+    // A private copy of `review_graph` with an injected `input_schema` on
+    // its one entry: the fixture itself declares none, and this is the only
+    // pack-shaped way to exercise `admit_operator_input` end to end through
+    // the CLI without touching the checked-in fixture other tests share.
+    let pack_dir = tempdir.path().join("review_graph_with_schema");
+    copy_dir_all(&fixture_pack_dir("review_graph"), &pack_dir)?;
+    let config_path = pack_dir.join("pack_config.json");
+    let mut config: Value = serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
+    config["graph_intents"][0]["entries"][0]["input_schema"] = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "repository": {"type": "string", "pattern": "^[a-z0-9_./-]+$"}
+        }
+    });
+    std::fs::write(&config_path, serde_json::to_vec_pretty(&config)?)?;
+
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack_dir),
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--inference-slot",
+            &format!("coordinator={profile}"),
+            "--inference-slot",
+            &format!("worker={profile}"),
+            "--inference-slot",
+            &format!("verifier={profile}"),
+        ],
+    )?;
+
+    let denial = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "graph",
+            "run",
+            "fixture/review_graph",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--field",
+            "repository=NOT VALID",
+        ],
+    )?;
+    anyhow::ensure!(
+        denial.contains("does not satisfy its schema"),
+        "a value violating the pattern must be refused before any run starts: {denial}"
+    );
+    Ok(())
+}
+
+/// An entry's `git_diff` host step runs through the CLI and the pack's own
+/// prepare plugin: the pack is built (compiling its plugin), installed from
+/// a `.pack` file, and a run over a real two-commit repository persists the
+/// plugin's evidence document and starts on the plugin's input, both carrying
+/// the diff's head sha.
+#[tokio::test]
+async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating prepare tempdir")?;
+    let home = tempdir.path().join("agent-home");
+    let home_arg = home.to_str().context("path")?;
+    let initialized = run_init_json(
+        tempdir.path(),
+        &["--agent-name", "prepare-runner", "--home", home_arg],
+    )?;
+    let owner_did = agent_did_from_init(&initialized)?;
+    let port = allocate_port()?;
+    let (_server, readiness) =
+        spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
+    anyhow::ensure!(
+        readiness.get("status").and_then(Value::as_str) == Some("serving"),
+        "server did not become ready: {readiness}"
+    );
+    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let profile = format!("{owner_did}:default-profile");
+
+    let pack_dir = tempdir.path().join("prepared_graph");
+    copy_dir_all(&fixture_pack_dir("prepared_graph"), &pack_dir)?;
+    let pack_file = tempdir.path().join("prepared_graph.pack");
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "build",
+            dir_arg(&pack_dir),
+            "--out",
+            dir_arg(&pack_file),
+        ],
+    )?;
+    run_cli_json(
+        tempdir.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack_file),
+            "--home",
+            home_arg,
+            "--grant-authority",
+            "--agent-did",
+            &owner_did,
+            "--inference-slot",
+            &format!("worker={profile}"),
+        ],
+    )?;
+
+    let repo = tempdir.path().join("repo");
+    std::fs::create_dir_all(&repo)?;
+    let git = |args: &[&str]| -> Result<String> {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
+            .args(args)
+            .output()
+            .context("running git")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    };
+    git(&["init", "--quiet"])?;
+    std::fs::write(repo.join("a.txt"), "one\n")?;
+    git(&["add", "-A"])?;
+    git(&["commit", "--quiet", "-m", "base"])?;
+    std::fs::write(repo.join("a.txt"), "two\n")?;
+    git(&["add", "-A"])?;
+    git(&["commit", "--quiet", "-m", "head"])?;
+    let head = git(&["rev-parse", "HEAD"])?;
+
+    let denial = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "graph",
+            "run",
+            "fixture/prepared_graph",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--field",
+            &format!("repository={}", dir_arg(&repo)),
+            "--field",
+            "head=NOT VALID",
+        ],
+    )?;
+    anyhow::ensure!(
+        denial.contains("does not satisfy its schema"),
+        "an invalid head must be refused before any host step runs: {denial}"
+    );
+
+    let receipt = run_cli_json(
+        tempdir.path(),
+        &[
+            "graph",
+            "run",
+            "fixture/prepared_graph",
+            "--output",
+            "json",
+            "--home",
+            home_arg,
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &owner_did,
+            "--field",
+            &format!("repository={}", dir_arg(&repo)),
+        ],
+    )?;
+    anyhow::ensure!(receipt.get("run_id").is_some(), "{receipt}");
+
+    let evidence = graphql_query(&graphql, "{ FixtureEvidence { head_ref note } }").await?;
+    let row = first_graphql_row(&evidence, "FixtureEvidence")?;
+    anyhow::ensure!(
+        row["head_ref"] == head.as_str() && row["note"] == "prepared",
+        "the plugin must have seen the repository's head {head}: {evidence}"
+    );
+    let jobs = graphql_query(&graphql, "{ FixtureJob { head_ref summary } }").await?;
+    let job = first_graphql_row(&jobs, "FixtureJob")?;
+    anyhow::ensure!(
+        job["head_ref"] == head.as_str()
+            && job["summary"] == format!("prepared at {head}").as_str(),
+        "the run must start on the plugin's input: {jobs}"
     );
     Ok(())
 }

@@ -5,25 +5,11 @@ use tracing::Instrument;
 
 use crate::document_config::AdvertisedModel;
 
-// The enum itself (and its pure parse/as_str/is_agent_scoped_oauth/Display)
-// moved to gents-loop (G-1): the loop's provider_input layer switches on it
-// with no reqwest dependency. This crate re-exports it and adds the two
-// OAuth-guidance methods below through an extension trait, since only the
-// type's defining crate may add inherent methods to it.
 pub use gents_loop::backend_provider::BackendProviderKind;
 
-/// OAuth-credential guidance for a backend provider kind: which
-/// `OAuthCredential.provider` it authenticates with, and how to render an
-/// auth problem for it. Kept here (not on the moved enum) because both touch
-/// native, agent-scoped OAuth modules the guest never links.
+/// Agent-scoped credential provider selected by each backend kind.
 pub(crate) trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;
-    fn oauth_auth_guidance(
-        self,
-        agent_did: &str,
-        provider: &str,
-        problem: &crate::oauth_credential::OAuthAuthProblem,
-    ) -> String;
 }
 
 impl BackendProviderOauthExt for BackendProviderKind {
@@ -34,26 +20,6 @@ impl BackendProviderOauthExt for BackendProviderKind {
             Self::XaiGrokOAuth => Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
             Self::ClaudeCliSubscription => Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             _ => None,
-        }
-    }
-
-    fn oauth_auth_guidance(
-        self,
-        agent_did: &str,
-        provider: &str,
-        problem: &crate::oauth_credential::OAuthAuthProblem,
-    ) -> String {
-        match self {
-            Self::ChatGptCodex => {
-                crate::oauth_credential::classify_chatgpt_auth_error(agent_did, provider, problem)
-            }
-            Self::XaiGrokOAuth => {
-                crate::xai_grok_oauth::classify_xai_auth_error(agent_did, provider, problem)
-            }
-            Self::ClaudeCliSubscription => {
-                crate::claude_oauth::classify_claude_auth_error(agent_did, provider, problem)
-            }
-            _ => format!("{self} does not use OAuth credentials"),
         }
     }
 }

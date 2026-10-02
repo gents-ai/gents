@@ -85,6 +85,11 @@ pub struct ChatSendRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub answer: Option<gents_protocol::mailbox_question::MailboxQuestionAnswer>,
+    /// The folder the user works in for this chat: plugin tools read inside
+    /// it without a prompt. Absent keeps the agent's own tool root.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

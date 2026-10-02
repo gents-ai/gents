@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-allowed-dirs-add"
+description = "Enables the desktop_allowed_dirs_add command without any pre-configured scope."
+commands.allow = ["desktop_allowed_dirs_add"]
+
+[[permission]]
+identifier = "deny-desktop-allowed-dirs-add"
+description = "Denies the desktop_allowed_dirs_add command without any pre-configured scope."
+commands.deny = ["desktop_allowed_dirs_add"]

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::Value;
 
+use crate::cli::args::{PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
     GraphScopeArgs, PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs,
     PackOutdatedArgs, PackRemoveArgs, PackSearchArgs, PackUpdateArgs,
@@ -89,6 +90,49 @@ pub async fn install(
         explicit: true,
     }))
     .await
+}
+
+/// The installed plugins that can call a model, which profile each is bound
+/// to (`null` when none), and the profiles a slot may be bound to.
+pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
+    let plugins = gents::plugin::store::list_records(&home)?
+        .into_iter()
+        .filter_map(|record| {
+            let slot = record.declaration.model_slot.clone()?;
+            Some(serde_json::json!({
+                "plugin": format!("{}/{}", record.namespace, record.name),
+                "slot": slot,
+                "profile": record.model_binding.map(|binding| binding.profile_id),
+            }))
+        })
+        .collect::<Vec<_>>();
+    if plugins.is_empty() {
+        return Ok(serde_json::json!({"plugins": plugins, "profiles": []}));
+    }
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let profiles = gents::pack::inference_profile_options(&access, &owner).await?;
+    Ok(serde_json::json!({"plugins": plugins, "profiles": profiles}))
+}
+
+/// Binds the installed `plugin`'s model slot to `profile`, or leaves it
+/// unbound when `profile` is `None`.
+pub async fn bind_plugin_slot(
+    home: PathBuf,
+    plugin: String,
+    profile: Option<String>,
+) -> Result<Value> {
+    let command = match profile {
+        Some(profile) => PluginCommand::Bind(PluginBindArgs {
+            name: plugin,
+            profile,
+            scope: scope(home),
+        }),
+        None => PluginCommand::Unbind(PluginUnbindArgs {
+            name: plugin,
+            home: Some(home),
+        }),
+    };
+    capture_report(crate::commands::plugin::dispatch(command)).await
 }
 
 pub async fn update(

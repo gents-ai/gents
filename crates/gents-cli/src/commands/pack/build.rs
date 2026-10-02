@@ -216,7 +216,7 @@ fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
 /// description the compiler reads there from the manifest entry, and compiles
 /// the copy, so the author's directory holds only their code and a rebuild
 /// reuses the language toolchain's own cache in the staged copy.
-fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Result<()> {
+pub(super) fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
         anyhow::ensure!(

@@ -1,0 +1,1 @@
+{"input": {"root": "unused"}, "bind": "fixtures/tree", "expect": {"files": ["a.txt", "b.txt"]}}

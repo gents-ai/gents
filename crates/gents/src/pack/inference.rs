@@ -48,6 +48,53 @@ pub async fn inspect_pack_inference_bindings(
         "pack owner DID must not be blank"
     );
 
+    let options = inference_profile_options(access, agent_did).await?;
+
+    let slots = manifest.metadata.inference_slots.clone();
+    let slot_names = slots
+        .iter()
+        .map(|slot| slot.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for slot in requested.keys() {
+        anyhow::ensure!(
+            slot_names.contains(slot.as_str()),
+            "pack {} has no inference slot {slot:?}",
+            manifest.name
+        );
+    }
+    for (slot, profile_id) in requested {
+        let profile = options
+            .iter()
+            .find(|profile| profile.profile_id == *profile_id)
+            .with_context(|| {
+                format!(
+                    "inference slot {slot:?} references unknown profile {profile_id:?} for principal {agent_did}"
+                )
+            })?;
+        anyhow::ensure!(
+            profile.usable,
+            "inference slot {slot:?} profile {profile_id:?} is unavailable: {}",
+            profile
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("unknown reason")
+        );
+    }
+
+    Ok(PackInferenceBindingPreview {
+        slots,
+        profiles: options,
+        bindings: requested.clone(),
+        automatic: false,
+    })
+}
+
+/// The principal's inference profiles, each with whether a pack slot can be
+/// bound to it. Fails when the principal is missing or disabled.
+pub async fn inference_profile_options(
+    access: &ConfigAccess,
+    agent_did: &str,
+) -> Result<Vec<PackInferenceProfileOption>> {
     let (principal_enabled, profiles, backends) = access
         .transact("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
@@ -110,44 +157,7 @@ pub async fn inspect_pack_inference_bindings(
         })
         .collect::<Vec<_>>();
     options.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
-
-    let slots = manifest.metadata.inference_slots.clone();
-    let slot_names = slots
-        .iter()
-        .map(|slot| slot.name.as_str())
-        .collect::<BTreeSet<_>>();
-    for slot in requested.keys() {
-        anyhow::ensure!(
-            slot_names.contains(slot.as_str()),
-            "pack {} has no inference slot {slot:?}",
-            manifest.name
-        );
-    }
-    for (slot, profile_id) in requested {
-        let profile = options
-            .iter()
-            .find(|profile| profile.profile_id == *profile_id)
-            .with_context(|| {
-                format!(
-                    "inference slot {slot:?} references unknown profile {profile_id:?} for principal {agent_did}"
-                )
-            })?;
-        anyhow::ensure!(
-            profile.usable,
-            "inference slot {slot:?} profile {profile_id:?} is unavailable: {}",
-            profile
-                .unavailable_reason
-                .as_deref()
-                .unwrap_or("unknown reason")
-        );
-    }
-
-    Ok(PackInferenceBindingPreview {
-        slots,
-        profiles: options,
-        bindings: requested.clone(),
-        automatic: false,
-    })
+    Ok(options)
 }
 
 /// Resolve every declared slot against the principal's retained inference
@@ -161,7 +171,32 @@ pub async fn preview_pack_inference_bindings(
 ) -> Result<PackInferenceBindingPreview> {
     let mut preview =
         inspect_pack_inference_bindings(access, manifest, agent_did, requested).await?;
-    if preview.slots.is_empty() {
+    use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
+    let models = AccessModels(access);
+    for slot in manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter_map(|plugin| plugin.model_slot.as_ref())
+    {
+        if let Some(profile_id) = requested.get(slot) {
+            models
+                .resolve(&ModelBinding {
+                    agent_did: agent_did.to_owned(),
+                    profile_id: profile_id.clone(),
+                })
+                .await
+                .with_context(|| {
+                    format!("profile {profile_id:?} cannot serve plugin slot {slot:?}")
+                })?;
+        }
+    }
+    let required = preview
+        .slots
+        .iter()
+        .filter(|slot| !slot.optional)
+        .collect::<Vec<_>>();
+    if required.is_empty() {
         return Ok(preview);
     }
     let usable = preview
@@ -174,15 +209,13 @@ pub async fn preview_pack_inference_bindings(
         "pack {} requires configured inference, but principal {agent_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
         manifest.name
     );
-    if requested.is_empty() && preview.slots.len() == 1 && usable.len() == 1 {
-        preview
-            .bindings
-            .insert(preview.slots[0].name.clone(), usable[0].profile_id.clone());
+    if requested.is_empty() && required.len() == 1 && usable.len() == 1 {
+        let slot = required[0].name.clone();
+        preview.bindings.insert(slot, usable[0].profile_id.clone());
         preview.automatic = true;
         return Ok(preview);
     }
-    let missing = preview
-        .slots
+    let missing = required
         .iter()
         .filter(|slot| !requested.contains_key(&slot.name))
         .map(|slot| slot.name.clone())
@@ -217,7 +250,18 @@ pub fn bind_pack_install_config(
             .clone();
     }
     anyhow::ensure!(
-        bindings.len() == manifest.metadata.inference_slots.len(),
+        manifest
+            .metadata
+            .inference_slots
+            .iter()
+            .all(|slot| slot.optional || bindings.contains_key(&slot.name))
+            && bindings.keys().all(|name| {
+                manifest
+                    .metadata
+                    .inference_slots
+                    .iter()
+                    .any(|slot| slot.name == *name)
+            }),
         "inference slot binding map does not exactly match the pack declaration"
     );
     super::provenance::stamp_pack_origin(manifest, &bound)

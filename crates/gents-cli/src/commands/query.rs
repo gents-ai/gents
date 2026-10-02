@@ -12,7 +12,7 @@ use crate::{post_graphql, print_json, resolve_graphql_endpoint};
 
 /// Introspect a collection's field set over GraphQL-over-HTTP. `Ok(None)`
 /// means the collection (GraphQL type) does not exist on the node.
-async fn fetch_collection_schema(
+pub(crate) async fn fetch_collection_schema(
     graphql: &GraphqlEndpoint,
     collection: &str,
 ) -> Result<Option<CollectionSchema>> {

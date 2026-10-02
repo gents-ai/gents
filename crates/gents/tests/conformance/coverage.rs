@@ -1632,6 +1632,19 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             .as_array()
             .is_some_and(|rows| !rows.is_empty())));
     emitted.insert(("tool_timeout_cases".into(), "ToolTimeoutCases".into()));
+    for family in ["consent", "budgets"] {
+        assert!(snapshot.plugin_resource_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+    }
+    emitted.insert(("plugin_resource_cases".into(), "PluginResourceCases".into()));
+    assert!(snapshot.plugin_resource_cases["model_slots"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty()));
+    emitted.insert((
+        "plugin_resource_cases".into(),
+        "PluginModelSlotCases".into(),
+    ));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

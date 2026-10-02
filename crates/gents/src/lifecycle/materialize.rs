@@ -780,7 +780,7 @@ impl RequestLifecycle {
     pub fn new_with_execution_binding(
         node: Arc<EmbeddedNode>,
         _agent_name: &str,
-        agent_did: &str,
+        _agent_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
@@ -789,7 +789,6 @@ impl RequestLifecycle {
         let behavior_id = request.behavior_id.clone();
         Self {
             node,
-            agent_did: agent_did.to_string(),
             behavior_id,
             execution_origin,
             backend_id: backend_id.into(),

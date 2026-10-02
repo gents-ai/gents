@@ -123,6 +123,11 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             Err(error) => report.problems.push(format!("{error:#}")),
         }
     }
+    if dir.join("experiment.json").is_file() {
+        if let Err(error) = super::scenario::validate_scenario_defaults(dir) {
+            report.problems.push(format!("{error:#}"));
+        }
+    }
     check_readme(dir, &mut report.problems);
     report
 }
@@ -359,20 +364,18 @@ pub(crate) fn write_topology(dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Every pack in this repository passes the check: the CI gate for packs.
+    /// Every fixture pack passes the check: the machinery gate for gents
+    /// itself. The CI gate for real (packs-repo) packs moved to packs CI
+    /// (`gents pack test`), which builds against this checkout's gents.
     #[tokio::test]
-    async fn every_pack_in_the_repository_passes_the_check() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.join("manifest.json").is_file())
-            .collect();
-        dirs.sort();
+    async fn every_fixture_pack_passes_the_check() {
+        let dirs = super::super::test_support::every_fixture_dir();
         assert!(!dirs.is_empty());
         for dir in dirs {
-            let report = check_dir(&dir).await;
+            let copy = copy_pack(&dir);
+            let manifest = read_manifest(copy.path()).unwrap();
+            super::super::test_support::build_unbuilt_plugins(copy.path(), &manifest);
+            let report = check_dir(copy.path()).await;
             assert!(
                 report.problems.is_empty(),
                 "{}: {:#?}",
@@ -382,20 +385,17 @@ mod tests {
         }
     }
 
-    fn copy_pack(name: &str) -> tempfile::TempDir {
-        let pack = gents::pack::resolve_pack(name).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        for path in declared_paths(&pack.manifest) {
-            let target = dir.path().join(&path);
-            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            std::fs::write(&target, pack.asset(&path).unwrap()).unwrap();
-        }
-        dir
+    fn copy_pack(dir: &Path) -> tempfile::TempDir {
+        let copy = tempfile::tempdir().unwrap();
+        super::super::test_support::copy_tree(dir, copy.path()).unwrap();
+        copy
     }
 
     #[tokio::test]
     async fn missing_and_undeclared_files_are_each_named() {
-        let dir = copy_pack("mailbox");
+        let dir = copy_pack(&super::super::test_support::fixture_dir(
+            "documents_fixture",
+        ));
         let manifest = read_manifest(dir.path()).unwrap();
         let dropped = manifest.metadata.assets[0].clone();
         std::fs::remove_file(dir.path().join(&dropped)).unwrap();
@@ -430,18 +430,23 @@ mod tests {
 
     #[tokio::test]
     async fn an_invalid_filter_is_reported_with_its_event_source() {
-        let dir = copy_pack("repo_maintenance");
+        let dir = copy_pack(&super::super::test_support::fixture_dir(
+            "documents_fixture",
+        ));
         let config_path = dir.path().join("pack_config.json");
         let text = std::fs::read_to_string(&config_path).unwrap();
         std::fs::write(
             &config_path,
-            text.replacen("{ binding_id: {", "{ no_such_field: {", 1),
+            text.replacen("{ status: {", "{ no_such_field: {", 1),
         )
         .unwrap();
         let report = check_dir(dir.path()).await;
         assert!(
-            report.problems.iter().any(|problem| problem
-                .starts_with("event source maintenance-execute filter is not valid")),
+            report
+                .problems
+                .iter()
+                .any(|problem| problem
+                    .starts_with("event source fixture-worker filter is not valid")),
             "{:#?}",
             report.problems
         );
@@ -449,13 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_stale_topology_diagram_is_reported_and_rewritten() {
-        let name = gents::pack::pack_catalog()
-            .unwrap()
-            .into_iter()
-            .find(|manifest| manifest.metadata.kind == PackKind::Graph)
-            .expect("a bundled graph pack")
-            .name;
-        let dir = copy_pack(&name);
+        let dir = copy_pack(&super::super::test_support::fixture_dir("review_graph"));
         let readme = dir.path().join("README.md");
         let text = std::fs::read_to_string(&readme).unwrap();
         let start = text.find(TOPOLOGY_START).unwrap();
@@ -473,5 +472,29 @@ mod tests {
         .unwrap();
         let report = check_dir(dir.path()).await;
         assert!(report.problems.is_empty(), "{:#?}", report.problems);
+    }
+
+    /// `gents pack check` validates `experiment.json` at its declared
+    /// defaults, so a scenario that fails to load fails the check too.
+    #[tokio::test]
+    async fn a_scenario_that_fails_validation_fails_the_check() {
+        let dir = copy_pack(&super::super::test_support::fixture_dir(
+            "documents_fixture",
+        ));
+        let experiment_path = dir.path().join("experiment.json");
+        let text = std::fs::read_to_string(&experiment_path).unwrap();
+        // A tool package the loader does not recognize; `validate_tool_package`
+        // refuses it before any run ever starts.
+        std::fs::write(
+            &experiment_path,
+            text.replacen(
+                "\"backend_preset\": \"vllm\"",
+                "\"backend_preset\": \"vllm\", \"tool_package\": \"no_such_package\"",
+                1,
+            ),
+        )
+        .unwrap();
+        let report = check_dir(dir.path()).await;
+        assert!(!report.problems.is_empty(), "{:#?}", report.problems);
     }
 }

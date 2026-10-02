@@ -98,6 +98,7 @@ async fn renew_once(node: &EmbeddedNode, request_doc_id: &str, generation: &str)
 /// Explicit-time form used by model-driven conformance fixtures. Production
 /// callers always enter through `renew_once`, so the wall-clock read remains
 /// owned by this module and no process-global test clock can affect siblings.
+#[cfg(test)]
 pub(crate) async fn renew_once_at(
     node: &EmbeddedNode,
     request_doc_id: &str,

@@ -1660,28 +1660,6 @@ impl ConfigAccess {
         })
     }
 
-    /// Replay an embedded update through the canonical transaction owner.
-    /// Creates need their own stable identity and durable reconciliation.
-    pub(crate) async fn write_local_idempotent_update_response<'a>(
-        node: &'a EmbeddedNode,
-        operation: &'static str,
-        mutation: &'a str,
-    ) -> Result<defra_node::QueryResponse> {
-        graphql::ensure_mutation_document(mutation)?;
-        anyhow::ensure!(
-            !mutation.contains("create_"),
-            "idempotent update seam does not accept creates"
-        );
-        Self::transact_local_idempotent(
-            node,
-            None,
-            IdempotentTransactionRetry::Standard,
-            operation,
-            move |txn| Box::pin(async move { txn.execute_local_response(mutation).await }),
-        )
-        .await
-    }
-
     async fn write_local_inner(
         node: &EmbeddedNode,
         operation: WriteOperation,

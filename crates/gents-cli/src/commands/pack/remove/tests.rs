@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{GraphScopeArgs, PackDriftArgs, PackInstallArgs};
+use crate::commands::pack::test_support::fixture_dir;
 use crate::output_format::OutputFormat;
 use serde_json::json;
 
@@ -37,10 +38,15 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
     .await
 }
 
+/// The fixture assets pack, as a spec string `install` accepts.
+fn assets_fixture_spec() -> String {
+    fixture_dir("assets_fixture").to_str().unwrap().to_owned()
+}
+
 #[tokio::test]
 async fn a_bundled_assets_pack_removes_without_a_node() {
     let home = tempfile::tempdir().unwrap();
-    let installed = install(home.path(), "mailbox".to_owned()).await.unwrap();
+    let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let assets = Path::new(installed["installed_assets"].as_str().unwrap());
     assert!(assets.is_dir());
     assert!(
@@ -48,7 +54,9 @@ async fn a_bundled_assets_pack_removes_without_a_node() {
         "install never opens a node"
     );
 
-    let removed = remove_pkg(home.path(), "mailbox").await.unwrap();
+    let removed = remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap();
     assert!(!assets.exists());
     assert!(
         !home.path().join("data").exists(),
@@ -60,27 +68,23 @@ async fn a_bundled_assets_pack_removes_without_a_node() {
         "{removed}"
     );
 
-    let error = remove_pkg(home.path(), "mailbox").await.unwrap_err();
+    let error = remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap_err();
     assert!(format!("{error:#}").contains("is not installed"));
 }
 
 #[tokio::test]
 async fn an_assets_pack_from_a_directory_releases_its_archive() {
     let home = tempfile::tempdir().unwrap();
-    let mailbox = gents::pack::resolve_pack("mailbox").unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    for path in gents::pack::declared_paths(&mailbox.manifest) {
-        let target = dir.path().join(&path);
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        std::fs::write(&target, mailbox.asset(&path).unwrap()).unwrap();
-    }
-    let package = dir.path().to_str().unwrap().to_owned();
-    let installed = install(home.path(), package).await.unwrap();
+    let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let digest = installed["digest"].as_str().unwrap().to_owned();
     let store = gents::pack_store::PackStore::new(home.path());
     assert!(store.contains(&digest).unwrap());
 
-    remove_pkg(home.path(), "mailbox").await.unwrap();
+    remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap();
     assert!(
         !store.contains(&digest).unwrap(),
         "the imported archive is released once nothing references it"
@@ -90,11 +94,13 @@ async fn an_assets_pack_from_a_directory_releases_its_archive() {
 #[tokio::test]
 async fn a_cache_version_with_runs_is_retained_and_reported() {
     let home = tempfile::tempdir().unwrap();
-    let installed = install(home.path(), "mailbox".to_owned()).await.unwrap();
+    let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let assets = Path::new(installed["installed_assets"].as_str().unwrap());
     std::fs::create_dir(assets.join("runs")).unwrap();
 
-    let removed = remove_pkg(home.path(), "mailbox").await.unwrap();
+    let removed = remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap();
     assert!(
         assets.exists(),
         "a cache version with run history is kept, not deleted"
@@ -103,26 +109,30 @@ async fn a_cache_version_with_runs_is_retained_and_reported() {
     assert_eq!(retained.len(), 1, "{retained:?}");
     assert_eq!(retained[0]["reason"], "holds run history");
 
-    let error = remove_pkg(home.path(), "mailbox").await.unwrap_err();
+    let error = remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap_err();
     assert!(format!("{error:#}").contains("is not installed"));
 }
 
 #[tokio::test]
 async fn a_busy_cache_lock_fails_removal_loudly() {
     let home = tempfile::tempdir().unwrap();
-    let installed = install(home.path(), "mailbox".to_owned()).await.unwrap();
+    let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let assets = Path::new(installed["installed_assets"].as_str().unwrap());
     let parent = assets.parent().unwrap();
     let lock = super::super::lock_exclusive(parent).unwrap();
 
-    let error = remove_pkg(home.path(), "mailbox").await.unwrap_err();
+    let error = remove_pkg(home.path(), "fixture/assets_fixture")
+        .await
+        .unwrap_err();
     assert!(
         format!("{error:#}").contains("pack cache is in use"),
         "{error:#}"
     );
 
     drop(lock);
-    remove_pkg(home.path(), "mailbox")
+    remove_pkg(home.path(), "fixture/assets_fixture")
         .await
         .expect("the record was untouched by the failed attempt");
 }

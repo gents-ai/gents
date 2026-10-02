@@ -105,6 +105,8 @@ export function useShell(
       selectedSession: d.session,
       draft: d.draft,
       setDraft: d.setDraft,
+      chatFolder: d.chatFolder,
+      setChatFolder: d.setChatFolder,
       // `activeRequestId` is the newest durable request even after it has
       // completed. The tracking cursor is the one that retires at terminality
       // and therefore owns the composer/interrupt state.

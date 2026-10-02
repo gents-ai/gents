@@ -235,10 +235,10 @@ fn init_tool_package_shorthands_parse() {
 
 #[test]
 fn server_apply_root_flags_parse() {
-    let args = parse_server(&["--apply-root", "packs/pipeline", "--apply-prune"]);
+    let args = parse_server(&["--apply-root", "packs/subject_pack", "--apply-prune"]);
     assert_eq!(
         args.apply_root.as_deref(),
-        Some(std::path::Path::new("packs/pipeline"))
+        Some(std::path::Path::new("packs/subject_pack"))
     );
     assert!(args.apply_prune);
     let bare = parse_server(&[]);
@@ -579,7 +579,7 @@ fn parse_graph(argv: &[&str]) -> GraphCommand {
 
 #[test]
 fn pack_catalog_and_install_parse() {
-    assert!(matches!(parse_pack(&["list"]), PackCommand::List));
+    assert!(matches!(parse_pack(&["list"]), PackCommand::List(_)));
     assert!(
         matches!(parse_pack(&["show", "code_review"]), PackCommand::Show(args) if args.package == "code_review")
     );
@@ -642,12 +642,12 @@ fn pack_catalog_and_install_parse() {
 }
 
 #[test]
-fn graph_run_defaults_to_current_checkout() {
+fn graph_run_defaults_to_no_entry_and_empty_input() {
     match parse_graph(&["run", "code_review"]) {
         GraphCommand::Run(args) => {
-            assert_eq!(args.repo, std::path::PathBuf::from("."));
-            assert_eq!(args.base, "origin/main");
-            assert_eq!(args.head, "HEAD");
+            assert!(args.entry.is_none());
+            assert!(args.input.is_none());
+            assert!(args.field.is_empty());
         }
         _ => panic!("expected graph run"),
     }
@@ -658,19 +658,19 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
     match parse_graph(&[
         "run",
         "code_review",
-        "--repo",
-        "/tmp/repo",
-        "--base",
-        "origin/main",
-        "--head",
-        "HEAD",
+        "--entry",
+        "review",
+        "--input",
+        r#"{"base":"origin/main"}"#,
+        "--field",
+        "head=HEAD",
         "--watch",
     ]) {
         GraphCommand::Run(args) => {
             assert_eq!(args.package, "code_review");
-            assert_eq!(args.repo, std::path::PathBuf::from("/tmp/repo"));
-            assert_eq!(args.base, "origin/main");
-            assert_eq!(args.head, "HEAD");
+            assert_eq!(args.entry.as_deref(), Some("review"));
+            assert_eq!(args.input.as_deref(), Some(r#"{"base":"origin/main"}"#));
+            assert_eq!(args.field, vec!["head=HEAD".to_owned()]);
             assert!(args.watch);
         }
         _ => panic!("expected graph run"),
@@ -708,7 +708,7 @@ fn pack_seed_parses_pack_port_and_page() {
     let args = parse_pack(&[
         "scenario",
         "seed",
-        "packs/pipeline",
+        "packs/subject_pack",
         "--http-port",
         "19191",
         "--page-port",
@@ -720,7 +720,7 @@ fn pack_seed_parses_pack_port_and_page() {
     ]);
     match args {
         PackCommand::Scenario(PackScenarioCommand::Seed(seed)) => {
-            assert_eq!(seed.pack, "packs/pipeline");
+            assert_eq!(seed.pack, "packs/subject_pack");
             assert_eq!(seed.http_port, 19191);
             assert_eq!(seed.page_port, Some(19190));
             assert_eq!(seed.prompt.as_deref(), Some("review the diff"));
@@ -735,13 +735,13 @@ fn pack_init_parses_pack_and_home() {
     let args = parse_pack(&[
         "scenario",
         "init",
-        "packs/pipeline",
+        "packs/subject_pack",
         "--home",
         "/tmp/review-home",
     ]);
     match args {
         PackCommand::Scenario(PackScenarioCommand::Init(init)) => {
-            assert_eq!(init.pack, "packs/pipeline");
+            assert_eq!(init.pack, "packs/subject_pack");
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);
         }
@@ -766,11 +766,16 @@ fn pack_install_parses_registry_override() {
 
 #[test]
 fn pack_build_parses_dir_out_and_all() {
-    match parse_pack(&["build", "packs/mailbox", "--out", "/tmp/mailbox.tar.gz"]) {
+    match parse_pack(&[
+        "build",
+        "packs/subject_pack",
+        "--out",
+        "/tmp/mailbox.tar.gz",
+    ]) {
         PackCommand::Build(args) => {
             assert_eq!(
                 args.dir.as_deref(),
-                Some(std::path::Path::new("packs/mailbox"))
+                Some(std::path::Path::new("packs/subject_pack"))
             );
             assert_eq!(
                 args.out.as_deref(),
@@ -793,7 +798,9 @@ fn pack_build_parses_dir_out_and_all() {
         _ => panic!("expected pack build"),
     }
     // --all and an explicit directory are mutually exclusive.
-    assert!(Cli::try_parse_from(["gents", "pack", "build", "packs/mailbox", "--all"]).is_err());
+    assert!(
+        Cli::try_parse_from(["gents", "pack", "build", "packs/subject_pack", "--all"]).is_err()
+    );
 }
 
 #[test]

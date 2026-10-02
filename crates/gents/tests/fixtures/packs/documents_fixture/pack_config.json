@@ -1,0 +1,64 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "fixture-worker",
+      "display_name": "Fixture worker",
+      "description": "Reads the read-only host workspace and processes the fixture job.",
+      "context_id": "fixture-worker-context",
+      "inference_profile_id": "gents:inference-slot:worker"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-worker-context",
+      "display_name": "Fixture worker",
+      "system_prompt": "./agent_behaviors/fixture_worker/system_prompt.md",
+      "tools_id": "fixture-worker-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-worker-tools",
+      "display_name": "Fixture worker: read-only workspace",
+      "host": {
+        "root": "${GENTS_FIXTURE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        },
+        "bash": {
+          "mode": "Off"
+        }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "fixture-worker-task",
+      "display_name": "fixture-worker-task",
+      "behavior_id": "fixture-worker",
+      "prompt_template": "./tasks/fixture_worker_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "fixture-worker",
+      "display_name": "fixture-worker",
+      "source_collection": "FixtureJob",
+      "event_kind": "created",
+      "filter": "{ status: { _eq: \"ready\" } }"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "fixture-worker",
+      "display_name": "fixture-worker",
+      "task_id": "fixture-worker-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "fixture-worker"
+      },
+      "concurrency": "parallel"
+    }
+  ]
+}

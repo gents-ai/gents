@@ -26,11 +26,32 @@ pub fn load_pack_config(
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
         Ok(prompt)
     })?;
+    pin_pack_plugins(manifest, read_asset, &mut config)?;
+    super::inference::validate_pack_inference_authoring(manifest, &config)?;
+    Ok(config)
+}
+
+/// Qualifies and pins every plugin node of `config` that names one of the
+/// pack's own plugins by `name`: graph capabilities and plugin callbacks. The
+/// one place that decides it, so a pack read from a directory, a built archive
+/// or the install's staging folder runs the artifact the pack ships.
+pub fn pin_pack_plugins(
+    manifest: &PackManifest,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    config: &mut PackConfig,
+) -> Result<()> {
     for capability in &mut config.graph_capabilities {
         pin_pack_plugin(manifest, read_asset, capability)?;
     }
-    super::inference::validate_pack_inference_authoring(manifest, &config)?;
-    Ok(config)
+    for callback in &mut config.callbacks {
+        pin_callback_plugin(manifest, read_asset, callback)?;
+    }
+    for intent in &mut config.graph_intents {
+        for entry in &mut intent.entries {
+            pin_entry_prepare_plugin(manifest, read_asset, entry)?;
+        }
+    }
+    Ok(())
 }
 
 /// Decode canonical authoring for both distributed packs and local configuration.
@@ -146,19 +167,87 @@ fn pin_pack_plugin(
     else {
         return Ok(());
     };
-    if plugin.contains('/') {
+    let what = format!("graph capability {}", capability.capability_id);
+    if let Some((qualified, pinned)) =
+        own_plugin(manifest, read_asset, plugin, digest.as_deref(), &what)?
+    {
+        *digest = Some(pinned);
+        *plugin = qualified;
+    }
+    Ok(())
+}
+
+/// [`pin_pack_plugin`] for a callback: a plugin handler naming one of the
+/// pack's own plugins by `name` with an empty `digest` (or the shipped one)
+/// runs the artifact the pack ships.
+fn pin_callback_plugin(
+    manifest: &PackManifest,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    callback: &mut crate::document_config::Callback,
+) -> Result<()> {
+    let crate::document_config::CallbackHandler::Plugin { plugin, digest, .. } =
+        &mut callback.handler
+    else {
         return Ok(());
+    };
+    let what = format!("callback {}", callback.callback_id);
+    let authored = Some(digest.as_str()).filter(|digest| !digest.is_empty());
+    if let Some((qualified, pinned)) = own_plugin(manifest, read_asset, plugin, authored, &what)? {
+        *digest = pinned;
+        *plugin = qualified;
+    }
+    Ok(())
+}
+
+/// An entry that prepares its input on the host names one of the pack's own
+/// plugins the same way a plugin node does; pin it the same way, and validate
+/// its declared `input_schema` compiles within the load-time ceiling.
+fn pin_entry_prepare_plugin(
+    manifest: &PackManifest,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    entry: &mut crate::graph_pipeline::EntryBinding,
+) -> Result<()> {
+    if let Some(schema) = &entry.input_schema {
+        crate::graph_pipeline::validate_input_schema(schema)
+            .with_context(|| format!("entry {:?} input_schema", entry.name))?;
+    }
+    let Some(prepare) = &mut entry.prepare else {
+        return Ok(());
+    };
+    let what = format!("entry {:?} prepare", entry.name);
+    if let Some((qualified, pinned)) = own_plugin(
+        manifest,
+        read_asset,
+        &prepare.plugin,
+        prepare.digest.as_deref(),
+        &what,
+    )? {
+        prepare.digest = Some(pinned);
+        prepare.plugin = qualified;
+    }
+    Ok(())
+}
+
+/// The qualified name and `sha256:` digest of the pack's own plugin `plugin`,
+/// or `None` when `plugin` is already `namespace/name`. `authored`, when
+/// given, must be the digest the pack ships.
+fn own_plugin(
+    manifest: &PackManifest,
+    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+    plugin: &str,
+    authored: Option<&str>,
+    what: &str,
+) -> Result<Option<(String, String)>> {
+    if plugin.contains('/') {
+        return Ok(None);
     }
     let declared = manifest
         .metadata
         .plugins
         .iter()
-        .find(|declared| declared.name == *plugin)
+        .find(|declared| declared.name == plugin)
         .with_context(|| {
-            format!(
-                "graph capability {} runs plugin {plugin:?}, which this pack does not declare",
-                capability.capability_id
-            )
+            format!("{what} runs plugin {plugin:?}, which this pack does not declare")
         })?;
     let bytes = read_asset(&declared.artifact)
         .with_context(|| format!("reading plugin artifact {}", declared.artifact))?;
@@ -166,16 +255,16 @@ fn pin_pack_plugin(
         "sha256:{:x}",
         <sha2::Sha256 as sha2::Digest>::digest(&bytes)
     );
-    if let Some(authored) = digest.as_deref() {
+    if let Some(authored) = authored {
         anyhow::ensure!(
             authored == pinned,
-            "graph capability {} pins plugin {plugin:?} to {authored}, but the pack ships {pinned}",
-            capability.capability_id
+            "{what} pins plugin {plugin:?} to {authored}, but the pack ships {pinned}"
         );
     }
-    *digest = Some(pinned);
-    *plugin = format!("{}/{}", manifest.metadata.namespace, plugin);
-    Ok(())
+    Ok(Some((
+        format!("{}/{}", manifest.metadata.namespace, plugin),
+        pinned,
+    )))
 }
 
 fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {

@@ -789,7 +789,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 trigger_correlation.clone(),
                 trigger_context.source_fields.clone(),
                 false,
-                inference,
+                crate::plugin::approval::scope_interactive(
+                    request.execution_origin.as_deref() == Some("interactive"),
+                    inference,
+                ),
             ),
         )
         .await?;

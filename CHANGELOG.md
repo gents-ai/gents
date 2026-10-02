@@ -6,8 +6,22 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Plugins can declare bounded resource limits and read a directory explicitly
+  bound for one call. Increased installed resource limits require
+  `--grant-authority`; unchanged or reduced approved limits survive reinstall.
+  Calls enforce host ceilings and refresh admission when declarations change.
+
 ### Breaking
 
+- The official packs (`code_review`, `mailbox`, `pipeline`, `security_scan`,
+  `lsp_rust`, `grok_tui_port`, `repo_maintenance`, `defending_code`,
+  `eval_author`, `prompt_proposer`, `web_deep_research`, `graph_pipeline`,
+  `background_continuation`) no longer ship in the binary. They are published
+  from gents-ai/packs to the registry; `gents pack install gents/<name>`
+  (or the desktop Packs panel) fetches one into the home's store, and a bare
+  name resolves from the store first, then the registry. `gents pack list`
+  lists the home's store, so a fresh home lists nothing. The `make maintain`,
+  `defend`, `grok-port` and `defend-page` targets moved to gents-ai/packs.
 - Schema administration moves from `config schema` to the independent `schema`
   tool, explicitly granted by `Tools.built_ins.enable_schema_tool`. It exposes
   application collection creation and patches, version inspection/activation,
@@ -158,6 +172,25 @@ source consistency checks, not a separate runtime compatibility version.
   trial` and the watch. `eval watch --json` prints one object per render.
   Live fields appear only for runs started by a runner with this change.
 
+- A plugin can call a model through the host. A pack declares an optional
+  inference slot (`optional: true`, no behaviors) and names it in a plugin's
+  `model_slot`; while the slot is bound, the plugin's input carries
+  `"model_calls": true` and it may answer with `{"model_calls": {"requests":
+  [...], "state": ...}}`. The host sends each request (prompt and PNG or JPEG
+  images) to the bound profile's OpenAI-compatible chat completions endpoint at
+  temperature 0, within the backend's `max_concurrent`, and calls the plugin
+  again with `model_results` and its `state`. A call has at most 64 rounds of at
+  most 64 requests (512 requests and 32 MiB of answers in all) inside its wall
+  clock and fuel, and after two failed rounds in a row every further request
+  fails at once. The backend's `max_concurrent` holds across all calls in the
+  process. When the wall clock runs out during model requests, the plugin gets
+  one final round to finish with what it has. A binding whose profile or
+  backend is gone, disabled or lacks its key runs the plugin without a model
+  and says so (`gents plugin run` prints one sentence). A pack that uses
+  `optional` or `model_slot` needs this gents version. The endpoint and key
+  never enter the sandbox. Bind with `gents pack install --inference-slot SLOT=PROFILE`,
+  `gents plugin bind NAME PROFILE` or the desktop Packs panel; `gents plugin
+  unbind` and "Not set" leave it unbound, and the plugin runs as before.
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no

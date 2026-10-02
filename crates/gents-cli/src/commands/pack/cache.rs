@@ -11,11 +11,9 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use gents::file_lock::FileLock;
-use gents::pack::{resolve_pack, PackKind};
+use gents::pack::PackKind;
 
 use crate::cli::PackPruneArgs;
-
-use super::PackSource;
 
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
@@ -124,8 +122,12 @@ pub(super) fn release_cache_root(root: &Path) -> Result<CacheRelease> {
     Ok(CacheRelease::Removed)
 }
 
-pub(super) fn prune(args: PackPruneArgs) -> Result<()> {
-    let pack = PackSource::Bundled(resolve_pack(&args.package)?);
+/// Resolves through the same path `install` does: an explicit local pack,
+/// else an installed record's digest if the store still holds it, else the
+/// store's name index, else the registry. No bundled fallback.
+pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let pack = super::resolve_pack_source(&args.package, None, &home).await?;
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets
             || pack
@@ -137,7 +139,6 @@ pub(super) fn prune(args: PackPruneArgs) -> Result<()> {
         "pack {} has no materialized asset cache",
         pack.manifest().name
     );
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let current = super::asset_cache_root(&home, &pack)?;
     let parent = current.parent().context("pack cache parent")?;
     if !parent.is_dir() {
@@ -186,16 +187,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
-        let parent = tempfile::tempdir().unwrap();
-        let home = parent.path().join("missing-home");
+    #[tokio::test]
+    async fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
+        let home = tempfile::tempdir().unwrap();
+        // Store the fixture first, the way an install would have.
+        let _ = super::super::test_support::fixture_pack_source("review_graph", home.path());
         let error = prune(PackPruneArgs {
-            package: "code_review".to_owned(),
-            home: Some(home.clone()),
+            package: "fixture/review_graph".to_owned(),
+            home: Some(home.path().to_path_buf()),
         })
+        .await
         .unwrap_err();
         assert!(error.to_string().contains("no materialized asset cache"));
-        assert!(!home.exists());
+        assert!(!home
+            .path()
+            .join(gents::home::PACKS_DIR_NAME)
+            .join("review_graph")
+            .exists());
     }
 }

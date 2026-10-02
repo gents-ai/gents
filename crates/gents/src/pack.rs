@@ -14,22 +14,22 @@ pub use home_install::{
     forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
 };
 pub use inference::{
-    bind_pack_install_config, inspect_pack_inference_bindings, install_pack_documents,
-    preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
+    install_pack_documents, preview_pack_inference_bindings, PackInferenceBindingPreview,
+    PackInferenceProfileOption,
 };
 pub use installation::{
-    installed_packs, list_installed_packs, referenced_pack_digests, remove_pack, DriftPolicy,
-    InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity, RemoveReport, Retained,
+    installed_packs, list_installed_packs, read_installed_pack, referenced_pack_digests,
+    remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
+    RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
-pub use loader::{decode_pack_config, load_pack_config};
+pub use loader::{decode_pack_config, load_pack_config, pin_pack_plugins};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
 pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;
-
-include!(concat!(env!("OUT_DIR"), "/bundled_packs.rs"));
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,7 +96,13 @@ pub struct PackInferenceSlot {
     pub name: String,
     pub description: String,
     /// Canonical behavior IDs whose authored profile reference names this slot.
+    /// Empty for a slot only plugins use ([`PackPlugin::model_slot`]).
+    #[serde(default)]
     pub behaviors: Vec<String>,
+    /// A slot an install may leave unbound, and bind later. Only a slot that
+    /// names no behavior can be optional: an unbound behavior has no profile.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 /// Complete explicit slot-to-existing-profile selection supplied at install.
@@ -160,6 +166,105 @@ pub struct PackPlugin {
     /// `plugins/<name>/TOOL.md`. Absent, the description is all it gets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// Lets one directory (or a file inside one) be bound into a call, named
+    /// fresh at every call site rather than granted once at install: an
+    /// operator flag, or a path in a graph node's source document or a model's
+    /// tool arguments that must resolve inside a folder the operator allowed
+    /// (see `crate::plugin::allowed`). Absent means the plugin can never be
+    /// bound. No `deny_unknown_fields` on [`PackPlugin`] itself, so an
+    /// older gents ignores this field entirely on a manifest that declares
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_dir: Option<PluginDirBinding>,
+    /// Resource ceiling this plugin declares it needs, raising
+    /// [`crate::plugin::PluginBudget::for_plugin`]'s default rather than
+    /// capping a caller's own budget. Each field must not exceed this
+    /// module's host ceiling; see [`PackPlugin::validate`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<PluginLimits>,
+    /// The pack's inference slot this plugin may call a model through. While
+    /// the slot is bound for the installation the host adds `"model_calls":
+    /// true` to the plugin's input and answers its model requests (see
+    /// `crate::plugin::model_calls`); unbound, the plugin runs as it always
+    /// did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_slot: Option<String>,
+}
+
+/// How much of a bound directory a plugin uses. Ordered: `ReadWrite`
+/// includes `Read`, so a folder allowed `ReadWrite` also serves a reader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindAccess {
+    #[default]
+    Read,
+    ReadWrite,
+}
+
+impl BindAccess {
+    /// The manifest and operator spelling: `read` or `read_write`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::ReadWrite => "read_write",
+        }
+    }
+
+    fn is_read(&self) -> bool {
+        *self == Self::Read
+    }
+}
+
+impl std::str::FromStr for BindAccess {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> anyhow::Result<Self> {
+        match text {
+            "read" => Ok(Self::Read),
+            "read_write" => Ok(Self::ReadWrite),
+            other => anyhow::bail!("{other:?} is not an access; use read or read_write"),
+        }
+    }
+}
+
+/// Where a plugin's `bind_dir` binds: which input field carries the
+/// canonical bound path, what a consenting operator is shown for it, and
+/// how much of the directory the plugin uses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginDirBinding {
+    /// A property of `input_schema` (or of each `oneOf` branch that
+    /// declares properties): the argument
+    /// [`crate::plugin::PluginRunner::call_bound`] overwrites with the
+    /// canonical bound path, so a plugin can never point itself at a
+    /// different directory than the one its caller named.
+    pub input_field: String,
+    /// A second string property of `input_schema` that the call fills with the
+    /// canonical path the caller named, overwriting anything passed. For a
+    /// single file `input_field` holds a short-lived link to it, so a plugin
+    /// that hands the path on (a graph node writing the next stage's input)
+    /// reads the real one here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_field: Option<String>,
+    /// Shown to an operator deciding whether to bind this plugin.
+    pub description: String,
+    /// `read` (the default) or `read_write`. A caller may bind it only
+    /// where the operator allowed at least this much.
+    #[serde(default, skip_serializing_if = "BindAccess::is_read")]
+    pub access: BindAccess,
+}
+
+/// A plugin's declared resource ceiling: what
+/// [`crate::plugin::PluginBudget::for_plugin`] raises the default to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PluginLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mib: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_clock_secs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_mib: Option<u32>,
 }
 
 /// Largest `TOOL.md` a plugin may ship: a model reads it on every turn the
@@ -296,8 +401,121 @@ impl PackPlugin {
                 self.name
             );
         }
+        if let Some(bind_dir) = &self.bind_dir {
+            anyhow::ensure!(
+                !bind_dir.input_field.trim().is_empty(),
+                "plugin {:?} bind_dir.input_field must not be blank",
+                self.name
+            );
+            anyhow::ensure!(
+                !bind_dir.description.trim().is_empty(),
+                "plugin {:?} bind_dir needs a description; it is what an operator is shown",
+                self.name
+            );
+            anyhow::ensure!(
+                schema_declares_string_property(&self.input_schema, &bind_dir.input_field),
+                "plugin {:?} bind_dir.input_field {:?} must be a string property of \
+                 input_schema, or of at least one oneOf branch, since call_bound always \
+                 injects a string",
+                self.name,
+                bind_dir.input_field
+            );
+            if let Some(original) = &bind_dir.original_field {
+                anyhow::ensure!(
+                    original != &bind_dir.input_field
+                        && schema_declares_string_property(&self.input_schema, original),
+                    "plugin {:?} bind_dir.original_field {:?} must be a string property of \
+                     input_schema other than input_field",
+                    self.name,
+                    original
+                );
+            }
+            // The directory a caller binds is authority granted fresh at
+            // every call (see `crate::plugin::BoundDir`), never a standing
+            // one; a plugin that also declared its own `fs` grant would
+            // read both, which is not a ceiling this field can express, so
+            // the two are mutually exclusive.
+            let declares_fs = !matches!(
+                crate::plugin::authority::declared_manifold(self)?.fs,
+                afterburner_core::manifold::FsAccess::None
+            );
+            anyhow::ensure!(
+                !declares_fs,
+                "plugin {:?} declares both bind_dir and a manifold fs grant; a directory bound \
+                 per call and a standing filesystem grant cannot be expressed together",
+                self.name
+            );
+        }
+        if let Some(limits) = &self.limits {
+            if let Some(memory_mib) = limits.memory_mib {
+                anyhow::ensure!(
+                    (1..=crate::plugin::MAX_DECLARED_MEMORY_MIB).contains(&memory_mib),
+                    "plugin {:?} declares memory_mib {memory_mib}, but it {}",
+                    self.name,
+                    limit_range_reason(memory_mib, crate::plugin::MAX_DECLARED_MEMORY_MIB, "MiB")
+                );
+            }
+            if let Some(wall_clock_secs) = limits.wall_clock_secs {
+                anyhow::ensure!(
+                    (1..=crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS).contains(&wall_clock_secs),
+                    "plugin {:?} declares wall_clock_secs {wall_clock_secs}, but it {}",
+                    self.name,
+                    limit_range_reason(
+                        wall_clock_secs,
+                        crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS,
+                        "s"
+                    )
+                );
+            }
+            if let Some(max_output_mib) = limits.max_output_mib {
+                anyhow::ensure!(
+                    (1..=crate::plugin::MAX_DECLARED_OUTPUT_MIB).contains(&max_output_mib),
+                    "plugin {:?} declares max_output_mib {max_output_mib}, but it {}",
+                    self.name,
+                    limit_range_reason(
+                        max_output_mib,
+                        crate::plugin::MAX_DECLARED_OUTPUT_MIB,
+                        "MiB"
+                    )
+                );
+            }
+        }
         Ok(())
     }
+}
+
+/// Why a declared limit outside `1..=ceiling` was refused: the operator is
+/// told the actual reason (zero is never a valid budget) rather than always
+/// being told it is over the ceiling, which is only true above it.
+fn limit_range_reason(value: u32, ceiling: u32, unit: &str) -> String {
+    if value == 0 {
+        "must be at least 1".to_owned()
+    } else {
+        format!("must be at most the host ceiling of {ceiling} {unit}")
+    }
+}
+
+/// Whether `field` is a string property `input_schema` declares directly,
+/// or that at least one of its `oneOf` branches declares: `call_bound`
+/// always injects a string, so a field declared with another type could
+/// never be satisfied, and a field absent from every location declares
+/// nothing to bind.
+fn schema_declares_string_property(input_schema: &serde_json::Value, field: &str) -> bool {
+    let is_string_property = |schema: &serde_json::Value| {
+        schema
+            .get("properties")
+            .and_then(|properties| properties.get(field))
+            .and_then(|property| property.get("type"))
+            .and_then(serde_json::Value::as_str)
+            == Some("string")
+    };
+    if is_string_property(input_schema) {
+        return true;
+    }
+    input_schema
+        .get("oneOf")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|branches| branches.iter().any(is_string_property))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,49 +569,11 @@ pub struct PackInstallOptions {
     pub agent_did: String,
 }
 
-pub struct ResolvedPack {
-    pub manifest: PackManifest,
-    pub digest: String,
-}
-
 /// Return whether `name` is admissible at the pack catalog and source-pack
 /// boundaries. Keep callers on this owner instead of growing parallel name
 /// validators in adapters.
 pub fn is_valid_pack_name(name: &str) -> bool {
     asset_path::is_snake_case_name(name)
-}
-
-impl ResolvedPack {
-    pub fn load_config(
-        &self,
-        options: &PackInstallOptions,
-    ) -> Result<crate::document_config::PackConfig> {
-        self.load_config_with_environment(options, &|name| std::env::var(name).ok())
-    }
-
-    /// Load a bundled pack with an explicit interpolation source. Runtime
-    /// owners use this to bind known package inputs without mutating the
-    /// process environment shared by concurrent requests.
-    pub(crate) fn load_config_with_environment(
-        &self,
-        options: &PackInstallOptions,
-        environment: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<crate::document_config::PackConfig> {
-        load_pack_config(
-            &self.manifest,
-            options,
-            &|path| Ok(self.asset(path)?.to_vec()),
-            environment,
-        )
-    }
-
-    pub fn asset(&self, path: &str) -> Result<&'static [u8]> {
-        anyhow::ensure!(
-            path == "manifest.json" || self.manifest.metadata.assets.iter().any(|p| p == path),
-            "undeclared pack asset: {path}"
-        );
-        bundled_pack_asset(&self.manifest.name, path).context("missing bundled pack asset")
-    }
 }
 
 /// Whether a path may appear in a pack archive.
@@ -419,7 +599,7 @@ pub fn validate_manifest(name: &str, manifest: &PackManifest) -> Result<()> {
     validate_pack_manifest(manifest)
 }
 
-/// Distribution validation shared by bundled and source-pack loaders.
+/// Distribution validation shared by every pack loader.
 pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     anyhow::ensure!(
         manifest.manifest_version == 1,
@@ -429,6 +609,19 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
         "only document packs support package dependencies; nested graph/asset dependencies are unsupported"
     );
+    for dependency in &manifest.metadata.dependencies {
+        anyhow::ensure!(
+            !dependency.contains('@'),
+            "dependency {dependency:?} must be a coordinate (name or ns/name), not a pinned version"
+        );
+        let (namespace, name) = dependency
+            .split_once('/')
+            .unwrap_or((crate::pack_archive::DEFAULT_NAMESPACE, dependency.as_str()));
+        anyhow::ensure!(
+            is_valid_pack_name(namespace) && is_valid_pack_name(name),
+            "dependency {dependency:?} is not a valid pack coordinate"
+        );
+    }
     anyhow::ensure!(
         !manifest.description.trim().is_empty() && !manifest.metadata.authors.is_empty(),
         "pack needs description and authors"
@@ -511,8 +704,9 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             slot.name
         );
         anyhow::ensure!(
-            !slot.behaviors.is_empty(),
-            "inference slot {:?} must name at least one behavior",
+            slot.optional == slot.behaviors.is_empty(),
+            "inference slot {:?} must name at least one behavior, unless it is optional, and \
+             an optional slot names none",
             slot.name
         );
         let mut local = BTreeSet::new();
@@ -531,9 +725,43 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents
             || manifest.metadata.kind == PackKind::Graph
-            || manifest.metadata.inference_slots.is_empty(),
-        "asset and plugins packs cannot declare inference slots"
+            || manifest
+                .metadata
+                .inference_slots
+                .iter()
+                .all(|slot| slot.optional),
+        "asset and plugins packs can declare only optional inference slots"
     );
+    let mut plugin_slots = BTreeSet::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Some(slot) = &plugin.model_slot {
+            anyhow::ensure!(
+                slot_names.contains(slot.as_str()),
+                "plugin {:?} names the model slot {slot:?}, which the pack does not declare",
+                plugin.name
+            );
+            anyhow::ensure!(
+                manifest.metadata.inference_slots.iter().any(|declared| {
+                    declared.name == *slot && declared.optional && declared.behaviors.is_empty()
+                }),
+                "plugin {:?} model slot {slot:?} must be optional and have no behaviors",
+                plugin.name
+            );
+            plugin_slots.insert(slot.as_str());
+        }
+    }
+    for slot in manifest
+        .metadata
+        .inference_slots
+        .iter()
+        .filter(|slot| slot.optional)
+    {
+        anyhow::ensure!(
+            plugin_slots.contains(slot.name.as_str()),
+            "optional inference slot {:?} is used by no plugin",
+            slot.name
+        );
+    }
 
     match manifest.metadata.kind {
         PackKind::Documents | PackKind::Graph => {
@@ -637,79 +865,9 @@ impl PackDigester {
     }
 }
 
-pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
-    anyhow::ensure!(
-        BUNDLED_PACK_NAMES.contains(&name),
-        "unknown pack {name:?}; use gents pack list"
-    );
-    let bytes = bundled_pack_asset(name, "manifest.json").context("missing manifest")?;
-    let manifest: PackManifest = serde_json::from_slice(bytes)?;
-    validate_manifest(name, &manifest)?;
-    let digest = crate::graph_package::digest_assets(name, &declared_paths(&manifest))?;
-    Ok(ResolvedPack { manifest, digest })
-}
-
-pub fn pack_catalog() -> Result<Vec<PackManifest>> {
-    BUNDLED_PACK_NAMES
-        .iter()
-        .map(|name| Ok(resolve_pack(name)?.manifest))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn all_packs_resolve_with_declared_assets_and_dependencies() {
-        let catalog = pack_catalog().unwrap();
-        assert!(catalog.len() >= 11);
-        for pack in catalog {
-            for dependency in pack.metadata.dependencies {
-                resolve_pack(&dependency).unwrap();
-            }
-        }
-        assert!(resolve_pack("code-review").is_err());
-        assert!(resolve_pack("../code_review").is_err());
-        let proposer = resolve_pack("prompt_proposer").unwrap();
-        assert_eq!(
-            proposer.manifest.metadata.inference_slots[0].name,
-            "proposer"
-        );
-    }
-
-    #[test]
-    fn every_configuration_pack_declares_slots_and_authors_no_inference_documents() {
-        let options = PackInstallOptions {
-            agent_did: "did:key:catalog-owner".into(),
-        };
-        for manifest in pack_catalog().unwrap() {
-            if !matches!(
-                manifest.metadata.kind,
-                PackKind::Documents | PackKind::Graph
-            ) {
-                continue;
-            }
-            let pack = resolve_pack(&manifest.name).unwrap();
-            let config = pack
-                .load_config(&options)
-                .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
-            assert!(
-                !manifest.metadata.inference_slots.is_empty(),
-                "{}",
-                manifest.name
-            );
-            assert!(config.inference_backends.is_empty(), "{}", manifest.name);
-            assert!(config.inference_profiles.is_empty(), "{}", manifest.name);
-            assert!(config.inference_sampling.is_empty(), "{}", manifest.name);
-            assert!(config.inference_execution.is_empty(), "{}", manifest.name);
-            assert!(
-                config.inference_retry_policies.is_empty(),
-                "{}",
-                manifest.name
-            );
-        }
-    }
 
     /// A minimal, otherwise-valid plugin, so each test below changes
     /// exactly the one field it means to check.
@@ -723,6 +881,9 @@ mod tests {
             input_schema: serde_json::json!({"type": "object"}),
             manifold: None,
             instructions: None,
+            bind_dir: None,
+            limits: None,
+            model_slot: None,
         }
     }
 
@@ -801,5 +962,283 @@ mod tests {
                 .validate()
                 .unwrap_or_else(|error| panic!("{language:?} must be accepted: {error:#}"));
         }
+    }
+
+    fn plugins_pack(slots: serde_json::Value, model_slot: Option<&str>) -> PackManifest {
+        let mut plugin = serde_json::to_value(valid_plugin()).unwrap();
+        plugin["model_slot"] = serde_json::json!(model_slot);
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 1,
+            "name": "ocr",
+            "version": "1.0.0",
+            "description": "reads pages",
+            "authors": ["tests"],
+            "kind": "plugins",
+            "assets": ["README.md", "plugins/format_check.afb"],
+            "inference_slots": slots,
+            "plugins": [plugin],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plugin_may_name_an_optional_slot_the_pack_declares() {
+        let optional =
+            serde_json::json!([{"name": "remote_ocr", "description": "d", "optional": true}]);
+        validate_pack_manifest(&plugins_pack(optional.clone(), Some("remote_ocr"))).unwrap();
+        validate_pack_manifest(&plugins_pack(serde_json::json!([]), None)).unwrap();
+        let unknown = validate_pack_manifest(&plugins_pack(optional.clone(), Some("other")));
+        assert!(format!("{:#}", unknown.unwrap_err()).contains("does not declare"));
+        let unused = validate_pack_manifest(&plugins_pack(optional, None));
+        assert!(format!("{:#}", unused.unwrap_err()).contains("used by no plugin"));
+        let undeclared =
+            validate_pack_manifest(&plugins_pack(serde_json::json!([]), Some("remote_ocr")));
+        assert!(undeclared.is_err());
+    }
+
+    #[test]
+    fn generated_plugin_model_slots_require_optional_behavior_free_declarations() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+        for case in cases["model_slots"].as_array().unwrap() {
+            let slots = if case["declared"].as_bool().unwrap() {
+                serde_json::json!([{
+                    "name": "remote_ocr", "description": "d",
+                    "optional": case["optional"],
+                    "behaviors": if case["behavior_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
+                }])
+            } else {
+                serde_json::json!([])
+            };
+            let mut manifest = plugins_pack(slots, Some("remote_ocr"));
+            manifest.metadata.kind = PackKind::Documents;
+            manifest.config = Some("config.json".to_owned());
+            manifest.metadata.assets.push("config.json".to_owned());
+            assert_eq!(
+                validate_pack_manifest(&manifest).is_ok(),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_slot_without_behaviors_can_be_optional() {
+        let required = serde_json::json!([{"name": "remote_ocr", "description": "d"}]);
+        assert!(validate_pack_manifest(&plugins_pack(required, Some("remote_ocr"))).is_err());
+        let with_behavior = serde_json::json!([{
+            "name": "remote_ocr", "description": "d", "optional": true, "behaviors": ["scan"]
+        }]);
+        assert!(validate_pack_manifest(&plugins_pack(with_behavior, Some("remote_ocr"))).is_err());
+    }
+
+    fn bindable_plugin() -> PackPlugin {
+        PackPlugin {
+            input_schema: serde_json::json!({"type": "object", "properties": {"root": {"type": "string"}}}),
+            bind_dir: Some(PluginDirBinding {
+                input_field: "root".to_owned(),
+                original_field: None,
+                description: "the directory to scan".to_owned(),
+                access: BindAccess::Read,
+            }),
+            ..valid_plugin()
+        }
+    }
+
+    #[test]
+    fn bind_dir_access_defaults_to_read_and_names_only_read_or_read_write() {
+        let parse = |access: &str| {
+            serde_json::from_str::<PluginDirBinding>(&format!(
+                r#"{{"input_field":"root","description":"d"{access}}}"#
+            ))
+        };
+        assert_eq!(parse("").unwrap().access, BindAccess::Read);
+        assert_eq!(
+            parse(r#","access":"read_write""#).unwrap().access,
+            BindAccess::ReadWrite
+        );
+        assert!(parse(r#","access":"write""#).is_err());
+        let plain = serde_json::to_value(parse("").unwrap()).unwrap();
+        assert!(
+            plain.get("access").is_none(),
+            "the default is not written out"
+        );
+    }
+
+    #[test]
+    fn bind_dir_requires_its_input_field_to_be_a_schema_property() {
+        bindable_plugin()
+            .validate()
+            .expect("root is a declared property");
+
+        let mut missing = bindable_plugin();
+        missing.input_schema = serde_json::json!({"type": "object"});
+        let error = missing.validate().expect_err("root is not declared");
+        assert!(format!("{error:#}").contains("root"));
+    }
+
+    #[test]
+    fn bind_dir_original_field_is_a_second_string_property() {
+        let mut plugin = bindable_plugin();
+        plugin.input_schema = serde_json::json!({"type": "object", "properties": {
+            "root": {"type": "string"}, "root_original": {"type": "string"}}});
+        plugin.bind_dir.as_mut().unwrap().original_field = Some("root_original".into());
+        plugin
+            .validate()
+            .expect("a declared second string property");
+
+        plugin.bind_dir.as_mut().unwrap().original_field = Some("root".into());
+        assert!(plugin.validate().is_err(), "it cannot be the input field");
+        plugin.bind_dir.as_mut().unwrap().original_field = Some("elsewhere".into());
+        let error = plugin.validate().expect_err("it must be declared");
+        assert!(format!("{error:#}").contains("original_field"));
+    }
+
+    #[test]
+    fn bind_dir_accepts_a_property_declared_by_one_one_of_branch() {
+        // The secscan shape: `root` is required in one branch and absent
+        // from the other (which takes `files` instead), so requiring every
+        // branch to declare it would refuse a pack that never asked for
+        // that.
+        let mut plugin = bindable_plugin();
+        plugin.input_schema = serde_json::json!({
+            "oneOf": [
+                {"properties": {"root": {"type": "string"}}},
+                {"properties": {"files": {"type": "array"}}},
+            ]
+        });
+        plugin
+            .validate()
+            .expect("one branch declaring root as a string is enough");
+
+        plugin.input_schema = serde_json::json!({
+            "oneOf": [
+                {"properties": {"other": {"type": "string"}}},
+                {"properties": {"files": {"type": "array"}}},
+            ]
+        });
+        assert!(plugin.validate().is_err(), "no branch declares root at all");
+    }
+
+    #[test]
+    fn bind_dir_refuses_a_non_string_input_field() {
+        let mut plugin = bindable_plugin();
+        plugin.input_schema = serde_json::json!({
+            "type": "object", "properties": {"root": {"type": "integer"}}
+        });
+        let error = plugin
+            .validate()
+            .expect_err("call_bound always injects a string; a non-string field can never match");
+        assert!(format!("{error:#}").contains("string"));
+
+        plugin.input_schema = serde_json::json!({
+            "oneOf": [{"properties": {"root": {"type": "integer"}}}]
+        });
+        assert!(
+            plugin.validate().is_err(),
+            "a non-string oneOf branch property must also be refused"
+        );
+    }
+
+    #[test]
+    fn bind_dir_and_a_standing_fs_grant_are_mutually_exclusive() {
+        let mut plugin = bindable_plugin();
+        plugin.manifold = Some(serde_json::json!({
+            "fs": {"ReadOnly": ["/data"]}, "net": "None", "env": "None",
+            "crypto": false, "child_process": false
+        }));
+        let error = plugin
+            .validate()
+            .expect_err("bind_dir plus a standing fs grant must be refused");
+        assert!(format!("{error:#}").contains("bind_dir"));
+
+        // A manifold that asks for something else, but not fs, is fine.
+        let mut plugin = bindable_plugin();
+        plugin.manifold = Some(serde_json::json!({
+            "fs": "None", "net": "None", "env": {"AllowList": ["HOME"]},
+            "crypto": false, "child_process": false
+        }));
+        plugin
+            .validate()
+            .expect("a non-fs grant alongside bind_dir is fine");
+    }
+
+    #[test]
+    fn limits_must_not_exceed_the_host_ceiling() {
+        let mut plugin = valid_plugin();
+        plugin.limits = Some(PluginLimits {
+            memory_mib: Some(crate::plugin::MAX_DECLARED_MEMORY_MIB),
+            wall_clock_secs: Some(crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS),
+            max_output_mib: Some(crate::plugin::MAX_DECLARED_OUTPUT_MIB),
+        });
+        plugin.validate().expect("exactly the ceiling is fine");
+
+        plugin.limits = Some(PluginLimits {
+            memory_mib: Some(crate::plugin::MAX_DECLARED_MEMORY_MIB + 1),
+            ..Default::default()
+        });
+        let error = plugin
+            .validate()
+            .expect_err("over the ceiling must be refused");
+        assert!(format!("{error:#}").contains("memory_mib"));
+
+        plugin.limits = Some(PluginLimits {
+            wall_clock_secs: Some(crate::plugin::MAX_DECLARED_WALL_CLOCK_SECS + 1),
+            ..Default::default()
+        });
+        assert!(plugin.validate().is_err());
+
+        plugin.limits = Some(PluginLimits {
+            max_output_mib: Some(crate::plugin::MAX_DECLARED_OUTPUT_MIB + 1),
+            ..Default::default()
+        });
+        assert!(plugin.validate().is_err());
+    }
+
+    #[test]
+    fn a_zero_limit_is_refused_for_being_zero_not_for_being_over_the_ceiling() {
+        let mut plugin = valid_plugin();
+        plugin.limits = Some(PluginLimits {
+            memory_mib: Some(0),
+            ..Default::default()
+        });
+        let error = plugin.validate().expect_err("zero is never a valid budget");
+        let message = format!("{error:#}");
+        assert!(message.contains("at least 1"), "{message}");
+        assert!(!message.contains("ceiling"), "{message}");
+    }
+
+    fn documents_manifest(dependencies: Vec<&str>) -> PackManifest {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 1,
+            "name": "dep_test",
+            "version": "1.0.0",
+            "description": "a test documents pack",
+            "authors": ["gents"],
+            "kind": "documents",
+            "assets": ["README.md", "pack_config.json"],
+            "config": "pack_config.json",
+            "dependencies": dependencies,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn dependency_coordinates_are_bare_or_namespaced_names_never_pinned() {
+        validate_pack_manifest(&documents_manifest(vec!["acme/widget"])).unwrap();
+        validate_pack_manifest(&documents_manifest(vec!["widget"])).unwrap();
+
+        let pinned = validate_pack_manifest(&documents_manifest(vec!["acme/widget@1.0.0"]))
+            .expect_err("a dependency must not pin a version");
+        assert!(
+            format!("{pinned:#}").contains("must be a coordinate"),
+            "{pinned:#}"
+        );
+
+        let bad = validate_pack_manifest(&documents_manifest(vec!["Acme/Widget"]))
+            .expect_err("a dependency coordinate must be snake_case");
+        assert!(
+            format!("{bad:#}").contains("is not a valid pack coordinate"),
+            "{bad:#}"
+        );
     }
 }

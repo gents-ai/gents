@@ -162,6 +162,8 @@ export type DesktopApiAdapter = {
     /** An answer to the question on the `causedBySourceDocId` item; the
         bridge renders the content, so `content` is empty. */
     answer?: MailboxQuestionAnswer | null;
+    /** The folder the user works in for this chat. */
+    cwd?: string | null;
   }) => Promise<ChatSendResult>;
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;

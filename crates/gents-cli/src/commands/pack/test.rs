@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::pack::PackManifest;
-use gents::plugin::{PluginBudget, PluginRunner, PluginVerdict};
+use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -23,6 +23,12 @@ struct PluginCase {
     input: Value,
     #[serde(default)]
     expect: Option<Value>,
+    /// A directory to bind for this call, relative to the case file's own
+    /// directory; only a plugin declaring `bind_dir` may use it. `within`
+    /// for [`BoundDir::new`] is that same directory, so a case cannot bind
+    /// anything outside its own tree.
+    #[serde(default)]
+    bind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,11 +119,14 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
             plugin,
             &gents::plugin::authority::declared_manifold(plugin)?,
         )?;
-        // The budget a real call of this artifact gets: an interpreted
-        // plugin needs room to boot its runtime.
-        let budget = PluginBudget::for_artifact(
+        // The budget a real call of this artifact gets, raised to what the
+        // plugin itself declares in `limits`: an interpreted plugin needs
+        // room to boot its runtime, and a plugin like `review_evidence`
+        // needs more than the bare default to process real input.
+        let budget = PluginBudget::for_plugin(
             &afterburner_cloud::Afb::from_bytes(&artifact)
                 .with_context(|| format!("{} is not a readable plugin", plugin.artifact))?,
+            plugin,
         );
         let mut report = PluginCases {
             plugin: plugin.name.clone(),
@@ -141,8 +150,20 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
 
 fn run_case(runner: &PluginRunner, budget: &PluginBudget, path: &Path) -> Result<()> {
     let case: PluginCase = serde_json::from_slice(&std::fs::read(path)?)
-        .context("a case is {\"input\": ..., \"expect\": ...}")?;
-    let outcome = runner.call(&case.input, budget)?;
+        .context("a case is {\"input\": ..., \"expect\": ..., \"bind\": ...}")?;
+    let outcome = match &case.bind {
+        Some(relative) => {
+            let case_dir = path
+                .parent()
+                .context("the case file has no parent directory")?;
+            let bound =
+                BoundDir::new(&case_dir.join(relative), Some(case_dir)).with_context(|| {
+                    format!("binding {relative:?} for the case at {}", path.display())
+                })?;
+            runner.call_bound(&case.input, budget, &bound)?
+        }
+        None => runner.call(&case.input, budget)?,
+    };
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "{:?}: {}",
@@ -204,5 +225,19 @@ mod tests {
             "{:?}",
             results[0].failures
         );
+    }
+
+    /// A case's `bind` field binds the directory named relative to the case
+    /// file itself, so the fixture's `list_files` plugin sees exactly the
+    /// fixture tree checked in beside its own case file.
+    #[tokio::test]
+    async fn a_bind_case_binds_its_fixture_directory() {
+        let dir = crate::commands::plugin::testing::build_bind_plugin_fixture();
+        let results = run_plugin_cases_off_runtime(dir.path().to_owned())
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].passed, 1, "{:?}", results[0].failures);
+        assert!(results[0].failures.is_empty());
     }
 }

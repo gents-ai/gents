@@ -208,6 +208,8 @@ mod tests {
                 collection: "SessionInput".to_owned(),
                 schema: "SessionInput/v1".to_owned(),
                 input_contract: None,
+                input_schema: None,
+                prepare: None,
                 to: PortRef {
                     node_id: "score".to_owned(),
                     port: "input".to_owned(),
@@ -667,6 +669,7 @@ mod tests {
             OWNER.to_owned(),
             None,
             &config,
+            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
         )
         .iter()
         .any(|tool| tool.name() == PREVIEW_GRAPH_TOOL_NAME));
@@ -677,6 +680,7 @@ mod tests {
             OWNER.to_owned(),
             None,
             &config,
+            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
         )
         .iter()
         .any(|tool| tool.name() == PREVIEW_GRAPH_TOOL_NAME));
@@ -693,6 +697,7 @@ mod tests {
             OWNER.to_owned(),
             None,
             &config,
+            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
         )
         .iter()
         .any(|tool| tool.name() == PREVIEW_GRAPH_TOOL_NAME));

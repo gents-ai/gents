@@ -3,9 +3,6 @@
 /.DS_Store
 /crates/gents/proofs/.lake
 /crates/gents/proofs/build
-/packs/home/
-/packs/*.log
-/packs/*/runs/
 /vendor/
 
 # TLA+ tooling and TLC state output
@@ -32,3 +29,6 @@ __pycache__/
 
 # Worktree-local Gents runtime, credentials, and review artifacts
 /.gents/
+
+# Fixture plugin artifacts: every test builds its own
+crates/gents/tests/fixtures/packs/*/plugins/*.afb
