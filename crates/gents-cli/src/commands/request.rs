@@ -1545,6 +1545,21 @@ mod tests {
     }
 
     #[test]
+    fn blocked_after_the_reset_prints_no_countdown() {
+        let resets_at = show_now() - chrono::Duration::days(1);
+        let text = render_request_show_text(
+            &show_snapshot(Some(usage_limit(Some(resets_at)))),
+            show_now(),
+        );
+        assert!(
+            text.contains(
+                r#"blocked: usage limit on account "label-b", reset at 2026-09-24T16:00:00Z (passed)"#
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn blocked_without_a_reset_prints_reset_not_reported() {
         let text = render_request_show_text(&show_snapshot(Some(usage_limit(None))), show_now());
         assert!(
