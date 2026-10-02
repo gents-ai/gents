@@ -2141,6 +2141,49 @@ mod provider_account_tests {
         assert!(!json.contains("SECRET"));
     }
 
+    #[tokio::test]
+    async fn a_label_names_only_an_added_account_never_a_refreshed_one() {
+        let node = serving_node().await;
+        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let agent = "did:key:zAgent";
+        let pending = PendingOAuthCredentials::default();
+        let labelled = |label: Option<&str>, account: &str, token: &str| OAuthCredential {
+            label: label.map(str::to_string),
+            ..claude_sign_in(agent, Some(account), account, token)
+        };
+        for (label, account) in [(None, "acct-a"), (Some("Work"), "acct-b")] {
+            save_issued_credential(
+                &pending,
+                access(),
+                pending.issue(labelled(label, account, "SECRET-a")),
+            )
+            .await
+            .expect("store the account");
+        }
+
+        for (account, kept) in [("acct-b", "Work"), ("acct-a", "Claude")] {
+            let refreshed = SignInView::from(
+                &save_issued_credential(
+                    &pending,
+                    access(),
+                    pending.issue(labelled(Some("Spare"), account, "SECRET-c")),
+                )
+                .await
+                .expect("refresh the stored account"),
+            );
+            assert_eq!(refreshed.result, "refreshed");
+            assert_eq!(refreshed.label, kept);
+        }
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), agent)
+            .await
+            .unwrap();
+        let labels: Vec<String> = stored
+            .iter()
+            .map(gents::oauth_credential::effective_account_label)
+            .collect();
+        assert_eq!(labels, ["Claude", "Work"]);
+    }
+
     #[test]
     fn a_sign_in_label_is_trimmed_and_checked_before_the_browser() {
         assert_eq!(
