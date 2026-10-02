@@ -296,6 +296,22 @@ function backendAccount(accounts: ProviderAccountView[], b: InferenceBackendView
   return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
 }
 
+/* a backend as a profile sees it: a subscription backend serves only on its
+   enabled account and is named "<label> · <provider>"; others always serve */
+export function profileBackend(
+  accounts: ProviderAccountView[],
+  b: InferenceBackendView,
+) {
+  const sub = SUBSCRIPTION[b.providerKind ?? ""];
+  const account = backendAccount(accounts, b);
+  return {
+    provider: sub?.provider,
+    account,
+    usable: !sub || Boolean(account?.enabled),
+    label: sub && account ? `${account.label} · ${sub.title}` : (b.name ?? b.backendId),
+  };
+}
+
 /* what an account action leaves behind: the profiles that fail their next
    turn, in the CLI's words, and for remove which backends go with it (an
    added account's backends that no profile uses, as the CLI's remove) */

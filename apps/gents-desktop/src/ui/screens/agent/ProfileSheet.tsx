@@ -5,6 +5,7 @@ import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { EditorSheet } from "./EditorSheet";
 import { ProfileEditor, newProfileDocument } from "./ProfilesPanel";
+import { useAccounts } from "./InferencePanel";
 
 export function ProfileSheet({
   shell,
@@ -21,15 +22,19 @@ export function ProfileSheet({
   /* the backend it is added to (a backend's Add profile row) */
   backendId?: string;
 }) {
-  const [draft, setDraft] = useState(() => newProfileDocument(deployment, backendId));
-  const [openedFor, setOpenedFor] = useState(backendId);
-  if (open && openedFor !== backendId) {
-    setOpenedFor(backendId);
-    setDraft(newProfileDocument(deployment, backendId));
+  const { accounts } = useAccounts(shell, deployment.agentDid);
+  const [draft, setDraft] = useState(() =>
+    newProfileDocument(deployment, backendId, accounts),
+  );
+  /* drafted as it opens, from the accounts as they are by then */
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setDraft(newProfileDocument(deployment, backendId, accounts));
   }
   const close = (id: string | null) => {
     onClose(id);
-    setDraft(newProfileDocument(deployment, backendId));
+    setDraft(newProfileDocument(deployment, backendId, accounts));
   };
   return (
     <EditorSheet

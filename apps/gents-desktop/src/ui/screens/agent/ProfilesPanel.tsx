@@ -3,6 +3,7 @@ import { dependentsWarning } from "./dependents";
 import type {
   BackendProviderKind,
   DeploymentView,
+  ProviderAccountView,
   InferenceExecution,
   InferenceModelRecommendation,
   InferenceProfile,
@@ -21,7 +22,7 @@ import {
   TextRow,
 } from "./editors";
 import { ProfileSheet } from "./ProfileSheet";
-import { InferencePanel } from "./InferencePanel";
+import { InferencePanel, profileBackend, useAccounts } from "./InferencePanel";
 import { BackendSheet } from "./BackendSheet";
 import { Plus } from "lucide-react";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
@@ -74,16 +75,31 @@ function settingsForDraft(
   };
 }
 
-/* the profile a draft starts from: the first backend that advertises a
-   model, or the one asked for, and its first model */
+/* the profile a draft starts from: the one asked for if its account (if
+   any) is usable, else the first usable backend that advertises a model,
+   moved to its provider's default account (the first enabled one in the
+   resolver order the list keeps), and its first model */
 export function newProfileDocument(
   deployment: DeploymentView,
   backendId?: string,
+  accounts: ProviderAccountView[] = [],
 ): InferenceProfile {
+  const backends = deployment.inferenceBackends;
+  const usable = (b: InferenceBackendView) => profileBackend(accounts, b).usable;
+  const asked = backends.find((b) => b.backendId === backendId && usable(b));
+  const start =
+    asked ?? backends.find((b) => b.models.length > 0 && usable(b)) ?? backends[0];
+  const provider =
+    start && !asked ? profileBackend(accounts, start).provider : undefined;
+  const first = accounts.find(
+    (a) => a.provider === provider && a.enabled && !a.pendingSave,
+  );
   const backend =
-    deployment.inferenceBackends.find((b) => b.backendId === backendId) ??
-    deployment.inferenceBackends.find((b) => b.models.length > 0) ??
-    deployment.inferenceBackends[0];
+    (first &&
+      backends.find(
+        (b) => profileBackend(accounts, b).account?.credentialId === first.credentialId,
+      )) ||
+    start;
   return {
     agent_did: deployment.agentDid,
     profile_id: newId("profile"),
@@ -213,6 +229,7 @@ export function ProfileEditor({
       .find((backend) => backend.backendId === backendId)
       ?.advertisedModels?.find((model) => model.model_name === modelName.trim())
       ?.max_context_window ?? undefined;
+  const { accounts } = useAccounts(shell, deployment.agentDid);
   const d = useDraft(
     saved,
     async (next) => {
@@ -642,10 +659,16 @@ export function ProfileEditor({
             d.set("backendId", v);
             d.set("modelName", modelName);
           }}
-          items={deployment.inferenceBackends.map((b) => ({
-            value: b.backendId,
-            label: b.name ?? b.backendId,
-          }))}
+          /* a disabled or missing account's backend only while it is the current one */
+          items={deployment.inferenceBackends
+            .filter(
+              (b) =>
+                b.backendId === d.draft.backendId || profileBackend(accounts, b).usable,
+            )
+            .map((b) => ({
+              value: b.backendId,
+              label: profileBackend(accounts, b).label,
+            }))}
           createLabel="New backend…"
           onCreate={() =>
             new Promise<string | null>((resolve) => {
