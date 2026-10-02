@@ -52,6 +52,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub(crate) mod bounded;
 mod command;
+mod native_filter;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
 pub(crate) mod query;
 pub(crate) mod render;
@@ -138,7 +139,7 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}})).into()),
+            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }
     }
 }

@@ -43,7 +43,7 @@ pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_ne,_gt,_lt,_ge,_le,_in,_nin,_like; compose with _and,_or,_not. Relationship selections, fulltext/BM25 and vector search are not exposed by this command family or bounded query tools; use the authenticated native GraphQL interface for those shapes."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Relationship selections, fulltext/BM25 and vector search are not exposed by this command family or bounded query tools; use the authenticated native GraphQL interface for those shapes."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
         _ => bail!("unknown query command; call query with {{\"argv\":[\"help\"]}}"),
@@ -181,6 +181,9 @@ pub async fn execute_command(
         limit,
     };
     build_query(&params, scope)?;
+    if let Some(filter) = params.filter.as_ref() {
+        super::native_filter::validate_filter(access, collection, filter).await?;
+    }
     let query = if command == "count" {
         let filter = params
             .filter

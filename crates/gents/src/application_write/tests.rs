@@ -169,6 +169,15 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
         .unwrap_err()
         .to_string()
         .contains("0 targets"));
+    for operation in ["update", "delete"] {
+        let malformed = call(
+            operation,
+            json!({"status":"sent"}),
+            Some(json!({"and":[{"eq":{"reference":"one"}}]})),
+        );
+        let error = tool.execute(&malformed).await.unwrap_err();
+        assert!(format!("{error:#}").contains("unknown filter field/operator"));
+    }
     node.shutdown().await;
 }
 
