@@ -19,7 +19,8 @@
         "minWidth": 640,
         "minHeight": 720,
         "titleBarStyle": "Transparent",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "zoomHotkeysEnabled": true
       }
     ],
     "security": {
