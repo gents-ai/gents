@@ -922,6 +922,90 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderAccountRenameRequest {
+    pub agent_did: String,
+    pub credential_id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderAccountRemoveRequest {
+    pub agent_did: String,
+    pub credential_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderUsageReadRequest {
+    pub agent_did: String,
+    /// `false` when the panel opens (the reads the runtime allows on open),
+    /// `true` for an explicit Refresh.
+    pub refresh: bool,
+    /// Only this credential provider's accounts, e.g. `claude-subscription`.
+    pub provider: Option<String>,
+}
+
+/// One backend's stored usage as the panel draws it: visible windows, or the
+/// note saying why there is no number, and this read's outcome.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackendUsageView {
+    pub backend_id: String,
+    pub windows: Vec<UsageWindowView>,
+    pub plan: Option<String>,
+    /// Only when `windows` is empty: `unknown`, `not reported`, `no cap on
+    /// this key` or `not verified`.
+    pub note: Option<String>,
+    pub read_at: Option<String>,
+    pub read_error: Option<String>,
+    /// The runtime's outcome for this read, e.g. `skipped_until_refresh` or
+    /// `unavailable: <reason>`; `None` when the runtime ran none for it.
+    pub read: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UsageWindowView {
+    pub label: String,
+    pub window_minutes: Option<i64>,
+    pub used_pct: f64,
+    pub resets_at: Option<String>,
+    /// `header`, `endpoint` or `error`.
+    pub source: String,
+    pub observed_at: String,
+    /// Older than the staleness bound: the last known value.
+    pub last_known: bool,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
+    _app: AppHandle<R>,
+    _request: ProviderAccountRenameRequest,
+    _state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    Err(BridgeError::untyped("not implemented"))
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
+    _app: AppHandle<R>,
+    _request: ProviderAccountRemoveRequest,
+    _state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    Err(BridgeError::untyped("not implemented"))
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_usage_read(
+    _request: ProviderUsageReadRequest,
+    _state: State<'_, DesktopAppState>,
+) -> Result<Vec<BackendUsageView>, BridgeError> {
+    Err(BridgeError::untyped("not implemented"))
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProviderAccountRetrySaveRequest {
     pub agent_did: String,
