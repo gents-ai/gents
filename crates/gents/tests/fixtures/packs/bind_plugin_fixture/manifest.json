@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "name": "bind_plugin_fixture",
+  "version": "0.1.0",
+  "description": "Fixture plugins pack for bind_dir tests: lists files under an operator-bound directory.",
+  "namespace": "fixture",
+  "authors": ["gents"],
+  "tags": [],
+  "kind": "plugins",
+  "assets": ["README.md", "plugins/list_files.afb"],
+  "plugins": [
+    {
+      "name": "list_files",
+      "description": "Lists the file names directly under the bound directory, sorted.",
+      "artifact": "plugins/list_files.afb",
+      "source": "plugins/list_files",
+      "language": "rust",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["root"],
+        "properties": {
+          "root": {"type": "string"}
+        }
+      },
+      "bind_dir": {
+        "input_field": "root",
+        "description": "The directory to list"
+      }
+    }
+  ]
+}

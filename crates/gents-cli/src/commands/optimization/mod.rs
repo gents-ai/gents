@@ -28,13 +28,13 @@ use crate::cli::{
     OptimizationCommand, OptimizationDigestArgs, OptimizationRmArgs, OptimizationRunArgs,
     OptimizationShowArgs, PolicyArg, ProposerArg,
 };
-use crate::commands::eval::init::install_pack_slot;
 use crate::commands::eval::init::turn::LiveTurn;
+use crate::commands::eval::init::{install_pack_slot, pack_config};
 use crate::commands::eval::{
     cancel_on_ctrl_c, default_id, follow_progress, load_policy, source_commit, source_dirty,
     write_json, Deps, EvalContext, Progress,
 };
-use crate::commands::pack::resolve_subject_pack;
+use crate::commands::pack::{resolve_pack_source, resolve_subject_pack, single_slot};
 
 use behavior_proposer::BehaviorProposer;
 
@@ -121,9 +121,10 @@ fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
     ))
 }
 
-/// The proposer behavior of a built-in pack, installed into the home with
-/// its one inference slot bound to `--proposer-profile` or the default
-/// profile, asked on a fresh session of the served home.
+/// The proposer behavior of a pack (resolved like `gents pack install`),
+/// installed into the home with its one inference slot bound to
+/// `--proposer-profile` or the default profile, asked on a fresh session of
+/// the served home.
 async fn behavior_proposer(
     ctx: &EvalContext,
     args: &OptimizationRunArgs,
@@ -132,14 +133,8 @@ async fn behavior_proposer(
     subject_dir: &Path,
     subject_behavior: &str,
 ) -> Result<BehaviorProposer<LiveTurn>> {
-    let resolved = gents::pack::resolve_pack(pack)?;
-    let manifest = &resolved.manifest;
-    let [slot] = manifest.metadata.inference_slots.as_slice() else {
-        anyhow::bail!(
-            "pack {pack} declares {} inference slots; a proposer pack declares one",
-            manifest.metadata.inference_slots.len()
-        );
-    };
+    let resolved = resolve_pack_source(pack, args.registry.as_deref(), &ctx.home_dir).await?;
+    let slot = single_slot(resolved.manifest())?;
     let behavior_id = proposer_behavior_id(pack, slot, behavior)?;
     let config = pack_config(&resolved, &ctx.owner)?;
     ensure_tool_less(&config, &ctx.owner, &behavior_id)?;
@@ -153,7 +148,7 @@ async fn behavior_proposer(
     let profile = args.proposer_profile.clone().unwrap_or_else(|| {
         default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&ctx.owner))
     });
-    install_pack_slot(&ctx.access, &ctx.owner, pack, &slot.name, &profile).await?;
+    install_pack_slot(&ctx.access, &ctx.owner, &resolved, &slot.name, &profile).await?;
     Ok(BehaviorProposer::with_preamble(
         LiveTurn {
             graphql: graphql.clone(),
@@ -166,22 +161,6 @@ async fn behavior_proposer(
         },
         preamble,
     ))
-}
-
-/// The documents `install_pack_slot` installs for `owner`, before binding.
-fn pack_config(
-    pack: &gents::pack::ResolvedPack,
-    owner: &str,
-) -> Result<gents::document_config::PackConfig> {
-    gents::pack::load_pack_config(
-        &pack.manifest,
-        &gents::pack::PackInstallOptions {
-            agent_did: owner.to_owned(),
-        },
-        &|path| pack.asset(path).map(Vec::from),
-        &|_name| None,
-    )
-    .with_context(|| format!("loading the {} pack", pack.manifest.name))
 }
 
 /// A proposer is tool-less, so a proposal draws only on the turns it is
@@ -320,17 +299,9 @@ async fn run(
     let proposer_arg = args.proposer.as_ref().context(
         "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer behavior:<pack>[:<behavior>]",
     )?;
-    let subject = resolve_subject_pack(
-        &ctx.home_dir,
-        &args.subject.pack,
-        args.registry.as_deref(),
-        true,
-    )
-    .await?;
-    let baseline_pack = subject
-        .directory()
-        .context("the subject pack did not resolve to a directory")?
-        .to_path_buf();
+    let subject =
+        resolve_subject_pack(&ctx.home_dir, &args.subject.pack, args.registry.as_deref()).await?;
+    let baseline_pack = subject.directory().to_path_buf();
     let behavior_id = match &args.subject.behavior {
         Some(behavior) => behavior.clone(),
         None => subject.default_behavior()?,
@@ -659,6 +630,7 @@ mod tests {
             name: "proposer".to_owned(),
             description: String::new(),
             behaviors: vec!["terse".to_owned(), "verbose".to_owned()],
+            optional: false,
         };
         let error = proposer_behavior_id("p", &slot, None).unwrap_err();
         assert_eq!(
@@ -676,6 +648,7 @@ mod tests {
         );
         let one = gents::pack::PackInferenceSlot {
             behaviors: vec!["terse".to_owned()],
+            optional: false,
             ..slot
         };
         assert_eq!(proposer_behavior_id("p", &one, None).unwrap(), "terse");
@@ -683,15 +656,14 @@ mod tests {
 
     #[test]
     fn the_subject_preamble_is_the_dossier_naming_the_subject_tools() {
-        let pipeline =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
-        let preamble = subject_preamble(&pipeline, "exp-stage1", &JobTarget::Context).unwrap();
+        let pipeline = crate::commands::pack::test_support::fixture_dir("documents_fixture");
+        let preamble = subject_preamble(&pipeline, "fixture-worker", &JobTarget::Context).unwrap();
         assert!(
             preamble.starts_with("# Subject\n\n## Identity"),
             "{preamble}"
         );
         assert_eq!(preamble.matches("# Subject").count(), 1, "{preamble}");
-        assert!(preamble.contains("write_experiment_finding"), "{preamble}");
+        assert!(preamble.contains("type FixtureJob"), "{preamble}");
         assert!(
             preamble.ends_with(
                 "The instruction you will rewrite is this behavior's system prompt. \
@@ -700,7 +672,7 @@ mod tests {
             "{preamble}"
         );
         let task =
-            subject_preamble(&pipeline, "exp-stage1", &JobTarget::Task("plan".into())).unwrap();
+            subject_preamble(&pipeline, "fixture-worker", &JobTarget::Task("plan".into())).unwrap();
         assert!(
             task.contains("the prompt template of its task \"plan\""),
             "{task}"
@@ -720,6 +692,10 @@ mod tests {
     async fn a_proposer_behavior_with_tools_is_refused_before_anything_runs() {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
+        let proposer = format!(
+            "behavior:{}",
+            crate::commands::pack::test_support::fixture_dir("documents_fixture").display()
+        );
         let error = optimization(
             &fixture,
             &[
@@ -728,18 +704,18 @@ mod tests {
                 "--subject",
                 pack.as_str(),
                 "--proposer",
-                "behavior:lsp_rust",
+                proposer.as_str(),
             ],
         )
         .await
         .unwrap_err();
         let message = error.to_string();
         assert!(
-            message.starts_with("proposer behavior lsp-coder has tools [")
+            message.starts_with("proposer behavior fixture-worker has tools [")
                 && message.ends_with("]; a proposer must be tool-less"),
             "{error:#}"
         );
-        assert!(message.contains("\"lsp\""), "{message}");
+        assert!(message.contains("\"read_file\""), "{message}");
     }
 
     /// What the resolved surface alone would miss: CLI tools a server started
@@ -748,9 +724,11 @@ mod tests {
     fn cli_tools_a_target_outside_the_pack_or_skills_are_refused() {
         use serde_json::json;
         const OWNER: &str = "did:key:z6MkproposerOwner";
-        let pack = gents::pack::resolve_pack("prompt_proposer").unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let pack =
+            crate::commands::pack::test_support::fixture_pack_source("slot_fixture", home.path());
         let base = pack_config(&pack, OWNER).unwrap();
-        ensure_tool_less(&base, OWNER, "prompt-proposer").unwrap();
+        ensure_tool_less(&base, OWNER, "fixture-author").unwrap();
 
         let mut cli = base.clone();
         cli.tools[0]
@@ -780,11 +758,11 @@ mod tests {
             (subagent, "\"agent_new\""),
             (skills, "has skills [\"review\"]"),
         ] {
-            let error = ensure_tool_less(&config, OWNER, "prompt-proposer")
+            let error = ensure_tool_less(&config, OWNER, "fixture-author")
                 .unwrap_err()
                 .to_string();
             assert!(
-                error.starts_with("proposer behavior prompt-proposer has ")
+                error.starts_with("proposer behavior fixture-author has ")
                     && error.contains(offending)
                     && error.ends_with("; a proposer must be tool-less"),
                 "{error}"
@@ -792,11 +770,15 @@ mod tests {
         }
     }
 
-    /// `prompt_proposer` passes the tool-less check and reaches the next one.
+    /// A tool-less proposer pack passes the tool-less check and reaches the next one.
     #[tokio::test]
     async fn a_behavior_proposer_needs_a_served_home() {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
+        let proposer = format!(
+            "behavior:{}",
+            crate::commands::pack::test_support::fixture_dir("slot_fixture").display()
+        );
         let error = optimization(
             &fixture,
             &[
@@ -805,7 +787,7 @@ mod tests {
                 "--subject",
                 pack.as_str(),
                 "--proposer",
-                "behavior:prompt_proposer",
+                proposer.as_str(),
             ],
         )
         .await
@@ -816,6 +798,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_proposer_pack_missing_offline_fails_in_one_sentence() {
+        let fixture = Fixture::new().await;
+        let pack = fixture.pack_arg();
+        let error = optimization(
+            &fixture,
+            &[
+                "run",
+                DEFINITION,
+                "--subject",
+                pack.as_str(),
+                "--proposer",
+                "behavior:absent_proposer",
+                "--registry",
+                "http://127.0.0.1:9",
+            ],
+        )
+        .await
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.starts_with("gents/absent_proposer is not in the pack store of ")
+                && message.contains("could not be reached")
+                && !message.contains('\n'),
+            "{message}"
+        );
+    }
+
     /// The pack install writes documents, so a job the request or policy
     /// refuses never reaches the proposer (here, the served-home check
     /// before the install).
@@ -823,6 +833,10 @@ mod tests {
     async fn a_refused_job_is_refused_before_the_proposer_is_built() {
         let fixture = Fixture::new().await;
         let pack = fixture.pack_arg();
+        let proposer = format!(
+            "behavior:{}",
+            crate::commands::pack::test_support::fixture_dir("slot_fixture").display()
+        );
         std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
         let policy = fixture.ctx.home_dir.join("policy.json");
         std::fs::write(
@@ -851,7 +865,7 @@ mod tests {
                     "--subject",
                     pack.as_str(),
                     "--proposer",
-                    "behavior:prompt_proposer",
+                    proposer.as_str(),
                     "--rounds",
                     "2",
                     flag,

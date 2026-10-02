@@ -1049,7 +1049,7 @@ async fn malformed_reserved_graph_trigger_cannot_publish() {
 }
 
 #[tokio::test]
-async fn bundled_package_root_binding_survives_task_metadata_changes() {
+async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     use crate::config_client::{ConfigAccess, ConfigApplyTxn};
     use crate::graph_package::GraphPackageInstallBindings;
     use crate::test_support::install_test_graph_package;
@@ -1070,7 +1070,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
         ]),
     };
     let access = ConfigAccess::Local(node.clone());
-    let installed = install_test_graph_package(&access, identity.did(), "code_review", &bindings)
+    let installed = install_test_graph_package(&access, identity.did(), "review_graph", &bindings)
         .await
         .unwrap();
     activate_graph_revision(
@@ -1084,7 +1084,8 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     .await
     .unwrap();
     let run = start_graph_run(&node, None, identity.did(), &installed.graph_id, None, "review",
-        serde_json::json!({"repository_path": "/tmp/repo", "base_ref": "base-sha", "head_ref": "head-sha", "lens_count": "4", "lens_min": "4", "lens_max": "4", "focus": "authorization"})).await.unwrap();
+        serde_json::json!({"repository_path": "/tmp/repo", "base_ref": "base-sha", "head_ref": "head-sha", "lens_count": "4", "lens_min": "4", "lens_max": "4", "focus": "authorization"}),
+        EntryInputOrigin::Operator).await.unwrap();
     let trigger =
         runtime::graph_trigger_id(&installed.revision_digest, "entry:review:recon:job").unwrap();
     let route = execute(

@@ -1788,6 +1788,7 @@ mod tests {
                 categories: categories.into_iter().collect(),
                 ..Default::default()
             },
+            std::sync::Arc::new(gents::plugin::executor::PluginExecutor::default()),
         );
         let config = tools
             .iter()

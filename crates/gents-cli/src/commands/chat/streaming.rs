@@ -246,6 +246,7 @@ pub(crate) async fn stream_turn_progress(
     timeout_secs: u64,
     poll_secs: u64,
     verbose: bool,
+    approvals_home: Option<&std::path::Path>,
 ) -> Result<RequestOutputEnvelope> {
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
@@ -256,6 +257,21 @@ pub(crate) async fn stream_turn_progress(
     let mut indicator = WorkingIndicator::start_if_tty();
 
     loop {
+        if let Some(home) = approvals_home {
+            let session = submitted.session_id.clone();
+            let home = home.to_path_buf();
+            if super::approvals::has_pending(&home, &session)? {
+                clear_indicator(&mut indicator).await;
+                tokio::task::spawn_blocking(move || {
+                    super::approvals::answer_pending(&home, &session, |request| {
+                        super::approvals::ask_on_terminal(request)
+                    })
+                })
+                .await??;
+                // The time spent answering is not the turn being idle.
+                last_progress_at = tokio::time::Instant::now();
+            }
+        }
         let query = chat_progress_query(submitted);
         let response = post_graphql(graphql, &query).await?;
         let rows = response

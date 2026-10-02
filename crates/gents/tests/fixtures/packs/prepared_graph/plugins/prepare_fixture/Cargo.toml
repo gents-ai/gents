@@ -1,0 +1,10 @@
+[workspace]
+
+[package]
+name = "prepare_fixture"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "prepare_fixture"
+path = "source/main.rs"

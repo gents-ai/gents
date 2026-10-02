@@ -169,3 +169,34 @@ pub async fn desktop_pack_whoami(
         run(move || packs::whoami(home, registry)).await
     }
 }
+
+#[tauri::command]
+pub async fn desktop_pack_plugin_slots(
+    state: State<'_, DesktopAppState>,
+) -> Result<Value, BridgeError> {
+    {
+        let home = home(&state)?;
+        run(move || packs::plugin_slots(home)).await
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginBindRequest {
+    /// An installed plugin, as `namespace/name`.
+    pub plugin: String,
+    /// The inference profile to call through; absent leaves the slot unbound.
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+#[tauri::command]
+pub async fn desktop_pack_plugin_bind(
+    request: PluginBindRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<Value, BridgeError> {
+    {
+        let home = home(&state)?;
+        run(move || packs::bind_plugin_slot(home, request.plugin, request.profile)).await
+    }
+}

@@ -30,6 +30,13 @@ pub(crate) enum RecoveryResult {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Model-driven conformance supplies explicit selections to the production recovery owner."
+    )
+)]
 pub(crate) enum RecoverySelectionChoice {
     NoMessage,
     MessageKey(String),

@@ -10,9 +10,6 @@ use crate::commands::chat::{
 use crate::request_helpers::wait_for_terminal_response;
 use crate::{create_agent_request, RequestSubmitOptions};
 
-/// The behavior the `eval_author` pack installs.
-pub(crate) const AUTHOR_BEHAVIOR: &str = "eval-author";
-
 #[async_trait::async_trait]
 pub(crate) trait Turn {
     /// Send one user turn on the author's session; return the author's text.
@@ -67,6 +64,7 @@ impl Turn for LiveTurn {
                 self.timeout_secs,
                 self.poll_secs,
                 false,
+                None,
             )
             .await?
         };

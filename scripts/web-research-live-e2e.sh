@@ -57,6 +57,7 @@ fi
 export GENTS_WEB_RESEARCH_MCP_ENDPOINT=http://127.0.0.1:19213/mcp
 export GENTS_WEB_RESEARCH_ENDPOINT="${GENTS_CLI_E2E_MODEL_ENDPOINT}"
 export GENTS_WEB_RESEARCH_MODEL="${GENTS_CLI_E2E_MODEL_NAME}"
+export GENTS_WEB_RESEARCH_PACK="${GENTS_WEB_RESEARCH_PACK:-gents/web_deep_research}"
 
 cd "${repo_dir}"
 cargo test -p gents-cli --features live-e2e --test cli_live_suite \

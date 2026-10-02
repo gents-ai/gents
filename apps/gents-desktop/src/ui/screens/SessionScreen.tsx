@@ -54,6 +54,7 @@ import {
   type ToolStepStatus,
 } from "@gents/ui/conversation";
 import type { Shell } from "@/hooks/useShell";
+import { ChatFolderPicker } from "./ChatFolderPicker";
 import { anchor, scrollViewport, useFollowTail, useOlderPages } from "@/lib/scroll";
 import { useResizableWidth } from "@/lib/resizable";
 import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
@@ -1041,12 +1042,18 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             }
             onKeyDown={startSlash.onKeyDown}
             leading={
-              <BehaviorPicker
-                shell={shell}
-                deployment={deployment}
-                behaviorId={choice.behaviorId}
-                onChange={choice.setPicked}
-              />
+              <>
+                <BehaviorPicker
+                  shell={shell}
+                  deployment={deployment}
+                  behaviorId={choice.behaviorId}
+                  onChange={choice.setPicked}
+                />
+                <ChatFolderPicker
+                  folder={shell.chatFolder}
+                  onChange={shell.setChatFolder}
+                />
+              </>
             }
             sending={shell.sending}
             placeholder={
@@ -1413,6 +1420,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       />
                     }
                     onKeyDown={slash.onKeyDown}
+                    leading={
+                      <ChatFolderPicker
+                        folder={shell.chatFolder}
+                        onChange={shell.setChatFolder}
+                      />
+                    }
                     sending={shell.sending || inFlight}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={

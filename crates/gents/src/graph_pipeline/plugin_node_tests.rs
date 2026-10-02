@@ -44,6 +44,8 @@ fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
                 collection: "EchoInput".to_owned(),
                 schema: "EchoInput/v1".to_owned(),
                 input_contract: None,
+                input_schema: None,
+                prepare: None,
                 to: at("input"),
             }],
             results: vec![ResultContract {
@@ -153,6 +155,7 @@ async fn run_echo_graph(
         None,
         "input",
         json!({ "payload": "hello" }),
+        EntryInputOrigin::Operator,
     )
     .await
     .unwrap();
@@ -264,6 +267,7 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
         None,
         "input",
         json!({ "payload": "hello" }),
+        EntryInputOrigin::Operator,
     )
     .await
     .unwrap();
@@ -379,6 +383,7 @@ async fn seed_interrupted_echo_invocation(
         None,
         "input",
         json!({ "payload": "hello" }),
+        EntryInputOrigin::Operator,
     )
     .await
     .unwrap();
@@ -543,6 +548,7 @@ async fn a_run_started_before_its_routes_are_noticed_still_runs() {
         None,
         "input",
         json!({ "payload": "hello" }),
+        EntryInputOrigin::Operator,
     )
     .await
     .unwrap();

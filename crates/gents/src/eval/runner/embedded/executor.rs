@@ -28,11 +28,13 @@ use crate::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::defra_node::EmbeddedNode;
-use crate::document_config::{InferenceSampling, PackConfig};
-use crate::eval::runner::embedded::home::{boot_runtime, EmbeddedHome, RUNTIME_READY_TIMEOUT};
+use crate::document_config::{InferenceSampling, PackConfig, TriggerObservation};
+use crate::eval::runner::embedded::home::{
+    boot_runtime, EmbeddedHome, RunningRuntime, RUNTIME_READY_TIMEOUT,
+};
 use crate::eval::runner::embedded::live::LiveObserver;
 use crate::eval::runner::embedded::observe::{
-    await_terminal, classify_request_outcome, collect_request_evidence,
+    await_terminal, classify_request_outcome, collect_request_evidence, poll_request,
     request_evidence_from_query_data, InferenceCallEvidence, RequestEvidence, TerminalObservation,
 };
 use crate::eval::runner::executor::{
@@ -194,7 +196,7 @@ impl EmbeddedExecutor {
             spec,
             &home,
             &locator,
-            run_stages(spec, &cancel, &home, &locator, &workspace, &ready),
+            run_stages(spec, &cancel, &home, &runtime, &locator, &workspace, &ready),
         )
         .await;
 
@@ -630,6 +632,7 @@ fn bind_inference_slots(
         .metadata
         .inference_slots
         .iter()
+        .filter(|slot| !slot.optional)
         .map(|slot| (slot.name.clone(), profile_id.to_owned()))
         .collect();
     bind_pack_install_config(manifest, config, &bindings)
@@ -876,6 +879,7 @@ async fn run_stages(
     spec: &TrialSpec,
     cancel: &CancellationToken,
     home: &EmbeddedHome,
+    runtime: &RunningRuntime,
     locator: &TrialLocator,
     workspace: &Path,
     ready: &watch::Receiver<Reconciled>,
@@ -910,7 +914,10 @@ async fn run_stages(
         }
         let stage = &reviewed;
         spec.progress.stage_started(&stage.stage_id);
-        let evidence = run_stage(spec, cancel, home, locator, workspace, stage, ready).await;
+        let evidence = run_stage(
+            spec, cancel, home, runtime, locator, workspace, stage, ready,
+        )
+        .await;
         let mut summary = spec.review.summarize(&evidence);
         summary["usage"] =
             serde_json::to_value(usage_of(&evidence.inference_calls)).unwrap_or(Value::Null);
@@ -929,12 +936,13 @@ async fn run_stage(
     spec: &TrialSpec,
     cancel: &CancellationToken,
     home: &EmbeddedHome,
+    runtime: &RunningRuntime,
     locator: &TrialLocator,
     workspace: &Path,
     stage: &StageSpec,
     ready: &watch::Receiver<Reconciled>,
 ) -> StageEvidence {
-    let observed = submit_and_observe(spec, cancel, home, locator, stage, ready).await;
+    let observed = submit_and_observe(spec, cancel, home, runtime, locator, stage, ready).await;
     StageEvidence {
         stage_id: stage.stage_id.clone(),
         request_id: observed.request_id,
@@ -1001,10 +1009,13 @@ async fn submit_and_observe(
     spec: &TrialSpec,
     cancel: &CancellationToken,
     home: &EmbeddedHome,
+    runtime: &RunningRuntime,
     locator: &TrialLocator,
     stage: &StageSpec,
     ready: &watch::Receiver<Reconciled>,
 ) -> ObservedStage {
+    // Seed writes can fire a trigger before submission finishes.
+    let stage_started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let deadline = Duration::from_secs(stage.deadline_secs);
     let started = Instant::now();
     // A seed stage spends part of the deadline waiting for the fire; the
@@ -1040,15 +1051,36 @@ async fn submit_and_observe(
         }
     };
 
-    let cancelled;
+    let watch_started = std::time::Instant::now();
+    let stopped;
     let observed = tokio::select! {
         observed = await_terminal(&home.node, &request_id, remaining, GRACE, POLL) => {
-            cancelled = false;
+            stopped = false;
             observed
         }
         () = cancel.cancelled() => {
-            cancelled = true;
+            stopped = true;
             interrupt_and_settle(&home.node, &request_id).await
+        }
+        // Nothing is left to settle the request, so its row would only be
+        // watched until the stage deadline and read as a deadline. One last
+        // read first, unbounded: the request may have settled within the same
+        // poll, and a slow read must not turn that into a dead runtime.
+        () = runtime_exited(runtime) => {
+            let row = poll_request(&home.node, &request_id).await.ok().flatten();
+            let settled = row.and_then(|row| {
+                let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
+                    .ok()
+                    .filter(|state| state.is_terminal())?;
+                Some(TerminalObservation {
+                    terminal_state,
+                    session_id: row.session_id,
+                    interrupted_on_deadline: false,
+                    elapsed: watch_started.elapsed(),
+                })
+            });
+            stopped = settled.is_none();
+            settled.ok_or_else(|| anyhow!("the trial runtime exited before the request settled"))
         }
     };
     let observed = match observed {
@@ -1064,7 +1096,7 @@ async fn submit_and_observe(
         }
     };
 
-    let settling = stage.settle && !cancelled && observed.is_some();
+    let settling = stage.settle && !stopped && !runtime.handle.is_finished() && observed.is_some();
     if settling {
         let budget = deadline.saturating_sub(started.elapsed());
         tokio::select! {
@@ -1114,7 +1146,7 @@ async fn submit_and_observe(
     let failure_kind = if prod_failed {
         Some(OutcomeKind::Infrastructure)
     } else {
-        stage_failure_kind(observed.as_ref(), collected, cancelled, &evidence)
+        stage_failure_kind(observed.as_ref(), collected, stopped, &evidence)
     };
     if settling && collected {
         if let Err(error) =
@@ -1141,7 +1173,19 @@ async fn submit_and_observe(
         request_id: Some(request_id),
         prods,
         terminal_state: observed.as_ref().map(|observed| observed.terminal_state),
-        failure_kind,
+        failure_kind: match failure_kind {
+            None => {
+                trigger_failure(
+                    &home.node,
+                    &locator.trial_agent_did,
+                    &stage_started,
+                    &spec.trial_id,
+                    &stage.stage_id,
+                )
+                .await
+            }
+            failed => failed,
+        },
         evidence,
     }
 }
@@ -1323,18 +1367,19 @@ async fn extend_with_later_requests(
 /// arrived, so it is [`OutcomeKind::Infrastructure`] and the slot is owed
 /// another attempt. An observation that failed outright is the same kind of
 /// fault — the watch of the request broke, which says nothing about what the
-/// request did. Cancellation stays on the runtime boundary: there the request
-/// itself is what did not finish.
+/// request did. A stage stopped by cancellation or by its runtime exiting
+/// stays on the runtime boundary: there the request itself is what did not
+/// finish, and the subject can bring a runtime down.
 fn stage_failure_kind(
     observed: Option<&TerminalObservation>,
     collected: bool,
-    cancelled: bool,
+    stopped: bool,
     evidence: &RequestEvidence,
 ) -> Option<OutcomeKind> {
     if !collected {
         return Some(OutcomeKind::Infrastructure);
     }
-    if cancelled {
+    if stopped {
         return Some(OutcomeKind::Runtime);
     }
     match observed {
@@ -1372,6 +1417,79 @@ fn provider_reason(
         .iter()
         .filter_map(|call| call.failure_reason.as_deref())
         .find_map(provider_reason_from_failure)
+}
+
+/// A trigger in the trial home whose last fire errored fails a stage that
+/// otherwise completed.
+///
+/// The pack under evaluation owns its triggers and the task templates they
+/// render, so the subject can cause the error and it counts against it as
+/// [`OutcomeKind::Runtime`]. A status that could not be read leaves the pass
+/// unproven, which is the harness failing: [`OutcomeKind::Infrastructure`].
+///
+/// Only errors attempted since `since` (the stage's start, in the trigger
+/// writers' whole-second RFC 3339 form) count. A trigger writes its status
+/// asynchronously after the fire, so an error recorded after the stage is read
+/// is attributed to the next stage, and one recorded after the final stage is
+/// not attributed at all.
+async fn trigger_failure(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    since: &str,
+    trial_id: &str,
+    stage_id: &str,
+) -> Option<OutcomeKind> {
+    let agent_did = escape_graphql_string(agent_did);
+    let since = escape_graphql_string(since);
+    let query = format!(
+        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _eq: "error" }}, last_attempt_at: {{ _geq: "{since}" }} }}) {{ trigger_id last_attempt_at last_status last_error }} }}"#
+    );
+    let errored = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
+        .await
+    {
+        Ok(response) => match errored_triggers(response.data.as_ref()) {
+            Some(errored) => errored,
+            None => {
+                tracing::warn!(
+                    trial_id = %trial_id,
+                    stage_id = %stage_id,
+                    "eval trial trigger status read had no Trigger list or a row that did not parse"
+                );
+                return Some(OutcomeKind::Infrastructure);
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                trial_id = %trial_id,
+                stage_id = %stage_id,
+                "eval trial trigger status could not be read"
+            );
+            return Some(OutcomeKind::Infrastructure);
+        }
+    };
+    if errored.is_empty() {
+        return None;
+    }
+    tracing::warn!(
+        triggers = ?errored,
+        trial_id = %trial_id,
+        stage_id = %stage_id,
+        "an eval trial trigger errored; the stage fails"
+    );
+    Some(OutcomeKind::Runtime)
+}
+
+/// The `Trigger` rows of a status read, or `None` when the response holds no
+/// list of them: a read that returned nothing to read is not "no errors".
+fn errored_triggers(data: Option<&Value>) -> Option<Vec<TriggerObservation>> {
+    serde_json::from_value(data?.get("Trigger")?.clone()).ok()
+}
+
+async fn runtime_exited(runtime: &RunningRuntime) {
+    while !runtime.handle.is_finished() {
+        tokio::time::sleep(POLL).await;
+    }
 }
 
 /// Cancellation reaches a running stage through the same latch a deadline
@@ -2201,6 +2319,7 @@ mod tests {
                 &TrialSpec::empty_for_tests("t1"),
                 &cancel,
                 &home,
+                &exited_runtime(),
                 &locator,
                 &stage,
                 &never_ready,
@@ -2590,10 +2709,12 @@ mod tests {
             ],
         };
 
+        let runtime = exited_runtime();
         let evidence = run_stage(
             &spec,
             &CancellationToken::new(),
             &home,
+            &runtime,
             &locator,
             &workspace,
             &stage,
@@ -2617,6 +2738,242 @@ mod tests {
             evidence.captures
         );
         home.node.shutdown().await;
+    }
+
+    /// The trial's runtime was already gone before the stage started, as an
+    /// OOM-killed or crashed runtime is.
+    #[tokio::test]
+    async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let home = EmbeddedHome::create_temp("runtime-exit").await.unwrap();
+        let locator = TrialLocator {
+            trial_agent_did: home.did().to_string(),
+            session_id: "s-1".to_string(),
+            home_hint: None,
+        };
+        let stage = StageSpec {
+            stage_id: "only".to_string(),
+            prompt: "hello".to_string(),
+            seed: None,
+            deadline_secs: 600,
+            settle: false,
+            continuation: None,
+            review_previous: false,
+            captures: Vec::new(),
+        };
+        let runtime = exited_runtime();
+
+        let evidence = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_stage(
+                &TrialSpec {
+                    behavior_id: "subject".to_string(),
+                    ..TrialSpec::empty_for_tests("t1")
+                },
+                &CancellationToken::new(),
+                &home,
+                &runtime,
+                &locator,
+                &workspace,
+                &stage,
+                &watch::channel(None).1,
+            ),
+        )
+        .await
+        .expect("a dead runtime is not waited out to the stage deadline");
+
+        assert!(evidence.request_id.is_some(), "the stage was submitted");
+        assert_eq!(evidence.failure_kind, Some(OutcomeKind::Runtime));
+        assert_eq!(evidence.provider_reason, None);
+        home.node.shutdown().await;
+    }
+
+    /// A trigger that fired and one that errored, in the same home: only the
+    /// error fails a stage that otherwise completed.
+    #[tokio::test]
+    async fn an_errored_trigger_fails_a_completed_stage_as_runtime() {
+        let home = EmbeddedHome::create_temp("trigger-error").await.unwrap();
+        let since = "2026-06-01T00:00:00Z";
+        assert_eq!(
+            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            None
+        );
+
+        seed_trigger(&home, "healthy", "fired", None, since).await;
+        assert_eq!(
+            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            None
+        );
+
+        seed_trigger(
+            &home,
+            "broken",
+            "error",
+            Some("template did not render"),
+            since,
+        )
+        .await;
+        assert_eq!(
+            trigger_failure(&home.node, home.did(), since, "t1", "only").await,
+            Some(OutcomeKind::Runtime)
+        );
+        assert_eq!(
+            trigger_failure(&home.node, "did:key:zSomeoneElse", since, "t1", "only").await,
+            None,
+            "another principal's trigger is not this trial's"
+        );
+        home.node.shutdown().await;
+    }
+
+    #[test]
+    fn a_trigger_status_read_without_a_trigger_list_is_not_a_clean_read() {
+        assert_eq!(errored_triggers(None), None);
+        assert_eq!(errored_triggers(Some(&json!({}))), None);
+        assert_eq!(errored_triggers(Some(&json!({"Trigger": null}))), None);
+        assert_eq!(
+            errored_triggers(Some(&json!({"Trigger": []}))),
+            Some(Vec::new())
+        );
+    }
+
+    /// Rows are read as [`crate::document_config::TriggerObservation`]s: a
+    /// row that is not one is a status that could not be read.
+    #[test]
+    fn a_trigger_row_that_is_not_a_trigger_observation_is_not_a_clean_read() {
+        assert_eq!(
+            errored_triggers(Some(
+                &json!({"Trigger": [{"trigger_id": "t", "last_status": 5}]})
+            )),
+            None
+        );
+    }
+
+    /// An error a trigger recorded before the stage started belongs to an
+    /// earlier stage, not to this one.
+    #[tokio::test]
+    async fn a_trigger_error_from_before_the_stage_does_not_fail_it() {
+        let home = EmbeddedHome::create_temp("trigger-stale").await.unwrap();
+        seed_trigger(&home, "stale", "error", Some("old"), "2026-01-01T00:00:00Z").await;
+
+        assert_eq!(
+            trigger_failure(&home.node, home.did(), "2026-06-01T00:00:00Z", "t1", "only").await,
+            None
+        );
+        home.node.shutdown().await;
+    }
+
+    async fn seed_trigger(
+        home: &EmbeddedHome,
+        trigger_id: &str,
+        status: &str,
+        error: Option<&str>,
+        last_attempt_at: &str,
+    ) {
+        let agent_did = escape_graphql_string(home.did());
+        let trigger_id = escape_graphql_string(trigger_id);
+        let status = escape_graphql_string(status);
+        let last_attempt_at = escape_graphql_string(last_attempt_at);
+        let last_error = error.map_or("null".to_string(), |error| {
+            format!("\"{}\"", escape_graphql_string(error))
+        });
+        let mutation = format!(
+            r#"mutation {{ create_Trigger(input: {{ trigger_id: "{trigger_id}", agent_did: "{agent_did}", task_id: "task", enabled: true, last_status: "{status}", last_error: {last_error}, last_attempt_at: "{last_attempt_at}" }}) {{ _docID }} }}"#
+        );
+        let response =
+            crate::ConfigAccess::write_local_response(&home.node, "eval.test.trigger", &mutation)
+                .await
+                .unwrap();
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
+
+    /// The request settled and then the runtime exited, both inside one poll
+    /// of the stage's watch: the stage is what the request did, not a dead
+    /// runtime. The runtime pauses the clock as it exits, so any bound on the
+    /// last read of the request expires while that read waits on the node, as
+    /// it would on a loaded host.
+    #[tokio::test]
+    async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let home = EmbeddedHome::create_temp("settled-then-exit")
+            .await
+            .unwrap();
+        let locator = TrialLocator {
+            trial_agent_did: home.did().to_string(),
+            session_id: "s-1".to_string(),
+            home_hint: None,
+        };
+        let stage = StageSpec {
+            stage_id: "only".to_string(),
+            prompt: "hello".to_string(),
+            seed: None,
+            deadline_secs: 600,
+            settle: false,
+            continuation: None,
+            review_previous: false,
+            captures: Vec::new(),
+        };
+        // Completes the request once it is written, pauses the clock, exits.
+        let node = home.node.clone();
+        let runtime = RunningRuntime {
+            shutdown: tokio::sync::watch::channel(false).0,
+            handle: tokio::spawn(async move {
+                loop {
+                    let response = crate::ConfigAccess::write_local_response(
+                            &node,
+                            "eval.test.complete",
+                            r#"mutation { update_AgentRequest(filter: {lifecycle_state: {_ne: "completed"}}, input: {lifecycle_state: "completed"}) { _docID } }"#,
+                        )
+                        .await.unwrap();
+                    let updated = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data["update_AgentRequest"].as_array().map(Vec::len));
+                    assert!(response.errors.is_empty(), "{:?}", response.errors);
+                    if updated.unwrap_or(0) > 0 {
+                        tokio::time::pause();
+                        return Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }),
+            agent_did: String::new(),
+        };
+
+        // No outer timeout: on the paused clock it would expire during the
+        // first node read after the runtime exits.
+        let evidence = run_stage(
+            &TrialSpec {
+                behavior_id: "subject".to_string(),
+                ..TrialSpec::empty_for_tests("t1")
+            },
+            &CancellationToken::new(),
+            &home,
+            &runtime,
+            &locator,
+            &workspace,
+            &stage,
+            &watch::channel(None).1,
+        )
+        .await;
+
+        assert_eq!(
+            evidence.terminal_state,
+            Some(RequestLifecycleState::Completed)
+        );
+        assert_eq!(evidence.failure_kind, None);
+        home.node.shutdown().await;
+    }
+
+    fn exited_runtime() -> RunningRuntime {
+        RunningRuntime {
+            shutdown: tokio::sync::watch::channel(false).0,
+            handle: tokio::spawn(async { Err(anyhow!("runtime killed")) }),
+            agent_did: String::new(),
+        }
     }
 
     async fn seed_request(home: &EmbeddedHome, request_id: &str) {

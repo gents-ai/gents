@@ -176,12 +176,23 @@ pub(super) async fn execute(
         Ok(record) => record,
         Err(error) => return deny(node, invocation, &format!("{error:#}")).await,
     };
+    let input = crate::callback::documents::strip_secret_fields(source.clone());
+    let bound = match plugins
+        .bind_input(
+            &record,
+            &input,
+            &crate::plugin::executor::BindContext::headless(None),
+        )
+        .await
+    {
+        Ok(bound) => bound,
+        Err(reason) => return deny(node, invocation, &reason).await,
+    };
     let mut journal = journal;
     advance(&mut journal, 0, ActionJournalState::Validated);
     advance(&mut journal, 0, ActionJournalState::Executing);
     persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
-    let input = crate::callback::documents::strip_secret_fields(source.clone());
     // The invocation carries the correlation it was caused by; a grouped
     // delivery's input is an array, so the source itself cannot say.
     let correlation = invocation.caused_by_correlation.clone().or_else(|| {
@@ -191,7 +202,11 @@ pub(super) async fn execute(
             .and_then(Value::as_str)
             .map(str::to_owned)
     });
-    let failure = match plugins.call(&record, input).await {
+    let called = match bound {
+        Some(bound) => plugins.call_bound(&record, input, bound).await,
+        None => plugins.call(&record, input).await,
+    };
+    let failure = match called {
         Err(error) => Some(format!("{error:#}")),
         Ok(call) if call.outcome.verdict != PluginVerdict::Success => Some(format!(
             "plugin {} did not return a result: {}",
@@ -390,12 +405,37 @@ mod tests {
     /// A node with a `Job` source, an `Echoed` output, and a binding that runs
     /// the echo plugin on every created Job; returns the created Job's id.
     async fn run_echo_binding(digest: &str) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
-        let (home, _) = crate::plugin::tests::executor::installed_echo();
+        run_binding(digest, None, false, "").await
+    }
+
+    /// [`run_echo_binding`] where the plugin declares `bind_dir` on `path`
+    /// when `bind` is set, the operator allows `allowed` read-only when
+    /// given, and the Job names `job_path`.
+    async fn run_binding(
+        digest: &str,
+        allowed: Option<&std::path::Path>,
+        bind: bool,
+        job_path: &str,
+    ) -> (std::sync::Arc<EmbeddedNode>, tempfile::TempDir) {
+        let (home, mut record) = crate::plugin::tests::executor::installed_echo();
+        if bind {
+            record.declaration.bind_dir = Some(crate::pack::PluginDirBinding {
+                input_field: "path".into(),
+                original_field: Some("origin".into()),
+                description: "a directory".into(),
+                access: Default::default(),
+            });
+            crate::plugin::store::write_record(home.path(), &record).unwrap();
+        }
+        if let Some(allowed) = allowed {
+            crate::plugin::allowed::add(home.path(), allowed, crate::pack::BindAccess::Read)
+                .unwrap();
+        }
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node.add_schema(
-            "type Job { job_run: String text: String }
-             type Echoed { job_run: String text: String run_ref: String }",
+            "type Job { job_run: String text: String path: String origin: String }
+             type Echoed { job_run: String text: String path: String origin: String run_ref: String }",
         )
         .await
         .unwrap();
@@ -406,7 +446,7 @@ mod tests {
                     handler:{{kind:"plugin",plugin:"team/plugin",digest:"{digest}",correlation_field:"job_run",
                         outputs:[{{name:"echoed",collection:"Echoed",schema:"Echoed/v1",correlation_field:"run_ref",cardinality:"one",required:true}}]}}}}) {{_docID}}
                 create_EventSource(input: {{event_source_id:"jobs",agent_did:"{owner}",source_collection:"Job",event_kind:"created"}}) {{_docID}}
-                create_CallbackBinding(input: {{binding_id:"bind-echo",agent_did:"{owner}",event_source_id:"jobs",callback_id:"cb-echo",input_fields:["job_run","text"],enabled:true}}) {{_docID}}
+                create_CallbackBinding(input: {{binding_id:"bind-echo",agent_did:"{owner}",event_source_id:"jobs",callback_id:"cb-echo",input_fields:["job_run","text","path","origin"],enabled:true}}) {{_docID}}
             }}"#
         );
         let response = node.execute(&setup).await;
@@ -421,9 +461,10 @@ mod tests {
         engine.plugins = std::sync::Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
         engine.reconcile_bindings().await;
         let created = node
-            .execute(
-                r#"mutation { create_Job(input: {job_run: "run-7", text: "hello"}) { _docID } }"#,
-            )
+            .execute(&format!(
+                r#"mutation {{ create_Job(input: {{job_run: "run-7", text: "hello", path: {}}}) {{ _docID }} }}"#,
+                serde_json::to_string(job_path).unwrap()
+            ))
             .await;
         let doc_id = crate::graphql::single_mutation_document(&created, "create_Job")
             .unwrap()
@@ -444,10 +485,10 @@ mod tests {
         let (_, record) = crate::plugin::tests::executor::installed_echo();
         let (node, _home) = run_echo_binding(&record.digest).await;
 
-        let echoed = rows(&node, "{ Echoed { job_run text run_ref } }", "Echoed").await;
+        let echoed = rows(&node, "{ Echoed { job_run text path run_ref } }", "Echoed").await;
         assert_eq!(
             echoed,
-            vec![json!({"job_run": "run-7", "text": "hello", "run_ref": "run-7"})]
+            vec![json!({"job_run": "run-7", "text": "hello", "path": "", "run_ref": "run-7"})]
         );
         let invocations = rows(
             &node,
@@ -493,5 +534,68 @@ mod tests {
                 .await
                 .is_empty()
         );
+    }
+
+    async fn only_invocation(node: &EmbeddedNode) -> Value {
+        let mut invocations = rows(
+            node,
+            "{ CallbackInvocation { lifecycle_state error } }",
+            "CallbackInvocation",
+        )
+        .await;
+        assert_eq!(invocations.len(), 1);
+        invocations.remove(0)
+    }
+
+    #[tokio::test]
+    async fn a_bound_plugin_node_reads_the_one_file_its_source_names() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = root.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("a.txt"), "hello").unwrap();
+        let digest = crate::plugin::tests::executor::installed_echo().1.digest;
+        let file = docs.join("a.txt");
+        let (node, _home) = run_binding(&digest, Some(&docs), true, file.to_str().unwrap()).await;
+        assert_eq!(
+            only_invocation(&node).await["lifecycle_state"],
+            LIFECYCLE_SUCCEEDED
+        );
+        let echoed = rows(&node, "{ Echoed { path origin } }", "Echoed").await;
+        assert_eq!(
+            echoed[0]["origin"],
+            file.canonicalize().unwrap().to_str().unwrap(),
+            "the next stage is told the real path, not the link"
+        );
+        let seen = echoed[0]["path"].as_str().unwrap();
+        assert!(seen.ends_with("/a.txt"), "{seen}");
+        assert_ne!(
+            seen,
+            file.canonicalize().unwrap().to_str().unwrap(),
+            "the plugin sees the file alone, through a private folder"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bound_plugin_node_refuses_a_path_outside_the_allowed_folders_and_never_asks() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = root.path().join("docs");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let digest = crate::plugin::tests::executor::installed_echo().1.digest;
+        let (node, _home) =
+            run_binding(&digest, Some(&docs), true, outside.to_str().unwrap()).await;
+        let invocation = only_invocation(&node).await;
+        assert_eq!(
+            invocation["lifecycle_state"],
+            super::super::LIFECYCLE_DENIED
+        );
+        assert!(invocation["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("gents plugin dirs add"));
+        assert!(rows(&node, "{ Echoed { run_ref } }", "Echoed")
+            .await
+            .is_empty());
     }
 }

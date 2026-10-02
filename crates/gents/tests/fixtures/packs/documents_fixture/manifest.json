@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "name": "documents_fixture",
+  "version": "1.0.0",
+  "description": "Pipeline-like documents pack: one worker slot, a read-only-workspace tool surface, a schema, and a filtered event source. Used for scenario, eval, proposer-refusal and pack-check tests.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/fixture_worker/system_prompt.md",
+    "experiment.json",
+    "pack_config.json",
+    "schemas/fixture_job.graphql",
+    "tasks/fixture_worker_task/prompt.md"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "schemas": [
+    "schemas/fixture_job.graphql"
+  ],
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "Executes the fixture's one task.",
+      "behaviors": [
+        "fixture-worker"
+      ]
+    }
+  ]
+}

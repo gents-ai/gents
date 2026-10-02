@@ -651,12 +651,17 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
     let researcher_slot = format!("researcher={profile_id}");
     let verifier_slot = format!("verifier={profile_id}");
 
+    // A local packs checkout (`GENTS_WEB_RESEARCH_PACK=/path/to/web_deep_research`)
+    // installs offline; the bare coordinate is the only correct answer once
+    // gents-ai/packs is published, but resolves nowhere until then.
+    let pack_spec = std::env::var("GENTS_WEB_RESEARCH_PACK")
+        .unwrap_or_else(|_| "gents/web_deep_research".to_string());
     let install = run_cli_json_with_env(
         &home_dir,
         &[
             "pack",
             "install",
-            "web_deep_research",
+            &pack_spec,
             "--home",
             home_arg,
             "--graphql",
@@ -700,10 +705,10 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
             &graphql,
             "--agent-did",
             &agent_did,
-            "--question",
-            &question,
-            "--investigator-count",
-            "3",
+            "--field",
+            &format!("question={question}"),
+            "--field",
+            "investigator_count=3",
             "--output",
             "json",
         ],

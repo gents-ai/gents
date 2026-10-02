@@ -155,7 +155,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 1
             && snapshot.router_generation == 1
-            && snapshot.last_reconcile_result == "startup"
+            && snapshot.last_reconcile_error.is_empty()
     })
     .await;
     assert_eq!(startup.default_behavior_id, default_behavior_id);
@@ -249,7 +249,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 2
             && snapshot.router_generation == 2
-            && snapshot.last_reconcile_result == "applied"
+            && snapshot.last_reconcile_error.is_empty()
     })
     .await;
     assert_eq!(reconciled.default_behavior_id, default_behavior_id);

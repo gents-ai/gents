@@ -30,6 +30,10 @@ type ChatActionParams = {
     nextSessionId: string | null,
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
+  /** The folder the user works in for this chat, sent with every message. */
+  chatFolder?: string | null;
+  /** Called with the session a send created or continued, to keep its folder. */
+  adoptChatFolder?: (sessionId: string) => void;
   selectedDeployment: DeploymentView | null;
   deployments: DeploymentView[];
   selectedSessionId: string | null;
@@ -62,6 +66,8 @@ export function createDesktopShellChatActions({
   advanceComposeIntent,
   captureComposeIntent,
   draft,
+  chatFolder = null,
+  adoptChatFolder,
   newSessionAgentRef,
   refreshSession,
   refreshSnapshot,
@@ -123,7 +129,9 @@ export function createDesktopShellChatActions({
         sessionId: selectedSessionId,
         content,
         causedBySourceDocId: pendingMailboxCauseId,
+        cwd: chatFolder,
       });
+      adoptChatFolder?.(result.sessionId);
       if (!acceptsComposeIntent(intentGeneration)) return result;
       setPendingMailboxCauseId(null);
       newSessionAgentRef.current = null;

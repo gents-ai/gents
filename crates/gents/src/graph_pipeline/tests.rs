@@ -99,6 +99,8 @@ fn linear_intent() -> GraphIntent {
             collection: "ExperimentJob".to_owned(),
             schema: "ExperimentJob/v1".to_owned(),
             input_contract: None,
+            input_schema: None,
+            prepare: None,
             to: PortRef {
                 node_id: "extract".to_owned(),
                 port: "job".to_owned(),
@@ -614,6 +616,130 @@ fn an_unpinned_plugin_node_does_not_compile() {
     let error = compile(&linear_intent(), &with_plugin_extract(None)).unwrap_err();
     assert!(
         has_code(&error, DiagnosticCode::UnpinnedPlugin),
+        "{error:?}"
+    );
+}
+
+fn git_diff_host(unified_context_lines: u32, rename_similarity_percent: u8) -> HostInput {
+    HostInput::GitDiff {
+        repository_field: "repository".to_owned(),
+        base_field: "base".to_owned(),
+        head_field: "head".to_owned(),
+        unified_context_lines,
+        rename_similarity_percent,
+    }
+}
+
+fn with_entry_prepare(prepare: EntryPrepare) -> GraphIntent {
+    let mut intent = linear_intent();
+    intent.entries[0].prepare = Some(prepare);
+    intent
+}
+
+#[test]
+fn an_unpinned_entry_prepare_plugin_does_not_compile() {
+    let intent = with_entry_prepare(EntryPrepare {
+        host: vec![git_diff_host(3, 50)],
+        plugin: "team/prepare".to_owned(),
+        digest: None,
+        writes: vec!["ExperimentFinding".to_owned()],
+    });
+    let error = compile(&intent, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::UnpinnedPlugin),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn entry_prepare_git_diff_limits_are_bounded() {
+    let digest = Some(format!("sha256:{}", "a".repeat(64)));
+    let too_many_context_lines = with_entry_prepare(EntryPrepare {
+        host: vec![git_diff_host(101, 50)],
+        plugin: "team/prepare".to_owned(),
+        digest: digest.clone(),
+        writes: vec!["ExperimentFinding".to_owned()],
+    });
+    let error = compile(&too_many_context_lines, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidPrepareLimits),
+        "{error:?}"
+    );
+
+    let too_high_rename_similarity = with_entry_prepare(EntryPrepare {
+        host: vec![git_diff_host(3, 101)],
+        plugin: "team/prepare".to_owned(),
+        digest,
+        writes: vec!["ExperimentFinding".to_owned()],
+    });
+    let error = compile(&too_high_rename_similarity, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidPrepareLimits),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn read_only_workspace_requires_an_earlier_git_diff() {
+    let intent = with_entry_prepare(EntryPrepare {
+        host: vec![HostInput::ReadOnlyWorkspace],
+        plugin: "team/prepare".to_owned(),
+        digest: Some(format!("sha256:{}", "a".repeat(64))),
+        writes: vec!["ExperimentFinding".to_owned()],
+    });
+    let error = compile(&intent, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::ReadOnlyWorkspaceRequiresGitDiff),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn entry_prepare_writes_must_be_non_empty_and_valid_collection_identifiers() {
+    let digest = Some(format!("sha256:{}", "a".repeat(64)));
+    let empty_writes = with_entry_prepare(EntryPrepare {
+        host: vec![],
+        plugin: "team/prepare".to_owned(),
+        digest: digest.clone(),
+        writes: vec![],
+    });
+    let error = compile(&empty_writes, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidPrepareWrites),
+        "{error:?}"
+    );
+
+    let invalid_identifier = with_entry_prepare(EntryPrepare {
+        host: vec![],
+        plugin: "team/prepare".to_owned(),
+        digest,
+        writes: vec!["not a valid identifier".to_owned()],
+    });
+    let error = compile(&invalid_identifier, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidPrepareWrites),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn entry_input_schema_must_compile_and_declare_an_object() {
+    let mut wrong_type = linear_intent();
+    wrong_type.entries[0].input_schema = Some(serde_json::json!({"type": "string"}));
+    let error = compile(&wrong_type, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidInputSchema),
+        "{error:?}"
+    );
+
+    let mut does_not_compile = linear_intent();
+    does_not_compile.entries[0].input_schema = Some(serde_json::json!({
+        "type": "object",
+        "properties": {"a": {"type": "string", "pattern": "(unterminated"}}
+    }));
+    let error = compile(&does_not_compile, &catalog()).unwrap_err();
+    assert!(
+        has_code(&error, DiagnosticCode::InvalidInputSchema),
         "{error:?}"
     );
 }

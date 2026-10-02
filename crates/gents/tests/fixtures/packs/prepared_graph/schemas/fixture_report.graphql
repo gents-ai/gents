@@ -1,0 +1,4 @@
+type FixtureReport {
+  run_id: String @index(unique: true) @immutable
+  summary: String
+}

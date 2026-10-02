@@ -707,6 +707,39 @@ pub async fn list_installed_packs(
         .collect()
 }
 
+/// The installed record for `coordinate`, if any: one query bounded to two
+/// rows, so a duplicate record (which should never exist) fails loud
+/// instead of silently picking one.
+pub async fn read_installed_pack(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<Option<InstalledPack>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest }} }}"#,
+            escape_graphql_string(owner),
+            escape_graphql_string(coordinate)
+        ))
+        .await?;
+    let rows = response["data"][RECORD]
+        .as_array()
+        .context("reading the pack installation records")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "{coordinate} has more than one installation record for its owner"
+    );
+    rows.first()
+        .map(|row| {
+            Ok(InstalledPack {
+                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
+                version: required_record_field_str(row, "version")?.to_owned(),
+                digest: required_record_field_str(row, "digest")?.to_owned(),
+            })
+        })
+        .transpose()
+}
+
 /// Every pack installed for `owner`, combining node-recorded installs
 /// (documents and graph packs) with `home`'s file-recorded ones (assets and
 /// plugins packs), sorted by coordinate. `pack outdated`/`update` and the

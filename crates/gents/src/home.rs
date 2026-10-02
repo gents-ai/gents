@@ -65,6 +65,12 @@ pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 /// Installed and cached packs.
 pub const PACKS_DIR_NAME: &str = "packs";
+/// The operator's allowed folders for caller-bound plugin directories
+/// (`gents plugin dirs`); written only by the operator's CLI or desktop.
+pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
+/// Operator questions a running plugin call is waiting on, one request file
+/// and one decision file per question.
+pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
 /// Installed plugins.
 pub const PLUGINS_DIR_NAME: &str = "plugins";
 /// Registry logins saved by `gents pack login`, one per registry URL.
@@ -92,6 +98,8 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,
+    ALLOWED_DIRS_FILE_NAME,
+    PLUGIN_APPROVALS_DIR_NAME,
     REGISTRY_DIR_NAME,
     CODEX_UI_DIR_NAME,
     EVAL_DIR_NAME,

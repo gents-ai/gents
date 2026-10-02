@@ -39,6 +39,8 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
             collection: input.collection.clone(),
             schema: input.schema.clone(),
             input_contract: None,
+            input_schema: None,
+            prepare: None,
             to: PortRef {
                 node_id: "worker".to_owned(),
                 port: input.name.clone(),

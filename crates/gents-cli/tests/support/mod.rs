@@ -11,7 +11,7 @@ pub mod process;
 pub mod waits;
 
 pub use fs::{
-    assert_json_schema_valid, assert_manifest_agent_dids, assert_runtime_init_state,
+    assert_json_schema_valid, assert_manifest_agent_dids, assert_runtime_init_state, copy_dir_all,
     manifest_contains, parse_jsonl, project_object_fields, read_captured_log, read_json_file,
     read_runtime_state_json, read_workspace_json, rewrite_manifest_agent_dids, workspace_root,
     write_json_file, write_manifest_root_from_export,
@@ -39,6 +39,15 @@ pub use waits::{
     wait_for_request_lifecycle_state, wait_for_runtime_quiescence, wait_for_runtime_ready,
     wait_for_runtime_state_graphql, wait_for_tool_call,
 };
+
+/// A gents-crate fixture pack directory, shared by every gents-cli
+/// integration test that installs or runs a pack:
+/// `crates/gents/tests/fixtures/packs/<name>`.
+pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../gents/tests/fixtures/packs")
+        .join(name)
+}
 
 // Matches the DEFAULT_LIVE_ENDPOINT the gents e2e_live suite uses
 // (workstation-1 over Tailscale). The previous default was a LAN address

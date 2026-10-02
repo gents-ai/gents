@@ -120,7 +120,7 @@ inductive Action where
   | materialize
   | activate
   | retire
-  | startRun (runId : RunId)
+  | startRun (runId : RunId) (inputAdmitted : Bool)
   | requestCancel
   | succeedRun (resultContractSatisfied activeWorkTerminal : Bool)
   | failRun (failureProven activeWorkTerminal : Bool)
@@ -167,11 +167,12 @@ def step? (state : State) : Action → Option State
         }
       else
         none
-  | .startRun runId =>
+  | .startRun runId inputAdmitted =>
       if state.revision.status = .active ∧
           state.activeRevision = some state.revision.revisionId ∧
           state.revision.ready ∧
-          state.run = none then
+          state.run = none ∧
+          inputAdmitted = true then
         some { state with
           run := some
             { runId := runId
@@ -285,7 +286,7 @@ theorem step_preserves_revision_identity
       · cases h
         simp
       · simp at h
-  | startRun runId =>
+  | startRun runId inputAdmitted =>
       simp only [step?] at h
       split at h
       · cases h
@@ -307,17 +308,28 @@ theorem step_preserves_revision_identity
       · simp at h
 
 theorem start_requires_active_revision
-    {pre post : State} {runId : RunId}
-    (h : step? pre (.startRun runId) = some post) :
+    {pre post : State} {runId : RunId} {inputAdmitted : Bool}
+    (h : step? pre (.startRun runId inputAdmitted) = some post) :
     pre.revision.status = .active ∧
       pre.activeRevision = some pre.revision.revisionId := by
   simp only [step?] at h
   split at h <;> simp_all
 
+/-- A run may not start without input that satisfies the pinned entry
+contract: the host runs any declared prepare step and admits the operator
+input against the entry's schema before the start transaction begins, never
+inside it. -/
+theorem start_requires_admitted_input
+    {pre post : State} {runId : RunId} {inputAdmitted : Bool}
+    (h : step? pre (.startRun runId inputAdmitted) = some post) :
+    inputAdmitted = true := by
+  simp only [step?] at h
+  split at h <;> simp_all
+
 theorem inactive_revision_cannot_start
-    (state : State) (runId : RunId)
+    (state : State) (runId : RunId) (inputAdmitted : Bool)
     (h : state.revision.status ≠ .active) :
-    step? state (.startRun runId) = none := by
+    step? state (.startRun runId inputAdmitted) = none := by
   simp [step?, h]
 
 theorem activation_requires_complete_validated_artifacts
@@ -328,8 +340,8 @@ theorem activation_requires_complete_validated_artifacts
   split at h <;> simp_all
 
 theorem start_pins_revision
-    {pre post : State} {runId : RunId}
-    (h : step? pre (.startRun runId) = some post) :
+    {pre post : State} {runId : RunId} {inputAdmitted : Bool}
+    (h : step? pre (.startRun runId inputAdmitted) = some post) :
     ∃ run, post.run = some run ∧
       run.graphId = pre.revision.graphId ∧
       run.revisionId = pre.revision.revisionId ∧
@@ -341,8 +353,8 @@ theorem start_pins_revision
   · simp at h
 
 theorem start_commits_seed_and_enters_running
-    {pre post : State} {runId : RunId}
-    (h : step? pre (.startRun runId) = some post) :
+    {pre post : State} {runId : RunId} {inputAdmitted : Bool}
+    (h : step? pre (.startRun runId inputAdmitted) = some post) :
     ∃ run, post.run = some run ∧
       run.status = .running ∧
       run.seedCommitted = true ∧
@@ -447,7 +459,7 @@ theorem safe_preserved
         simp_all [State.safe, State.pointerAligned, State.activeReady,
           State.runPinned]
       · simp at h_step
-  | startRun runId =>
+  | startRun runId inputAdmitted =>
       simp only [step?] at h_step
       split at h_step
       · cases h_step

@@ -6,4 +6,9 @@ export type ChatSendRequest = { agentDid: string, behaviorId: string | null, ses
  * An answer to the question on the `caused_by_source_doc_id` item. The
  * bridge renders the reply content from the item, so `content` is empty.
  */
-answer?: MailboxQuestionAnswer | null, };
+answer?: MailboxQuestionAnswer | null,
+/**
+ * The folder the user works in for this chat: plugin tools read inside
+ * it without a prompt. Absent keeps the agent's own tool root.
+ */
+cwd?: string | null, };

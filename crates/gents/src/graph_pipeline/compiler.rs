@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use super::types::{
     CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphPlan,
-    GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedResult,
+    GroupCount, HostInput, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedResult,
     PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability, StageTarget,
     COMPILER_VERSION,
 };
@@ -14,6 +14,9 @@ use crate::document_config::reject_protected_collection_name;
 use crate::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
 };
+
+const MAX_PREPARE_UNIFIED_CONTEXT_LINES: u32 = 100;
+const MAX_PREPARE_RENAME_SIMILARITY_PERCENT: u8 = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerPolicy {
@@ -548,6 +551,16 @@ pub fn compile_graph(
                 format!("entry {:?} is declared more than once", entry.name),
             );
         }
+        if let Some(schema) = entry.input_schema.as_ref() {
+            if let Err(error) = super::entry_input::validate_input_schema(schema) {
+                diagnostic(
+                    &mut diagnostics,
+                    DiagnosticCode::InvalidInputSchema,
+                    format!("{path}/input_schema"),
+                    format!("{error:#}"),
+                );
+            }
+        }
         let target_node = nodes.contains(entry.to.node_id.as_str());
         if !target_node {
             diagnostic(
@@ -602,6 +615,73 @@ pub fn compile_graph(
         }
         *incoming.entry(entry.to.clone()).or_default() += 1;
         entry_nodes.insert(entry.to.node_id.as_str());
+
+        if let Some(prepare) = &entry.prepare {
+            let prepare_path = format!("{path}/prepare");
+            if prepare.digest.is_none() {
+                diagnostic(
+                    &mut diagnostics,
+                    DiagnosticCode::UnpinnedPlugin,
+                    format!("{prepare_path}/plugin"),
+                    format!(
+                        "entry {:?} prepare plugin {:?} is not pinned to an artifact digest",
+                        entry.name, prepare.plugin
+                    ),
+                );
+            }
+            let mut saw_git_diff = false;
+            for (host_index, host_input) in prepare.host.iter().enumerate() {
+                match host_input {
+                    HostInput::GitDiff {
+                        unified_context_lines,
+                        rename_similarity_percent,
+                        ..
+                    } => {
+                        saw_git_diff = true;
+                        if *unified_context_lines > MAX_PREPARE_UNIFIED_CONTEXT_LINES
+                            || *rename_similarity_percent > MAX_PREPARE_RENAME_SIMILARITY_PERCENT
+                        {
+                            diagnostic(
+                                &mut diagnostics,
+                                DiagnosticCode::InvalidPrepareLimits,
+                                format!("{prepare_path}/host/{host_index}"),
+                                format!(
+                                    "git_diff unified_context_lines must be at most {MAX_PREPARE_UNIFIED_CONTEXT_LINES} and rename_similarity_percent at most {MAX_PREPARE_RENAME_SIMILARITY_PERCENT}"
+                                ),
+                            );
+                        }
+                    }
+                    HostInput::ReadOnlyWorkspace => {
+                        if !saw_git_diff {
+                            diagnostic(
+                                &mut diagnostics,
+                                DiagnosticCode::ReadOnlyWorkspaceRequiresGitDiff,
+                                format!("{prepare_path}/host/{host_index}"),
+                                "read_only_workspace requires an earlier git_diff in the same prepare.host list",
+                            );
+                        }
+                    }
+                }
+            }
+            if prepare.writes.is_empty() {
+                diagnostic(
+                    &mut diagnostics,
+                    DiagnosticCode::InvalidPrepareWrites,
+                    format!("{prepare_path}/writes"),
+                    "prepare.writes must name at least one collection",
+                );
+            }
+            for (write_index, collection) in prepare.writes.iter().enumerate() {
+                if validate_collection_identifier(collection).is_err() {
+                    diagnostic(
+                        &mut diagnostics,
+                        DiagnosticCode::InvalidPrepareWrites,
+                        format!("{prepare_path}/writes/{write_index}"),
+                        format!("{collection:?} is not a valid collection identifier"),
+                    );
+                }
+            }
+        }
     }
 
     if !intent.results.iter().any(|result| result.terminal) {
@@ -922,6 +1002,8 @@ pub fn compile_graph(
                 to: entry.to.clone(),
                 target: target_capability.target.clone(),
                 correlation_field: target_port.correlation_field.clone(),
+                input_schema: entry.input_schema.clone(),
+                prepare: entry.prepare.clone(),
             }
         })
         .collect();

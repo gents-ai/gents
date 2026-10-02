@@ -2366,7 +2366,6 @@ mod tests {
             .iter()
             .map(|cell| match &cell.source {
                 CellSource::Directory(dir) => (cell.cell_id.as_str(), dir.clone()),
-                CellSource::InstalledPack { name } => panic!("installed pack {name}"),
             })
             .collect();
         assert_eq!(

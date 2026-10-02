@@ -58,6 +58,48 @@ pub fn describe_manifold(manifold: &Manifold) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("; "))
 }
 
+/// What operator consent for `plugin` covers, beyond [`describe_manifold`]'s
+/// own axes: whether it also reads one caller-bound directory per call
+/// (never standing authority - see [`super::BoundDir`]) and what resource
+/// ceiling it declares. `None` when `plugin` asks for nothing at all: no
+/// manifold grant, no `bind_dir`, no `limits`.
+pub fn describe_plugin_authority(plugin: &PackPlugin, manifold: &Manifold) -> Option<String> {
+    let mut parts: Vec<String> = describe_manifold(manifold).into_iter().collect();
+    if let Some(binding) = &plugin.bind_dir {
+        parts.push(
+            match binding.access {
+                crate::pack::BindAccess::Read => "reads one directory its caller binds, per call",
+                crate::pack::BindAccess::ReadWrite => {
+                    "reads and writes one directory its caller binds, per call"
+                }
+            }
+            .to_owned(),
+        );
+    }
+    if let Some(limits) = &plugin.limits {
+        if let Some(description) = describe_limits(limits) {
+            parts.push(description);
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// One line naming the resource ceiling `limits` declares, or `None` when it
+/// declares nothing.
+fn describe_limits(limits: &crate::pack::PluginLimits) -> Option<String> {
+    let mut bits = Vec::new();
+    if let Some(memory_mib) = limits.memory_mib {
+        bits.push(format!("{memory_mib} MiB memory"));
+    }
+    if let Some(wall_clock_secs) = limits.wall_clock_secs {
+        bits.push(format!("{wall_clock_secs}s wall clock"));
+    }
+    if let Some(max_output_mib) = limits.max_output_mib {
+        bits.push(format!("{max_output_mib} MiB output"));
+    }
+    (!bits.is_empty()).then(|| format!("up to {}", bits.join(", ")))
+}
+
 fn paths_list(paths: &[std::path::PathBuf]) -> String {
     paths
         .iter()
@@ -85,6 +127,20 @@ pub fn grant_for(
         "plugin {} asks for {asks}; install it with --grant-authority to allow that",
         plugin.name
     )
+}
+
+pub(super) fn limits_consented(
+    requested: Option<&crate::pack::PluginLimits>,
+    previous: Option<&crate::pack::PluginLimits>,
+    consent: bool,
+) -> bool {
+    let empty = crate::pack::PluginLimits::default();
+    let requested = requested.unwrap_or(&empty);
+    let previous = previous.unwrap_or(&empty);
+    consent
+        || (requested.memory_mib.unwrap_or(0) <= previous.memory_mib.unwrap_or(0)
+            && requested.wall_clock_secs.unwrap_or(0) <= previous.wall_clock_secs.unwrap_or(0)
+            && requested.max_output_mib.unwrap_or(0) <= previous.max_output_mib.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -128,5 +184,54 @@ mod tests {
         // Asking for more is not.
         let more = serde_json::json!({"fs": "None", "net": {"OutboundHttp": null}, "env": "None", "crypto": false, "child_process": false});
         assert!(grant_for(&plugin(Some(more)), Some(&granted), false).is_err());
+    }
+
+    #[test]
+    fn a_plugin_asking_for_nothing_has_no_authority_to_describe() {
+        assert_eq!(
+            describe_plugin_authority(&plugin(None), &Manifold::sealed()),
+            None
+        );
+    }
+
+    #[test]
+    fn bind_dir_and_limits_are_named_even_with_a_sealed_manifold() {
+        let mut declaration = plugin(None);
+        declaration.bind_dir = Some(crate::pack::PluginDirBinding {
+            input_field: "root".to_owned(),
+            original_field: None,
+            description: "The directory to scan".to_owned(),
+            access: Default::default(),
+        });
+        declaration.limits = Some(crate::pack::PluginLimits {
+            memory_mib: Some(512),
+            wall_clock_secs: Some(300),
+            max_output_mib: Some(4),
+        });
+        let description =
+            describe_plugin_authority(&declaration, &Manifold::sealed()).expect("must describe");
+        assert!(description.contains("reads one directory its caller binds, per call"));
+        assert!(description.contains("512 MiB memory"));
+        assert!(description.contains("300s wall clock"));
+        assert!(description.contains("4 MiB output"));
+    }
+
+    #[test]
+    fn manifold_authority_and_bind_dir_both_appear_together() {
+        let mut declaration = plugin(None);
+        declaration.bind_dir = Some(crate::pack::PluginDirBinding {
+            input_field: "root".to_owned(),
+            original_field: None,
+            description: "scan target".to_owned(),
+            access: Default::default(),
+        });
+        let manifold = Manifold {
+            net: NetAccess::OutboundHttp(None),
+            ..Manifold::sealed()
+        };
+        let description =
+            describe_plugin_authority(&declaration, &manifold).expect("must describe");
+        assert!(description.contains("HTTP to any host"));
+        assert!(description.contains("reads one directory its caller binds, per call"));
     }
 }

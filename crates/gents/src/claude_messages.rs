@@ -747,6 +747,7 @@ fn usage_from_sse(value: &Value) -> rig::completion::Usage {
 }
 
 /// Incremental line-splitter over a response body.
+#[cfg(test)]
 pub(crate) fn stream_sse_body(
     body: http_client::sse::BoxedStream,
     state: MessagesSseState,

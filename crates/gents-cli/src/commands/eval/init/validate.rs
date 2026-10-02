@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use gents::document_config::{EvalCapture, EvalDefinition, EvalSplit};
+use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
 use gents::eval::checks::CheckRegistry;
 use serde_json::{json, Value};
 
@@ -77,31 +77,43 @@ pub(crate) fn validate(
 
 /// Step 4: every check is registered and its params satisfy its schema.
 fn catalog_conformance(definition: &EvalDefinition, registry: &CheckRegistry) -> BTreeSet<String> {
+    definition
+        .cases
+        .iter()
+        .flat_map(|case| case_catalog_conformance(case, registry))
+        .collect()
+}
+
+/// Step 4 for one case: the single owner of the rule, so `gents eval checks
+/// --validate-case` (a pack's own contract tests) and the author's draft
+/// validation cannot disagree on what the catalog admits.
+pub(crate) fn case_catalog_conformance(
+    case: &EvalCase,
+    registry: &CheckRegistry,
+) -> BTreeSet<String> {
     let mut messages = BTreeSet::new();
-    for case in &definition.cases {
-        for stage in &case.stages {
-            let at = format!("case {} stage {}", case.case_id, stage.stage_id);
-            for check in &stage.checks {
-                let Some(registered) = registry.get(&check.check) else {
+    for stage in &case.stages {
+        let at = format!("case {} stage {}", case.case_id, stage.stage_id);
+        for check in &stage.checks {
+            let Some(registered) = registry.get(&check.check) else {
+                messages.insert(format!(
+                    "{at}: unknown check {:?}; draft only checks from the catalog",
+                    check.check
+                ));
+                continue;
+            };
+            let schema = registered.describe().params_schema;
+            match jsonschema::validator_for(&schema) {
+                Ok(validator) => {
+                    for error in validator.iter_errors(&check.params) {
+                        messages.insert(format!("{at} check {} params: {error}", check.check));
+                    }
+                }
+                Err(error) => {
                     messages.insert(format!(
-                        "{at}: unknown check {:?}; draft only checks from the catalog",
+                        "{at} check {}: its params schema does not compile: {error}",
                         check.check
                     ));
-                    continue;
-                };
-                let schema = registered.describe().params_schema;
-                match jsonschema::validator_for(&schema) {
-                    Ok(validator) => {
-                        for error in validator.iter_errors(&check.params) {
-                            messages.insert(format!("{at} check {} params: {error}", check.check));
-                        }
-                    }
-                    Err(error) => {
-                        messages.insert(format!(
-                            "{at} check {}: its params schema does not compile: {error}",
-                            check.check
-                        ));
-                    }
                 }
             }
         }

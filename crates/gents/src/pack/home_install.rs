@@ -138,7 +138,7 @@ mod tests {
             version: "1.0.0".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
             kind: PackKind::Assets,
-            assets: "packs/mailbox/aaaa".into(),
+            assets: "packs/subject_pack/aaaa".into(),
             plugins: vec![],
             installed_at: "2026-01-01T00:00:00Z".into(),
         }
