@@ -434,7 +434,19 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             Some(rows(&remote, "DeploymentNote", "_docID text").await?)
         };
         let metrics = json!({"tool_calls":calls.len(),"failed_tool_calls":failed_calls,"errors_naming_next_call":actionable_errors,"tool_output_bytes":output_bytes});
-        let report = json!({"case_id":case.case_id,"grading_version":case.grading_version,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        let capability_evidence = json!({
+            "protocol_sync_supported": gents::agent::p2p_reconcile::templates::admit_app_collections(["OAuthCredential".into()].into()).is_some(),
+            "application_collection_grant": ["DeploymentNote"],
+            "source_peer_certified": false,
+            "sync_requires_known_document_ids": true,
+            "registry_is_enrollment_authority": false
+        });
+        let answer_audit = json!({"version":1,"status":"unassessed","method":"independent semantic audit","criteria":[
+            "Recovery must be possible through the supported interface; broader grants or ACP do not enable protocol collection sync.",
+            "Distinguish registry, signed enrollment, desired pairing, applied pairing and observed connectivity; do not certify the document supplier.",
+            "Preserve supplied user inputs and identify only genuinely missing inputs."
+        ]});
+        let report = json!({"case_id":case.case_id,"grading_version":case.grading_version,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"deterministic_grade":"native outcomes with lexical answer smoke checks; not semantic answer correctness","capability_evidence":capability_evidence,"answer_audit":answer_audit,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
         std::fs::write(
             directory.join("evidence.json"),
             serde_json::to_vec_pretty(&report)?,

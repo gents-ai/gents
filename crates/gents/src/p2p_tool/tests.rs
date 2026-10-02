@@ -76,6 +76,9 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     assert!(malformed.to_string().contains("network"));
     let forbidden = Tool::call(&tool, serde_json::from_value(json!({"argv":["sync","documents"],"options":{"peer_id":peer_id,"collection":"OAuthCredential","doc_ids":["copied-credential-id"]}})).unwrap()).await.unwrap_err();
     assert!(forbidden.to_string().contains("protocol collections"));
+    assert!(forbidden
+        .to_string()
+        .contains("changing grants or ACP cannot enable"));
     let applied = call(
         &tool,
         json!({"argv":["pairings","apply"],"options":options}),
@@ -120,6 +123,49 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     )
     .await;
     assert_eq!(inspected["outcome"]["connected"], true, "{inspected}");
+    let compact = call(
+        &tool,
+        json!({"argv":["pairings","get"],"options":{"peer_id":peer_id}}),
+    )
+    .await;
+    assert_eq!(compact["outcome"]["desired"].as_array().unwrap().len(), 1);
+    assert_eq!(compact["outcome"]["applied"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        compact["observations"]["enrolled_peers"][0]["peer_id"],
+        peer_id
+    );
+    assert_eq!(
+        compact["observations"]["connected_peers"]["observed_count"],
+        1
+    );
+    let replicators = compact["observations"]["replicators"]["items"]
+        .as_array()
+        .unwrap();
+    assert!(!replicators.is_empty());
+    assert!(replicators
+        .iter()
+        .all(|row| row.get("collections").is_none()
+            && row.get("filters").is_none()
+            && row["collection_count"].as_u64().is_some()));
+    let detail = call(&tool, compact["observations"]["details_call"].clone()).await;
+    assert!(detail["observations"]["replicators"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["collections"].is_array() && row.get("filters").is_some()));
+    let absent = call(
+        &tool,
+        json!({"argv":["pairings","get"],"options":{"peer_id":"unrelated-peer"}}),
+    )
+    .await;
+    assert_eq!(absent["outcome"]["desired"], json!([]));
+    assert_eq!(absent["outcome"]["applied"], json!([]));
+    assert_eq!(absent["observations"]["enrolled_peers"], json!([]));
+    assert_eq!(absent["observations"]["replicators"]["observed_count"], 0);
+    assert_eq!(
+        absent["observations"]["connected_peers"]["observed_count"],
+        0
+    );
     assert!(store
         .load_applied(&peer_id)
         .await
@@ -241,4 +287,85 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     .unwrap_err()
     .to_string()
     .contains("running node DID"));
+}
+
+#[tokio::test]
+async fn help_and_scope_distinguish_capability_limits_from_collection_grants() {
+    let db = crate::support::test_p2p_db("engineer-p2p-discovery").await;
+    let tool = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        false,
+        EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]),
+    );
+    for (argv, resource) in [
+        (json!(["help", "pairing"]), "pairings"),
+        (json!(["pairings", "help"]), "pairings"),
+        (json!(["help", "documents"]), "sync"),
+    ] {
+        let error = Tool::call(&tool, serde_json::from_value(json!({"argv":argv})).unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!("[\"help\",\"{resource}\"]")),
+            "{error}"
+        );
+    }
+    let scope = call(&tool, json!({"argv":["help","scope"]})).await;
+    assert_eq!(scope["outcome"]["grant"]["mutations"], false);
+    assert_eq!(
+        scope["outcome"]["grant"]["application_collections"]["names"],
+        json!(["DeploymentNote"])
+    );
+    assert!(scope["outcome"]["help"]
+        .as_str()
+        .unwrap()
+        .contains("permanently excluded"));
+    let forbidden = tool
+        .checked_collections(
+            json!({"collections":["OAuthCredential"]})
+                .as_object()
+                .unwrap(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(forbidden.contains("changing grants or ACP cannot enable"));
+    assert!(!forbidden.contains("nonempty"));
+    let denied = tool
+        .checked_collections(json!({"collections":["PrivateNote"]}).as_object().unwrap())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(denied.contains("outside this tool's P2P collection grant"));
+    assert!(!denied.contains("never supported"));
+    let empty = tool
+        .checked_collections(json!({"collections":[]}).as_object().unwrap())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(empty.contains("must contain application collection names"));
+    assert!(!empty.contains("protocol"));
+    let all = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::all(),
+    );
+    for name in ["OAuthCredential", "AgentRequest", "InferenceBackend"] {
+        assert!(all
+            .checked_collections(json!({"collections":[name]}).as_object().unwrap())
+            .await
+            .is_err());
+    }
+    let status = call(&tool, json!({"argv":["status"]})).await;
+    assert!(status["observations"]["sync"].get("pending_dags").is_some());
+    assert!(status["observations"]["sync"]
+        .get("car_served_cids")
+        .is_none());
+    let detailed = call(&tool, status["observations"]["details_call"].clone()).await;
+    assert!(detailed["observations"]["sync"]
+        .get("car_served_cids")
+        .is_some());
 }
