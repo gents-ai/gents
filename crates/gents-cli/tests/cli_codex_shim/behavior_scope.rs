@@ -8,7 +8,6 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
-    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
@@ -28,13 +27,13 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut serve = spawn_server_with_env(
+    let (mut serve, server_port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
         server_port,
         &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
-    wait_for_port(server_port, &mut serve)?;
+    let graphql = graphql_url(server_port);
     wait_for_port(shim_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
@@ -143,7 +142,6 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
     let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "irrelevant")?;
     let server_port = allocate_port()?;
-    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
 
     let init = run_init_json(
@@ -163,13 +161,13 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut serve = spawn_server_with_env(
+    let (mut serve, server_port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
         server_port,
         &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
-    wait_for_port(server_port, &mut serve)?;
+    let graphql = graphql_url(server_port);
     wait_for_port(shim_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
