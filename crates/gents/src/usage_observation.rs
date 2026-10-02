@@ -477,8 +477,6 @@ pub enum UsageTrigger {
 pub enum UsageRead {
     Read,
     SkippedRecent,
-    /// Claude's usage endpoint is read only on an explicit refresh.
-    SkippedUntilRefresh,
     /// The provider has no usage read.
     NotReported,
     Disabled,

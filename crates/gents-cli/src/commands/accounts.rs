@@ -536,16 +536,11 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
     }
     .map(|reason| format!("(read: {reason})"));
     if usage.windows.is_empty() {
-        let source = match (reason, &row.read) {
-            (Some(reason), _) => reason,
-            (None, Some(UsageRead::SkippedUntilRefresh)) => "refresh to read".to_owned(),
-            (None, _) => dash(),
-        };
         return vec![[
             dash(),
             usage.note.unwrap_or("unknown").to_owned(),
             dash(),
-            source,
+            reason.unwrap_or_else(dash),
             dash(),
         ]];
     }
@@ -1553,7 +1548,7 @@ mod tests {
                     None,
                     UsageRead::Unavailable("throttled".to_owned()),
                 ),
-                usage_read(CLAUDE, None, None, UsageRead::SkippedUntilRefresh),
+                usage_read(CLAUDE, None, None, UsageRead::SkippedRecent),
                 usage_read("OpenRouter", None, Some("openrouter"), UsageRead::Read),
             ],
         };
@@ -1566,10 +1561,7 @@ mod tests {
             row(&rows, "Grok 2").read,
             Some(UsageRead::Unavailable("throttled".to_owned()))
         );
-        assert_eq!(
-            row(&rows, "Personal").read,
-            Some(UsageRead::SkippedUntilRefresh)
-        );
+        assert_eq!(row(&rows, "Personal").read, Some(UsageRead::SkippedRecent));
         assert_eq!(row(&rows, "OpenRouter").read, Some(UsageRead::Read));
         assert_eq!(row(&rows, "Grok").read, None);
 
@@ -1582,7 +1574,6 @@ mod tests {
                 .to_owned()
         };
         assert!(line("Grok 2").contains("(read: throttled)"), "{table}");
-        assert!(line("Personal").contains("refresh to read"), "{table}");
     }
 
     #[test]

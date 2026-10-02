@@ -1029,7 +1029,7 @@ pub(crate) struct BackendUsageView {
     pub note: Option<String>,
     pub read_at: Option<String>,
     pub read_error: Option<String>,
-    /// The runtime's outcome for this read, e.g. `skipped_until_refresh` or
+    /// The runtime's outcome for this read, e.g. `skipped_recent` or
     /// `unavailable: <reason>`; `None` when the runtime ran none for it.
     pub read: Option<String>,
 }
@@ -1161,7 +1161,6 @@ async fn backend_usage_views(
             read: read.map(|read| match &read.outcome {
                 UsageRead::Read => "read".to_string(),
                 UsageRead::SkippedRecent => "skipped_recent".to_string(),
-                UsageRead::SkippedUntilRefresh => "skipped_until_refresh".to_string(),
                 UsageRead::NotReported => "not_reported".to_string(),
                 UsageRead::Disabled => "disabled".to_string(),
                 UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
@@ -1171,10 +1170,10 @@ async fn backend_usage_views(
     Ok(views)
 }
 
-/// Asks the hosted runtime to read usage (on open, the reads it allows then;
-/// on Refresh, every read), signed with its own identity as `gents accounts
-/// list` signs it, then returns each backend's stored usage. A failed read on
-/// open still returns what is stored.
+/// Asks the hosted runtime to read usage (skipping accounts read in the last
+/// few minutes), signed with its own identity as `gents accounts list` signs
+/// it, then returns each backend's stored usage. A failed read on open still
+/// returns what is stored.
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
     request: ProviderUsageReadRequest,
@@ -2520,7 +2519,7 @@ mod provider_account_tests {
                     provider: gents::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
                     account_ref: b.account_ref.clone(),
                     backend_id: None,
-                    outcome: UsageRead::SkippedUntilRefresh,
+                    outcome: UsageRead::SkippedRecent,
                 },
                 AccountUsageRead {
                     provider: "OpenRouter".to_string(),
@@ -2563,7 +2562,7 @@ mod provider_account_tests {
             "a window seen 20 minutes ago is last known"
         );
         assert_eq!(work.note, None);
-        assert_eq!(work.read.as_deref(), Some("skipped_until_refresh"));
+        assert_eq!(work.read.as_deref(), Some("skipped_recent"));
 
         let original = view("claude");
         assert_eq!(original.windows.len(), 1, "{original:?}");

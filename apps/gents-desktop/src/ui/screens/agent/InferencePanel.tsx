@@ -257,12 +257,9 @@ function UsageBar({ view }: { view?: BackendUsageView }) {
    this read went */
 function UsageRows({ view }: { view?: BackendUsageView }) {
   const now = Date.now();
-  const read =
-    view?.read === "skipped_until_refresh"
-      ? "Refresh to read usage"
-      : view?.read?.startsWith("unavailable: ")
-        ? `Not read: ${view.read.slice("unavailable: ".length)}`
-        : view?.readError;
+  const read = view?.read?.startsWith("unavailable: ")
+    ? `Not read: ${view.read.slice("unavailable: ".length)}`
+    : view?.readError;
   return (
     <>
       {view?.windows.length ? (

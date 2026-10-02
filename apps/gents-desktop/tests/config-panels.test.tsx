@@ -880,7 +880,7 @@ describe("configuration panels", () => {
             note: "no cap on this key",
             read: "unavailable: throttled",
           }),
-          view_("claude", { note: "unknown", read: "skipped_until_refresh" }),
+          view_("claude", { note: "unknown" }),
           view_("grok-side", { windows: [window("5h", 50)] }),
         ];
         const setup = (item?: string) => {
@@ -980,7 +980,6 @@ describe("configuration panels", () => {
           ["chatgpt", ["unknown"]],
           ["local", ["not reported"]],
           ["openrouter", ["no cap on this key", "Not read: throttled"]],
-          ["claude", ["unknown", "Refresh to read usage"]],
         ] as const)
           it(`says why ${item} has no number`, async () => {
             setup(item);

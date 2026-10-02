@@ -12,7 +12,7 @@ export type BackendUsageView = { backendId: string, windows: Array<UsageWindowVi
  */
 note: string | null, readAt: string | null, readError: string | null,
 /**
- * The runtime's outcome for this read, e.g. `skipped_until_refresh` or
+ * The runtime's outcome for this read, e.g. `skipped_recent` or
  * `unavailable: <reason>`; `None` when the runtime ran none for it.
  */
 read: string | null, };
