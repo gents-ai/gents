@@ -97,18 +97,20 @@ pub(crate) fn blocked_turn_from(
             },
         };
         let backend_id = call.backend_id.as_deref();
-        let mut on_backend = profiles.iter().filter(|profile| {
+        // The profile that served the call's kind, while it is still on the
+        // call's backend; a sibling left there did not serve the call.
+        let served = if call.call_kind.as_deref() == Some("compaction") {
+            profiles.last()
+        } else {
+            profiles.first()
+        };
+        let profile = served.filter(|profile| {
             references
                 .profile_with_backend(profile)
                 .ok()
                 .flatten()
                 .is_some_and(|(profile, _)| Some(profile.backend_id.as_str()) == backend_id)
         });
-        let profile = if call.call_kind.as_deref() == Some("compaction") {
-            on_backend.next_back()
-        } else {
-            on_backend.next()
-        };
         let started_at = call
             .started_at
             .as_deref()

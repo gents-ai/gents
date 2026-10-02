@@ -121,8 +121,8 @@ pub async fn resume_goal_on_account(
             .map_err(|error| anyhow::anyhow!("switch failed; nothing changed: {error:#}"))?;
             Some(receipt)
         }
-        // No profile of the behavior runs on the limited account any more: an
-        // earlier run moved it. Done when one runs on the target.
+        // The profile that served the call left the limited account: an
+        // earlier run moved it. Done when it runs on the target.
         None => {
             let on_target = call.map(|call| FailedCall {
                 backend_id: Some(target_backend_id.to_owned()),
