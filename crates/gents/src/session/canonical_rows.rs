@@ -147,9 +147,12 @@ pub(crate) fn authored_message_key(request_doc_id: &str, key: &str) -> String {
 pub fn output_segment_create_variables(
     segment: &gents_protocol::output::OutputSegment,
 ) -> Result<serde_json::Value> {
-    Ok(serde_json::json!({
-        "input": serde_json::to_value(segment).context("serializing canonical AgentOutputSegment")?
-    }))
+    let input =
+        serde_json::to_value(segment).context("serializing canonical AgentOutputSegment")?;
+    Ok(serde_json::Value::Object(serde_json::Map::from_iter([(
+        "input".to_owned(),
+        input,
+    )])))
 }
 
 /// Build the `execute_with_variables` variables for one canonical
@@ -158,9 +161,11 @@ pub fn output_segment_create_variables(
 pub fn transcript_message_create_variables(
     message: &gents_protocol::output::TranscriptMessage,
 ) -> Result<serde_json::Value> {
-    Ok(serde_json::json!({
-        "input": serde_json::to_value(message).context("serializing canonical AgentMessage")?
-    }))
+    let input = serde_json::to_value(message).context("serializing canonical AgentMessage")?;
+    Ok(serde_json::Value::Object(serde_json::Map::from_iter([(
+        "input".to_owned(),
+        input,
+    )])))
 }
 
 #[cfg(test)]
