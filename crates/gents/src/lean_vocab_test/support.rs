@@ -137,6 +137,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) optimization_cases: LeanOptimizationCases,
     pub(crate) publish_if_cases: Vec<LeanPublishIfCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
+    pub(crate) application_write_cases: Vec<serde_json::Value>,
     pub(crate) write_input_cases: Vec<serde_json::Value>,
     pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
@@ -2621,4 +2622,8 @@ impl LeanVocabularyParseError<'_> {
 
 pub(crate) fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydrationCase] {
     &lean_contract_snapshot().budget_rehydration_cases
+}
+
+pub(crate) fn lean_application_write_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().application_write_cases
 }

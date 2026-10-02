@@ -414,7 +414,7 @@ impl ToolPolicySurface {
                     .iter()
                     .map(|name| name.trim().to_string()),
             ),
-            write_tools: write_scope_from_decls(&selection.write_tools),
+            write_tools: write_scope_from_selection(selection),
             query_tools: query_scope_from_decls(&selection.query_tools),
             eth_query_methods: eth_query_scope_from_resolved(&selection.eth_queries),
             eth_call_tools: eth_call_scope_from_resolved(&selection.eth_calls),
@@ -547,6 +547,26 @@ impl ToolPolicySurface {
             EndpointScope::Only(_) => self.defra_collections.keys(),
             EndpointScope::None | EndpointScope::All => Vec::new(),
         }
+    }
+
+    pub fn application_write_collections_for_runtime(&self, collections: &[String]) -> Vec<String> {
+        collections
+            .iter()
+            .filter(|collection| {
+                let key = (
+                    crate::application_write::WRITE_TOOL_NAME.to_string(),
+                    (*collection).clone(),
+                );
+                match &self.write_tools {
+                    EndpointScope::None => false,
+                    EndpointScope::All => true,
+                    EndpointScope::Only(grants) => {
+                        grants.get(&key).is_some_and(|fields| fields.contains("*"))
+                    }
+                }
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn write_decls_for_runtime(&self, decls: &[WriteToolDecl]) -> Vec<WriteToolDecl> {
@@ -807,4 +827,22 @@ fn network_mode_rank(mode: CommandNetworkMode) -> u8 {
         CommandNetworkMode::Inherit => 1,
         CommandNetworkMode::Enabled => 2,
     }
+}
+
+fn write_scope_from_selection(
+    selection: &ResolvedToolSelection,
+) -> EndpointScope<(String, String), BTreeSet<String>> {
+    let mut scope = write_scope_from_decls(&selection.write_tools);
+    if let EndpointScope::Only(grants) = &mut scope {
+        for collection in &selection.application_write_collections {
+            grants.insert(
+                (
+                    crate::application_write::WRITE_TOOL_NAME.into(),
+                    collection.clone(),
+                ),
+                BTreeSet::from(["*".into()]),
+            );
+        }
+    }
+    scope
 }

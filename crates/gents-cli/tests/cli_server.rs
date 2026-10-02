@@ -2260,7 +2260,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     graphql_query(
         &graphql,
         &format!(
-            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "trace-tc", request_id: "trace-req", request_doc_id: "{request_doc_id_literal}", session_id: "trace-session", agent_did: "{agent_did_literal}", message_sequence: 1, tool_name: "defra_query", tool_call_id: "trace-tc-1", status: "completed", lifecycle_state: "completed", started_at: "2026-06-03T10:00:01Z", completed_at: "2026-06-03T10:00:02Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "trace-tc", request_id: "trace-req", request_doc_id: "{request_doc_id_literal}", session_id: "trace-session", agent_did: "{agent_did_literal}", message_sequence: 1, tool_name: "query", tool_call_id: "trace-tc-1", status: "completed", lifecycle_state: "completed", started_at: "2026-06-03T10:00:01Z", completed_at: "2026-06-03T10:00:02Z" }}) {{ _docID }} }}"#
         ),
     )
     .await
@@ -2401,7 +2401,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ],
     )?;
     assert_eq!(
-        request.get("count").and_then(Value::as_i64),
+        request.get("returned_count").and_then(Value::as_i64),
         Some(1),
         "{request}"
     );
@@ -2432,12 +2432,12 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ],
     )?;
     assert_eq!(
-        tool_calls.get("count").and_then(Value::as_i64),
+        tool_calls.get("returned_count").and_then(Value::as_i64),
         Some(1),
         "{tool_calls}"
     );
     let tc = &tool_calls["results"][0];
-    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    assert_eq!(tc["tool_name"].as_str(), Some("query"));
     assert_eq!(
         tc["lifecycle_state"].as_str(),
         Some("completed"),
@@ -2646,7 +2646,12 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
 
-    let mut serve = spawn_server_with_env(&home_dir, port, &["--enable-mcp"], &[])?;
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        port,
+        &["--enable-mcp", "--mcp-write-collection", "McpParcel"],
+        &[],
+    )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -2654,7 +2659,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         format!(
             r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", lifecycle_state: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
-        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", status: "completed" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "query", status: "completed" }) { _docID } }"#.to_string(),
     ] {
         graphql_query(&graphql, &mutation)
             .await
@@ -2668,10 +2673,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
     assert!(
-        tools
-            .tools
-            .iter()
-            .any(|tool| tool.name.as_ref() == "defra_query"),
+        tools.tools.iter().any(|tool| tool.name.as_ref() == "query"),
         "expected defra_query in advertised tools: {:?}",
         tools
             .tools
@@ -2681,12 +2683,12 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     );
 
     let args = serde_json::json!({
-        "collection": "AgentToolCall",
-        "fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
-        "filter": { "request_id": { "_eq": "mcp-req" } }
+        "argv": ["find"], "collection": "AgentToolCall",
+        "options": {"fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
+        "filter": { "request_id": { "_eq": "mcp-req" } }}
     });
     let params =
-        CallToolRequestParams::new("defra_query").with_arguments(args.as_object().unwrap().clone());
+        CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
     let result = mcp
         .peer()
         .call_tool(params)
@@ -2699,13 +2701,13 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         .collect::<Vec<_>>()
         .join("");
     let payload: Value = serde_json::from_str(&text).context("MCP tool result is JSON")?;
-    assert_eq!(payload["count"].as_i64(), Some(1), "{payload}");
+    assert_eq!(payload["returned_count"].as_i64(), Some(1), "{payload}");
     let tc = &payload["results"][0];
-    assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
+    assert_eq!(tc["tool_name"].as_str(), Some("query"));
     assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
 
-    let denied_args = serde_json::json!({ "collection": "InferenceBackend", "fields": ["auth"] });
-    let denied_params = CallToolRequestParams::new("defra_query")
+    let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
+    let denied_params = CallToolRequestParams::new("query")
         .with_arguments(denied_args.as_object().unwrap().clone());
     let denied = mcp.peer().call_tool(denied_params).await;
     let blocked = match denied {
@@ -2726,6 +2728,71 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "expected MCP defra_query to block backend auth selection"
     );
 
+    assert!(tools.tools.iter().any(|tool| tool.name.as_ref() == "write"));
+    let preview = serde_json::json!({"argv":["preview","create"],"collection":"McpParcel","options":{"input":{"reference":"MCP-7","status":"queued"}}});
+    let unsigned = mcp
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("write")
+                .with_arguments(preview.as_object().unwrap().clone()),
+        )
+        .await;
+    assert!(
+        match unsigned {
+            Err(_) => true,
+            Ok(result) => result.is_error == Some(true),
+        },
+        "anonymous MCP write must fail"
+    );
+    let _identity = identity_from_init(&init)?;
+    let access = gents::config_client::ConfigAccess::graphql_as(graphql.clone(), agent_did.clone());
+    access
+        .add_schema("type McpParcel { reference: String status: String }")
+        .await?;
+    let bearer =
+        gents::identity::defradb_bearer_authorization(&agent_did, &format!("127.0.0.1:{port}"))?;
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
+            .auth_header(bearer.strip_prefix("Bearer ").unwrap());
+    let authenticated = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            config,
+        ))
+        .await?;
+    for command in [
+        preview,
+        serde_json::json!({"argv":["preview","update"],"collection":"McpParcel","options":{"filter":{"reference":{"_eq":"MCP-7"}},"max_targets":1,"input":{"status":"delivered"}}}),
+        serde_json::json!({"argv":["preview","delete"],"collection":"McpParcel","options":{"filter":{"reference":{"_eq":"MCP-7"}},"max_targets":1}}),
+    ] {
+        let result = authenticated
+            .peer()
+            .call_tool(
+                CallToolRequestParams::new("write")
+                    .with_arguments(command.as_object().unwrap().clone()),
+            )
+            .await?;
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let text = result
+            .content
+            .iter()
+            .filter_map(|v| v.raw.as_text().map(|v| v.text.as_str()))
+            .collect::<String>();
+        let preview: Value = serde_json::from_str(&text)?;
+        assert_eq!(preview["effect"]["target_count"], 1);
+        let applied = authenticated
+            .peer()
+            .call_tool(
+                CallToolRequestParams::new("write")
+                    .with_arguments(preview["next_call"]["args"].as_object().unwrap().clone()),
+            )
+            .await?;
+        assert_ne!(applied.is_error, Some(true), "{applied:?}");
+    }
+    assert_eq!(
+        access.execute("{McpParcel{reference status}}").await?["data"]["McpParcel"],
+        serde_json::json!([])
+    );
+    let _ = authenticated.cancel().await;
     let _ = mcp.cancel().await;
     Ok(())
 }

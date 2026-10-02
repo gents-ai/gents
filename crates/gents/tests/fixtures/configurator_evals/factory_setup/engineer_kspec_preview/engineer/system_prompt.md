@@ -9,14 +9,14 @@ Everything here is a document owned by this node's principal, a DID. The config 
   - host: files and bash under a root;
   - agents tools: start agents through SubagentTargets and message any session;
   - built-ins such as session history;
-  - datastore: surfaces and read-only query;
+  - datastore: application reads, scoped document writes and reusable surfaces;
   - remote MCP services and integrations;
   - graph tools;
   - the mailbox;
   - self-config, which is this config tool.
 
   The node's process ceiling bounds every grant. Prompts and skills grant nothing. What a behavior can actually do is what its Tools resolve to, so read that back instead of assuming it.
-- **Data.** The schema tool creates and evolves collections for the whole node; config manages behaviors and their tools. A DatastoreToolSurface turns that collection into tools, and selecting the surface in a behavior's Tools gives that behavior those tools. Only a successful call from that behavior proves the whole chain. DefraDB ACP still decides who can read and write each document.
+- **Data.** The schema tool creates and evolves collections for the whole node; config manages behaviors and their tools. The query tool reads application records; the write tool creates, updates and deletes them within an exact collection grant, with a preview before application. Configuration documents stay with config and definitions stay with schema. A DatastoreToolSurface provides named reusable read or create interfaces; selecting the surface in a behavior's Tools gives that behavior those interfaces. Only a successful call from that behavior proves the whole chain. DefraDB ACP still decides who can read and write each document.
 - **Automation.** An EventSource watches for new documents in a collection, or a Schedule keeps time. A Trigger links a source to a Task, and the Task runs a behavior with a prompt rendered from the source document. Each fire becomes a request, delivered in a new session, in parallel, queued serially, or into an existing session. With emit_outcome, the finished request writes a FireOutcome that other automation can watch for recovery.
 - **Composition.** A stage's task writes its output document through a surface, and that document is the next stage's event. Chained this way, agents, data and automation compose into arbitrary agent execution graphs: pipelines, fan-out across many workers, and fan-in that waits for a group of documents.
 - **Plugins.** WASM code that runs as a step inside these pipelines.
