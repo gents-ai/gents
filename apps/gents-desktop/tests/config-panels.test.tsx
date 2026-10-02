@@ -840,6 +840,151 @@ describe("configuration panels", () => {
           );
         });
       });
+
+      describe("rows draw reported usage only, read on open and on Refresh", () => {
+        const at = (minutes: number) =>
+          new Date(Date.now() + minutes * 60_000).toISOString();
+        const window = (label: string, usedPct: number, fields: object = {}) => ({
+          label,
+          windowMinutes: null,
+          usedPct,
+          resetsAt: at(133),
+          source: "header",
+          observedAt: at(-3),
+          lastKnown: false,
+          ...fields,
+        });
+        const view_ = (backendId: string, fields: object = {}) => ({
+          backendId,
+          windows: [],
+          plan: null,
+          note: null,
+          readAt: null,
+          readError: null,
+          read: null,
+          ...fields,
+        });
+        const usage = [
+          view_("claude-work", { windows: [window("5h", 30), window("7d", 81)] }),
+          view_("chatgpt-team", {
+            windows: [window("5h", 20, { observedAt: at(-70), lastKnown: true })],
+          }),
+          view_("chatgpt", { note: "unknown" }),
+          view_("local", { note: "not reported" }),
+          view_("openrouter", {
+            note: "no cap on this key",
+            read: "unavailable: throttled",
+          }),
+          view_("claude", { note: "not verified", read: "skipped_until_refresh" }),
+          view_("grok-side", { windows: [window("5h", 50)] }),
+        ];
+        const setup = (item?: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.readProviderUsage = vi.fn().mockResolvedValue(usage);
+          const view = render(
+            <InferencePanel shell={shell} deployment={rowsDeployment} item={item} />,
+          );
+          return { api, shell, view, user: userEvent.setup() };
+        };
+
+        it("reads usage once on open and not on a snapshot change", async () => {
+          const { api, shell, view } = setup();
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
+          expect(api.readProviderUsage).toHaveBeenCalledWith(
+            deployment.agentDid,
+            false,
+            null,
+          );
+          view.rerender(
+            <InferencePanel
+              shell={{ ...shell, snapshot: { bootstrap } } as Shell}
+              deployment={rowsDeployment}
+            />,
+          );
+          await act(async () => {});
+          expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
+        });
+
+        it("draws the most-used window on a row and no percent without a window", async () => {
+          setup();
+          expect(await screen.findByText("7d 81%")).toBeVisible();
+          expect(screen.getByText("5h 20%")).toBeVisible();
+          /* the disabled Side account draws no usage; no other row has a window */
+          expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
+            "7d 81%",
+            "5h 20%",
+          ]);
+        });
+
+        it("opens a row with each window's percent, reset, source and age", async () => {
+          setup("claude-work");
+          for (const pct of [30, 81])
+            expect(
+              await screen.findByText(
+                new RegExp(
+                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, [23]m ago$`,
+                ),
+              ),
+            ).toBeVisible();
+        });
+
+        it("marks a stale window as last known", async () => {
+          setup("chatgpt-team");
+          expect(
+            await screen.findByText(
+              /^20% used · .* · from response headers, 1h1[01]m ago · last known$/,
+            ),
+          ).toBeVisible();
+        });
+
+        for (const [item, texts] of [
+          ["chatgpt", ["unknown"]],
+          ["local", ["not reported"]],
+          ["openrouter", ["no cap on this key", "Not read: throttled"]],
+          ["claude", ["not verified", "Refresh to read usage"]],
+        ] as const)
+          it(`says why ${item} has no number`, async () => {
+            setup(item);
+            for (const text of texts)
+              expect(await screen.findByText(text)).toBeVisible();
+            expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+          });
+
+        it("draws no usage for a disabled account", async () => {
+          setup("grok-side");
+          expect(await screen.findByText("Disabled")).toBeVisible();
+          expect(screen.queryByText(/50%/)).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("button", { name: "Refresh" }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("Refresh reads the row's provider and redraws from the result", async () => {
+          const { api, user, view } = setup("claude");
+          await screen.findByText("not verified");
+          api.readProviderUsage.mockResolvedValueOnce([
+            view_("claude", { windows: [window("5h", 12)] }),
+          ]);
+          await user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            "claude-subscription",
+          );
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          view.unmount();
+
+          const openrouter = setup("openrouter");
+          await screen.findByText("no cap on this key");
+          await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            null,
+          );
+        });
+      });
     });
   });
 
