@@ -93,6 +93,7 @@ impl EmbeddedHome {
         let did = identity.did().to_string();
         let mut builder = EmbeddedNode::builder()
             .data_path(&path)
+            .with_regolith_options(crate::storage_backend::regolith_options())
             .with_node_identity_did(&did);
         if let Some(p2p) = &p2p {
             builder = builder.with_p2p(p2p(&path));
@@ -162,6 +163,7 @@ impl EmbeddedHome {
 
         let mut builder = EmbeddedNode::builder()
             .data_path(&self.path)
+            .with_regolith_options(crate::storage_backend::regolith_options())
             .with_node_identity_did(&self.did);
         if let Some(p2p) = &self.p2p {
             builder = builder.with_p2p(p2p(&self.path));

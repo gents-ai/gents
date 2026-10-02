@@ -906,7 +906,14 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
     let git = |args: &[&str]| -> Result<String> {
         let output = std::process::Command::new("git")
             .current_dir(&repo)
-            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .context("running git")?;

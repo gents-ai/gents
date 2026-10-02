@@ -321,14 +321,18 @@ async fn copy_and_verify(
 ) -> Result<()> {
     // A retry starts from the original source snapshot, including deletions
     // an earlier binary might have committed between interrupted upgrades.
-    let source = RegolithStore::open(data)?;
+    let source =
+        RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let destination = EncryptedStore::new(RegolithStore::open(stage)?, *key.0);
+        let destination = EncryptedStore::new(
+            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
+            *key.0,
+        );
         let copied = copy_values(&source, &destination, progress).await;
         let verified = match copied {
             Ok(()) => verify_values(&source, &destination, progress).await,
@@ -389,9 +393,13 @@ async fn recheck_source(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<bool> {
-    let source = RegolithStore::open(data)?;
+    let source =
+        RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
     let result = async {
-        let destination = EncryptedStore::new(RegolithStore::open(stage)?, *key.0);
+        let destination = EncryptedStore::new(
+            RegolithStore::open_with_options(stage, crate::storage_backend::regolith_options())?,
+            *key.0,
+        );
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;
         drop(destination);

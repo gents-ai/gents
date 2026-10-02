@@ -57,6 +57,7 @@ async fn main() -> Result<()> {
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
+            .with_regolith_options(gents::storage_backend::regolith_options())
             .with_http(HttpConfig::with_addr(http_addr))
             .with_node_identity_did(identity.did())
             .build()

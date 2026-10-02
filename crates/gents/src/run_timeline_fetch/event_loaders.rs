@@ -247,23 +247,20 @@ async fn load_spawned_tool_output(
         reconstruction::{reconstruct_stream, ObservedSegment},
         OutputSource, PayloadRef, StreamPayload,
     };
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
-    let request = escape_graphql_string(request_doc_id);
-    let query = format!(
-        r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
-        crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
-    );
+    let query = crate::session::canonical_rows::request_output_segments_query(request_doc_id);
     let values = required_rows(access, "AgentOutputSegment", &query).await?;
     let source = OutputSource::ToolCall {
         tool_call_doc_id: tool_doc_id.to_owned(),
     };
-    let rows = values
-        .iter()
-        .map(crate::session::canonical_rows::decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|row| row.segment.source == source)
-        .collect::<Vec<_>>();
+    let rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
+        &values,
+        agent_did,
+        Some(session_id),
+        requester_did,
+    )?
+    .into_iter()
+    .filter(|row| row.segment.source == source)
+    .collect::<Vec<_>>();
     let closes = rows
         .iter()
         .filter(|row| row.segment.close.is_some())

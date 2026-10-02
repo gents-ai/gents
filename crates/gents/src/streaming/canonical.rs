@@ -638,13 +638,14 @@ async fn publish_provider_turn_with_time(
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<PublishedProviderTurn> {
+    let plan = std::sync::Arc::new(plan);
     ConfigAccess::transact_local_idempotent(
         node,
         None,
         IdempotentTransactionRetry::Standard,
         "streaming.publish_provider_turn",
         move |txn| {
-            let mut final_flush = plan.final_flush.clone();
+            let plan = std::sync::Arc::clone(&plan);
             let message_key = plan.message_key.clone();
             let encoded = std::sync::Arc::clone(&plan.encoded);
             let expected = std::sync::Arc::clone(&plan.expected);
@@ -652,7 +653,7 @@ async fn publish_provider_turn_with_time(
             let background_calls = plan.background_calls.clone();
             let fixture_now = fixture_now.clone();
             Box::pin(async move {
-            let exemplar = final_flush.as_ref().context("provider publication has no output")?;
+            let exemplar = plan.final_flush.as_ref().context("provider publication has no output")?;
             anyhow::ensure!(
                 matches!(&exemplar.source, OutputSource::ProviderTurn { .. } | OutputSource::Authored { .. })
                     && !exemplar.source.is_auxiliary_audit()
@@ -693,11 +694,10 @@ async fn publish_provider_turn_with_time(
                 .await;
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
-            let prepared = final_flush.as_mut().expect("checked");
-            let provisional = OutputSegmentRow { doc_id: "<pending-close>".into(), segment: prepared.clone() };
+            let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();
-            if provisional.segment.ordinal.is_some() {
-                observations.push(ObservedSegment { doc_id: &provisional.doc_id, segment: &provisional.segment });
+            if prepared.ordinal.is_some() {
+                observations.push(ObservedSegment { doc_id: "<pending-close>", segment: prepared });
             }
             let extent = gents_protocol::output::extent::inspect_open_source(
                 &observations, &prepared.request_doc_id, &prepared.source, &prepared.writer)?;
@@ -718,9 +718,10 @@ async fn publish_provider_turn_with_time(
             if prepared.close.as_ref().is_some_and(|candidate| candidate != &derived_close) {
                 return Err(ProviderCloseRejection::InvalidExtent.into());
             }
-            prepared.close = Some(derived_close);
+            let mut variables = output_segment_create_variables(prepared)?;
+            variables["input"]["close"] = serde_json::to_value(&derived_close)?;
             let created = txn.execute_with_variables(
-                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_create_variables(prepared)?,
+                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables,
             ).await?;
             let close_doc_id = created_doc_id(&created, "AgentOutputSegment")?;
             let sequence = crate::lifecycle::queue::next_append_sequence_in_transaction(

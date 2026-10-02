@@ -31,7 +31,7 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/background_completion/datetime_fields.rs", 1),
     ("crates/gents/src/background_completion/notification_delivery.rs", 2),
     ("crates/gents/src/background_completion/side_effects.rs", 1),
-    ("crates/gents/src/background_tools.rs", 3),
+    ("crates/gents/src/background_tools.rs", 2),
     ("crates/gents/src/callback/scan.rs", 3),
     ("crates/gents/src/completion_factory.rs", 1),
     ("crates/gents/src/eth/submit.rs", 2),

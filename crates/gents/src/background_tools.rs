@@ -9,7 +9,9 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use crate::session::canonical_rows::{
+    decode_scoped_request_output_segments, request_output_segments_query,
+};
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
@@ -347,25 +349,20 @@ pub(crate) async fn canonical_tool_output(
     agent_did: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
-    let request = escape_graphql_string(request_doc_id);
-    let response = node.execute(&format!(
-        r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-    )).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "canonical tool output query failed: {:?}",
-        response.errors
-    );
-    let rows = response
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &request_output_segments_query(request_doc_id),
+        "query canonical tool output",
+    )
+    .await?;
+    let values = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
-        .context("canonical tool output query omitted segments")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .context("canonical tool output query omitted segments")?;
+    let rows =
+        decode_scoped_request_output_segments(values, agent_did, Some(session_id), requester_did)?;
     Ok(canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)?.into_text())
 }
 
@@ -391,20 +388,15 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
     agent_did: &str,
     requester_did: Option<&str>,
 ) -> Result<CanonicalToolOutputObservation> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
-    let request = escape_graphql_string(request_doc_id);
     let response = access
-        .execute(&format!(
-            r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-        ))
+        .execute(&request_output_segments_query(request_doc_id))
         .await?;
-    let rows = response
+    let values = response
         .pointer("/data/AgentOutputSegment")
         .and_then(serde_json::Value::as_array)
-        .context("canonical tool output query omitted segments")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
+        .context("canonical tool output query omitted segments")?;
+    let rows =
+        decode_scoped_request_output_segments(values, agent_did, Some(session_id), requester_did)?;
     canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)
 }
 
