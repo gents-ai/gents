@@ -21,7 +21,8 @@
     "cases/extend_customer_records.json",
     "cases/editorial_relationships.json",
     "cases/spanish_knowledge_base.json",
-    "cases/guest_bookings.json"
+    "cases/guest_bookings.json",
+    "cases/admiral_report_search.json"
   ],
   "config": "pack_config.json"
 }

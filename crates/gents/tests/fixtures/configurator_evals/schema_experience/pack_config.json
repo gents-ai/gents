@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-schema-experience",
-      "comparability_version": 2,
+      "comparability_version": 3,
       "title": "Engineer schema experience",
       "subject": {
         "kind": "behavior",
@@ -20,7 +20,8 @@
         "./cases/extend_customer_records.json",
         "./cases/editorial_relationships.json",
         "./cases/spanish_knowledge_base.json",
-        "./cases/guest_bookings.json"
+        "./cases/guest_bookings.json",
+        "./cases/admiral_report_search.json"
       ]
     }
   ]
