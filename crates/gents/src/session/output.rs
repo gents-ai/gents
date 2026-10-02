@@ -801,6 +801,7 @@ async fn reconstruct_scoped_message_with_facts(
 /// A source boundary limits this read, but does not itself prove that an
 /// independently stored checkpoint was causally derived from the whole view.
 /// The caller must not select a candidate by comparing native message bytes.
+#[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
     node: &EmbeddedNode,
     scope: CanonicalReplayScope<'_>,
@@ -941,8 +942,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             .request_doc_id
             .as_deref()
             .context("canonical provider header has no physical request")?;
-        // The bounded header and its physical coordinate are already proven;
-        // unrequested candidates need no request witness or capture decode.
+        // Filter only after bounded-header and physical-coordinate validation
+        // so unrequested history cannot bypass canonical-view checks.
         if let Some(tags) = selected_tags {
             let selected = tags.iter().any(|tag| {
                 if tag.request_doc_id != request_doc_id {
