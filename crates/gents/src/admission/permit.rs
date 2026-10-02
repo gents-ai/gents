@@ -132,7 +132,7 @@ impl AdmissionPermit {
             usage: None,
             cached_input_tokens: CachedInputTokensObservation::NotAvailable,
         });
-        if let Err(error) = super::persistence::persist_existing_call_terminal(
+        if let Err(error) = persist_existing_call_terminal(
             self.node.clone(),
             &self.call,
             terminal.call_state,
@@ -181,6 +181,7 @@ impl StreamGuardLifecycle for AdmissionPermit {
                 call_state: "failed",
                 failure_reason: Some(recorded_failure_reason(&error.to_string())),
                 usage: None,
+                cached_input_tokens: CachedInputTokensObservation::NotAvailable,
             });
         }
     }
@@ -250,7 +251,7 @@ impl Drop for AdmissionPermit {
         // provider's terminal item. Drop remains the abort/cancellation repair
         // path and must never block a Tokio runtime thread.
         spawn_persistence(async move {
-            if let Err(error) = super::persistence::persist_existing_call_terminal(
+            if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,
                 terminal.call_state,
