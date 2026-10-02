@@ -471,3 +471,59 @@ fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
         Some("req-2")
     );
 }
+
+#[test]
+fn interrupted_unowned_input_survives_next_send_and_reloaded_projection() {
+    let mut first = request("req-1", "session-1", RequestLifecycleState::Interrupted);
+    first.content = Some("interrupted question".into());
+    let mut second = request("req-2", "session-1", RequestLifecycleState::Processing);
+    second.created_at = Some("2026-04-21T12:01:00Z".into());
+    let mut rows = ClientStoreRows {
+        sessions: vec![session(
+            "session-1",
+            "did:test:amy",
+            Some(("req-2", RequestLifecycleState::Processing)),
+        )],
+        requests: vec![second, first],
+        ..Default::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-2:prompt",
+        "session-1",
+        Some("req-2"),
+        1,
+        MessageRole::User,
+        "next question",
+    );
+    for _ in 0..2 {
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows.clone()),
+            "session-1",
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(&snapshot.timeline_items[0], RenderedTimelineItem::PendingUserTurn { request_id, content, lifecycle_state, .. }
+            if request_id == "req-1" && content == "interrupted question" && lifecycle_state.as_deref() == Some("interrupted"))
+        );
+        assert!(matches!(
+            &snapshot.timeline_items[1],
+            RenderedTimelineItem::UserMessage { .. }
+        ));
+        assert!(snapshot.pending_turn.is_none());
+    }
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-1:prompt",
+        "session-1",
+        Some("req-1"),
+        0,
+        MessageRole::User,
+        "interrupted question",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "session-1", None)
+            .unwrap();
+    assert!(!snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-1")));
+}

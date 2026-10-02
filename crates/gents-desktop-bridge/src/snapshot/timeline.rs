@@ -73,7 +73,7 @@ fn render_timeline_order(
     order: Vec<TimelineSlot>,
     rendered_messages: &BTreeMap<String, RenderedTimelineItem>,
     tool_groups: &BTreeMap<Option<i64>, Vec<ToolCallView>>,
-    pending_turn: Option<&PendingTurnView>,
+    pending_turns: &[(PendingTurnView, Option<i64>)],
     overlay_content: &Option<String>,
     overlay_reasoning: &Option<String>,
 ) -> Vec<RenderedTimelineItem> {
@@ -96,8 +96,10 @@ fn render_timeline_order(
                     tools: tools.into_iter().map(render_tool_call).collect(),
                 });
             }
-            TimelineSlot::Pending => {
-                if let Some(pending_turn) = pending_turn {
+            TimelineSlot::Pending { key } => {
+                if let Some((pending_turn, _)) = pending_turns.iter().find(|(turn, _)| {
+                    turn.request_doc_id.as_deref().unwrap_or(&turn.request_id) == key
+                }) {
                     timeline.push(RenderedTimelineItem::PendingUserTurn {
                         item_key: format!("pending-{}", pending_turn.request_id),
                         request_id: pending_turn.request_id.clone(),
@@ -125,7 +127,7 @@ fn render_timeline_order(
 pub(super) fn build_rendered_timeline(
     messages: &[MessageView],
     tool_calls: &[ToolCallView],
-    pending_turn: Option<&PendingTurnView>,
+    pending_turns: &[(PendingTurnView, Option<i64>)],
 ) -> Vec<RenderedTimelineItem> {
     // Group tool calls by their owning message sequence (rich lookup for the
     // mapping-back step); the presentation-neutral ORDER is decided by the
@@ -224,43 +226,24 @@ pub(super) fn build_rendered_timeline(
         });
     }
 
-    let pending = pending_turn.map(|pending_turn| {
-        let first_same_request_assistant = messages
-            .iter()
-            .filter(|message| {
-                pending_turn.request_doc_id.as_deref().is_some()
-                    && message.request_id.as_deref() == pending_turn.request_doc_id.as_deref()
-                    && message.sequence.is_some()
-                    && message
-                        .display_role
-                        .as_deref()
-                        .or(message.role.as_deref())
-                        .is_some_and(|role| role.eq_ignore_ascii_case("assistant"))
-                    && !message.has_tool_results
-                    && !message.runtime_control
-                    && (normalize_optional(message.display_content.as_deref()).is_some()
-                        || normalize_optional(message.reasoning.as_deref()).is_some()
-                        || message.has_tool_calls)
-            })
-            .min_by_key(|message| {
-                message
-                    .sequence
-                    .map_or((0_i8, 0_i64), |sequence| (1, sequence))
-            });
-        PendingInput {
-            placement: first_same_request_assistant
-                .and_then(|message| message.sequence)
-                .map_or(PendingPlacement::Tail, |message_sequence| {
-                    PendingPlacement::BeforeMessage { message_sequence }
-                }),
-        }
-    });
-    let order = build_timeline_order(&inputs, &group_sequences, pending, None);
+    let pending = pending_turns
+        .iter()
+        .map(|(turn, anchor)| PendingInput {
+            key: turn
+                .request_doc_id
+                .clone()
+                .unwrap_or_else(|| turn.request_id.clone()),
+            placement: anchor.map_or(PendingPlacement::Tail, |message_sequence| {
+                PendingPlacement::BeforeMessage { message_sequence }
+            }),
+        })
+        .collect::<Vec<_>>();
+    let order = build_timeline_order(&inputs, &group_sequences, &pending, None);
     render_timeline_order(
         order,
         &rendered_message,
         &tool_groups,
-        pending_turn,
+        pending_turns,
         &None,
         &None,
     )
@@ -400,7 +383,7 @@ mod tests {
             },
         ];
 
-        let timeline = build_rendered_timeline(&messages, &[], None);
+        let timeline = build_rendered_timeline(&messages, &[], &[]);
 
         assert_eq!(timeline.len(), 1);
         assert!(matches!(
@@ -415,7 +398,7 @@ mod tests {
         let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
-        let timeline = build_rendered_timeline(&messages, &[], None);
+        let timeline = build_rendered_timeline(&messages, &[], &[]);
 
         assert!(matches!(
             &timeline[0],

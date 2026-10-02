@@ -96,7 +96,7 @@ fn canonical_text_message(
 /// tests deliberately go through the same header/segment split as a real
 /// transcript: a header without its segment is an incomplete reconstruction,
 /// not a serialized-message fallback.
-fn push_canonical_text_message(
+pub(super) fn push_canonical_text_message(
     rows: &mut ClientStoreRows,
     doc_id: &str,
     session_id: &str,

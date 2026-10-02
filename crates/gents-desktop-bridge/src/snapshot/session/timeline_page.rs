@@ -34,7 +34,9 @@ fn rendered_timeline_durable_sequence(
 /// Bound the bridge-visible transcript while retaining an opaque, durable-row
 /// cursor for explicit older-page requests. The full database-backed snapshot
 /// remains authoritative inside the bridge; only IPC materialization is
-/// windowed here.
+/// windowed here. Request-owned inputs are already loaded session state; retain
+/// them beside their selected durable anchor (or the tip) for the frontend's
+/// existing local transcript window, without inventing a database cursor.
 pub fn apply_session_timeline_page(
     snapshot: &mut DesktopSessionSnapshot,
     before_item_key: Option<&str>,
@@ -55,10 +57,40 @@ pub fn apply_session_timeline_page_with_query(
         .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
 
     let (page, has_older, has_newer, oldest_item_key) = if let Some(query_page) = query_page {
+        let mut pending_anchors = HashMap::new();
+        let mut next_sequence = None;
+        for item in snapshot.timeline_items.iter().rev() {
+            match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => next_sequence = Some(sequence),
+                None if matches!(
+                    item,
+                    crate::types::RenderedTimelineItem::PendingUserTurn { .. }
+                ) =>
+                {
+                    if let Some(sequence) = next_sequence {
+                        pending_anchors.insert(rendered_timeline_item_key(item), sequence);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let page_sequence = |item: &crate::types::RenderedTimelineItem| {
+            pending_anchors
+                .get(rendered_timeline_item_key(item))
+                .copied()
+                .map(Some)
+                .or_else(|| rendered_timeline_durable_sequence(item))
+        };
         let mut sequence_counts = BTreeMap::<i64, usize>::new();
         let mut non_durable_items = 0_usize;
         for item in &snapshot.timeline_items {
-            match rendered_timeline_durable_sequence(item) {
+            if matches!(
+                item,
+                crate::types::RenderedTimelineItem::PendingUserTurn { .. }
+            ) {
+                continue;
+            }
+            match page_sequence(item) {
                 Some(Some(sequence)) => {
                     *sequence_counts.entry(sequence).or_default() += 1;
                 }
@@ -95,7 +127,7 @@ pub fn apply_session_timeline_page_with_query(
         let page = snapshot
             .timeline_items
             .iter()
-            .filter(|item| match rendered_timeline_durable_sequence(item) {
+            .filter(|item| match page_sequence(item) {
                 Some(Some(sequence)) => selected_sequences.contains(&sequence),
                 Some(None) => false,
                 None => true,
