@@ -893,30 +893,38 @@ async fn transport_401_invalidates_the_bearer_once() {
     );
 }
 
-async fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> String {
+fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> String {
+    // The fixture lock spans the request, so it is held outside the
+    // runtime: a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
-    let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
-        401,
-        r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
-    )
-    .await;
-    let _ = stream_messages_at(
-        &url,
-        "claude-sonnet-5",
-        &echo_request(),
-        HashSet::new(),
-        bearer,
-        &ReqwestClient::new(),
-    )
-    .await;
-    handle.await.expect("request")
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
+                401,
+                r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
+            )
+            .await;
+            let _ = stream_messages_at(
+                &url,
+                "claude-sonnet-5",
+                &echo_request(),
+                HashSet::new(),
+                bearer,
+                &ReqwestClient::new(),
+            )
+            .await;
+            handle.await.expect("request")
+        })
 }
 
 /// An API key sends the bearer and version, never the OAuth beta.
-#[tokio::test]
-async fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
+#[test]
+fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let request = captured_request(&bearer).await;
+    let request = captured_request(&bearer);
     let has = |expected: &str| {
         request
             .lines()
@@ -933,10 +941,10 @@ async fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
 }
 
 /// A sign-in keeps the OAuth beta.
-#[tokio::test]
-async fn sign_in_request_keeps_the_oauth_beta() {
+#[test]
+fn sign_in_request_keeps_the_oauth_beta() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
-    let request = captured_request(&bearer).await;
+    let request = captured_request(&bearer);
     assert!(
         request
             .lines()
