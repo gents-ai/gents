@@ -72,7 +72,10 @@ pub(crate) fn blocked_turn_from(
     call: Option<&FailedCall>,
     now: DateTime<Utc>,
 ) -> Option<BlockedTurn> {
-    if request.lifecycle_state != Some(RequestLifecycleState::Failed) {
+    if !matches!(
+        request.lifecycle_state,
+        Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
+    ) {
         return None;
     }
     let behavior_id = call
