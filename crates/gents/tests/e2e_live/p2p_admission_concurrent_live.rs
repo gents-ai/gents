@@ -35,6 +35,7 @@ use serde::Deserialize;
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{create_runtime_request, BootedAgent};
 use crate::support::live_inference::{bind_target, boot_live_agent, live_target};
+use crate::support::p2p_waits::wait_for_listen_addr;
 use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, TestP2pAdmission};
 
 const CONCURRENT_WAVES: usize = 4;
@@ -42,25 +43,6 @@ const REPLICATED: &[&str] = &["AgentRequest", "AgentOutputSegment", "AgentMessag
 
 fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_P2P_ADMISSION").as_deref() == Ok("1")
-}
-
-async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let addrs = node
-            .p2p()
-            .expect("p2p enabled")
-            .listen_addresses()
-            .await
-            .expect("listen addresses");
-        if let Some(addr) = addrs.first() {
-            return addr.clone();
-        }
-        if Instant::now() >= deadline {
-            panic!("no P2P listen address; last={addrs:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 async fn wait_for_connected_peer(node: &EmbeddedNode) {
