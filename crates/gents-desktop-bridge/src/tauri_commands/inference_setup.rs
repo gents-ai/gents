@@ -1029,6 +1029,17 @@ pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
     Ok(())
 }
 
+/// Each stored backend's usage as the panel draws it, with the runtime's
+/// outcome when `reads` names it: by backend, else by its account.
+async fn backend_usage_views(
+    _access: &gents::ConfigAccess,
+    _agent_did: &str,
+    _reads: Option<&gents_server::accounts::UsageReads>,
+    _now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Vec<BackendUsageView>> {
+    Ok(Vec::new())
+}
+
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
     _request: ProviderUsageReadRequest,
@@ -1988,6 +1999,236 @@ mod provider_account_tests {
 
         let json = serde_json::to_string(&[&added, &refreshed]).unwrap();
         assert!(!json.contains("SECRET"));
+    }
+
+    /// Serves `body` with 200 to one request; returns the server's origin.
+    fn serve_once(body: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
+        let address = listener.local_addr().expect("local address");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = stream.read(&mut [0u8; 4096]);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        format!("http://{address}")
+    }
+
+    fn stored_backend(agent: &str, backend: serde_json::Value) -> gents::InferenceBackend {
+        let mut backend = backend;
+        backend["agent_did"] = agent.into();
+        serde_json::from_value(backend).expect("backend")
+    }
+
+    #[tokio::test]
+    async fn usage_views_follow_each_backend_with_source_age_and_honest_unknowns() {
+        use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
+        use gents::usage_observation::{
+            read_account_usage, record_usage, AccountUsageRead, UsageAccount, UsageEndpoints,
+            UsageRead, UsageTrigger,
+        };
+
+        let node = serving_node().await;
+        let access = gents::ConfigAccess::Local(node.clone());
+        let agent = "did:key:zAgent";
+        let now = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
+        let minutes = chrono::Duration::minutes;
+        let window = |label: &str, used_pct, source, observed_at, resets_at| UsageWindow {
+            label: label.to_string(),
+            window_minutes: None,
+            used_pct,
+            resets_at: Some(resets_at),
+            source,
+            observed_at,
+        };
+        let report = |windows| UsageReport {
+            windows,
+            ..UsageReport::default()
+        };
+
+        let a = gents::oauth_credential::store_sign_in(
+            &access,
+            claude_sign_in(agent, Some("account-a"), "acct-a", "SECRET-a"),
+            None,
+        )
+        .await
+        .expect("store the original account")
+        .credential;
+        let b = gents::oauth_credential::store_sign_in(
+            &access,
+            OAuthCredential {
+                provider_account_key: Some("KEY-SENTINEL".to_string()),
+                ..claude_sign_in(agent, Some("account-b"), "IDENTITY", "SECRET-b")
+            },
+            Some("Work"),
+        )
+        .await
+        .expect("store the added account")
+        .credential;
+        let b_backend = format!("claude-subscription-{}", b.account_ref.clone().unwrap());
+        let openrouter_origin = serve_once(r#"{"data":{"limit":null}}"#);
+        let openrouter = stored_backend(
+            agent,
+            serde_json::json!({
+                "backend_id": "openrouter",
+                "name": "OpenRouter",
+                "provider_kind": "OpenRouter",
+                "endpoint": format!("{openrouter_origin}/api/v1"),
+                "auth": { "kind": "api_key", "key": "SECRET-or" },
+            }),
+        );
+        for backend in [
+            stored_backend(
+                agent,
+                serde_json::json!({
+                    "backend_id": "claude",
+                    "name": "Claude",
+                    "provider_kind": "ClaudeCliSubscription",
+                    "endpoint": "https://api.anthropic.com",
+                    "auth": { "kind": "principal_oauth" },
+                }),
+            ),
+            openrouter.clone(),
+            stored_backend(
+                agent,
+                serde_json::json!({
+                    "backend_id": "local",
+                    "name": "Local",
+                    "provider_kind": "OpenAiCompatible",
+                    "endpoint": "http://127.0.0.1:9/v1",
+                    "auth": { "kind": "unauthenticated" },
+                }),
+            ),
+        ] {
+            gents::config_client::write_inference_backend_document(&access, &backend)
+                .await
+                .expect("store backend");
+        }
+
+        record_usage(
+            &node,
+            &UsageAccount::for_credential(&b),
+            report(vec![
+                window(
+                    "5h",
+                    40.0,
+                    UsageSource::Header,
+                    now - minutes(3),
+                    now + minutes(133),
+                ),
+                window(
+                    "7d",
+                    90.0,
+                    UsageSource::Header,
+                    now - minutes(70),
+                    now + minutes(600),
+                ),
+            ]),
+        )
+        .await
+        .expect("record B");
+        record_usage(
+            &node,
+            &UsageAccount::for_credential(&a),
+            report(vec![
+                window(
+                    "5h",
+                    70.0,
+                    UsageSource::Header,
+                    now - minutes(5),
+                    now - minutes(1),
+                ),
+                window(
+                    "7d",
+                    20.0,
+                    UsageSource::Endpoint,
+                    now - minutes(2),
+                    now + minutes(600),
+                ),
+            ]),
+        )
+        .await
+        .expect("record A");
+        assert_eq!(
+            read_account_usage(
+                node.clone(),
+                agent,
+                &openrouter,
+                UsageTrigger::Refresh,
+                &UsageEndpoints::default(),
+                now,
+            )
+            .await
+            .expect("read OpenRouter"),
+            UsageRead::Read
+        );
+
+        let reads = gents_server::accounts::UsageReads {
+            agent_did: agent.to_string(),
+            reads: vec![
+                AccountUsageRead {
+                    provider: gents::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
+                    account_ref: b.account_ref.clone(),
+                    backend_id: None,
+                    outcome: UsageRead::SkippedUntilRefresh,
+                },
+                AccountUsageRead {
+                    provider: "OpenRouter".to_string(),
+                    account_ref: None,
+                    backend_id: Some("openrouter".to_string()),
+                    outcome: UsageRead::Unavailable("throttled".to_string()),
+                },
+            ],
+        };
+        let views = backend_usage_views(&access, agent, Some(&reads), now)
+            .await
+            .expect("usage views");
+        let view = |backend_id: &str| {
+            views
+                .iter()
+                .find(|view| view.backend_id == backend_id)
+                .unwrap_or_else(|| panic!("no usage view for {backend_id}: {views:?}"))
+        };
+
+        let work = view(&b_backend);
+        assert_eq!(work.windows.len(), 1, "{work:?}");
+        let five_hours = &work.windows[0];
+        assert_eq!(five_hours.label, "5h");
+        assert_eq!(five_hours.used_pct, 40.0);
+        assert_eq!(five_hours.source, "header");
+        assert_eq!(five_hours.observed_at, (now - minutes(3)).to_rfc3339());
+        assert_eq!(
+            five_hours.resets_at.as_deref(),
+            Some((now + minutes(133)).to_rfc3339().as_str())
+        );
+        assert!(!five_hours.last_known);
+        assert_eq!(work.note, None);
+        assert_eq!(work.read.as_deref(), Some("skipped_until_refresh"));
+
+        let original = view("claude");
+        assert!(original.windows.is_empty(), "{original:?}");
+        assert_eq!(original.note.as_deref(), Some("not verified"));
+        assert_eq!(original.read, None);
+
+        let key = view("openrouter");
+        assert!(key.windows.is_empty(), "{key:?}");
+        assert_eq!(key.note.as_deref(), Some("no cap on this key"));
+        assert!(key.read_at.is_some());
+        assert_eq!(key.read.as_deref(), Some("unavailable: throttled"));
+
+        let local = view("local");
+        assert!(local.windows.is_empty());
+        assert_eq!(local.note.as_deref(), Some("not reported"));
+        assert_eq!(local.read, None);
+
+        let json = serde_json::to_string(&views).unwrap();
+        for secret in ["SECRET", "KEY-SENTINEL", "IDENTITY"] {
+            assert!(!json.contains(secret), "usage views leak {secret}: {json}");
+        }
     }
 }
 
