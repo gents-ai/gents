@@ -233,9 +233,17 @@ pub(super) fn build_rendered_timeline(
                 .request_doc_id
                 .clone()
                 .unwrap_or_else(|| turn.request_id.clone()),
-            placement: anchor.map_or(PendingPlacement::Tail, |message_sequence| {
-                PendingPlacement::BeforeMessage { message_sequence }
-            }),
+            placement: anchor
+                .and_then(|anchor| {
+                    inputs
+                        .iter()
+                        .filter_map(|input| input.sequence)
+                        .filter(|sequence| *sequence >= anchor)
+                        .min()
+                })
+                .map_or(PendingPlacement::Tail, |message_sequence| {
+                    PendingPlacement::BeforeMessage { message_sequence }
+                }),
         })
         .collect::<Vec<_>>();
     let order = build_timeline_order(&inputs, &group_sequences, &pending, None);
@@ -272,6 +280,32 @@ mod tests {
             denied_dependency_doc_id: None,
             runtime_control: false,
             timestamp: None,
+        }
+    }
+
+    #[test]
+    fn request_input_advances_past_a_non_rendering_physical_anchor() {
+        let pending = super::PendingTurnView {
+            request_id: "interrupted".into(),
+            request_doc_id: Some("physical-request".into()),
+            content: "keep this input".into(),
+            selected_skill_ids: vec![],
+            lifecycle_state: Some("interrupted".into()),
+            created_at: None,
+        };
+        let hidden = MessageView {
+            has_tool_results: true,
+            ..user_message("hidden-result", 1, "tool result")
+        };
+        for messages in [
+            vec![hidden.clone()],
+            vec![hidden, user_message("later", 2, "next input")],
+        ] {
+            let items = build_rendered_timeline(&messages, &[], &[(pending.clone(), Some(1))]);
+            assert!(
+                matches!(&items[0], RenderedTimelineItem::PendingUserTurn { request_id, .. }
+                if request_id == "interrupted")
+            );
         }
     }
 
