@@ -910,6 +910,39 @@ describe("configuration panels", () => {
           expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
         });
 
+        it("drops the previous agent's usage when the agent changes", async () => {
+          const { api, shell, view } = setup();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
+          api.readProviderUsage.mockRejectedValue(new Error("agent not running"));
+          view.rerender(
+            <InferencePanel
+              shell={shell}
+              deployment={{ ...rowsDeployment, agentDid: "did:key:z6MkTestOther" }}
+            />,
+          );
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(2));
+          await act(async () => {});
+          expect(screen.queryByText("5h 81%")).not.toBeInTheDocument();
+        });
+
+        it("keeps a Refresh result over an open read that lands later", async () => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          let land: (views: unknown) => void = () => {};
+          api.readProviderUsage = vi
+            .fn()
+            .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
+            .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
+          render(
+            <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
+          );
+          const user = userEvent.setup();
+          await user.click(await screen.findByRole("button", { name: "Refresh" }));
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          await act(async () => land(usage()));
+          expect(screen.getByText(/^12% used/)).toBeVisible();
+        });
+
         it("draws the most-used window on a row and no percent without a window", async () => {
           setup();
           expect(await screen.findByText("5h 81%")).toBeVisible();
