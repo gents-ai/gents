@@ -36,7 +36,7 @@
   },
   {
     "case_id": "malformed-peer", "split": "held_out",
-    "prompt": "Inspect the peer called cedar-not-a-peer-id, and tell me how to locate its actual identity if that identifier is invalid. Don't create a pairing.",
+    "prompt": "Inspect the peer with identifier /ip4/127.0.0.1/tcp/4001, and tell me how to locate its actual identity if that identifier is invalid. Don't create a pairing.",
     "expectation": "identifier_recovery"
   }
 ]

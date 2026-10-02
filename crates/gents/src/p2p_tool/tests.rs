@@ -66,7 +66,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let malformed = Tool::call(
         &tool,
         serde_json::from_value(
-            json!({"argv":["network","get"],"options":{"peer_id":"not-a-peer-id"}}),
+            json!({"argv":["network","get"],"options":{"peer_id":"/ip4/127.0.0.1/tcp/4001"}}),
         )
         .unwrap(),
     )
