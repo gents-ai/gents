@@ -558,11 +558,16 @@ export function RenameDialog({
   onClose: () => void;
 }) {
   const [label, setLabel] = useState(value ?? "");
+  const [error, setError] = useState<string | null>(null);
   const save = async () => {
     if (value === null) return;
     const next = label.trim();
-    if (next && next !== value) await onSave(next);
-    onClose();
+    try {
+      if (next && next !== value) await onSave(next);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
   return (
     <Dialog open={value !== null} onOpenChange={(o) => !o && onClose()}>
@@ -579,6 +584,11 @@ export function RenameDialog({
         >
           <Input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus />
         </form>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel

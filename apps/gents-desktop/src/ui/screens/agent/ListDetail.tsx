@@ -556,6 +556,7 @@ export function DeleteButton({
   label,
   onDelete,
   base,
+  noun = NOUNS[base.section] ?? "item",
   after,
   warning,
   companion,
@@ -563,6 +564,8 @@ export function DeleteButton({
   label: string;
   onDelete: () => Promise<unknown>;
   base: Extract<Route, { name: "agent" }>;
+  /* what is deleted, when it is not the section's document */
+  noun?: string;
   /* where to go once deleted; the list when absent */
   after?: Route;
   /* what else the delete leaves behind, said in the confirmation */
@@ -570,7 +573,6 @@ export function DeleteButton({
   /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
 }) {
-  const noun = NOUNS[base.section] ?? "item";
   const [open, setOpen] = useState(false);
   return (
     <FieldSet className="mt-12 mb-8" data-testid="danger-zone">

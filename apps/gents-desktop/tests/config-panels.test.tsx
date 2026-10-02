@@ -335,6 +335,7 @@ describe("configuration panels", () => {
         provider: "xai-oauth",
         enabled: true,
         accountId: "person@example.test",
+        label: "Grok 2",
         accountRef: "g-2",
         credentialId: "private-credential-id",
         planType: null,
@@ -459,6 +460,7 @@ describe("configuration panels", () => {
       enabled,
       pendingSave: false,
       accountRef,
+      label: `label-${credentialId}`,
     });
 
     it("never borrows another account for a backend in the list", async () => {
@@ -829,7 +831,8 @@ describe("configuration panels", () => {
 
         it("offers Remove account, not Delete backend, in an added account's Danger zone", async () => {
           const { user } = setup("claude-work");
-          const zone = await screen.findByTestId("danger-zone");
+          await screen.findByText("Work-identity");
+          const zone = screen.getByTestId("danger-zone");
           expect(within(zone).queryByText(/Delete backend/)).not.toBeInTheDocument();
           await user.click(within(zone).getByRole("button", { name: /account/ }));
           expect(await screen.findByRole("alertdialog")).toHaveTextContent(

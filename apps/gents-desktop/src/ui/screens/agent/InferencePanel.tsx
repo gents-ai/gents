@@ -39,7 +39,7 @@ import {
   TextRow,
   TagsRow,
 } from "./editors";
-import { DeleteButton, ListDetail, type ListRow } from "./ListDetail";
+import { ConfirmDelete, DeleteButton, ListDetail, type ListRow } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { RowMenu } from "./RowMenu";
 import {
@@ -49,8 +49,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@gents/ui/components/dialog";
 import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
+import { RenameDialog } from "../AgentsScreen";
 
 export function backendSave(
   agentDid: string,
@@ -173,6 +182,158 @@ function referencedAccount(
       !a.pendingSave &&
       (a.accountRef ?? null) === (accountRef ?? null),
   );
+}
+
+/* the account a subscription backend runs on, if it is stored here */
+function backendAccount(accounts: ProviderAccountView[], b: InferenceBackendView) {
+  const sub = SUBSCRIPTION[b.providerKind ?? ""];
+  return sub ? referencedAccount(accounts, sub.provider, b.accountRef) : undefined;
+}
+
+/* what an account action leaves behind: the profiles that fail their next
+   turn, in the CLI's words, and for remove which backends go with it (an
+   added account's backends that no profile uses, as the CLI's remove) */
+function accountWarnings(
+  deployment: DeploymentView,
+  accounts: ProviderAccountView[],
+  account: ProviderAccountView,
+) {
+  const backends = deployment.inferenceBackends.filter(
+    (b) => backendAccount(accounts, b)?.credentialId === account.credentialId,
+  );
+  const usedBy = (b: InferenceBackendView) =>
+    deployment.inferenceProfiles.filter((p) => p.backend_id === b.backendId);
+  const profiles = backends.flatMap(usedBy).map((p) => p.display_name ?? p.profile_id);
+  const names = (list: InferenceBackendView[]) =>
+    list.map((b) => b.name ?? b.backendId).join(", ");
+  const gone = account.accountRef ? backends.filter((b) => !usedBy(b).length) : [];
+  const kept = backends.filter((b) => !gone.includes(b));
+  const disconnect = profiles.length
+    ? `These profiles use this account and fail their next turn until moved to another backend: ${profiles.join(", ")}.`
+    : "";
+  const remove = [
+    disconnect,
+    gone.length ? `Deletes its unused backends: ${names(gone)}.` : "",
+    kept.length
+      ? `${account.accountRef ? "Keeps the backends a profile uses" : "Keeps its backends"}: ${names(kept)}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return { disconnect, remove };
+}
+
+type AccountAction = {
+  action: "rename" | "disconnect" | "remove";
+  account: ProviderAccountView;
+};
+
+/* rename, disconnect and remove for an account, opened from its row's menu;
+   none of them edits a profile or a backend */
+function AccountDialogs({
+  shell,
+  deployment,
+  accounts,
+  reload,
+  acting,
+  onClose,
+}: {
+  shell: Shell;
+  deployment: DeploymentView;
+  accounts: ProviderAccountView[];
+  reload: () => Promise<void>;
+  acting: AccountAction | null;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const api = shell.api;
+  const account = acting?.account;
+  const warnings = account && accountWarnings(deployment, accounts, account);
+  const rename = async (label: string) => {
+    if (!account) return;
+    if (
+      accounts.some(
+        (a) =>
+          a.provider === account.provider &&
+          !a.pendingSave &&
+          a.credentialId !== account.credentialId &&
+          a.label === label,
+      )
+    )
+      throw new Error(
+        `Another account is already labelled “${label}”. Choose another label.`,
+      );
+    await api.renameProviderAccount?.(deployment.agentDid, account.credentialId, label);
+    toast("Renamed");
+    await reload();
+  };
+  const disconnect = async () => {
+    if (!account) return;
+    setBusy(true);
+    try {
+      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
+      toast("Disconnected");
+      onClose();
+      await reload();
+    } catch (error) {
+      toast(`Disconnect failed: ${setupErrorMessage(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <RenameDialog
+        key={account?.credentialId ?? "none"}
+        title="Rename account"
+        description="The label this account goes by on this agent."
+        value={acting?.action === "rename" ? account!.label : null}
+        onSave={rename}
+        onClose={onClose}
+      />
+      <Dialog
+        open={acting?.action === "disconnect"}
+        onOpenChange={(open) => !open && !busy && onClose()}
+      >
+        <DialogContent aria-modal="true">
+          <DialogHeader>
+            <DialogTitle>Disconnect {account?.label}?</DialogTitle>
+            <DialogDescription>
+              Signing in to it again reconnects it. {warnings?.disconnect}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={onClose}>
+              Keep connected
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={disconnect}>
+              {busy ? "Disconnecting…" : "Disconnect now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {account && (
+        <ConfirmDelete
+          label={account.label}
+          noun="account"
+          open={acting?.action === "remove"}
+          onOpenChange={(open) => !open && onClose()}
+          onDelete={() => removeAccount(shell, deployment, account, reload)}
+          warning={warnings?.remove}
+        />
+      )}
+    </>
+  );
+}
+
+async function removeAccount(
+  shell: Shell,
+  deployment: DeploymentView,
+  account: ProviderAccountView,
+  reload: () => Promise<void>,
+) {
+  await shell.api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
+  await reload();
 }
 
 /* the account card for a subscription backend */
@@ -422,6 +583,8 @@ export function BackendEditor({
     setDiscoveredModels(null);
     setProbe(null);
   }, [d.draft.providerKind, d.draft.endpoint]);
+  /* an added account's backend is deleted by removing the account */
+  const removable = backend.accountRef ? backendAccount(accounts, backend) : undefined;
   const users = deployment.inferenceProfiles
     .filter((p) => p.backend_id === backend.backendId)
     .map((p) => p.display_name ?? p.profile_id);
@@ -689,7 +852,16 @@ export function BackendEditor({
         onSave={d.save}
         onCancel={d.reset}
       />
-      {!embedded && (
+      {!embedded && removable && (
+        <DeleteButton
+          label={removable.label}
+          noun="account"
+          warning={accountWarnings(deployment, accounts, removable).remove}
+          base={base}
+          onDelete={() => removeAccount(shell, deployment, removable, reload)}
+        />
+      )}
+      {!embedded && !removable && (
         <DeleteButton
           label={backend.name ?? backend.backendId}
           warning={dependentsWarning(deployment, "backend", backend.backendId)}
@@ -786,6 +958,7 @@ export function InferencePanel({
     section: "profiles",
   };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
+  const [acting, setActing] = useState<AccountAction | null>(null);
   const catalog = useSetupCatalog(shell);
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
@@ -815,12 +988,12 @@ export function InferencePanel({
   /* backends in the catalog's provider order, so two of one provider sit together */
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
   const configured = deployment.inferenceBackends
-    .map((b) => ({ b, provider: providerOf(b) }))
+    .map((b) => ({ b, provider: providerOf(b), stored: backendAccount(accounts, b) }))
     .sort((x, y) => order(x.provider) - order(y.provider));
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
-    const stored = sub && referencedAccount(accounts, sub.provider, b.accountRef);
+    const stored = backendAccount(accounts, b);
     /* the label only where the row's title does not already say it */
     const label =
       stored?.label && stored.label !== (b.name ?? b.backendId)
@@ -860,7 +1033,7 @@ export function InferencePanel({
         item={item}
         back={{ route: models, label: "Providers" }}
         rows={[
-          ...configured.map(({ b, provider }) => ({
+          ...configured.map(({ b, provider, stored }) => ({
             id: b.backendId,
             children: under?.(b),
             metaLeadToggles: true,
@@ -900,13 +1073,17 @@ export function InferencePanel({
                       }),
                     ),
                 }}
-                onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteBackendConfig({
-                      backendId: b.backendId,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
+                /* an added account's backend goes with Remove account */
+                onDelete={
+                  b.accountRef && stored
+                    ? undefined
+                    : () =>
+                        shell.applyConfig((api) =>
+                          api.deleteBackendConfig({
+                            backendId: b.backendId,
+                            agentDid: deployment.agentDid,
+                          }),
+                        )
                 }
                 warning={dependentsWarning(deployment, "backend", b.backendId)}
               >
@@ -914,6 +1091,30 @@ export function InferencePanel({
                   Add another{" "}
                   {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
                 </DropdownMenuItem>
+                {stored && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => setActing({ action: "rename", account: stored })}
+                    >
+                      Rename account…
+                    </DropdownMenuItem>
+                    {stored.enabled && (
+                      <DropdownMenuItem
+                        onClick={() =>
+                          setActing({ action: "disconnect", account: stored })
+                        }
+                      >
+                        Disconnect…
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => setActing({ action: "remove", account: stored })}
+                    >
+                      Remove account…
+                    </DropdownMenuItem>
+                  </>
+                )}
               </RowMenu>
             ),
           })),
@@ -969,6 +1170,14 @@ export function InferencePanel({
             />
           );
         }}
+      />
+      <AccountDialogs
+        shell={shell}
+        deployment={deployment}
+        accounts={accounts}
+        reload={reload}
+        acting={acting}
+        onClose={() => setActing(null)}
       />
     </>
   );
