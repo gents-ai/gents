@@ -404,6 +404,24 @@ pub struct BuiltInTools {
     /// Tools writers may configure this capability like other built-ins; an
     /// operator that must forbid it must clamp the tool-policy ceiling.
     pub enable_schema_tool: Option<bool>,
+    /// Native node P2P observations. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_p2p_tool: Option<bool>,
+    /// Native P2P changes also require enable_p2p_tool. Enrollment and DefraDB
+    /// remain the authorization owners. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_p2p_mutations: Option<bool>,
+    /// Exact collection names allowed for application pairing overlays and sync.
+    /// Missing or empty grants no collections; the policy ceiling can only narrow.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    pub p2p_collections: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_context_budget: Option<bool>,
@@ -604,6 +622,13 @@ impl Tools {
             }
         }
         let mut errors = Vec::new();
+        if let Some(built_ins) = &self.built_ins {
+            for collection in &built_ins.p2p_collections {
+                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                    errors.push(format!("built_ins.p2p_collections: {error}"));
+                }
+            }
+        }
         if let Some(host) = &self.host {
             if let Some(files) = &host.files {
                 at_most(

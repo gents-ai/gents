@@ -78,6 +78,9 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -162,6 +165,9 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -229,6 +235,9 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -286,6 +295,9 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -342,6 +354,9 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -397,6 +412,9 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -452,6 +470,9 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -505,6 +526,9 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -556,6 +580,9 @@ fn selection_without_root_inherits_operator_root() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -620,6 +647,9 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -681,6 +711,9 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -745,6 +778,9 @@ fn selection_mcp_service_allowlist_is_deduped() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -884,6 +920,9 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -936,6 +975,9 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -996,6 +1038,9 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -1782,6 +1827,9 @@ async fn session_history_tool_requires_selection_opt_in() {
         ResolvedToolSelection {
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             ..Default::default()
         },
@@ -2988,4 +3036,17 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         .contains(&crate::toolset::NativeTool::ReadFile {
             max_chars: crate::toolset::DEFAULT_MAX_FILE_CHARS
         }));
+}
+
+#[test]
+fn meta_only_behavior_does_not_grant_p2p_authority() {
+    let config = BehaviorToolConfig::meta_only();
+    let surface =
+        config.resolve_with_subagent_tools_for_mcp_presence(false, SubagentToolConfig::default());
+    assert!(!surface
+        .tool_names()
+        .contains(&crate::p2p_tool::P2P_TOOL_NAME.to_owned()));
+    assert!(!config.static_policy().p2p_read);
+    assert!(!config.static_policy().permits_p2p_mutation());
+    assert!(config.static_policy().p2p_collections.is_deny_all());
 }

@@ -18,6 +18,9 @@ structure SurfaceView where
   selfConfig : Bool
   memory : Bool
   schemaManagement : Bool
+  p2pRead : Bool
+  p2pMutate : Bool
+  p2pMutationAllowed : Bool
   sessionHistory : Bool
   contextBudget : Bool
   sessionMessages : Bool
@@ -39,6 +42,8 @@ structure SurfaceView where
   mcpPermits : Bool
   defraCollectionsScopeKind : String
   defraCollectionsKeys : List String
+  p2pCollectionsScopeKind : String
+  p2pCollectionsKeys : List String
   selfConfigCategoriesScopeKind : String
   selfConfigCategoriesKeys : List String
   subagentTargetsScopeKind : String
@@ -78,7 +83,7 @@ def stringSet (items : List String) : Finset String :=
   items.toFinset
 
 def knownToolIds : List String :=
-  ["svc-a", "svc-x", "svc-y"]
+  ["svc-a", "svc-x", "svc-y", "DeploymentNote", "PrivateNote"]
 
 def knownArgvPrefixes : List (List String) :=
   [["git", "status"], ["ls"]]
@@ -223,6 +228,8 @@ def surface (file : FileCap) (bash : BashPolicy)
   , selfConfig := defraQuery
   , memory := ordinary
   , schemaManagement := ordinary
+  , p2pRead := ordinary
+  , p2pMutate := ordinary
   , sessionHistory := ordinary
   , contextBudget := ordinary
   , sessionMessages := sessionMessages
@@ -231,6 +238,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
+  , p2pCollections := .all
   , selfConfigCategories := .all
   , subagentTargets := .all
   , backgroundTools := .all
@@ -248,6 +256,9 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , selfConfig := s.selfConfig
   , memory := s.memory
   , schemaManagement := s.schemaManagement
+  , p2pRead := s.p2pRead
+  , p2pMutate := s.p2pMutate
+  , p2pMutationAllowed := permitsP2pMutation s
   , sessionHistory := s.sessionHistory
   , contextBudget := s.contextBudget
   , sessionMessages := s.sessionMessages
@@ -269,6 +280,8 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , mcpPermits := decide (s.mcpServices.permits mcpProbe)
   , defraCollectionsScopeKind := scopeKind s.defraCollections
   , defraCollectionsKeys := toolScopeKeys s.defraCollections
+  , p2pCollectionsScopeKind := scopeKind s.p2pCollections
+  , p2pCollectionsKeys := toolScopeKeys s.p2pCollections
   , selfConfigCategoriesScopeKind := scopeKind s.selfConfigCategories
   , selfConfigCategoriesKeys := selfConfigScopeKeys s.selfConfigCategories
   , subagentTargetsScopeKind := scopeKind s.subagentTargets
@@ -382,6 +395,8 @@ def ceilingClampsEachCategory : Surface :=
     memory := false
   , lsp := false
   , schemaManagement := false
+  , p2pRead := false
+  , p2pMutate := false
   , sessionHistory := false
   , contextBudget := false
   , sessionMessages := false
@@ -529,6 +544,19 @@ def cases : List Case :=
       { wideOpen with schemaManagement := false } wideOpen wideOpen "svc-a" probeWrite
   , mkCase "schema_clamped_by_runtime"
       wideOpen wideOpen { wideOpen with schemaManagement := false } "svc-a" probeWrite
+  , mkCase "p2p_read_independent_of_config"
+      { secureMinimal with p2pRead := true } wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "p2p_mutation_requires_read"
+      { secureMinimal with p2pMutate := true } wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "p2p_mutation_clamped_by_ceiling"
+      wideOpen { wideOpen with p2pMutate := false } wideOpen "svc-a" probeWrite
+  , mkCase "p2p_read_ceiling_closes_mutation"
+      wideOpen { wideOpen with p2pRead := false } wideOpen "svc-a" probeWrite
+  , mkCase "p2p_mutation_requires_authored_grant"
+      { wideOpen with p2pMutate := false } wideOpen wideOpen "svc-a" probeWrite
+  , mkCase "p2p_collections_intersect"
+      { wideOpen with p2pCollections := toolsOnly ["DeploymentNote", "PrivateNote"] }
+      { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen "svc-a" probeWrite
   , mkCase "other_capabilities_do_not_enable_goals"
       behaviorWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]

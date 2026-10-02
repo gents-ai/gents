@@ -384,6 +384,11 @@ fn explain_builtin_reads(
     } else {
         builder.exclude("schema", crate::schema_tool::SCHEMA_TOOL_NAME);
     }
+    if surface.enable_p2p_tool {
+        builder.include_many("p2p", [crate::p2p_tool::P2P_TOOL_NAME.to_string()]);
+    } else {
+        builder.exclude("p2p", crate::p2p_tool::P2P_TOOL_NAME);
+    }
     if surface.enable_session_history_tool {
         builder.include_many("built_in_read", [SESSION_HISTORY_TOOL_NAME.to_string()]);
     } else {
@@ -436,6 +441,14 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
             format!("bash_mode:{:?}", policy.bash.execution_mode),
             format!("bash_network:{:?}", policy.bash.network_mode),
             format!("bash_allowed:{}", policy.bash.allowed_argv_prefixes.kind()),
+        ],
+    );
+    summary.insert(
+        "p2p".to_string(),
+        vec![
+            format!("read:{}", policy.p2p_read),
+            format!("mutate:{}", policy.permits_p2p_mutation()),
+            format!("collections:{}", policy.p2p_collections.kind()),
         ],
     );
     summary.insert(

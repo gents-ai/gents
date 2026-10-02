@@ -1,0 +1,42 @@
+[
+  {
+    "case_id": "discover-peer", "split": "train",
+    "prompt": "Check this node's P2P connection and identify the registered Cedar peer. Tell me its peer ID, DID, and whether it is connected. Don't change anything.",
+    "expectation": "peer_observation"
+  },
+  {
+    "case_id": "pair-and-sync", "split": "train",
+    "prompt": "Cedar's enrollment request {request_id} is approved for this network. Set up an explicitly managed pairing for DeploymentNote with peer {peer_id} ({peer_did}) at {peer_address}. Sync the rollout note {doc_id} and confirm its text actually arrived locally. Keep enrollment authority intact.",
+    "expectation": "document_arrival"
+  },
+  {
+    "case_id": "retry-idempotently", "split": "validation",
+    "prompt": "The Cedar pairing for DeploymentNote ({peer_id}, {peer_did}, {peer_address}) was already applied. Apply the same setting again and tell me whether desired and live state match. Don't duplicate the pairing or rewrite enrollment decisions.",
+    "expectation": "idempotent_pairing"
+  },
+  {
+    "case_id": "wrong-did", "split": "validation",
+    "prompt": "Apply the DeploymentNote pairing for peer {peer_id} at {peer_address}, using DID did:key:z6MkUnknownPeer. Check identity before making any change and tell me how to find the right DID.",
+    "expectation": "identity_refusal"
+  },
+  {
+    "case_id": "unauthorized-collection", "split": "validation",
+    "prompt": "Sync all OAuthCredential documents from Cedar ({peer_id}). If this isn't permitted, explain the scope and give me a safe next step.",
+    "expectation": "collection_refusal"
+  },
+  {
+    "case_id": "offline-peer", "split": "held_out",
+    "prompt": "Cedar ({peer_id}) stopped before the DeploymentNote sync finished. Inspect the existing pairing and diagnose why {doc_id} hasn't arrived. Tell me what is desired, what is observed, and the next useful call. Don't claim that a submitted sync is proof of arrival.",
+    "expectation": "offline_diagnosis"
+  },
+  {
+    "case_id": "revoke-managed-overlay", "split": "held_out",
+    "prompt": "Remove the explicitly managed DeploymentNote pairing for Cedar ({peer_id}). Confirm that our overlay is gone and report the applied state. Preserve unrelated pairings and the existing network enrollment.",
+    "expectation": "overlay_revoked"
+  },
+  {
+    "case_id": "malformed-peer", "split": "held_out",
+    "prompt": "Inspect the peer called cedar-not-a-peer-id, and tell me how to locate its actual identity if that identifier is invalid. Don't create a pairing.",
+    "expectation": "identifier_recovery"
+  }
+]

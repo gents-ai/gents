@@ -58,6 +58,11 @@ structure Surface where
   selfConfig : Bool
   memory : Bool
   schemaManagement : Bool
+  /-- Native P2P observations require explicit node-management authority. -/
+  p2pRead : Bool
+  /-- Mutations also require read authority. Enrollment and DefraDB remain
+  the authority owners for peer access and document changes. -/
+  p2pMutate : Bool
   sessionHistory : Bool
   contextBudget : Bool
   /-- The agents tool group (`SubagentTools.enabled`): `agent_new` over the
@@ -69,6 +74,8 @@ structure Surface where
   cliTools : EndpointScope ToolId (Finset String)
   mcpServices : EndpointScope ToolId Unit
   defraCollections : EndpointScope ToolId Unit
+  /-- Replication and sync collection grants do not imply generic query access. -/
+  p2pCollections : EndpointScope ToolId Unit
   selfConfigCategories : EndpointScope ToolId Unit
   subagentTargets : EndpointScope (String × String) Unit
   backgroundTools : EndpointScope ToolId Unit

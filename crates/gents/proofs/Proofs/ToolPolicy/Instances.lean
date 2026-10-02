@@ -20,6 +20,8 @@ def Surface.meet (a b : Surface) : Surface :=
   , selfConfig := a.selfConfig && b.selfConfig
   , memory := a.memory && b.memory
   , schemaManagement := a.schemaManagement && b.schemaManagement
+  , p2pRead := a.p2pRead && b.p2pRead
+  , p2pMutate := a.p2pMutate && b.p2pMutate
   , sessionHistory := a.sessionHistory && b.sessionHistory
   , contextBudget := a.contextBudget && b.contextBudget
   , sessionMessages := a.sessionMessages && b.sessionMessages
@@ -28,6 +30,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , cliTools := a.cliTools.meet rootVM b.cliTools
   , mcpServices := a.mcpServices.meet unitVM b.mcpServices
   , defraCollections := a.defraCollections.meet unitVM b.defraCollections
+  , p2pCollections := a.p2pCollections.meet unitVM b.p2pCollections
   , selfConfigCategories := a.selfConfigCategories.meet unitVM b.selfConfigCategories
   , subagentTargets := a.subagentTargets.meet unitVM b.subagentTargets
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
@@ -123,6 +126,39 @@ theorem effective_schemaManagement_le_ceiling :
 theorem effective_schemaManagement_le_behavior :
     (effective behavior ceiling runtime).schemaManagement = true → behavior.schemaManagement = true := by
   exact fun h => bool_and_left (bool_and_left h)
+
+theorem effective_p2pRead_le_ceiling :
+    (effective behavior ceiling runtime).p2pRead = true → ceiling.p2pRead = true := by
+  exact fun h => bool_and_right (bool_and_left h)
+
+theorem effective_p2pMutate_le_ceiling :
+    (effective behavior ceiling runtime).p2pMutate = true → ceiling.p2pMutate = true := by
+  exact fun h => bool_and_right (bool_and_left h)
+
+/-- A mutation grant does not expose node observations on its own. -/
+def permitsP2pMutation (surface : Surface) : Bool := surface.p2pRead && surface.p2pMutate
+
+theorem permitsP2pMutation_requires_read (surface : Surface) :
+    permitsP2pMutation surface = true → surface.p2pRead = true := by
+  exact bool_and_left
+
+theorem effective_p2pMutation_le_ceiling :
+    permitsP2pMutation (effective behavior ceiling runtime) = true →
+      permitsP2pMutation ceiling = true := by
+  intro h
+  have read := effective_p2pRead_le_ceiling behavior ceiling runtime (bool_and_left h)
+  have mutate := effective_p2pMutate_le_ceiling behavior ceiling runtime (bool_and_right h)
+  simp [permitsP2pMutation, read, mutate]
+
+theorem effective_p2pCollections_subset_ceiling (collection : ToolId) :
+    (effective behavior ceiling runtime).p2pCollections.permits collection →
+      ceiling.p2pCollections.permits collection := by
+  intro h
+  have inner := EndpointScope.meet_permits_left unitVM
+    (behavior.p2pCollections.meet unitVM ceiling.p2pCollections)
+    runtime.p2pCollections collection h
+  exact EndpointScope.meet_permits_right unitVM behavior.p2pCollections
+    ceiling.p2pCollections collection inner
 
 theorem effective_sessionHistory_le_ceiling :
     (effective behavior ceiling runtime).sessionHistory = true → ceiling.sessionHistory = true := by
