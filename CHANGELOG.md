@@ -309,8 +309,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 - Sign-ins now store which provider account they belong to: the ChatGPT
   workspace membership, the Claude organization and account ids, or the Grok
-  principal. Existing ChatGPT and Grok sign-ins gain it on their next token
-  refresh; Claude sign-ins at the next sign-in. A sign-in whose tokens do not
+  principal. ChatGPT and Grok sign-ins that lack it gain it on their next
+  token refresh; Claude sign-ins at the next sign-in. A sign-in whose tokens do not
   show the account clears it: for ChatGPT and Grok the next refresh whose
   tokens show it fills it again, for Claude only a later sign-in that shows
   it. A sign-in of a different account still replaces the stored one, as
