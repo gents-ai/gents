@@ -16,7 +16,7 @@ use crate::config::advertised_model_for_profile;
 use crate::document_config::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
 use crate::oauth_credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
-    serving_account, AccountState, AccountSummary,
+    serving_account, AccountState, AccountSummary, ServingAccount,
 };
 use crate::usage_observation::{usage_for_backend, usage_view, UsageView};
 use crate::{Collection, InferenceBackend};
@@ -40,8 +40,8 @@ pub struct SwitchCandidate {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SwitchPlan {
     pub profile: String,
-    /// The label of the account the profile runs on.
-    pub account: String,
+    /// The account the profile runs on.
+    pub account: ServingAccount,
     pub behaviors: Vec<String>,
     /// Plugins whose model slot is bound to the profile.
     pub plugin_slots: Vec<String>,
@@ -56,8 +56,8 @@ pub struct SwitchPlan {
 pub struct SwitchReceipt {
     pub headline: String,
     pub profile: String,
-    /// The label of the account the profile now runs on.
-    pub account: String,
+    /// The account the profile now runs on.
+    pub account: ServingAccount,
     pub backend_id: String,
     pub behaviors: Vec<String>,
     pub plugin_slots: Vec<String>,
@@ -117,7 +117,7 @@ pub async fn switch_candidates(
     candidates.sort_by(|a, b| a.label.cmp(&b.label));
     Ok(SwitchPlan {
         profile: profile_id.to_owned(),
-        account: serving_account(&snapshot.backend, &accounts).label,
+        account: serving_account(&snapshot.backend, &accounts),
         behaviors: snapshot.references.behaviors_on_profile(profile_id),
         plugin_slots: plugin_slots.to_vec(),
         candidates,
@@ -227,7 +227,7 @@ pub async fn switch_profile_account(
                         plugin_slots.len(),
                     ),
                     profile: profile_id.to_owned(),
-                    account: serving.label,
+                    account: serving,
                     backend_id: target.backend_id.clone(),
                     behaviors,
                     plugin_slots: plugin_slots.to_vec(),

@@ -273,7 +273,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
     let plan = fixture.plan().await.unwrap();
 
     assert_eq!(plan.profile, "p");
-    assert_eq!(plan.account, "label-a");
+    assert_eq!(plan.account.label, "label-a");
     assert_eq!(plan.behaviors, ["x", "y"]);
     assert_eq!(plan.companions, ["summ"]);
     assert_eq!(plan.cost, SWITCH_COST);
@@ -315,7 +315,7 @@ async fn switch_moves_only_the_profile() {
         receipt.headline,
         "Move profile p to label-b (used by 2 behaviors)"
     );
-    assert_eq!(receipt.account, "label-b");
+    assert_eq!(receipt.account.label, "label-b");
     assert_eq!(receipt.backend_id, fixture.backends["b"]);
     assert_eq!(receipt.behaviors, ["x", "y"]);
     assert_eq!(receipt.cost, SWITCH_COST);

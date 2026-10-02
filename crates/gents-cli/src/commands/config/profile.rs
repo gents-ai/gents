@@ -61,23 +61,40 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
 }
 
 /// The plugins whose model slot is bound to `profile_id` on this host.
+/// Bindings live in the local home, as `gents plugin bind` writes them, so
+/// none are read over `--graphql`.
 fn bound_slots(
-    _home: Option<&std::path::Path>,
-    _graphql: Option<&str>,
-    _agent_did: &str,
-    _profile_id: &str,
+    home: Option<&std::path::Path>,
+    graphql: Option<&str>,
+    agent_did: &str,
+    profile_id: &str,
 ) -> Result<Vec<String>> {
-    Ok(Vec::new())
+    if graphql.is_some() {
+        return Ok(Vec::new());
+    }
+    gents::plugin::store::bound_to_profile(
+        &crate::home_state::resolve_home_dir(home),
+        agent_did,
+        profile_id,
+    )
 }
 
 /// Where `profile_id` can move, who uses it and what a move costs.
 async fn list_candidates(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _profile_id: &str,
-    _plugin_slots: &[String],
+    access: &ConfigAccess,
+    agent_did: &str,
+    profile_id: &str,
+    plugin_slots: &[String],
 ) -> Result<Value> {
-    Ok(Value::Null)
+    let plan = gents::config_client::switch_candidates(
+        access,
+        agent_did,
+        profile_id,
+        plugin_slots,
+        chrono::Utc::now(),
+    )
+    .await?;
+    Ok(serde_json::to_value(plan)?)
 }
 
 /// Write the profile `contents` holds. `account` (narrowed by `provider`), or
@@ -125,27 +142,41 @@ async fn set_profile(
     write_checked(access, &snapshot, &profile, account.is_none()).await
 }
 
-/// Move `profile_id` to `account`'s backend; nothing else changes.
+/// Move `profile_id` to `account`'s backend through the switch owner; with
+/// `with_compaction` its companions move too. `account` may name an API-key
+/// backend by id or name, which is its own account.
 async fn set_account(
     access: &ConfigAccess,
     agent_did: &str,
     profile_id: &str,
     account: &str,
     provider: Option<&str>,
-    _with_compaction: bool,
-    _plugin_slots: &[String],
+    with_compaction: bool,
+    plugin_slots: &[String],
 ) -> Result<Value> {
     let snapshot = snapshot(access, agent_did).await?;
-    let mut profile = snapshot
-        .profiles
-        .iter()
-        .find(|profile| profile.profile_id == profile_id)
-        .with_context(|| {
-            format!("no profile {profile_id:?}; `gents config profile list` shows them")
-        })?
-        .clone();
-    profile.backend_id = account_backend(&snapshot, snapshot.pick(account, provider)?)?;
-    write_checked(access, &snapshot, &profile, false).await
+    let backend_id = match snapshot.pick(account, provider) {
+        Ok(summary) => account_backend(&snapshot, summary)?,
+        Err(error) => snapshot
+            .backends
+            .iter()
+            .find(|backend| {
+                backend_account(backend, &snapshot.accounts).is_none()
+                    && (backend.backend_id == account || backend.name == account)
+            })
+            .map(|backend| backend.backend_id.clone())
+            .ok_or(error)?,
+    };
+    let receipt = gents::config_client::switch_profile_account(
+        access,
+        agent_did,
+        profile_id,
+        &backend_id,
+        with_compaction,
+        plugin_slots,
+    )
+    .await?;
+    Ok(serde_json::to_value(receipt)?)
 }
 
 /// The one backend that runs on `account`.
@@ -860,7 +891,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_account_moves_the_profile_through_the_switch() {
-        let (access, b_backend, _) = seeded().await;
+        let (access, _, _) = seeded().await;
         with_behaviors(&access).await;
         let output = set_account(&access, DID, "p-original", "label-b", None, false, &[])
             .await
@@ -875,18 +906,14 @@ mod tests {
         assert_eq!(output["companions_moved"], json!([]));
         assert_eq!(stored(&access, "summ").await.unwrap().backend_id, "claude");
 
-        let (access, b_backend_2, _) = seeded().await;
+        let (access, b_backend, _) = seeded().await;
         with_behaviors(&access).await;
         let output = set_account(&access, DID, "p-original", "label-b", None, true, &[])
             .await
             .unwrap();
         assert_eq!(output["companions_moved"], json!(["summ"]));
         assert_eq!(output["companions_offered"], json!([]));
-        assert_eq!(
-            stored(&access, "summ").await.unwrap().backend_id,
-            b_backend_2
-        );
-        assert_eq!(b_backend, b_backend_2);
+        assert_eq!(stored(&access, "summ").await.unwrap().backend_id, b_backend);
         assert_redacted(&output.to_string());
     }
 

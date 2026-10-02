@@ -163,7 +163,7 @@ pub(crate) fn blocked_turn_from(
             .unwrap_or_default(),
         switch_command: profile
             .as_deref()
-            .map(|profile| format!("gents config profile set-account {profile} <account>")),
+            .map(|profile| format!("gents config profile set-account {profile}")),
         profile,
         resets_at,
     })
