@@ -597,7 +597,11 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
     )?;
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
-    let config = root_host_tools(config, workspace)?;
+    let mut config = root_host_tools(config, workspace)?;
+    config
+        .agent_principal
+        .default_behavior_id
+        .get_or_insert_with(|| spec.behavior_id.clone());
     let access = ConfigAccess::Local(home.node.clone());
     // The binding first: the pack's behaviors now reference the profile by id,
     // and a reference is only installable once what it names exists.
@@ -2454,6 +2458,49 @@ mod tests {
             rows[0]["inference_profile_id"], "frozen-profile",
             "the slot marker never reaches the trial home"
         );
+        home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_trial_subject_supplies_an_omitted_default_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+        let path = pack_dir.join("pack_config.json");
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["agent_principal"] = json!({});
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let spec = TrialSpec {
+            pack_digest: materialized_digest(&pack_dir),
+            pack_dir,
+            behavior_id: "subject".into(),
+            inference: frozen_binding(json!("frozen-profile")),
+            ..TrialSpec::empty_for_tests("subject-default")
+        };
+        let home = EmbeddedHome::create_temp("subject-default").await.unwrap();
+        install(&spec, &home, &dir.path().join("workspace"))
+            .await
+            .unwrap();
+
+        let access = ConfigAccess::Local(home.node.clone());
+        let response = access
+            .execute("query { AgentPrincipal { default_behavior_id } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["AgentPrincipal"][0]["default_behavior_id"],
+            "subject"
+        );
+        let agent = crate::Gents::from_default_behavior_documents(
+            home.node.clone(),
+            home.identity.clone(),
+            DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(agent.default_behavior_id(), "subject");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
         home.node.shutdown().await;
     }
 
