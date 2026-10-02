@@ -64,6 +64,10 @@ source consistency checks, not a separate runtime compatibility version.
   `ensure_migrations` with `UnknownLineage` for `OAuthCredential`: reset it
   and sign in again (#2116).
 
+- `Goal` gains an optional `auto_resume_at_reset` field by baseline re-pin;
+  there is deliberately no migration step. A store created by an earlier build
+  fails `ensure_migrations` with `UnknownLineage` for `Goal`: reset it (#2121).
+
 - `codex-login`, `claude-login` and `grok-login` accept only their own
   `--provider` value. Other values stored a sign-in that no backend read
   (#2119).

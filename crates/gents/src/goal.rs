@@ -211,6 +211,7 @@ pub const GOAL_FIELDS: &str = r#"
     infrastructure_retry_count
     last_failure
     completion_evidence
+    auto_resume_at_reset
     created_at
     updated_at
 "#;
