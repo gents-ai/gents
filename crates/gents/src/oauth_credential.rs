@@ -245,7 +245,10 @@ impl std::fmt::Debug for OAuthCredential {
             .field("enabled", &self.enabled)
             .field("account_ref", &self.account_ref)
             .field("connected_at", &self.connected_at)
-            .field("provider_account_key", &self.provider_account_key)
+            .field(
+                "provider_account_key",
+                &self.provider_account_key.as_ref().map(|_| REDACTED),
+            )
             .finish()
     }
 }
