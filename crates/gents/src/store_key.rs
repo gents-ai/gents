@@ -308,7 +308,8 @@ pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node
     Ok(key.encrypt(
         defra_node::EmbeddedNode::builder()
             .data_path(data_path)
-            .with_storage_backend(defra_node::StorageBackend::Regolith),
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .with_regolith_options(crate::storage_backend::regolith_options()),
     ))
 }
 

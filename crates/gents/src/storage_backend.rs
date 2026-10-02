@@ -3,6 +3,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+/// In-process hosts share memory with inference, tools and their UI. Keep the
+/// server's value/key limits, isolation and durability; the upstream embedded
+/// profile restricts document sizes and disables background compaction.
+/// These are per-store working-set targets, not a process RSS limit: snapshots,
+/// compaction, large values and additional nodes consume memory separately.
+pub fn regolith_options() -> storage::RegolithStoreOptions {
+    let mut options = storage::RegolithStoreOptions::default();
+    options.engine.write_buffer_size = 32 * 1024 * 1024;
+    options.engine.max_write_buffer_number = 2;
+    options.engine.block_cache_size = 64 * 1024 * 1024;
+    options
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncompatibleStoreKind {
     LegacyRocksDb,
@@ -184,6 +197,24 @@ pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
+        let server = storage::RegolithStoreOptions::default();
+        let local = regolith_options();
+        assert_eq!(local.engine.write_buffer_size, 32 * 1024 * 1024);
+        assert_eq!(local.engine.max_write_buffer_number, 2);
+        assert_eq!(local.engine.block_cache_size, 64 * 1024 * 1024);
+        assert_eq!(local.engine.max_key_size, server.engine.max_key_size);
+        assert_eq!(local.engine.max_value_size, server.engine.max_value_size);
+        assert_eq!(local.engine.durability, server.engine.durability);
+        assert_eq!(local.isolation, server.isolation);
+        assert_eq!(local.close_timeout, server.close_timeout);
+        assert_eq!(
+            local.engine.max_background_compactions,
+            server.engine.max_background_compactions
+        );
+    }
     use anyhow::Context as _;
 
     #[test]

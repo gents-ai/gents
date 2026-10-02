@@ -864,18 +864,20 @@ async fn load_referenced_segments(
                 })
         }))
         .collect::<BTreeSet<_>>();
-    let agent = escape_graphql_string(agent_did);
-    let requester = escape_graphql_string(requester_did);
     for request_id in request_ids {
-        let request_id = escape_graphql_string(&request_id);
-        let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-        ), "query authorized hydration output extent").await?;
-        for row in rows::<serde_json::Value>(&response, "AgentOutputSegment")?
-            .iter()
-            .map(decode_output_segment_row)
-        {
-            let row = row?;
+        let response = graphql_with_transaction_retry(
+            node,
+            &crate::session::canonical_rows::request_output_segments_query(&request_id),
+            "query authorized hydration output extent",
+        )
+        .await?;
+        let values = rows::<serde_json::Value>(&response, "AgentOutputSegment")?;
+        for row in crate::session::canonical_rows::decode_scoped_request_output_segments(
+            &values,
+            agent_did,
+            None,
+            Some(requester_did),
+        )? {
             if !segments.iter().any(|known| known.doc_id == row.doc_id) {
                 segments.push(row);
             }

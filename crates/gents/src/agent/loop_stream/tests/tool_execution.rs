@@ -1010,3 +1010,154 @@ async fn terminalization_scale_grid() {
         terminalization_with_principal_output(values[0], values[1], values[2]).await;
     }
 }
+
+#[tokio::test]
+async fn background_output_query_work_is_independent_of_principal_history() {
+    use crate::session::canonical_rows::{
+        output_segment_create_variables, request_output_segments_query,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{OutputSource, OutputWriter};
+    let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
+    let request_id = lifecycle.request().doc_id.clone();
+    let template = gents_protocol::output::OutputSegment {
+        agent_did: "did:test:owner".into(),
+        requester_did: None,
+        session_id: "session".into(),
+        request_doc_id: request_id.clone(),
+        source: OutputSource::ToolCall {
+            tool_call_doc_id: "tool-doc".into(),
+        },
+        writer: OutputWriter::ToolExecution {
+            tool_call_doc_id: "tool-doc".into(),
+        },
+        ordinal: Some(0),
+        runs: vec![gents_protocol::output::SegmentRun {
+            stream: 0,
+            bytes: 6,
+            declaration: Some(gents_protocol::output::StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: gents_protocol::output::StreamPayload::ToolOutput,
+            }),
+        }],
+        payload: "output".into(),
+        close: Some(gents_protocol::output::SourceClose::Closed {
+            outcome: gents_protocol::output::OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![6],
+        }),
+        created_at: "2026-10-02T00:00:00Z".into(),
+    };
+    async fn create(
+        node: &defra_node::EmbeddedNode,
+        segment: &gents_protocol::output::OutputSegment,
+    ) {
+        let response = node
+            .execute_request_with_retry(
+                defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                    .with_variables(output_segment_create_variables(segment).unwrap()),
+                defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+    fn scan<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a serde_json::Value> {
+        if value.get(field).is_some() {
+            return Some(value);
+        }
+        match value {
+            serde_json::Value::Object(object) => {
+                object.values().find_map(|value| scan(value, field))
+            }
+            serde_json::Value::Array(array) => array.iter().find_map(|value| scan(value, field)),
+            _ => None,
+        }
+    }
+    create(&node, &template).await;
+    let query = request_output_segments_query(&request_id);
+    let mut work = Vec::new();
+    for noise in [0, 160] {
+        if noise > 0 {
+            for replica in 0..noise {
+                let mut segment = template.clone();
+                segment.request_doc_id = format!("noise-request-{replica}");
+                segment.session_id = format!("noise-session-{replica}");
+                segment.payload = "n".repeat(4096);
+                segment.runs[0].bytes = 4096;
+                segment.close = Some(gents_protocol::output::SourceClose::Closed {
+                    outcome: gents_protocol::output::OutputOutcome::Complete,
+                    segments: 1,
+                    stream_bytes: vec![4096],
+                });
+                create(&node, &segment).await;
+            }
+        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!("query @explain(type: execute) {query}"),
+            "explain request output",
+        )
+        .await
+        .unwrap();
+        let data = response.data.unwrap();
+        let request_scan = scan(&data, "indexFetches")
+            .unwrap_or_else(|| panic!("request output must report index execution work: {data}"));
+        let plan = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!("query @explain {query}"),
+            "explain request output plan",
+        )
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+        let plan_scan = scan(&plan, "indexName")
+            .unwrap_or_else(|| panic!("request output must use an index scan: {plan}"));
+        assert!(
+            plan_scan["indexName"]
+                .as_str()
+                .unwrap()
+                .contains("request_doc_id"),
+            "{plan}"
+        );
+        work.push(
+            request_scan["indexFetches"]
+                .as_u64()
+                .expect("execution must report index work"),
+        );
+        let output = crate::background_tools::canonical_tool_output(
+            &node,
+            "tool-doc",
+            &request_id,
+            "session",
+            "did:test:owner",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(output, "output");
+        assert_eq!(
+            crate::background_tools::observe_canonical_tool_output_with_access(
+                &crate::config_client::ConfigAccess::Local(node.clone()),
+                "tool-doc",
+                &request_id,
+                "session",
+                "did:test:owner",
+                None,
+            )
+            .await
+            .unwrap(),
+            crate::background_tools::CanonicalToolOutputObservation::Closed(output)
+        );
+
+
+    }
+    assert_eq!(
+        work[0], work[1],
+        "request query work grew with unrelated history"
+    );
+    assert!(work[0] > 0);
+    drop(lifecycle);
+    node.shutdown().await;
+}
