@@ -1117,6 +1117,21 @@ impl ClientCore {
             .and_then(crate::local_runtime::operator_endpoint)
     }
 
+    /// The identity of the hosted runtime serving `agent_did`, which signs
+    /// that runtime's operator commands.
+    pub fn operator_signer(
+        &self,
+        agent_did: &str,
+    ) -> Result<std::sync::Arc<dyn gents::identity::AgentIdentity>> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.agent_did == agent_did)
+            .context("no runtime record for this agent")?;
+        crate::local_runtime::operator_signer(&record)
+    }
+
     pub fn operator_access(&self, agent_did: &str) -> Result<ConfigAccess> {
         let record = self
             .sync_state

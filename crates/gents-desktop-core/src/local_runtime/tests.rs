@@ -485,8 +485,6 @@ fn operator_principal_requires_the_homes_own_runtime_endpoint() {
 /// under the same checks as its operator principal.
 #[test]
 fn operator_signer_is_the_hosted_runtimes_own_identity() {
-    use gents::identity::AgentIdentity as _;
-
     let tempdir = tempfile::tempdir().unwrap();
     let (home, did) = hosted_home(tempdir.path());
     let record = |graphql: &str| hosted_record(&home, &did, graphql);

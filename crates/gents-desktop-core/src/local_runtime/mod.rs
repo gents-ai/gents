@@ -108,6 +108,21 @@ pub fn operator_endpoint(
 /// its home's live `runtime.json` names both the record's endpoint and
 /// agent, so a bearer is never sent to a remote or re-pointed endpoint.
 fn load_operator_principal(record: &crate::client::PeerRecord) -> Result<()> {
+    if gents::identity::can_mint_defradb_bearer(&record.agent_did) {
+        return hosted_runtime_home(record).map(drop);
+    }
+    let identity = operator_signer(record)?;
+    anyhow::ensure!(
+        gents::identity::can_mint_defradb_bearer(identity.did()),
+        "runtime identity {} has no exportable signing key",
+        identity.did()
+    );
+    Ok(())
+}
+
+/// The home of a runtime this desktop hosts, when its live `runtime.json`
+/// names both the record's endpoint and agent.
+fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
         .operator_graphql()
         .context("runtime record is not a runtime this desktop hosts")?;
@@ -126,29 +141,21 @@ fn load_operator_principal(record: &crate::client::PeerRecord) -> Result<()> {
         home.display(),
         record.agent_did
     );
-    if gents::identity::can_mint_defradb_bearer(&record.agent_did) {
-        return Ok(());
-    }
-    let identity = load_standard_runtime_identity(home)?;
-    anyhow::ensure!(
-        identity.did() == record.agent_did,
-        "runtime home identity does not match the recorded agent"
-    );
-    anyhow::ensure!(
-        gents::identity::can_mint_defradb_bearer(identity.did()),
-        "runtime identity {} has no exportable signing key",
-        identity.did()
-    );
-    Ok(())
+    Ok(home)
 }
 
 /// The co-hosted runtime's own identity, which signs the operator commands
 /// its HTTP routes take (the usage read), under the same checks as
 /// [`load_operator_principal`].
 pub fn operator_signer(
-    _record: &crate::client::PeerRecord,
+    record: &crate::client::PeerRecord,
 ) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
-    anyhow::bail!("not implemented")
+    let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
+    anyhow::ensure!(
+        identity.did() == record.agent_did,
+        "runtime home identity does not match the recorded agent"
+    );
+    Ok(identity)
 }
 
 pub(crate) fn load_standard_runtime_identity(
