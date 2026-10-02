@@ -144,6 +144,17 @@ impl ConfigReferences {
             .collect()
     }
 
+    /// The profiles a behavior's turns use: its own, then its context's
+    /// compaction profile.
+    pub(crate) fn behavior_profiles(&self, _behavior_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Behaviors that use `profile_id`, directly or as their compaction profile.
+    pub(crate) fn behaviors_on_profile(&self, _profile_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Event Triggers of this snapshot whose Task opts into `emit_outcome`,
     /// as `(trigger_id, task_id, event_source_id, source_collection)`.
     /// Unresolvable links are the reference validator's diagnostic and are

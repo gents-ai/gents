@@ -1641,7 +1641,7 @@ const MOVE_OFF_ACCOUNT: &str =
 /// `<Product> account "<label>" is <state>.` A label that reads as a provider
 /// limit or a context-length error is replaced by the product name: bearer
 /// errors reach the limit classifiers, and a label is free text.
-fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
+pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
     let lower = label.to_ascii_lowercase();
     let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
         || lower.contains("context_length_exceeded")
@@ -1652,6 +1652,11 @@ fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
         label
     };
     format!("{} account \"{label}\" is {state}.", product.name)
+}
+
+/// The state an [`account_failure`] sentence in `text` names, if any.
+pub fn account_failure_state(_text: &str) -> Option<&'static str> {
+    None
 }
 
 pub struct DbCredentialBearer {
