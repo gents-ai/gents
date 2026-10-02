@@ -2141,6 +2141,20 @@ mod provider_account_tests {
         assert!(!json.contains("SECRET"));
     }
 
+    #[test]
+    fn a_sign_in_label_is_trimmed_and_checked_before_the_browser() {
+        assert_eq!(
+            sign_in_label(Some("  Work ")).unwrap().as_deref(),
+            Some("Work")
+        );
+        assert_eq!(sign_in_label(Some("   ")).unwrap(), None);
+        assert_eq!(sign_in_label(None).unwrap(), None);
+        for refused in ["x".repeat(65), "Wo\u{7}rk".to_string()] {
+            let error = sign_in_label(Some(&refused)).expect_err("an invalid label is refused");
+            assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
+        }
+    }
+
     /// Serves `body` with 200 to one request; returns the server's origin.
     fn serve_once(body: &'static str) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
