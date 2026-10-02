@@ -38,7 +38,23 @@ fn every_native_case_validates_and_uses_shipped_checks() {
     let registry = CheckRegistry::builtin();
     let definitions = definitions();
     assert_eq!(definitions.len(), 6);
-    for definition in definitions {
+    let mut application_definitions = Vec::new();
+    for fixture in ["engineer_datastore", "engineer_explain"] {
+        let dir = root().parent().unwrap().join(fixture);
+        let manifest: PackManifest =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let application = load_pack_config(
+            &manifest,
+            &PackInstallOptions {
+                agent_did: "did:key:eval-owner".into(),
+            },
+            &|path| Ok(std::fs::read(dir.join(path))?),
+            &|_| None,
+        )
+        .unwrap();
+        application_definitions.extend(application.eval_definitions);
+    }
+    for definition in definitions.into_iter().chain(application_definitions) {
         definition.validate().unwrap();
         for case in definition.cases {
             for stage in case.stages {
@@ -58,6 +74,9 @@ fn every_native_case_validates_and_uses_shipped_checks() {
                             EvalCapture::Documents { .. } => {
                                 CaptureResult::Documents { rows: vec![] }
                             }
+                            EvalCapture::Schema { .. } => CaptureResult::Schema {
+                                collections: vec![],
+                            },
                             EvalCapture::File { .. } => CaptureResult::Files {
                                 files: vec![],
                                 outside_workspace: vec![],

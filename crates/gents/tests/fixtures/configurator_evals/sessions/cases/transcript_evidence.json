@@ -1,0 +1,102 @@
+{
+  "case_id": "transcript-evidence",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "record",
+      "prompt": "Record this incident note: The upload retry keeps its checkpoint until the server acknowledges the batch. Reply only Recorded.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              "Recorded",
+              "recorded"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "investigate",
+      "prompt": "Use sessions to find our earlier incident note about upload retries. Quote the checkpoint rule and include the canonical source message ID so I can verify it.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "keeps its checkpoint"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "source_headers",
+                "source_match": {
+                  "field": "sequence",
+                  "equals": 1
+                },
+                "field": "_docID",
+                "target_capture": "source_headers",
+                "target_key": "_docID",
+                "reported_fields": [
+                  "_docID"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "source_headers",
+          "collection": "AgentMessage",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "requester_did": {
+              "_eq": "$trial"
+            },
+            "sequence": {
+              "_eq": 1
+            }
+          },
+          "fields": [
+            "_docID",
+            "sequence",
+            "session_id"
+          ]
+        }
+      ]
+    }
+  ]
+}

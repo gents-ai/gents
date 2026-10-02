@@ -1,0 +1,102 @@
+{
+  "case_id": "archive-evidence",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "record",
+      "prompt": "Record this deploy note: The rollout pauses at the first failing health check and leaves the previous image pinned. Reply only Recorded.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              "Recorded",
+              "recorded"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "investigate",
+      "prompt": "Find our recorded deployment rollback decision using sessions. Quote the health-check rule and cite the source message ID.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "leaves the previous image pinned"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "source_headers",
+                "source_match": {
+                  "field": "sequence",
+                  "equals": 1
+                },
+                "field": "_docID",
+                "target_capture": "source_headers",
+                "target_key": "_docID",
+                "reported_fields": [
+                  "_docID"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "source_headers",
+          "collection": "AgentMessage",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "requester_did": {
+              "_eq": "$trial"
+            },
+            "sequence": {
+              "_eq": 1
+            }
+          },
+          "fields": [
+            "_docID",
+            "sequence",
+            "session_id"
+          ]
+        }
+      ]
+    }
+  ]
+}

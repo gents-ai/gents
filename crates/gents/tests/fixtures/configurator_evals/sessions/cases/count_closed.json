@@ -1,0 +1,126 @@
+{
+  "case_id": "count-closed",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollout review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "support-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Support triage",
+            "source": "user"
+          },
+          "tags": [
+            "support"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-followup",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollback followup",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "did:key:z6MkiForeignSessionOwner",
+          "requester_did": "did:key:z6MkiForeignSessionOwner",
+          "session_id": "launch-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Protected foreign work",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "How many of my closed sessions have the release tag? Give the exact total using sessions; exclude other principals.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "count",
+                "equals": 2
+              },
+              {
+                "field": "scope.agent_did",
+                "matches": "^did:key:"
+              },
+              {
+                "field": "scope.requester_did",
+                "matches": "^did:key:"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

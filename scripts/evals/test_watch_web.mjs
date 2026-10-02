@@ -79,3 +79,14 @@ test('context separates missing measurements, peak input and the two compaction 
  assert.match(run('contextDetail(live)'),/Last input \(estimated\)/);
  assert.doesNotMatch(run('contextDetail(live)'),/<s>/);
 });
+
+test('schema completion appears under its actual stage name',()=>{
+ const run=viewer();
+ run(`globalThis.slot={key:'schema',run:{home:'/workstation-2',cases:[{case_id:'search',stages:['configure','use']}]},case_id:'search',trial_index:0,state:'pass',goal:[],live:{stages:{configure:{checks:[{check:'schema_matches',raw:{satisfied:7,total:8}}]}}}}`);
+ assert.match(run("scoreCell(slot,'configure')"),/87\.5%/);
+ const table=run('trialTable([slot])');
+ assert.match(table,/<th>configure<\/th>/);
+ assert.match(table,/<th>use<\/th>/);
+ assert.match(table,/87\.5%/);
+ assert.doesNotMatch(table,/<th>Initial<\/th>/);
+});

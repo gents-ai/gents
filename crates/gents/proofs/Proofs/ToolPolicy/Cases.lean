@@ -98,7 +98,7 @@ def knownReadOnlyCmds : List String :=
   ["cat", "ls", "pwd"]
 
 def knownWriteKeys : List (String × String) :=
-  [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
+  [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2"), ("write", "Shipment"), ("write", "Other")]
 
 def knownQueryKeys : List (String × String) :=
   [("qt", "coll")]
@@ -115,7 +115,7 @@ def knownSubagentTargets : List (String × String) :=
   [("did-a", "beh-a"), ("did-b", "beh-b")]
 
 def knownFieldNames : List String :=
-  ["field_a", "field_b", "field_c"]
+  ["field_a", "field_b", "field_c", "*"]
 
 def fieldList (fields : Finset String) : List String :=
   knownFieldNames.filter (fun field => decide (field ∈ fields))
@@ -571,6 +571,20 @@ def cases : List Case :=
       { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["PrivateNote"] ["DeploymentNote"]
   , mkCase "p2p_overlay_revoke_requires_existing_scope"
       { wideOpen with p2pCollections := toolOnly "DeploymentNote" } wideOpen wideOpen "svc-a" probeWrite ["DeploymentNote", "PrivateNote"] []
+  , mkCase "application_write_exact_collection_grant"
+      { secureMinimal with writeTools := writeOnly ("write", "Shipment") ["*"] }
+      wideOpen wideOpen "svc-a" ("write", "Shipment")
+  , mkCase "application_write_scope_meet_denies_other_collection"
+      { wideOpen with writeTools := writeOnly ("write", "Shipment") ["*"] }
+      { wideOpen with writeTools := writeOnly ("write", "Other") ["*"] }
+      wideOpen "svc-a" ("write", "Shipment")
+  , mkCase "application_write_missing_field_grant_denies"
+      { wideOpen with writeTools := writeOnly ("write", "Shipment") ["*"] }
+      { wideOpen with writeTools := writeOnly ("write", "Shipment") [] }
+      wideOpen "svc-a" ("write", "Shipment")
+  , mkCase "application_write_runtime_denies"
+      { wideOpen with writeTools := writeOnly ("write", "Shipment") ["*"] }
+      wideOpen { wideOpen with writeTools := .none } "svc-a" ("write", "Shipment")
   , mkCase "other_capabilities_do_not_enable_goals"
       behaviorWithoutGoals wideOpen wideOpen "svc-a" probeWrite
   ]

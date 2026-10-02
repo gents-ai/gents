@@ -77,6 +77,7 @@ pub struct ToolSurface {
     pub(super) p2p_collections: EndpointScope<String, ()>,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_scope: CollectionScope,
+    pub(super) application_write_collections: Vec<String>,
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) query_tools: Vec<QueryToolDecl>,
     pub(super) surface_of_tool: std::collections::BTreeMap<String, String>,
@@ -247,6 +248,9 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
+        if !self.application_write_collections.is_empty() {
+            names.push(crate::application_write::WRITE_TOOL_NAME.into());
+        }
         if self.lsp.is_some() {
             names.push(crate::toolset::lsp::LSP_TOOL_NAME.to_string());
         }
@@ -347,11 +351,35 @@ impl ToolSurface {
                 runtime.agent_did.clone(),
             ));
         }
+        let datastore_actor = if self.enable_defra_query
+            || !self.application_write_collections.is_empty()
+            || !self.query_tools.is_empty()
+        {
+            let identity = runtime
+                .identity
+                .as_ref()
+                .context("datastore tools require the principal identity")?;
+            anyhow::ensure!(
+                identity.did() == runtime.agent_did,
+                "datastore identity differs from principal DID"
+            );
+            Some(identity::Did::new(identity.did().to_owned())?)
+        } else {
+            None
+        };
         if self.enable_defra_query {
             tools.push(build_defra_query_tool(
                 runtime.node.clone(),
                 self.defra_query_scope.clone(),
+                datastore_actor.clone().expect("query actor was validated"),
             ));
+        }
+        if !self.application_write_collections.is_empty() {
+            tools.push(Box::new(crate::application_write::WriteTool::new(
+                crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                self.application_write_collections.iter().cloned().collect(),
+                datastore_actor.clone(),
+            )));
         }
         if let Some(lsp) = &self.lsp {
             tools.push(Box::new(crate::toolset::lsp::LspTool::new(
@@ -405,6 +433,7 @@ impl ToolSurface {
         }
         for decl in &self.query_tools {
             let tool = BoundedQueryTool::new(runtime.node.clone(), decl.clone())
+                .with_actor(datastore_actor.clone().expect("query actor was validated"))
                 .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
             if !tool.is_well_formed() {
                 anyhow::bail!(

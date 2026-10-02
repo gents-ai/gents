@@ -262,7 +262,7 @@ pub fn diagnose_failed_query(
         .collect();
     format!(
         "{clauses} on collection {collection:?}; queryable fields: [{fields}]. \
-         Tip: call defra_query with fields: [\"*\"] to list a collection's fields",
+         Tip: call query with argv: [\"fields\"] and collection to list its fields",
         clauses = clauses.join("; "),
         collection = params.collection,
         fields = visible.join(", "),

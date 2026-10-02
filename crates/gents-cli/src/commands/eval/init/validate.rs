@@ -147,6 +147,8 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                     capture.name()
                 );
                 match capture {
+                    // A stage may create the collections whose schemas it captures.
+                    EvalCapture::Schema { .. } => {}
                     EvalCapture::Documents {
                         collection,
                         fields,

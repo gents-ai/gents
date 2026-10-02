@@ -170,6 +170,7 @@ pub struct ResolvedToolSelection {
     pub enable_context_budget: bool,
     pub enable_defra_query: bool,
     pub defra_query_collections: Vec<String>,
+    pub application_write_collections: Vec<String>,
     pub write_tools: Vec<crate::document_config::WriteToolDecl>,
     pub query_tools: Vec<crate::document_config::QueryToolDecl>,
     /// See [`crate::document_config::MergedSurfaceTools::surface_of_tool`].
@@ -214,6 +215,7 @@ impl Default for ResolvedToolSelection {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -393,6 +395,9 @@ impl ResolvedToolSelection {
                 .iter()
                 .cloned()
                 .collect(),
+            application_write_collections: datastore
+                .and_then(|v| v.write_collections.clone())
+                .unwrap_or_default(),
             // Canonical surfaces own datastore write declarations; canonical
             // DatastoreToolSurface/EthTool documents are expanded by the caller.
             write_tools: Vec::new(),

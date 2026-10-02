@@ -8,4 +8,8 @@ export type DatastoreTools = { enable_defra_query?: boolean | null, defra_query_
  * Bare `surface_id` refs to same-agent `DatastoreToolSurface` docs.
  * Expanded into create and query tools at snapshot build (fail-closed).
  */
-datastore_tool_surface_ids?: Array<string> | null, };
+datastore_tool_surface_ids?: Array<string> | null,
+/**
+ * Exact application collections granted to the generic write endpoint. Empty denies all.
+ */
+write_collections?: Array<string> | null, };

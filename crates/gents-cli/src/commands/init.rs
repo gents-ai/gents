@@ -1158,6 +1158,7 @@ fn tools_for_package(
             enable_context_budget: Some(true),
         }),
         datastore: Some(DatastoreTools {
+            write_collections: None,
             enable_defra_query: Some(enable_defra_query),
             defra_query_collections: (!defra_query_collections.is_empty())
                 .then_some(defra_query_collections),

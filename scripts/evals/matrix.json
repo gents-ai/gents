@@ -102,6 +102,60 @@
       ],
       "title": "Graph authoring capability probe",
       "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
+    },
+    {
+      "id": "schema-experience",
+      "definition_id": "engineer-schema-experience",
+      "path": "schema_experience",
+      "subject": "ladder/engineer_subject",
+      "coverage": [
+        "BM25 index deployment",
+        "relational modeling",
+        "ordered, unique and vector indexes",
+        "additive updates preserve records",
+        "write and read configured records"
+      ],
+      "title": "Schema management"
+    },
+    {
+      "id": "engineer-datastore",
+      "definition_id": "engineer-datastore",
+      "path": "engineer_datastore",
+      "subject": "ladder/engineer_subject",
+      "title": "Application datastore",
+      "coverage": [
+        "filtered count",
+        "ordered pagination",
+        "durable create/update/delete",
+        "protected data and owner selection"
+      ]
+    },
+    {
+      "id": "engineer-explain",
+      "definition_id": "engineer-explain",
+      "path": "engineer_explain",
+      "subject": "ladder/engineer_subject",
+      "title": "Read-only query plans",
+      "coverage": [
+        "scan and index evidence",
+        "explicit bounded execution",
+        "empty results",
+        "schema recovery",
+        "protected collection refusal"
+      ]
+    },
+    {
+      "id": "sessions",
+      "definition_id": "engineer-sessions",
+      "path": "sessions",
+      "subject": "sessions/subject",
+      "coverage": [
+        "canonical discovery",
+        "exact scoped count",
+        "wrong ID recovery",
+        "filtered discovery"
+      ],
+      "title": "Engineer sessions"
     }
   ]
 }

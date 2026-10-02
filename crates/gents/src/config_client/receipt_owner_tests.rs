@@ -159,3 +159,24 @@ async fn transient_receipt_read_retries_without_reposting() -> Result<()> {
     server.abort();
     Ok(())
 }
+
+#[test]
+fn delegated_bearer_remains_caller_owned_and_is_redacted() {
+    let secret = "Bearer caller-signed-sensitive-token";
+    let endpoint = super::GraphqlEndpoint::with_delegated_authorization(
+        "http://127.0.0.1:8000/api/v0/graphql",
+        secret,
+    )
+    .unwrap();
+    assert_eq!(endpoint.authorization().unwrap().as_deref(), Some(secret));
+    assert!(!format!("{endpoint:?}").contains(secret));
+    assert_eq!(
+        serde_json::to_value(&endpoint).unwrap(),
+        serde_json::json!(endpoint.url())
+    );
+    for invalid in ["", "Bearer ", "Basic abc", "Bearer abc\nmalicious"] {
+        assert!(
+            super::GraphqlEndpoint::with_delegated_authorization(endpoint.url(), invalid).is_err()
+        );
+    }
+}

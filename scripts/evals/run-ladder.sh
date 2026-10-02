@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run native onboarding evals with a live browser or terminal view.
 #
-#   scripts/evals/run-ladder.sh [all|l1..l6|factory-setup|list] [TRIALS] [CONCURRENCY]
+#   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
 #
 # `all` runs L1-L5 and the configuration-only capstone. L6 is an explicit
 # capability probe, excluded from acceptance while graph authoring is missing.
@@ -214,7 +214,7 @@ echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature $TEMPERATUR
 # The subject is the Engineer this checkout seeds: its Setup prompt and grant,
 # copied over the pack's so the cell never drifts from gents_protocol.
 SUBJECT="$EVAL_HOME/engineer_subject-$SHA"
-rm -rf "$SUBJECT" && cp -R "$LADDER/engineer_subject" "$SUBJECT"
+rm -rf "$SUBJECT" && cp -R "${GENTS_EVAL_SUBJECT:-$LADDER/engineer_subject}" "$SUBJECT"
 cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$SUBJECT/agent_behaviors/engineer/system_prompt.md"
 python3 - "$SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PY'
 import json, sys
@@ -240,6 +240,19 @@ for level in "${SELECTED[@]}"; do
   SUITE_PATH=$(python3 -c 'import json,sys; print(next(s["path"] for s in json.load(open(sys.argv[1]))["suites"] if s["id"]==sys.argv[2]))' "$MATRIX" "$level")
   DEFINITION_ID=$(python3 -c 'import json,sys; print(next(s["definition_id"] for s in json.load(open(sys.argv[1]))["suites"] if s["id"]==sys.argv[2]))' "$MATRIX" "$level")
   RUN_SUBJECT=$SUBJECT
+  if [ "$level" = sessions ]; then
+    RUN_SUBJECT="$EVAL_HOME/sessions_subject-$SHA"
+    rm -rf "$RUN_SUBJECT"
+    cp -R "$FIXTURES/sessions/subject" "$RUN_SUBJECT"
+    cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$RUN_SUBJECT/agent_behaviors/engineer/system_prompt.md"
+    python3 - "$RUN_SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PYSESSIONS'
+import json, sys
+config, grant = sys.argv[1:]
+c = json.load(open(config))
+c["tools"][0]["self_config"] = json.load(open(grant))
+json.dump(c, open(config, "w"), indent=2)
+PYSESSIONS
+  fi
   if [ "$level" = factory-setup ]; then
     RUN_SUBJECT="$EVAL_HOME/factory_subject-$SHA"
     rm -rf "$RUN_SUBJECT"
@@ -249,7 +262,7 @@ for level in "${SELECTED[@]}"; do
   # A definition pack's empty agent_principal would clear the home's default
   # behavior, and the served home then refuses to restart; keep the default.
   DEFINITION="$EVAL_HOME/definitions/$level"
-  rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "$FIXTURES/$SUITE_PATH" "$DEFINITION"
+  rm -rf "$DEFINITION" && mkdir -p "$EVAL_HOME/definitions" && cp -R "${GENTS_EVAL_DEFINITION_SOURCE:-$FIXTURES/$SUITE_PATH}" "$DEFINITION"
   python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["agent_principal"]={"default_behavior_id": sys.argv[2]}; json.dump(c, open(p,"w"), indent=2)' \
     "$DEFINITION/pack_config.json" "$DID:default"
   "$GENTS" config apply --root "$DEFINITION" --bind-agent-did home --home "$EVAL_HOME" >/dev/null

@@ -84,6 +84,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -171,6 +172,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -241,6 +243,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             enable_context_budget: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -301,6 +304,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             enable_context_budget: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -360,6 +364,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -418,6 +423,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -476,6 +482,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -532,6 +539,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -586,6 +594,7 @@ fn selection_without_root_inherits_operator_root() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -653,6 +662,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -717,6 +727,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -784,6 +795,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -926,6 +938,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -981,6 +994,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -1044,6 +1058,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
@@ -1089,7 +1104,7 @@ async fn defra_query_tool_gated_by_selection() {
     .resolve(&node, "did:key:z-test-agent")
     .await
     .unwrap();
-    assert!(enabled.tool_names().contains(&"defra_query".to_string()));
+    assert!(enabled.tool_names().contains(&"query".to_string()));
 
     let disabled = BehaviorToolConfig::from_selection(
         "ops",
@@ -1104,7 +1119,7 @@ async fn defra_query_tool_gated_by_selection() {
     .resolve(&node, "did:key:z-test-agent")
     .await
     .unwrap();
-    assert!(!disabled.tool_names().contains(&"defra_query".to_string()));
+    assert!(!disabled.tool_names().contains(&"query".to_string()));
 }
 
 #[tokio::test]
@@ -1306,6 +1321,11 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
 async fn query_tool_is_advertised_and_registered() {
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 
+    let keys = tempfile::tempdir().unwrap();
+    let identity = std::sync::Arc::new(
+        crate::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None).unwrap(),
+    );
+    let agent_did = crate::identity::AgentIdentity::did(&*identity).to_owned();
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
@@ -1330,7 +1350,7 @@ async fn query_tool_is_advertised_and_registered() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent")
+    .resolve(&node, &agent_did)
     .await
     .unwrap();
 
@@ -1340,11 +1360,18 @@ async fn query_tool_is_advertised_and_registered() {
         "declared query tool should be advertised; got {names:?}"
     );
     assert!(
-        !names.contains(&"defra_query".to_string()),
+        !names.contains(&"query".to_string()),
         "bound query tools must not imply the generic defra_query console"
     );
 
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let mut runtime =
+        ToolRuntimeContext::oneshot_with_agent_did(std::sync::Arc::new(node), agent_did);
+    let error = match surface.build_tools(&runtime).await {
+        Ok(_) => panic!("query requires its principal identity"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("principal identity"));
+    runtime.identity = Some(identity);
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
@@ -2020,7 +2047,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             ceiling: ToolCeiling::meta_only(),
             mcp_services_online: false,
             expected_tool_names: vec!["context_budget"],
-            absent_tool_names: vec!["call_tool", "defra_query", "read_file", "spawn_process"],
+            absent_tool_names: vec!["call_tool", "query", "read_file", "spawn_process"],
             expected_warnings: vec!["host_ceiling_not_global"],
             host_ceiling_warning: true,
         },
@@ -2029,7 +2056,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             selection: preset_tools_document("introspection", "Off", "Off", false, true),
             ceiling: ToolCeiling::meta_only(),
             mcp_services_online: false,
-            expected_tool_names: vec!["context_budget", "defra_query"],
+            expected_tool_names: vec!["context_budget", "query"],
             absent_tool_names: vec!["call_tool", "read_file", "spawn_process"],
             expected_warnings: vec!["host_ceiling_not_global", "defra_query_empty_scope_all"],
             host_ceiling_warning: true,
@@ -2039,7 +2066,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
             selection: preset_tools_document("introspection", "Off", "Off", false, true),
             ceiling: ToolCeiling::meta_only(),
             mcp_services_online: true,
-            expected_tool_names: vec!["context_budget", "defra_query"],
+            expected_tool_names: vec!["context_budget", "query"],
             absent_tool_names: vec![
                 "discover_tools",
                 "call_tool",
@@ -2072,7 +2099,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "write_file",
                 "bash_unrestricted",
                 "spawn_process",
-                "defra_query",
+                "query",
             ],
             expected_warnings: vec![],
             host_ceiling_warning: false,
@@ -2094,13 +2121,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
                 "wait_process",
                 "context_budget",
             ],
-            absent_tool_names: vec![
-                "discover_tools",
-                "call_tool",
-                "bash",
-                "agent_new",
-                "defra_query",
-            ],
+            absent_tool_names: vec!["discover_tools", "call_tool", "bash", "agent_new", "query"],
             expected_warnings: vec![],
             host_ceiling_warning: false,
         },
@@ -2232,7 +2253,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         "agent_message",
         "agent_interrupt",
         "agent_list",
-        "defra_query",
+        "query",
     ] {
         assert!(
             explanation.tool_names.contains(&name.to_string()),
@@ -2451,9 +2472,7 @@ async fn defra_query_is_off_by_default() {
     .await
     .unwrap();
     assert!(
-        !default_surface
-            .tool_names()
-            .contains(&"defra_query".to_string()),
+        !default_surface.tool_names().contains(&"query".to_string()),
         "default ResolvedToolSelection must not surface defra_query: {:?}",
         default_surface.tool_names()
     );
@@ -2472,7 +2491,7 @@ async fn defra_query_is_off_by_default() {
         .await
         .unwrap();
     assert!(
-        !meta_only.tool_names().contains(&"defra_query".to_string()),
+        !meta_only.tool_names().contains(&"query".to_string()),
         "meta_only baseline must not surface defra_query: {:?}",
         meta_only.tool_names()
     );
@@ -2502,7 +2521,7 @@ async fn agent_config_alias_expands_to_config_scope() {
     .await
     .unwrap();
 
-    assert!(surface.tool_names().contains(&"defra_query".to_string()));
+    assert!(surface.tool_names().contains(&"query".to_string()));
     for allowed in ["AgentBehavior", "Tools", "Schedule", "AgentContext"] {
         assert!(
             surface.defra_query_scope.ensure_allowed(allowed).is_ok(),
@@ -3071,4 +3090,36 @@ fn effective_surface_fingerprint_preserves_p2p_mutation_and_collection_scope() {
     let other = make(true, vec!["PrivateNote".into()]);
     assert_ne!(format!("{read:?}"), format!("{mutate:?}"));
     assert_ne!(format!("{mutate:?}"), format!("{other:?}"));
+}
+
+#[test]
+fn application_write_is_exactly_granted_and_narrowed_by_the_existing_endpoint_meet() {
+    let grant = ResolvedToolSelection {
+        application_write_collections: vec!["Shipment".into()],
+        ..Default::default()
+    };
+    let policy = ToolPolicySurface::from_selection(&grant, &SubagentToolConfig::default());
+    assert_eq!(
+        policy.application_write_collections_for_runtime(&["Shipment".into(), "Other".into()]),
+        vec!["Shipment"]
+    );
+    assert!(!policy.defra_query);
+    let other = ResolvedToolSelection {
+        application_write_collections: vec!["Other".into()],
+        ..Default::default()
+    };
+    let narrowed = policy.meet(&ToolPolicySurface::from_selection(
+        &other,
+        &SubagentToolConfig::default(),
+    ));
+    assert!(narrowed
+        .application_write_collections_for_runtime(&grant.application_write_collections)
+        .is_empty());
+    let empty = ToolPolicySurface::from_selection(
+        &ResolvedToolSelection::default(),
+        &SubagentToolConfig::default(),
+    );
+    assert!(empty
+        .application_write_collections_for_runtime(&grant.application_write_collections)
+        .is_empty());
 }

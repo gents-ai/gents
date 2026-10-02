@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.ToolPolicy.Cases
 import Proofs.ToolPolicy.WriteInput
+import Proofs.ToolPolicy.ApplicationWrite
 
 namespace Conformance.Contracts
 
@@ -155,4 +156,31 @@ def goalCapabilityResolutionCaseJson (c : GoalCapabilityResolutionCase) : String
 def goalCapabilityResolutionCasesJson : String :=
   jsonArray (goalCapabilityResolutionCases.map goalCapabilityResolutionCaseJson)
 
+end Conformance.Contracts
+
+namespace Conformance.Contracts
+def applicationWriteCasesJson : String := Id.run do
+  let mut rows := []
+  for op in [ToolPolicy.ApplicationWrite.Operation.create, .update, .delete] do
+    for granted in [false, true] do
+      for application in [false, true] do
+        for blocked in [false, true] do
+          for credential in [false, true] do
+            for bounded in [false, true] do
+              for targets in [0, 1, 3, 101] do
+                for limit in [0, 2, 100, 101] do
+                  for preview in [false, true] do
+                    for digestMatches in [false, true] do
+                      let o : ToolPolicy.ApplicationWrite.Observation :=
+                        ⟨granted, application, blocked, credential, bounded, targets, limit, preview, digestMatches⟩
+                      let name := match op with | .create => "create" | .update => "update" | .delete => "delete"
+                      rows := rows ++ ["{\"operation\":" ++ jsonString name
+                        ++ ",\"granted\":" ++ boolJson granted ++ ",\"application\":" ++ boolJson application
+                        ++ ",\"protected\":" ++ boolJson blocked ++ ",\"credential\":" ++ boolJson credential
+                        ++ ",\"bounded\":" ++ boolJson bounded ++ ",\"targets\":" ++ toString targets
+                        ++ ",\"limit\":" ++ toString limit ++ ",\"preview\":" ++ boolJson preview
+                        ++ ",\"digest_matches\":" ++ boolJson digestMatches
+                        ++ ",\"admitted\":" ++ boolJson (ToolPolicy.ApplicationWrite.admitted op o)
+                        ++ ",\"may_apply\":" ++ boolJson (ToolPolicy.ApplicationWrite.mayApply op o) ++ "}"]
+  return jsonArray rows
 end Conformance.Contracts

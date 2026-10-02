@@ -1,0 +1,46 @@
+{
+  "case_id": "projects-and-tasks",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "I need a small project tracker. The app's records are Project { name, tasks } and ProjectTask { title, done, project }. Names and titles are text; done is true/false. One project has many tasks, and each task belongs to one project. Use real relationships so we can follow those links in both directions. Please create the record types.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Project",
+            "ProjectTask"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Project { name: String tasks: [ProjectTask] } type ProjectTask { title: String done: Boolean project: Project }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

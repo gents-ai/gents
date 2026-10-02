@@ -1,0 +1,21 @@
+{
+  "agent_principal": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-datastore",
+      "comparability_version": 1,
+      "title": "Application datastore: count, paging and durable writes",
+      "subject": {
+        "kind": "behavior",
+        "inference_slots": [
+          "engineer"
+        ]
+      },
+      "cases": [
+        "./cases/shipment_count_page.json",
+        "./cases/shipment_lifecycle.json",
+        "./cases/protected_and_wrong_scope.json"
+      ]
+    }
+  ]
+}

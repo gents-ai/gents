@@ -1,0 +1,158 @@
+{
+  "case_id": "filtered-discovery",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollout review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "support-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Support triage",
+            "source": "user"
+          },
+          "tags": [
+            "support"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-followup",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollback followup",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "did:key:z6MkiForeignSessionOwner",
+          "requester_did": "did:key:z6MkiForeignSessionOwner",
+          "session_id": "launch-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Protected foreign work",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Find my open support sessions using sessions. Give their IDs and titles. Include its canonical session document ID as a source citation.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "support-review",
+              "Support triage"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "source_sessions",
+                "source_match": {
+                  "field": "session_id",
+                  "equals": "support-review"
+                },
+                "field": "_docID",
+                "target_capture": "source_sessions",
+                "target_key": "_docID",
+                "reported_fields": [
+                  "_docID"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "source_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "session_id": {
+              "_eq": "support-review"
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "title"
+          ]
+        }
+      ]
+    }
+  ]
+}

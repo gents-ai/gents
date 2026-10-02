@@ -1,0 +1,45 @@
+{
+  "case_id": "catalog-neighbors",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Our product matching prototype already produces three-number vectors; don't generate embeddings. Create CatalogItem with sku and label as text, and coordinates as a list of Float32 values. Add an exact FLAT vector index with three dimensions and Euclidean distance. The catalog is small, so exact answers matter more than scaling right now.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CatalogItem"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CatalogItem { sku: String label: String coordinates: [Float32!] @index(vector:{dimensions:3,flat:{metric:EUCLIDEAN}}) }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

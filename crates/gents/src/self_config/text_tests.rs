@@ -1294,7 +1294,12 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 #[tokio::test]
 async fn saved_config_audit_reports_broken_references_without_mutation_and_accepts_repair() {
     let (node, owner, tools) = setup("saved-audit", &["persona", "tools"]).await;
-    let valid = ok(&tools, json!({"argv":["validate"]})).await;
+    let failure = structured_failure(&tools, json!({"argv":["datastore","validate"]})).await;
+    assert_eq!(failure["config_execution"]["mutation_entered"], false);
+    assert!(!failure["error"].as_str().unwrap().contains("sessions"));
+    let recovery = failure["recovery"]["next_call"].clone();
+    assert_eq!(recovery, json!({"argv":["validate"]}));
+    let valid = ok(&tools, recovery).await;
     assert_eq!(valid["valid"], true);
     assert!(valid["checked_documents"].as_u64().unwrap() > 0);
     assert_eq!(valid["collections"]["AgentBehavior"], 1);

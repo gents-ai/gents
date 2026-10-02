@@ -451,6 +451,14 @@ pub struct DatastoreTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub datastore_tool_surface_ids: Option<Vec<String>>,
+    /// Exact application collections granted to the generic write endpoint. Empty denies all.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub write_collections: Option<Vec<String>>,
 }
 
 /// Domain-specific external integrations. Extension design remains to be settled.
@@ -785,6 +793,21 @@ impl Tools {
             );
         }
         if let Some(datastore) = &self.datastore {
+            names(
+                &mut errors,
+                "datastore.write_collections",
+                datastore
+                    .write_collections
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
+                false,
+            );
+            for collection in datastore.write_collections.iter().flatten() {
+                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                    errors.push(format!("datastore.write_collections: {error}"));
+                }
+            }
             names(
                 &mut errors,
                 "datastore.defra_query_collections",
