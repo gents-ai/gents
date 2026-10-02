@@ -201,6 +201,7 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
+            let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
                 &model,
                 &mut history,
@@ -213,6 +214,16 @@ where
                 &mut active_reduction_keys,
             )
             .await?;
+            tracing::info!(
+                target: "gents::agent::loop_stream",
+                request_doc_id = replay.request_doc_id.as_deref().unwrap_or_default(),
+                turn = turn_index,
+                history_count = history.len(),
+                new_message_count = new_messages.len(),
+                context_window = config.context_window,
+                elapsed_ms = preparation_started.elapsed().as_millis() as u64,
+                "prepared provider request before completion dispatch"
+            );
             let compaction_reason = turn_context_decision.reason;
             let pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
