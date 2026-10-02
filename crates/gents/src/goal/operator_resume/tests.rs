@@ -289,6 +289,57 @@ async fn resume_on_names_the_failed_step() {
 }
 
 #[tokio::test]
+async fn resume_on_counts_the_plugin_slots_of_the_moved_profile() {
+    let limited = Limited::new(&usage_limit()).await;
+    let asked = std::cell::RefCell::new(Vec::new());
+    let receipt = resume_goal_on_account(
+        &limited.access,
+        limited.f.identity.as_ref(),
+        limited.f.identity.did(),
+        SESSION,
+        PARENT,
+        &limited.b,
+        false,
+        &|profile| {
+            asked.borrow_mut().push(profile.to_owned());
+            Ok(vec!["team/ocr".into()])
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(asked.into_inner(), [PROFILE]);
+    let switch = receipt.switch.expect("the profile moved");
+    assert_eq!(
+        switch.headline,
+        format!("Move profile {PROFILE} to label-b (used by 1 behavior and 1 plugin slot)")
+    );
+    assert_eq!(switch.plugin_slots, ["team/ocr"]);
+}
+
+#[tokio::test]
+async fn resume_on_checks_the_session_before_the_switch() {
+    let limited = Limited::new(&usage_limit()).await;
+    let error = resume_goal_on_account(
+        &limited.access,
+        limited.f.identity.as_ref(),
+        limited.f.identity.did(),
+        "other-session",
+        PARENT,
+        &limited.b,
+        false,
+        &|_| Ok(Vec::new()),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        error,
+        "resume predecessor must uniquely belong to the goal owner and session"
+    );
+    assert_eq!(limited.profile_backend().await, limited.a, "nothing moved");
+}
+
+#[tokio::test]
 async fn resume_on_covers_limits_only() {
     let limited = Limited::new(r#"Claude account "label-a" is disabled."#).await;
     let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
