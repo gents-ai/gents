@@ -82,7 +82,7 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
         page,
-        header.getByLabel("breadcrumb"),
+        header.getByRole("link", { name: "Agents" }).first(),
         header.getByRole("button", { name: /Sync healthy/ }),
       );
       await expectInsideViewport(
@@ -97,7 +97,7 @@ test.describe("half-screen window", () => {
       await expectNoPageHorizontalOverflow(page);
 
       /* agents */
-      await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+      await page.getByRole("link", { name: "Agents" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
       await expectNoPageHorizontalOverflow(page);
@@ -147,10 +147,11 @@ test.describe("half-screen window", () => {
         .click();
       await expectInsideViewport(page, composer(page));
       await page
-        .getByRole("button", { name: "Open side panel" })
+        .getByRole("button", { name: "More" })
         .filter({ visible: true })
         .first()
         .click();
+      await page.getByRole("menuitem", { name: "Trace" }).click();
       /* the side panel opens as a sheet over the transcript, not a column */
       const sheet = page.getByRole("dialog", { name: "Side panel" });
       await expect(sheet).toBeVisible();
@@ -166,7 +167,7 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, composer(page));
       await expectNoPageHorizontalOverflow(page);
 
-      await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+      await page.getByRole("link", { name: "Agents" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
       await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
       await expectNoPageHorizontalOverflow(page);

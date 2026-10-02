@@ -22,7 +22,6 @@ import {
   ArrowLeft,
   ChevronDown,
   Copy,
-  PanelRight,
   Pencil,
   Play,
   Split,
@@ -57,9 +56,6 @@ import {
 import type { Shell } from "@/hooks/useShell";
 import { ChatFolderPicker } from "./ChatFolderPicker";
 import { anchor, scrollViewport, useFollowTail, useOlderPages } from "@/lib/scroll";
-import { useResizableWidth } from "@/lib/resizable";
-import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
-import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
 import { href, navigate } from "@/lib/router";
 import {
   Collapsible,
@@ -81,6 +77,9 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
 import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
+import { PanelMenu } from "@/app/PanelMenu";
+import { DropdownMenuItem } from "@gents/ui/components/dropdown-menu";
+import { PaneBar } from "@/app/PaneBar";
 import { BehaviorPicker } from "./BehaviorPicker";
 import { HoldCard } from "./HoldCard";
 import { LoadingStatus } from "./LoadingStatus";
@@ -88,7 +87,6 @@ import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
 import { activityStatus, isStopping } from "./activity-status";
-import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { isWorkingNode, nodeDidOf, workersBySession } from "@/lib/nodes";
@@ -327,26 +325,6 @@ export function SessionContext({
       </PopoverContent>
     </Popover>
   );
-}
-
-/* the trace panel's open state outlives the session; a person who works
-   with the trace open keeps it open */
-function useTraceOpen() {
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem("gents-prototype-trace") === "1";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("gents-prototype-trace", open ? "1" : "0");
-    } catch {
-      /* storage unavailable */
-    }
-  }, [open]);
-  return [open, setOpen] as const;
 }
 
 export function useBehaviorChoice(shell: Shell) {
@@ -1032,9 +1010,8 @@ function AssistantContent({ itemKey, content }: { itemKey: string; content: stri
   return <StreamText text={content} startFrom={from} />;
 }
 
-/* Under a finished response, the way Codex does it: the actions sit on
-   the line below the answer and stay there, rather than floating over it on
-   hover. Copy takes the response as written — its markdown — and says so. */
+/* Under a finished response the actions sit on the line below the answer
+   and stay there, rather than floating over it on hover. Copy takes the response as written — its markdown — and says so. */
 function ResponseActions({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1319,10 +1296,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     title: string;
   } | null>(null);
   const forkNotice = useExclusivePopover();
-  const [traceOpenPref, setTracePref] = useTraceOpen();
-  /* the remembered state is a desktop habit; on a phone the sheet opens only by
-     hand, and takes its turn with the shell's popovers like any other dialog */
-  const traceSheet = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
@@ -1382,16 +1355,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     /* the loader shows first and the marker mounts with the session, after
        this effect has already run once and found nothing: run again then */
   }, [shell.selectedSessionId, session]);
-  const wide = useMediaQuery(ROOMY_WINDOW);
-  const traceOpen = wide ? traceOpenPref : traceSheet.open;
-  const setTraceOpen = (open: boolean) =>
-    wide ? setTracePref(open) : traceSheet.onOpenChange(open);
-  const trace = useResizableWidth({
-    key: "gents-prototype-trace-width",
-    initial: 520,
-    min: 320,
-    max: (container) => container * 0.6,
-  });
   const choice = useBehaviorChoice(shell);
   const deployment = shell.selectedDeployment;
   const provenance = useSessionProvenance(shell);
@@ -1712,67 +1675,20 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
   return (
     <div
-      className="grid h-full min-h-0"
+      className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)]"
       data-testid="session-screen"
-      style={{
-        gridTemplateColumns: wide
-          ? `minmax(0,1fr) ${traceOpen ? "auto" : "0px"} ${traceOpen ? trace.width : 0}px`
-          : "minmax(0,1fr) 0px 0px",
-        /* the columns ease when the panel opens or closes, not while it is dragged */
-        transition: trace.isDragging
-          ? undefined
-          : "grid-template-columns 260ms cubic-bezier(0.22, 1, 0.36, 1)",
-      }}
     >
       <div className="relative flex min-h-0 min-w-0 flex-col">
-        {/* takes no space in the flow (negative margin), so nothing shifts when it appears */}
+        {/* once the header has scrolled out, a fade at the top says the
+            transcript continues above, where the condensed title now is */}
         <div
-          className={`absolute inset-x-0 top-0 z-20 ${condensed ? "" : "pointer-events-none invisible"}`}
-        >
-          <div className="mx-auto flex h-12 w-full max-w-page items-center gap-3 border-b border-border/60 bg-background/95 px-6 backdrop-blur">
-            <a
-              href={href({ name: "sessions" })}
-              aria-label="Sessions"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="size-4" />
-            </a>
-            <NodeBehaviorStack
-              nodes={shell.deployments}
-              nodeDid={session?.agentDid}
-              behaviorId={session?.behaviorId}
-              deployment={deployment}
-              size="sm"
-              keyboard
-            />
-            <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
-              {session?.title}
-            </span>
-            {session?.context && <SessionContext context={session.context} compact />}
-            <Hint label="Fork session">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Fork session"
-                onClick={fork}
-              >
-                <Split />
-              </Button>
-            </Hint>
-
-            <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={traceOpen ? "Close side panel" : "Open side panel"}
-                className={traceOpen ? "bg-accent text-foreground" : undefined}
-                onClick={() => setTraceOpen(!traceOpen)}
-              >
-                <PanelRight />
-              </Button>
-            </Hint>
-          </div>
-        </div>
+          aria-hidden="true"
+          data-testid="transcript-top-fade"
+          className={cn(
+            "pointer-events-none absolute inset-x-0 top-0 z-20 h-8 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+            condensed ? "opacity-100" : "opacity-0",
+          )}
+        />
         {/* transcript and composer scroll together in the kit's scroll area;
             the composer sticks to the foot so the bar runs the full height */}
         <div ref={column} className="min-h-0 flex-1">
@@ -1787,12 +1703,91 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 parentWork.hasSenders && "sm:pr-14",
               )}
             >
-              <a
-                href={href({ name: "sessions" })}
-                className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-              >
-                <ArrowLeft className="size-3.5" /> Sessions
-              </a>
+              <PaneBar>
+                <a
+                  href={href({ name: "sessions" })}
+                  aria-label="Sessions"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                >
+                  <ArrowLeft className="size-4" />
+                </a>
+                {/* the header's facts, once the header has scrolled out: they
+                    ease in where the reader's eye already is, and the bar's
+                    height never changes, so nothing moves */}
+                <div
+                  aria-hidden={!condensed}
+                  data-testid="pane-bar-condensed"
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 transition-[opacity,transform] duration-150 ease-out",
+                    condensed
+                      ? "translate-y-0 opacity-100"
+                      : "pointer-events-none translate-y-1 opacity-0",
+                  )}
+                >
+                  <NodeBehaviorStack
+                    nodes={shell.deployments}
+                    nodeDid={session?.agentDid}
+                    behaviorId={session?.behaviorId}
+                    deployment={deployment}
+                    size="sm"
+                    keyboard
+                    workers={
+                      session
+                        ? (workersBySession(shell.deployments).get(session.sessionId) ??
+                          [])
+                        : []
+                    }
+                  />
+                  <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
+                    {session ? (
+                      <Title
+                        key={session.sessionId + (session.title ?? "")}
+                        title={session.title ?? "Untitled session"}
+                        onRename={async (title) => {
+                          await shell.api.renameSession({
+                            agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
+                            sessionId: session.sessionId,
+                            title,
+                          });
+                          await shell.refreshSnapshot();
+                          toast("Renamed");
+                        }}
+                      />
+                    ) : (
+                      /* no session to name: the LoadingStatus below says what
+                       happened, so the title stays neutral */
+                      <h1 className="font-heading text-sm font-medium text-heading">
+                        Session
+                      </h1>
+                    )}
+                  </div>
+                </div>
+                {/* the meter rides up with the header, next to the menu */}
+                {session?.context && (
+                  <div
+                    aria-hidden={!condensed}
+                    className={cn(
+                      "flex shrink-0 items-center transition-[opacity,transform] duration-150 ease-out",
+                      condensed
+                        ? "translate-y-0 opacity-100"
+                        : "pointer-events-none translate-y-1 opacity-0",
+                    )}
+                  >
+                    <SessionContext context={session.context} compact />
+                  </div>
+                )}
+                <PanelMenu
+                  routeName="session"
+                  size="icon-sm"
+                  actions={
+                    session ? (
+                      <DropdownMenuItem onClick={fork}>
+                        <Split className="size-4" /> Fork session
+                      </DropdownMenuItem>
+                    ) : null
+                  }
+                />
+              </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   {session ? (
@@ -1865,31 +1860,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     </span>
                     {session?.context && <SessionContext context={session.context} />}
                   </div>
-                </div>
-                <div className="flex gap-1">
-                  <Hint label="Fork session">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Fork session"
-                      onClick={fork}
-                    >
-                      <Split />
-                    </Button>
-                  </Hint>
-
-                  <Hint label={traceOpen ? "Close side panel" : "Open side panel"}>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={traceOpen ? "Close side panel" : "Open side panel"}
-                      aria-pressed={traceOpen}
-                      className={traceOpen ? "bg-accent text-foreground" : undefined}
-                      onClick={() => setTraceOpen(!traceOpen)}
-                    >
-                      <PanelRight />
-                    </Button>
-                  </Hint>
                 </div>
               </div>
 
@@ -2040,52 +2010,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </ScrollArea>
         </div>
       </div>
-      {/* the drag handle: a hairline that darkens on hover; arrow keys resize too */}
-      <div
-        {...trace.handleProps}
-        aria-label="Resize trace"
-        aria-hidden={!traceOpen || !wide}
-        tabIndex={traceOpen && wide ? 0 : -1}
-        /* a closed panel's handle takes no width, or it overflows its 0px track */
-        className={cn(
-          "group flex cursor-col-resize items-center justify-center overflow-hidden outline-none focus-visible:bg-accent",
-          traceOpen && wide ? "w-3" : "w-0",
-        )}
-      >
-        <div className="h-10 w-0.5 rounded-full bg-border transition-colors group-hover:bg-muted-foreground group-focus-visible:bg-ring" />
-      </div>
-      {/* the panel keeps its width inside a clipping cell, so it slides rather than squashes */}
-      <div
-        className="min-h-0 min-w-0 overflow-hidden py-4"
-        aria-hidden={!traceOpen || !wide}
-      >
-        <div
-          className="h-full pr-4 transition-transform duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
-          style={{
-            width: trace.width,
-            transform: traceOpen ? "translateX(0)" : "translateX(24px)",
-          }}
-        >
-          {wide && <TracePanel shell={shell} onClose={() => setTraceOpen(false)} />}
-        </div>
-      </div>
-      {/* in a narrow window the panel is a sheet over the transcript */}
-      {!wide && (
-        <Sheet
-          open={traceSheet.open}
-          onOpenChange={traceSheet.onOpenChange}
-          onOpenChangeComplete={traceSheet.onOpenChangeComplete}
-        >
-          <SheetContent
-            ref={traceSheet.popupRef}
-            side="right"
-            className="w-[92vw] max-w-md border-0 bg-transparent p-2 shadow-none"
-          >
-            <SheetTitle className="sr-only">Side panel</SheetTitle>
-            <TracePanel shell={shell} onClose={() => setTraceOpen(false)} />
-          </SheetContent>
-        </Sheet>
-      )}
       <AlertDialog
         open={forkNotice.open && forked !== null}
         onOpenChange={forkNotice.onOpenChange}

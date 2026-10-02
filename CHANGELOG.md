@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop shell: a window bar across the top carries each screen's title,
+  marks and actions; the side panel becomes a dock of tabbed surfaces
+  (trace, workers) beside the pane, resized by a divider that
+  settles with a spring and collapses to a tab; in a half-screen window the
+  dock is a sheet, and on a phone a bottom sheet. The rail keeps its mark
+  and settings at the foot.
+
 - Desktop lists span nodes: the sessions list and the mailbox cover every
   node the client can see, with a node axis to narrow them, and each row
   wears the node and behavior it belongs to; the navigation panel shows the
