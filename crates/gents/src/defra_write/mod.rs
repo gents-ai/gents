@@ -70,7 +70,7 @@ impl BoundedWriteTool {
         self.ensure_well_formed().is_ok()
     }
 
-    fn ensure_well_formed(&self) -> Result<()> {
+    pub(crate) fn ensure_well_formed(&self) -> Result<()> {
         if self.decl.collection == crate::mailbox::MAILBOX_COLLECTION {
             bail!(
                 "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"

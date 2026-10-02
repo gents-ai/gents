@@ -69,6 +69,25 @@ impl BoundedQueryTool {
         self.ensure_well_formed().is_ok()
     }
 
+    pub(crate) async fn validate_schema(&self) -> Result<()> {
+        self.ensure_well_formed()?;
+        let fields = crate::config_client::ConfigAccess::Local(self.node.clone())
+            .collection_fields(&self.decl.collection)
+            .await?
+            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+        for field in self.decl.fields.iter().map(String::as_str).chain(
+            self.decl
+                .filter_fields
+                .iter()
+                .map(|field| field.name.as_str()),
+        ) {
+            if !fields.contains(field) {
+                bail!("field `{field}` is absent from `{}`", self.decl.collection);
+            }
+        }
+        Ok(())
+    }
+
     /// Mirrors [`crate::defra_write::BoundedWriteTool::ensure_well_formed`]:
     /// the protected-collection rule holds at use as well as at configuration
     /// validation, so a persisted surface that somehow names one is refused

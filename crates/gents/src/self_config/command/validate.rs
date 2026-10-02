@@ -8,7 +8,7 @@ impl ConfigCommandTool {
         self.ensure_behavior_catalog("validate", None)?;
         anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated principal");
         let identity = self.core.identity()?;
-        let (counts, errors) = ConfigAccess::transact_local(
+        let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local(
             &self.node,
             Some(identity),
             "self_config.validate",
@@ -50,16 +50,63 @@ impl ConfigCommandTool {
                         errors.push(json!({"error":format!("{error:#}")}));
                     }
                 }
-                Ok((counts, errors))
+                let selected: std::collections::BTreeSet<String> = references.documents()
+                    .filter(|((collection, _), _)| *collection == crate::Collection::Tools)
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::Tools>(value.clone()).ok())
+                    .flat_map(|tools| tools.datastore.and_then(|d| d.datastore_tool_surface_ids).unwrap_or_default())
+                    .collect();
+                let surfaces = references.documents()
+                    .filter(|((collection, id), _)| *collection == crate::Collection::DatastoreToolSurface && selected.contains(id))
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::DatastoreToolSurfaceDocument>(value.clone()).ok())
+                    .collect::<Vec<_>>();
+                Ok((counts, errors, surfaces))
             }),
         ).await?;
+        for surface in selected_surfaces {
+            for entry in surface.entries.unwrap_or_default() {
+                use crate::document_config::SurfaceToolDecl;
+                let (tool_name, collection, result) = match entry {
+                    SurfaceToolDecl::Create(decl) => {
+                        let result = if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
+                            crate::mailbox::validate_mailbox_write_decl(&decl)
+                        } else {
+                            crate::defra_write::BoundedWriteTool::new(
+                                self.node.clone(),
+                                decl.clone(),
+                            )
+                            .ensure_well_formed()
+                        };
+                        (decl.tool_name, decl.collection, result)
+                    }
+                    SurfaceToolDecl::Query(decl) => {
+                        let result = crate::defra_query::BoundedQueryTool::new(
+                            self.node.clone(),
+                            decl.clone(),
+                        )
+                        .validate_schema()
+                        .await;
+                        (decl.tool_name, decl.collection, result)
+                    }
+                };
+                if let Err(error) = result {
+                    errors.push(json!({
+                        "collection":"DatastoreToolSurface", "id":surface.surface_id,
+                        "tool_name":tool_name, "schema_collection":collection,
+                        "error":format!("{error:#}"),
+                        "inspect_with":{"argv":["datastore","get"],"target_id":surface.surface_id},
+                        "inspect_schema_with":{"tool":"schema","args":{"argv":["collection","get"],"target_id":collection}},
+                        "next":"Use datastore update to correct this entry or schema collection update to correct the existing collection. Preserve unrelated fields and entries, then run config validate again."
+                    }));
+                }
+            }
+        }
         ordered! {
             "valid": errors.is_empty(),
             "checked_documents": counts.values().sum::<usize>(),
             "collections": counts,
             "errors": errors,
-            "scope": "Saved configuration for the authenticated principal: canonical fields, references and publication checks. Reports the first failure per document, then publication checks; fix and rerun. Does not test credentials, remote destinations, runtime or application-schema readiness, or user intent.",
-            "next": if errors.is_empty() { "Inspect behavior get to verify selections match the user's request; exercise tools to verify runtime behavior. Report what remains untested." } else { "Inspect the named objects, fix them with resource update/create, and run validate again before reporting completion." },
+            "scope": "Saved configuration for the authenticated principal: canonical fields, references, publication checks and selected datastore tools against current collection schemas. Config and schema observations are not one atomic snapshot. Does not test credentials, remote destinations, runtime execution or user intent.",
+            "next": if errors.is_empty() { "Inspect behavior get to verify selections match the user's request; exercise tools to verify runtime behavior. Report what remains untested." } else { "Read the named objects, correct existing objects with resource update (create only missing objects), and run validate again before reporting completion." },
             "committed": false,
         }.pretty()
     }

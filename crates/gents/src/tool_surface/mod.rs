@@ -379,12 +379,12 @@ impl ToolSurface {
             } else {
                 let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone())
                     .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
-                if !tool.is_well_formed() {
-                    anyhow::bail!(
-                        "write tool `{}` has an unavailable or unsupported collection schema",
-                        decl.tool_name
-                    );
-                }
+                tool.ensure_well_formed().map_err(|error| {
+                    anyhow::anyhow!(
+                        "write tool `{}` on collection `{}`: {error:#}. Declared by datastore surface `{}`; inspect with config datastore get, then use datastore update to correct its fields or schema collection update to correct the existing collection",
+                        decl.tool_name, decl.collection, self.surface_of_tool.get(&decl.tool_name).map(String::as_str).unwrap_or("unresolved")
+                    )
+                })?;
                 tools.push(Box::new(tool) as Box<dyn ToolDyn>);
             }
         }

@@ -253,7 +253,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "validate" => Page {
             what: "audit saved configuration for your authenticated principal; read-only (behavior catalog grant).",
             commands: &["validate"],
-            notes: "Uses the same canonical fields, references and publication checks as writes. Reports document counts and errors; fix them with resource update/create, then validate again. References to remote principals are not locally verified. This does not test credentials, running helpers, application-schema readiness or whether the setup meets the user's goal. Inspect selections with behavior get; exercise tools to test runtime behavior.",
+            notes: "Uses the same canonical fields, references and publication checks as writes. Also checks selected datastore tools against current collection schemas. Read each affected object, correct it with resource update, and validate again; create only missing objects. Preserve unrelated fields and entries. References to remote principals are not locally verified. This does not test credentials, running helpers or whether the setup meets the user's goal. Inspect selections with behavior get; exercise tools to test runtime behavior.",
             next: "fix reported errors before reporting completion; state what remains untested.",
         },
         "skill" => Page {

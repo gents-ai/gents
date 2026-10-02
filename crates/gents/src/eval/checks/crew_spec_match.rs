@@ -770,7 +770,7 @@ impl Check for CrewSpecMatch {
                                                     });
                                                 valid &= by_key_alone;
                                                 if !by_key_alone {
-                                                    contract_issues.push(format!("{} must accept caller-supplied {key} alone; return {key}, remove runtime fills, and make every other filter optional", d.tool_name));
+                                                    contract_issues.push(format!("{} query must accept caller-supplied {key} alone: return {key}, remove fills only from this query's filter_fields, and make its other filters optional. Update this query entry; preserve write-tool fills and unrelated entries", d.tool_name));
                                                 }
                                             }
                                             if called {
@@ -1271,7 +1271,7 @@ mod tests {
                     .feedback
                     .as_deref()
                     .unwrap()
-                    .contains("find_result must accept caller-supplied correlation alone"));
+                    .contains("find_result query must accept caller-supplied correlation alone"));
             }
             assert!(
                 v.score_bp.unwrap() < 10000,

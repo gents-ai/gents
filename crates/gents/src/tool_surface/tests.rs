@@ -1210,9 +1210,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         Err(error) => error,
     };
     assert!(
-        error
-            .to_string()
-            .contains("has an unavailable or unsupported collection schema"),
+        format!("{error:#}").contains("unsupported bounded write field type"),
         "{error:#}"
     );
 }

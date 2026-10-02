@@ -4,6 +4,100 @@ use crate::tool_surface::{BehaviorToolConfig, ResolvedToolSelection, ToolCeiling
 fn args(value: Value) -> SchemaParams {
     serde_json::from_value(value).unwrap()
 }
+
+#[test]
+fn concept_help_examples_use_supported_native_sdl() {
+    let paths = [
+        "collections",
+        "collections policy",
+        "collections branchable",
+        "collections governed",
+        "collections downsample",
+        "views",
+        "views virtual",
+        "views materialized",
+        "views refresh",
+        "fields",
+        "fields types",
+        "fields nullability",
+        "fields arrays",
+        "fields defaults",
+        "fields crdt",
+        "fields immutable",
+        "fields constraints",
+        "relationships",
+        "relationships one-to-many",
+        "relationships one-to-one",
+        "relationships named",
+        "relationships self",
+        "indexes",
+        "indexes ordered",
+        "indexes unique",
+        "indexes composite",
+        "indexes vector",
+        "indexes vector dimensions",
+        "indexes vector metrics",
+        "indexes vector hnsw",
+        "indexes vector flat",
+        "indexes vector ivfpq",
+        "indexes vector ivfflat",
+        "indexes vector ssg",
+        "indexes fulltext",
+        "indexes encrypted",
+        "embeddings",
+        "embeddings generation",
+        "embeddings indexing",
+        "evolution",
+        "evolution additive",
+        "evolution versions",
+        "evolution migrations",
+        "migration workflow",
+        "migration authoring",
+        "migration authoring rust",
+        "migration build",
+        "migration contract",
+        "migration contract memory",
+        "migration contract documents",
+        "migration arguments",
+        "migration inverse",
+        "migration versions",
+        "migration verify",
+        "migration verify host",
+        "migration recovery",
+    ];
+    for path in paths {
+        let words: Vec<_> = path.split_whitespace().map(str::to_owned).collect();
+        let page = help::page(&words).unwrap_or_else(|error| panic!("{path}: {error}"));
+        assert!(
+            page.len() <= 2_600,
+            "{path}: {} bytes; split into subtopics",
+            page.len()
+        );
+        for fenced in page.split("```graphql\n").skip(1) {
+            let (sdl, _) = fenced.split_once("```").expect("closed SDL example");
+            let parsed = query::sdl_parse::parse_sdl_with_warnings(sdl)
+                .unwrap_or_else(|error| panic!("{path}: {error}\n{sdl}"));
+            assert!(parsed.warnings.is_empty(), "{path}: {:?}", parsed.warnings);
+            schema::definition_validation::validate_new_collections(&parsed.collections)
+                .unwrap_or_else(|error| panic!("{path}: {error}\n{sdl}"));
+            schema::definition_validation::validate_new_collections_with_existing(
+                &parsed.collections,
+                &[],
+            )
+            .unwrap_or_else(|error| panic!("{path}: {error}\n{sdl}"));
+        }
+    }
+    assert!(help::page(&[]).unwrap().len() < 2_000);
+}
+
+#[test]
+fn unknown_concept_help_returns_nearest_available_parent() {
+    let path = ["indexes", "vector", "unknown"].map(str::to_owned);
+    let error = help::page(&path).unwrap_err().to_string();
+    let argv: Vec<String> = serde_json::from_str(error.split_once("argv:").unwrap().1).unwrap();
+    assert_eq!(argv, ["help", "indexes", "vector"]);
+    assert!(help::page(&argv[1..]).is_ok());
+}
 async fn call(tool: &SchemaTool, value: Value) -> Value {
     serde_json::from_str(&tool.call(args(value)).await.unwrap()).unwrap()
 }
@@ -168,6 +262,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         vec!["help", "version"],
         vec!["help", "migration"],
         vec!["help", "view"],
+        vec!["help", "indexes", "vector", "hnsw"],
     ] {
         assert!(!tool
             .call(args(json!({"argv":path})))

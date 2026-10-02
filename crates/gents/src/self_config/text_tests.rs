@@ -1497,3 +1497,71 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
+    let (node, _owner, tools) = setup("saved-schema-audit", &["persona", "tools"]).await;
+    node.add_schema("type AuditRecord { message: String }")
+        .await
+        .unwrap();
+    let entries = json!([
+        {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true},{"name":"correlation","fill":"correlation"}]},
+        {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message","missing_projection"],"filter_fields":[{"name":"missing_filter"}]}
+    ]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","create","audit"],"set":{"entries":entries}}),
+    )
+    .await;
+    // Unselected declarations may precede schema installation.
+    assert_eq!(
+        ok(&tools, json!({"argv":["validate"]})).await["valid"],
+        true
+    );
+    ok(&tools, json!({"argv":["tools","update","beh-test:tools"],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
+    let before = ok(&tools, json!({"argv":["datastore","get","audit"]})).await;
+    let invalid = ok(&tools, json!({"argv":["validate"]})).await;
+    assert_eq!(invalid["valid"], false, "{invalid}");
+    assert_eq!(invalid["committed"], false);
+    let errors = invalid["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{invalid}");
+    assert!(errors[0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("field `correlation` is absent from `AuditRecord`"));
+    assert!(errors[1]["error"]
+        .as_str()
+        .unwrap()
+        .contains("missing_projection"));
+    assert_eq!(errors[0]["tool_name"], "write_audit_record");
+    ok(&tools, errors[0]["inspect_with"].clone()).await;
+    assert_eq!(
+        before,
+        ok(&tools, json!({"argv":["datastore","get","audit"]})).await
+    );
+    let corrected = json!([
+        {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true}]},
+        {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message"],"filter_fields":[{"name":"missing_filter"}]}
+    ]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","update","audit"],"set":{"entries":corrected}}),
+    )
+    .await;
+    let invalid = ok(&tools, json!({"argv":["validate"]})).await;
+    assert!(invalid["errors"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("missing_filter"));
+    let mut corrected = corrected;
+    corrected[1]["filter_fields"] = json!([{"name":"message"}]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","update","audit"],"set":{"entries":corrected}}),
+    )
+    .await;
+    assert_eq!(
+        ok(&tools, json!({"argv":["validate"]})).await["valid"],
+        true
+    );
+}

@@ -52,6 +52,8 @@ pub struct LiveSnapshot {
     pub reported_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_contexts: Option<Vec<SessionContextUsage>>,
     pub tool_calls: u64,
     /// Tool calls that ended failed or timed out.
     pub failed_tool_calls: u64,
@@ -72,6 +74,21 @@ pub struct LiveSnapshot {
     /// installed: the schemas the subject registered.
     #[serde(default)]
     pub schemas: Vec<String>,
+}
+
+/// Last dispatched inference input, not cumulative billing or the transcript
+/// after the final response. Estimates come from the owned loop's accounting.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionContextUsage {
+    pub agent_did: String,
+    pub session_id: String,
+    pub requester_did: Option<String>,
+    pub last_prompt_tokens: Option<u64>,
+    pub peak_prompt_tokens: Option<u64>,
+    pub last_estimated_input_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub session_compactions: u64,
+    pub provider_reductions: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

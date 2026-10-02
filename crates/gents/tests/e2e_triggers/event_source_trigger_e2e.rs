@@ -13,8 +13,7 @@
 //!   3. Seeds one Task + one Trigger bound to the default behavior,
 //!      gated by `filter: { kind: { _eq: "signup" } }` with a `{{ doc.external_id }}`
 //!      prompt template.
-//!   4. Waits for the control-watcher reconcile to pick up the new trigger and
-//!      bump `active_generation` past the startup baseline (Task 21 pipeline).
+//!   4. Waits for routing and the trigger's durable arrival cursor.
 //!   5. Writes a matching `WebhookEvent` source doc and polls the
 //!      `AgentRequest` collection until exactly one request lands with the
 //!      expected trigger lineage.
@@ -379,6 +378,36 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         reconciled.last_reconcile_error
     );
 
+    // Routing can advance for the Task before the Trigger's first scan seeds
+    // its cursor at the journal head. Events written before that seed are historical.
+    let cursor_query = format!(
+        r#"{{ EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, trigger_id: {{_eq: "{}"}}, source_collection: {{_eq: "WebhookEvent"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(&agent_did),
+        escape_graphql_string(TRIGGER_ID)
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let response = gents::graphql::graphql_with_transaction_retry(
+            db.node.as_ref(),
+            &cursor_query,
+            "test event trigger readiness",
+        )
+        .await
+        .unwrap();
+        if response
+            .data
+            .as_ref()
+            .and_then(|data| data["EventSourceCursor"].as_array())
+            .is_some_and(|rows| rows.len() == 1)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "trigger arrival cursor was not initialized"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let source_doc_id = write_webhook_event(db.node.as_ref(), EXTERNAL_ID, "signup").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
