@@ -95,6 +95,8 @@ export function useShell(
       api,
       snapshot: d.snapshot,
       error: d.error,
+      actionError: d.actionError,
+      clearActionError: d.onDismissActionError,
       activityStatus: d.activityStatus,
       nonEmptyContentSendStatus: d.nonEmptyContentSendStatus,
       interruptVisible: d.interruptVisible,

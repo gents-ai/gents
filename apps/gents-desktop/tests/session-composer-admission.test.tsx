@@ -47,6 +47,7 @@ function newSessionShell(
     selectedSessionId: null,
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
+    deployments: [],
     selectedDeployment: {
       agentDid: "did:key:agent",
       agentPrincipal: { displayName: "Agent" },
@@ -119,6 +120,7 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     selectedBehaviorId: shell.selectedBehaviorId,
     selectedSessionId: shell.selectedSessionId,
     selectedSessionSummary: null,
+    deployments: [],
     selectedDeployment: null,
     sending: false,
     session: null,

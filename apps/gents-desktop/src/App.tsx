@@ -37,7 +37,13 @@ import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
 import { ShellProvider } from "./ui/app/ShellContext";
-import { setHomeDid } from "./ui/lib/nodes";
+import { nodeDidOf, setHomeDid, workingNode } from "./ui/lib/nodes";
+import {
+  defaultScope,
+  mailboxInScope,
+  recentInScope,
+  scopeContextOf,
+} from "./ui/lib/scope";
 import "./ui/screens/surfaces";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
 import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
@@ -86,6 +92,38 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     route.name === "session" ? route.sessionId : undefined,
   );
   setHomeDid(shell.snapshot?.bootstrap.initAgentDid);
+  const working = workingNode(shell.deployments);
+  /* a failed action is over by the time it is reported: one toast where the
+     person is, then forgotten. The banner is for the client's own state. */
+  useEffect(() => {
+    if (!shell.actionError) return;
+    toast(shell.actionError);
+    shell.clearActionError();
+  }, [shell.actionError, shell.clearActionError]);
+  /* the desktop reads a session through its selected node, so a session
+     that lives on another node selects that node first */
+  const routeSessionId = route.name === "session" ? route.sessionId : null;
+  useEffect(() => {
+    if (!routeSessionId) return;
+    const owner = shell.deployments.find((d) =>
+      d.sessions.some((c) => c.sessionId === routeSessionId),
+    );
+    if (!owner) return;
+    if (nodeDidOf(owner) !== shell.selectedAgentDid)
+      shell.selectAgent(nodeDidOf(owner));
+    /* selecting a node clears its session; once the node has settled, the
+       route's session is selected again against it */ else if (
+      shell.selectedSessionId !== routeSessionId
+    )
+      shell.selectSession(routeSessionId);
+  }, [
+    routeSessionId,
+    shell.deployments,
+    shell.selectedAgentDid,
+    shell.selectedSessionId,
+    shell.selectAgent,
+    shell.selectSession,
+  ]);
 
   useEffect(() => {
     initTheme();
@@ -232,10 +270,11 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               ceiling={shell.snapshot?.bootstrap.initToolCeiling}
               online={Boolean(shell.snapshot?.client)}
               mailboxCount={
-                shell.selectedDeployment?.mailboxItems.filter(
-                  (m) => m.status === "open",
-                ).length ?? 0
+                mailboxInScope(defaultScope("mailbox"), scopeContextOf(shell)).length
               }
+              recent={recentInScope(defaultScope("recents"), scopeContextOf(shell), 8)}
+              working={working}
+              nodeCount={shell.deployments.length}
               holds={
                 new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
               }
@@ -245,10 +284,16 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               onReconnect={shell.reconnect}
               onOpenDbExplorer={openDbExplorer}
             >
-              {route.name === "sessions" && <SessionsScreen shell={shell} />}
+              {route.name === "sessions" && (
+                <SessionsScreen shell={shell} nodeDid={route.nodeDid} />
+              )}
               {route.name === "session" && <SessionScreen shell={shell} />}
-              {route.name === "mailbox" && <MailboxScreen shell={shell} />}
-              {route.name === "agents" && <AgentsScreen shell={shell} />}
+              {route.name === "mailbox" && (
+                <MailboxScreen shell={shell} nodeDid={route.nodeDid} />
+              )}
+              {(route.name === "agents" || route.name === "nodes") && (
+                <AgentsScreen shell={shell} />
+              )}
               {route.name === "agent" && (
                 <AgentScreen
                   shell={shell}

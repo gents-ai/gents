@@ -9,6 +9,7 @@ import { isLocalAgent } from "./firstRun";
 export type NodeDid = string;
 
 export const nodeDidOf = (node: DeploymentView): NodeDid => node.agentDid;
+export const nodeOfSession = (session: SessionSummary): NodeDid => session.agentDid;
 
 /* The working node is the one this machine runs. Its configuration is
    what the sidebar always shows and what a new session is created on. A
