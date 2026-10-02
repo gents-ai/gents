@@ -400,6 +400,41 @@ fn not_blocked() {
     );
 }
 
+fn dead_request(failure_reason: &str) -> AgentRequestRow {
+    AgentRequestRow {
+        lifecycle_state: Some(RequestLifecycleState::Dead),
+        ..failed_request(failure_reason)
+    }
+}
+
+#[test]
+fn dead_request_with_a_limited_call_is_blocked() {
+    let call = call(B, "inference", anthropic_rejected());
+    let turn = blocked(
+        &references(documents(B, A)),
+        &accounts(),
+        &dead_request("canonical output integrity failure: corrupt"),
+        Some(&call),
+    );
+    assert_eq!(
+        turn.map(|turn| turn.reason),
+        Some(BlockedReason::UsageLimit)
+    );
+}
+
+#[test]
+fn dead_request_without_a_call_is_not_blocked() {
+    assert_eq!(
+        blocked(
+            &references(documents(B, A)),
+            &accounts(),
+            &dead_request("canonical output integrity failure: corrupt"),
+            None
+        ),
+        None
+    );
+}
+
 #[test]
 fn the_value_holds_no_secret() {
     let turn = limit_on(B, anthropic_rejected());
