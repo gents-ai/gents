@@ -1,0 +1,76 @@
+{
+  "manifest_version": 1,
+  "name": "prepared_graph",
+  "version": "1.0.0",
+  "description": "Fixture graph pack whose entry prepares host git_diff evidence through a pack plugin, for prepare machinery tests. Not a shipped pack.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "graph",
+    "fixture"
+  ],
+  "kind": "graph",
+  "config": "pack_config.json",
+  "assets": [
+    "README.md",
+    "agent_behaviors/fixture_worker/system_prompt.md",
+    "pack_config.json",
+    "plugins/prepare_fixture.afb",
+    "schemas/fixture_evidence.graphql",
+    "schemas/fixture_job.graphql",
+    "schemas/fixture_report.graphql",
+    "tasks/fixture_worker_task/prompt.md"
+  ],
+  "dependencies": [],
+  "compiler_version": "graph-intent-v4",
+  "plugins": [
+    {
+      "name": "prepare_fixture",
+      "description": "Turns the entry's git_diff host fact into one evidence document and the job input. Runs only as the entry's prepare step.",
+      "artifact": "plugins/prepare_fixture.afb",
+      "source": "plugins/prepare_fixture",
+      "language": "rust",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "object"
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "host": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "input",
+          "nonce",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      "limits": {
+        "memory_mib": 256,
+        "wall_clock_secs": 30,
+        "max_output_mib": 1
+      }
+    }
+  ],
+  "schemas": [
+    "schemas/fixture_job.graphql",
+    "schemas/fixture_evidence.graphql",
+    "schemas/fixture_report.graphql"
+  ],
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "The one slot this fixture declares.",
+      "behaviors": [
+        "fixture-worker"
+      ]
+    }
+  ]
+}

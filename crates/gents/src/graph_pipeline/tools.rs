@@ -223,6 +223,8 @@ mod tests {
                 collection: "PipelineInput".to_owned(),
                 schema: "PipelineInput/v1".to_owned(),
                 input_contract: None,
+                input_schema: None,
+                prepare: None,
                 to: PortRef {
                     node_id: "worker".to_owned(),
                     port: "input".to_owned(),
@@ -306,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn checked_in_evaluation_cases_match_compiler_results() {
         let cases: Vec<EvalCase> = serde_json::from_str(include_str!(
-            "../../../../packs/graph_pipeline/eval_cases.json"
+            "../../tests/fixtures/graph_pipeline/eval_cases.json"
         ))
         .unwrap();
         let caller = "did:key:owner";

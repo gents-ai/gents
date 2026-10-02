@@ -381,6 +381,7 @@ impl ToolSurface {
             runtime.agent_did.clone(),
             runtime.identity.clone(),
             &self.self_config,
+            runtime.plugins.clone(),
         ));
         let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
@@ -455,7 +456,13 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for plugin in &self.plugin_tools {
-            let tool = crate::plugin::tool::PluginTool::resolve(runtime.plugins.clone(), plugin)?;
+            let tool = crate::plugin::tool::PluginTool::resolve(
+                runtime.plugins.clone(),
+                plugin,
+                self.host_tools
+                    .read_root()
+                    .map(std::path::Path::to_path_buf),
+            )?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

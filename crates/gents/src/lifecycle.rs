@@ -412,7 +412,6 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
     behavior_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,

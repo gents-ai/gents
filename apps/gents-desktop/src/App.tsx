@@ -32,6 +32,7 @@ import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
 import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
+import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
@@ -252,6 +253,9 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             )}
           </AppShell>
           <Toaster />
+          {shell.deployments.some((deployment) =>
+            isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),
+          ) && <PluginAccessPrompt />}
           <Shortcuts shell={shell} />
         </BehaviorColorsContext.Provider>
       </TooltipProvider>

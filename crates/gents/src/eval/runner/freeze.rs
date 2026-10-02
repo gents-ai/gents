@@ -27,16 +27,15 @@ use crate::eval::{
     create_run, load_run, CellSpec, DefinitionRef, RunOrigin, RunRecord, SubjectRef,
     DENOMINATOR_POLICY_V1, TAXONOMY_VERSION,
 };
-use crate::pack::{
-    declared_paths, digest_declared_assets, resolve_pack, PackInstallOptions, PackManifest,
-};
+use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
 use crate::tool_surface::BashMode;
 use crate::Collection;
 
-/// Where a cell's subject pack comes from.
+/// Where a cell's subject pack comes from. A named pack is resolved and
+/// materialized into a directory before it reaches a cell, so a pack compared
+/// across sources is one pack.
 #[derive(Clone, Debug)]
 pub enum CellSource {
-    InstalledPack { name: String },
     Directory(PathBuf),
 }
 
@@ -520,62 +519,43 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
     let options = PackInstallOptions {
         agent_did: owner.to_owned(),
     };
-    match source {
-        CellSource::InstalledPack { name } => {
-            let resolved = resolve_pack(name)?;
-            let files = declared_paths(&resolved.manifest)
-                .into_iter()
-                .map(|path| {
-                    let bytes = resolved.asset(&path)?.to_vec();
-                    Ok((path, bytes))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            Ok(LoadedPack {
-                digest: resolved.digest.clone(),
-                config: resolved.load_config(&options)?,
-                manifest: resolved.manifest.clone(),
-                files,
-            })
-        }
-        CellSource::Directory(root) => {
-            let manifest: PackManifest = serde_json::from_slice(
-                &std::fs::read(root.join("manifest.json"))
-                    .with_context(|| format!("reading {}/manifest.json", root.display()))?,
-            )
-            .context("parsing pack manifest")?;
-            let present = copyable_files(root)?;
-            let asset = |path: &str| {
-                present
-                    .get(path)
-                    .with_context(|| format!("pack has no asset {path:?}"))
-            };
-            // The same digest an installed pack resolves to: over the declared
-            // contents, so a pack compared across sources is one pack.
-            let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
-            let config = crate::pack::load_pack_config(
-                &manifest,
-                &options,
-                &|path| asset(path).cloned(),
-                &|name| std::env::var(name).ok(),
-            )?;
-            // Only the declared assets travel: a trial must receive the bytes
-            // the digest covers, not whatever else the authoring directory
-            // happened to hold.
-            let files = declared_paths(&manifest)
-                .into_iter()
-                .map(|path| {
-                    let bytes = asset(&path)?.clone();
-                    Ok((path, bytes))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            Ok(LoadedPack {
-                digest,
-                config,
-                manifest,
-                files,
-            })
-        }
-    }
+    let CellSource::Directory(root) = source;
+    let manifest: PackManifest = serde_json::from_slice(
+        &std::fs::read(root.join("manifest.json"))
+            .with_context(|| format!("reading {}/manifest.json", root.display()))?,
+    )
+    .context("parsing pack manifest")?;
+    let present = copyable_files(root)?;
+    let asset = |path: &str| {
+        present
+            .get(path)
+            .with_context(|| format!("pack has no asset {path:?}"))
+    };
+    // The same digest an installed pack resolves to: over the declared
+    // contents, so a pack compared across sources is one pack.
+    let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
+    let config = crate::pack::load_pack_config(
+        &manifest,
+        &options,
+        &|path| asset(path).cloned(),
+        &|name| std::env::var(name).ok(),
+    )?;
+    // Only the declared assets travel: a trial must receive the bytes
+    // the digest covers, not whatever else the authoring directory
+    // happened to hold.
+    let files = declared_paths(&manifest)
+        .into_iter()
+        .map(|path| {
+            let bytes = asset(&path)?.clone();
+            Ok((path, bytes))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    Ok(LoadedPack {
+        digest,
+        config,
+        manifest,
+        files,
+    })
 }
 
 /// Every regular file under `root`, keyed by its path relative to `root`.
@@ -1171,7 +1151,7 @@ pub(crate) mod tests {
     /// The monitor behavior's system prompt in [`write_fixture_pack`].
     pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
 
-    /// The shape of `packs/pipeline`: a manifest, a README, the canonical
+    /// The shape of a documents pack: a manifest, a README, the canonical
     /// config bundle and one behavior sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
         std::fs::create_dir_all(root.join("agent_behaviors/monitor")).unwrap();

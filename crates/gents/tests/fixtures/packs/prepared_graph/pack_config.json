@@ -1,0 +1,196 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "fixture-worker",
+      "display_name": "Fixture worker",
+      "description": "Writes one report for the prepared job.",
+      "context_id": "fixture-worker-context",
+      "inference_profile_id": "gents:inference-slot:worker"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-worker-tools",
+      "display_name": "Write the fixture report",
+      "built_ins": {
+        "enable_goal_tools": true
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "fixture-worker-writes"
+        ]
+      }
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-worker-context",
+      "system_prompt": "./agent_behaviors/fixture_worker/system_prompt.md",
+      "tools_id": "fixture-worker-tools",
+      "compaction_id": "fixture-compaction"
+    }
+  ],
+  "compactions": [
+    {
+      "compaction_id": "fixture-compaction",
+      "threshold": 0.85
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "fixture-worker-writes",
+      "display_name": "Fixture report writes",
+      "entries": [
+        {
+          "tool_name": "write_fixture_report",
+          "collection": "FixtureReport",
+          "description": "Create the single report for this correlated run; run_id is filled by the runtime.",
+          "output_obligation": {
+            "scope": "trigger",
+            "minimum_writes": 1
+          },
+          "fields": [
+            {
+              "name": "run_id",
+              "required": false,
+              "fill": "correlation"
+            },
+            {
+              "name": "summary",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "fixture-worker-task",
+      "display_name": "Write the fixture report",
+      "behavior_id": "fixture-worker",
+      "prompt_template": "./tasks/fixture_worker_task/prompt.md",
+      "goal_objective_template": "Write the report for run {{ event.correlation }}, then complete this Goal."
+    }
+  ],
+  "graphs": [
+    {
+      "graph_id": "prepared-fixture"
+    }
+  ],
+  "graph_capabilities": [
+    {
+      "capability_id": "fixture-worker",
+      "allowed_callers": [
+        "${GENTS_PACK_AGENT_DID}"
+      ],
+      "revision": "v1",
+      "target": {
+        "kind": "task",
+        "task_id": "fixture-worker-task"
+      },
+      "input_ports": [
+        {
+          "name": "job",
+          "collection": "FixtureJob",
+          "schema": "FixtureJob/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one",
+          "required": true
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "report",
+          "collection": "FixtureReport",
+          "schema": "FixtureReport/v1",
+          "correlation_field": "run_id",
+          "cardinality": "one"
+        }
+      ]
+    }
+  ],
+  "graph_intents": [
+    {
+      "graph_id": "prepared-fixture",
+      "nodes": [
+        {
+          "node_id": "worker",
+          "capability_id": "fixture-worker",
+          "capability_revision": "v1"
+        }
+      ],
+      "edges": [],
+      "entries": [
+        {
+          "name": "prepare",
+          "collection": "FixtureJob",
+          "schema": "FixtureJob/v1",
+          "input_contract": "fixture-input/v1",
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "repository": {
+                "type": "string",
+                "default": "."
+              },
+              "base": {
+                "type": "string",
+                "default": "HEAD~1"
+              },
+              "head": {
+                "type": "string",
+                "default": "HEAD",
+                "pattern": "^[A-Za-z0-9_./~^-]+$"
+              }
+            }
+          },
+          "prepare": {
+            "host": [
+              {
+                "kind": "git_diff",
+                "repository_field": "repository",
+                "base_field": "base",
+                "head_field": "head",
+                "unified_context_lines": 3,
+                "rename_similarity_percent": 50
+              }
+            ],
+            "plugin": "prepare_fixture",
+            "writes": [
+              "FixtureEvidence"
+            ]
+          },
+          "to": {
+            "node_id": "worker",
+            "port": "job"
+          }
+        }
+      ],
+      "results": [
+        {
+          "name": "report",
+          "from": {
+            "node_id": "worker",
+            "port": "report"
+          },
+          "cardinality": {
+            "kind": "exactly",
+            "count": 1
+          },
+          "terminal": true
+        }
+      ],
+      "limits": {
+        "max_nodes": 2,
+        "max_edges": 2,
+        "max_depth": 2,
+        "max_fan_out": 2,
+        "max_total_invocations": 4,
+        "max_runtime_secs": 600
+      }
+    }
+  ]
+}

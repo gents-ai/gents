@@ -248,6 +248,7 @@ impl RequestLifecycle {
 
 /// LatestOnly and child deadlines revoke the observed execution through the
 /// same atomic terminal owner. Unlike recovery, revocation may cancel a live lease.
+#[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
     node: &EmbeddedNode,
     row: &AgentRequestRow,

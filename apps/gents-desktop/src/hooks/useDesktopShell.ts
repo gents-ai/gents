@@ -4,6 +4,7 @@ import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
 import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
 import { useDesktopShellEffects } from "./desktopShellEffects";
+import { useChatFolders } from "./useChatFolders";
 import { useDesktopClientLifecycle } from "./useDesktopClientLifecycle";
 import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
 import { useDesktopMailboxRoute } from "./useDesktopMailboxRoute";
@@ -251,6 +252,9 @@ export function useDesktopShell({
       document.removeEventListener("visibilitychange", repairAfterForeground);
   }, []);
 
+  const { chatFolder, setChatFolder, adoptChatFolder } =
+    useChatFolders(selectedSessionId);
+
   const {
     onSaveAgentConfig,
     onSetDefaultBehavior,
@@ -301,6 +305,8 @@ export function useDesktopShell({
     api,
     behaviorReadiness,
     captureComposeIntent,
+    chatFolder,
+    adoptChatFolder,
     draft,
     newSessionAgentRef,
     refreshSession,
@@ -401,6 +407,8 @@ export function useDesktopShell({
     setSelectedSessionId: selectSession,
     setSelectedBehaviorId: selectBehavior,
     setDraft,
+    chatFolder,
+    setChatFolder,
     clearPendingMailboxCause,
     onOpenMailboxItem,
     onDismissMailboxItem,

@@ -162,8 +162,9 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
 }
 
 #[test]
-fn bundled_review_loads_slot_authoring_and_literal_prompt_assets() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/code_review");
+fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/review_graph");
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
     let config = load_pack_config(
@@ -211,6 +212,38 @@ fn bundled_review_loads_slot_authoring_and_literal_prompt_assets() {
                 .unwrap();
             assert_eq!(prompt, std::fs::read_to_string(root.join(path)).unwrap());
         }
+    }
+}
+
+/// Every fixture pack that ships a config loads it cleanly, matching the
+/// pack loader's own installation path. Enumerated from the fixtures
+/// directory (shared with [`crate::pack_archive::tests`]'s digest test) so a
+/// new fixture is covered without either test keeping its own hand-written
+/// name list.
+#[test]
+fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
+    for name in crate::support::fixtures::fixture_pack_names() {
+        // The copy carries a built stand-in for each plugin artifact the
+        // fixture declares; the repository holds none.
+        let (_guard, copy) = crate::test_support::fixture_pack_copy(&name, &json!({}));
+        let root = copy;
+        let manifest: PackManifest =
+            serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap())
+                .unwrap_or_else(|error| panic!("{name} manifest: {error}"));
+        crate::pack::validate_manifest(&manifest.name, &manifest)
+            .unwrap_or_else(|error| panic!("{name} manifest: {error:#}"));
+        if manifest.config.is_none() {
+            continue; // an assets-kind pack ships no config to load
+        }
+        load_pack_config(
+            &manifest,
+            &PackInstallOptions {
+                agent_did: "did:key:fixture-owner".into(),
+            },
+            &|path| Ok(std::fs::read(root.join(path))?),
+            &|_| None,
+        )
+        .unwrap_or_else(|error| panic!("{name} config: {error:#}"));
     }
 }
 
@@ -400,4 +433,83 @@ fn a_plugin_node_the_pack_cannot_run_is_refused() {
             max_attempts: None,
         }
     );
+}
+
+fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
+    let manifest: PackManifest = serde_json::from_value(json!({
+        "manifest_version":1,"name":"example","namespace":"team","version":"1",
+        "description":"Example","kind":"graph","authors":["Example"],
+        "assets":["README.md","config/bundle.json","plugins/prepare.afb"],
+        "config":"config/bundle.json",
+        "compiler_version": crate::graph_pipeline::COMPILER_VERSION,
+        "plugins":[{"name":"prepare","description":"Prepares evidence","artifact":"plugins/prepare.afb",
+                    "language":"rust","input_schema":{"type":"object"}}],
+    }))
+    .unwrap();
+    let mut entry = json!({
+        "name":"job","collection":"Job","schema":"Job/v1",
+        "to":{"node_id":"worker","port":"job"},
+    });
+    for (key, value) in entry_extra.as_object().unwrap() {
+        entry[key] = value.clone();
+    }
+    let config = json!({"agent_principal":{},"graph_intents":[{
+        "graph_id":"g",
+        "nodes":[{"node_id":"worker","capability_id":"worker","capability_revision":"1"}],
+        "edges":[],
+        "entries":[entry],
+        "results":[],
+        "limits":{"max_nodes":1,"max_edges":1,"max_depth":1,"max_fan_out":1,
+                  "max_total_invocations":1,"max_runtime_secs":60},
+        "tags":[],
+    }]});
+    load_pack_config(
+        &manifest,
+        &PackInstallOptions {
+            agent_did: "did:key:owner".into(),
+        },
+        &|path| match path {
+            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "plugins/prepare.afb" => Ok(b"artifact bytes".to_vec()),
+            _ => anyhow::bail!("unexpected asset {path}"),
+        },
+        &|_| None,
+    )
+}
+
+#[test]
+fn an_entry_prepare_plugin_is_pinned_to_the_packs_artifact() {
+    let prepare = json!({
+        "host": [{"kind":"git_diff","repository_field":"repository","base_field":"base",
+                  "head_field":"head","unified_context_lines":3,"rename_similarity_percent":50}],
+        "plugin": "prepare",
+        "writes": ["FixtureEvidence"],
+    });
+    let config = prepare_pack_config(json!({"prepare": prepare})).unwrap();
+    let prepare = config.graph_intents[0].entries[0].prepare.as_ref().unwrap();
+    assert_eq!(prepare.plugin, "team/prepare");
+    assert_eq!(prepare.digest.as_deref(), Some(shipped_digest().as_str()));
+}
+
+#[test]
+fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
+    let prepare = json!({"host": [], "plugin": "missing", "writes": ["FixtureEvidence"]});
+    let error = prepare_pack_config(json!({"prepare": prepare})).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("does not declare"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn an_entry_input_schema_must_compile_and_declare_an_object() {
+    let error = prepare_pack_config(json!({"input_schema": {"type": "string"}})).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("\"type\": \"object\""),
+        "{error:#}"
+    );
+
+    let too_big = json!({"type": "object", "filler": "a".repeat(70 * 1024)});
+    let error = prepare_pack_config(json!({"input_schema": too_big})).unwrap_err();
+    assert!(format!("{error:#}").contains("byte ceiling"), "{error:#}");
 }

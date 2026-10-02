@@ -563,8 +563,10 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
                     behaviors.retain(|behavior| behavior != id);
                 }
             }
-            pack.manifest_list("inference_slots")?
-                .retain(|slot| slot["behaviors"].as_array().is_some_and(|b| !b.is_empty()));
+            pack.manifest_list("inference_slots")?.retain(|slot| {
+                slot["optional"] == true
+                    || slot["behaviors"].as_array().is_some_and(|b| !b.is_empty())
+            });
         }
         PackPart::Task => {
             let task = pack.remove_row("tasks", "task_id", id)?;

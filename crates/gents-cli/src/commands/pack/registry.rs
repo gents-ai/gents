@@ -2,7 +2,7 @@
 //! the download-verify-cache path `gents pack install` falls back to when a
 //! pack is not compiled into this binary.
 //!
-//! A pack fetched from the registry has to become the same pack a bundled
+//! A pack fetched from the registry has to become the same pack a local
 //! one is before it is trusted with anything: its raw bytes are checked
 //! against the digest the registry advertised before they are ever parsed,
 //! and only a match is cached and handed to [`gents::pack_archive::PackArchive`].
@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
 pub(crate) use gents::pack_registry::{
-    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient, RegistryPack,
+    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
 };
 #[cfg(test)]
 use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
@@ -73,6 +73,9 @@ pub(crate) fn resolve_token_flag(
 /// file is written, so what lands on disk is the pack that was asked for
 /// or nothing at all.
 pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
+    if args.store {
+        return fetch_into_store(args).await;
+    }
     let (namespace, name) = crate::commands::pack::split_namespace(&args.package);
     let base_url = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(base_url.clone());
@@ -124,6 +127,57 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         "digest": header.digest,
         "size_bytes": size_bytes,
         "out": out.display().to_string(),
+    }))
+}
+
+/// `gents pack fetch --store`: admits `<spec>` into the home's pack store
+/// and name index instead of writing a `.pack` file. `<spec>` is a
+/// directory, a `.pack` file, or a registry coordinate (optionally
+/// `@version`, or pinned with `--version`); a store or installed hit costs
+/// no network call.
+async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    if let Some(local) = crate::commands::pack::local::classify(&args.package) {
+        anyhow::ensure!(
+            args.version.is_none(),
+            "--version applies only to a registry coordinate, not {:?}",
+            args.package
+        );
+        let archive = crate::commands::pack::local::open(&local, &home)?;
+        let manifest = archive.manifest();
+        return crate::print_json(&serde_json::json!({
+            "pack": manifest.name,
+            "namespace": manifest.metadata.namespace,
+            "version": manifest.version,
+            "digest": archive.digest(),
+            "source": "local",
+            "home": home,
+        }));
+    }
+    let spec = match &args.version {
+        Some(version) => format!("{}@{version}", args.package),
+        None => args.package.clone(),
+    };
+    let options = gents::pack_resolve::ResolveOptions {
+        home: Some(&home),
+        registry_url: resolve_registry_url(args.registry.as_deref()),
+        installed: &[],
+    };
+    let resolved = gents::pack_resolve::resolve_named(&spec, &options).await?;
+    let source = match resolved.from {
+        gents::pack_resolve::ResolvedFrom::Installed | gents::pack_resolve::ResolvedFrom::Store => {
+            "store"
+        }
+        gents::pack_resolve::ResolvedFrom::Registry { .. } => "registry",
+    };
+    let manifest = resolved.archive.manifest();
+    crate::print_json(&serde_json::json!({
+        "pack": manifest.name,
+        "namespace": manifest.metadata.namespace,
+        "version": manifest.version,
+        "digest": resolved.archive.digest(),
+        "source": source,
+        "home": home,
     }))
 }
 

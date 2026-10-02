@@ -4,6 +4,7 @@
 //! supplies only the arguments. Which artifact runs, and with what authority,
 //! is the installed record's, resolved when the tool surface is built.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -26,12 +27,19 @@ pub struct PluginTool {
     executor: Arc<PluginExecutor>,
     record: InstalledPlugin,
     definition: ToolDefinition,
+    /// The root the operator gave the agent's file tools: the working folder
+    /// of a session that has no workspace folder of its own.
+    root: Option<PathBuf>,
 }
 
 impl PluginTool {
     /// The tool `plugin` names, refused when it is not installed or no
     /// longer the pinned artifact.
-    pub fn resolve(executor: Arc<PluginExecutor>, plugin: &PluginToolRef) -> Result<Self> {
+    pub fn resolve(
+        executor: Arc<PluginExecutor>,
+        plugin: &PluginToolRef,
+        root: Option<PathBuf>,
+    ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),
@@ -45,6 +53,7 @@ impl PluginTool {
             executor,
             record,
             definition,
+            root,
         })
     }
 }
@@ -63,7 +72,7 @@ impl ToolDyn for PluginTool {
             let input: serde_json::Value = crate::llm::tool::parse_tool_args(&args)?;
             let call = self
                 .executor
-                .call(&self.record, input)
+                .call_data_bound(&self.record, input, self.root.as_deref())
                 .await
                 .map_err(|error| tool_error(format!("{error:#}")))?;
             match call.outcome.verdict {

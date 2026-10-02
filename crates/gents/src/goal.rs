@@ -21,10 +21,11 @@ pub use readiness_gate::{
     GoalBehaviorObservation, GoalBehaviorReadiness, GoalContinuationFacts, GoalFailureCause,
     GoalGatedDecision, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX,
 };
+#[cfg(test)]
+pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{
-    assignment_allows, assignment_request_id_in_txn, authenticated_goal_request_members,
-    goal_session_is_idle, latest_authenticated_session_request, latest_goal_request,
-    verify_goal_continuation_edge,
+    assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
+    latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
 };
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";

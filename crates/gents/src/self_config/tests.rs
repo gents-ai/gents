@@ -5,6 +5,10 @@
 use super::command::{behavior_params, help_patch_contracts};
 use super::*;
 
+fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {
+    Arc::new(crate::plugin::executor::PluginExecutor::default())
+}
+
 #[derive(Clone)]
 struct RootReadModel {
     path: String,
@@ -314,6 +318,7 @@ async fn build_fails_closed_without_agent_did() {
         String::new(),
         None,
         &config(&["behavior"]),
+        test_plugins(),
     );
     assert!(
         tools.is_empty(),
@@ -337,6 +342,7 @@ async fn build_registers_gated_family() {
         "did:key:zSelfConfigTest".to_string(),
         None,
         &config(&["behavior", "backend"]),
+        test_plugins(),
     );
     assert_eq!(
         tools.len(),
@@ -374,6 +380,8 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         crate::test_support::install_test_behavior(&node, &agent_did, role).await;
     }
 
+    // The pack resolves from the home's store: the registry is never asked.
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let mut tool_config = config(&[]);
     tool_config.behavior_id = "setup".to_string();
     tool_config.enable_pack_install = true;
@@ -383,6 +391,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         agent_did.clone(),
         Some(identity),
         &tool_config,
+        plugins,
     );
     let tool = tools
         .iter()
@@ -403,7 +412,9 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     }
     let discovery: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": ["pack", "preview", "install", "code_review"]}).to_string())
+            .call(
+                json!({"argv": ["pack", "preview", "install", "fixture/review_graph"]}).to_string(),
+            )
             .await
             .expect("incomplete preview remains readable"),
     )
@@ -439,7 +450,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         "--inference-slot",
         "verifier=verifier:inference",
     ];
-    let mut preview_argv = vec!["pack", "preview", "install", "code_review"];
+    let mut preview_argv = vec!["pack", "preview", "install", "fixture/review_graph"];
     preview_argv.extend(slot_argv);
     let preview: Value = serde_json::from_str(
         &tool
@@ -450,14 +461,20 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     .unwrap();
     assert_eq!(preview["ready"], true);
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let mut install_argv = vec!["pack", "install", "code_review", "--digest", digest];
+    let mut install_argv = vec![
+        "pack",
+        "install",
+        "fixture/review_graph",
+        "--digest",
+        digest,
+    ];
     install_argv.extend(slot_argv);
     let output = tool
         .call(json!({"argv": install_argv}).to_string())
         .await
-        .expect("bundled pack installs");
+        .expect("a stored pack installs");
     let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
-    assert_eq!(output["install"]["package_name"], "code_review");
+    assert_eq!(output["install"]["package_name"], "review_graph");
     assert_eq!(output["artifact_digest"], preview["artifact_digest"]);
     assert_eq!(
         output["inference"]["bindings"],
@@ -493,7 +510,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     );
     let inspected: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": ["pack", "get", "code_review"]}).to_string())
+            .call(json!({"argv": ["pack", "get", "fixture/review_graph"]}).to_string())
             .await
             .expect("installed pack is inspectable"),
     )
@@ -507,7 +524,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     let rejected = tool
         .call(
             json!({"argv": [
-                "pack", "update", "code_review", "--digest", bad_digest,
+                "pack", "update", "fixture/review_graph@1.0.0", "--digest", bad_digest,
                 "--inference-slot", "coordinator=coordinator:inference",
                 "--inference-slot", "worker=worker:inference",
                 "--inference-slot", "verifier=verifier:inference"
@@ -521,7 +538,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     let owner = crate::graphql::escape_graphql_string(&agent_did);
     let tagged = node
         .execute(&format!(
-            r#"mutation {{ update_AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}, input: {{tags: ["gents:pack:code_review", "user:favorite"]}}) {{_docID}} }}"#
+            r#"mutation {{ update_AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}, input: {{tags: ["gents:pack:review_graph", "user:favorite"]}}) {{_docID}} }}"#
         ))
         .await;
     assert!(!tagged.has_errors(), "{:?}", tagged.errors);
@@ -529,7 +546,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": [
-                    "pack", "preview", "update", "code_review",
+                    "pack", "preview", "update", "fixture/review_graph@1.0.0",
                     "--inference-slot", "coordinator=coordinator:inference",
                     "--inference-slot", "worker=worker:inference",
                     "--inference-slot", "verifier=verifier:inference"
@@ -546,7 +563,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         &tool
             .call(
                 json!({"argv": [
-                    "pack", "update", "code_review", "--digest", update_digest,
+                    "pack", "update", "fixture/review_graph@1.0.0", "--digest", update_digest,
                     "--inference-slot", "coordinator=coordinator:inference",
                     "--inference-slot", "worker=worker:inference",
                     "--inference-slot", "verifier=verifier:inference"
@@ -569,7 +586,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     assert!(!tags.has_errors(), "{:?}", tags.errors);
     assert_eq!(
         tags.data.unwrap()["AgentBehavior"][0]["tags"],
-        json!(["gents:pack:code_review", "user:favorite"])
+        json!(["gents:pack:review_graph", "user:favorite"])
     );
     let list = tools
         .iter()
@@ -586,19 +603,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         list["graphs"][0]["active_plan"]["digest"],
         output["install"]["revision_digest"]
     );
-    let run_error = tools
-        .iter()
-        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
-        .unwrap()
-        .call(json!({"package": "code_review"}).to_string())
-        .await
-        .expect_err("code review cannot bypass this behavior's disabled file authority");
-    assert!(
-        run_error
-            .to_string()
-            .contains("requires effective read authority"),
-        "{run_error:#}"
-    );
+    // No run has been attempted here.
     let runs = node
         .execute(&format!(
             r#"{{ GraphRun(filter: {{owner_did: {{_eq: "{}"}}}}) {{run_id}} }}"#,
@@ -614,11 +619,11 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     // `pack remove` is a real operation now, not a stale refusal: it deletes
     // the installed graph and its record.
     let removed = tool
-        .call(json!({"argv": ["pack", "remove", "code_review"]}).to_string())
+        .call(json!({"argv": ["pack", "remove", "fixture/review_graph"]}).to_string())
         .await
         .expect("an installed graph package removes");
     let removed: Value = serde_json::from_str(&removed).unwrap();
-    assert_eq!(removed["pack"], "gents/code_review");
+    assert_eq!(removed["pack"], "fixture/review_graph");
 
     let response = node
         .execute(&format!(
@@ -633,10 +638,247 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     assert!(data["PackInstallation"].as_array().unwrap().is_empty());
 
     let again = tool
-        .call(json!({"argv": ["pack", "remove", "code_review"]}).to_string())
+        .call(json!({"argv": ["pack", "remove", "fixture/review_graph"]}).to_string())
         .await
         .expect_err("a second remove finds no record");
     assert!(again.to_string().contains("is not installed"), "{again:#}");
+}
+
+/// A tool over `plugins` that may install packs, plus the node it acts on.
+async fn pack_tool(
+    label: &str,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
+    let node = build_persona_node().await;
+    let identity = persona_identity(label);
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let mut tool_config = config(&[]);
+    tool_config.behavior_id = "setup".to_string();
+    tool_config.enable_pack_install = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    (node, agent_did, tools)
+}
+
+async fn config_call(
+    tools: &[Box<dyn ToolDyn>],
+    argv: &[&str],
+) -> Result<String, crate::llm::tool::ToolError> {
+    tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered")
+        .call(json!({ "argv": argv }).to_string())
+        .await
+}
+
+#[tokio::test]
+async fn pack_list_pages_the_packs_the_home_store_holds() {
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
+    let page: Value =
+        serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
+    assert_eq!(page["source"], "store");
+    assert_eq!(page["page"]["total"], 1);
+    assert_eq!(page["page"]["truncated"], false);
+    assert_eq!(page["items"][0]["name"], "fixture/review_graph");
+    assert_eq!(page["items"][0]["version"], "1.0.0");
+    assert_eq!(page["items"][0]["installable"], true);
+    assert_eq!(page["items"][0]["installed"], Value::Null);
+
+    // The cursor names the last coordinate returned; nothing sorts after it.
+    let after: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "list", "--cursor", "fixture/review_graph"],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(after["items"].as_array().unwrap().is_empty());
+
+    let error = config_call(&tools, &["pack", "list", "--limit", "51"])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("between 1 and 50"), "{error}");
+
+    // A runtime with no home has no store to list.
+    let (_node, _did, homeless) = pack_tool("pack-list-homeless", test_plugins()).await;
+    let page: Value =
+        serde_json::from_str(&config_call(&homeless, &["pack", "list"]).await.unwrap()).unwrap();
+    assert_eq!(page["page"]["total"], 0);
+    assert!(page["items"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (_node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
+    let page: Value =
+        serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
+    let digest = page["items"][0]["artifact_digest"].as_str().unwrap();
+    let path = crate::pack_store::PackStore::new(home.path())
+        .path(digest)
+        .unwrap();
+    std::fs::write(path, b"not a pack archive").unwrap();
+    // An open prefers the unpacked copy, so the damage must be all there is.
+    std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
+
+    let page: Value =
+        serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
+    assert_eq!(page["page"]["returned"], 1);
+    assert_eq!(page["items"][0]["name"], "fixture/review_graph");
+    assert_eq!(page["items"][0]["installable"], false);
+    assert!(page["items"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("could not be opened"));
+}
+
+#[tokio::test]
+async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offline() {
+    let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
+    let error = config_call(
+        &tools,
+        &["pack", "preview", "update", "fixture/review_graph"],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("the newest version of fixture/review_graph could not be looked up"),
+        "{error}"
+    );
+    // A pinned version resolves from the store with no network call.
+    let error = config_call(
+        &tools,
+        &["pack", "preview", "update", "fixture/review_graph@1.0.0"],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("is not installed"), "{error}");
+}
+
+#[tokio::test]
+async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks_for_authority() {
+    let slot = ["--inference-slot", "worker=setup:inference"];
+    let (_fixture, dir) = crate::test_support::fixture_pack_copy("prepared_graph", &json!({}));
+    let manifest_path = dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["plugins"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("limits");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (_node, _did, tools) = pack_tool("pack-plugins", plugins).await;
+    let mut preview_argv = vec!["pack", "preview", "install", "fixture/prepared_graph"];
+    preview_argv.extend(slot);
+    let preview: Value =
+        serde_json::from_str(&config_call(&tools, &preview_argv).await.unwrap()).unwrap();
+    assert_eq!(preview["ready"], true);
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    assert_eq!(
+        preview["apply_with"]["argv_prefix"],
+        json!([
+            "pack",
+            "install",
+            "fixture/prepared_graph@1.0.0",
+            "--digest",
+            digest
+        ])
+    );
+    let mut install_argv = vec![
+        "pack",
+        "install",
+        "fixture/prepared_graph",
+        "--digest",
+        digest,
+    ];
+    install_argv.extend(slot);
+    config_call(&tools, &install_argv)
+        .await
+        .expect("a sealed plugin installs with its pack");
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "prepare_fixture")
+        .expect("the pack's plugin is in the home's plugin store");
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/prepared_graph")
+    );
+    assert!(record.granted.is_none(), "a sealed plugin holds no grant");
+
+    // The same pack with a plugin that asks for network access is refused,
+    // and nothing is left behind.
+    let (_guard, dir) =
+        crate::test_support::fixture_pack_copy("prepared_graph", &serde_json::json!({}));
+    let manifest_path = dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["plugins"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("limits");
+    manifest["plugins"][0]["manifold"] = json!({
+        "fs": "None",
+        "net": {"OutboundHttp": ["api.example.com"]},
+        "env": "None",
+        "crypto": false,
+        "child_process": false,
+    });
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let (home, plugins) = crate::test_support::home_with_pack_dir(&dir);
+    let (node_2, agent_did_2, tools) = pack_tool("pack-plugins-authority", plugins).await;
+    let mut preview_argv = vec!["pack", "preview", "install", "fixture/prepared_graph"];
+    preview_argv.extend(slot);
+    let preview: Value =
+        serde_json::from_str(&config_call(&tools, &preview_argv).await.unwrap()).unwrap();
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let mut install_argv = vec![
+        "pack",
+        "install",
+        "fixture/prepared_graph",
+        "--digest",
+        digest,
+    ];
+    install_argv.extend(slot);
+    let error = format!(
+        "{:#}",
+        config_call(&tools, &install_argv).await.unwrap_err()
+    );
+    assert!(
+        error.contains("install it with `gents pack install --grant-authority`")
+            && error.contains("api.example.com"),
+        "{error}"
+    );
+    assert!(
+        crate::plugin::store::read_record(home.path(), "fixture", "prepare_fixture").is_err(),
+        "a refused plugin leaves no record"
+    );
+    let graphs = node_2
+        .execute(&format!(
+            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id}} }}",
+            crate::graphql::escape_graphql_string(&agent_did_2)
+        ))
+        .await;
+    assert!(graphs.data.unwrap()["GraphDefinition"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -679,11 +921,13 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         bash_mode: crate::tool_surface::BashMode::Off,
         root: Some(repository.path().to_owned()),
     };
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
         node.clone(),
         agent_did.clone(),
         Some(identity.clone()),
         &tool_config,
+        plugins.clone(),
     );
     let call = |name: &str, args: Value| {
         let tool = tools
@@ -708,7 +952,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let preview = call(
         CONFIG_TOOL_NAME,
         json!({"argv": [
-            "pack", "preview", "install", "code_review",
+            "pack", "preview", "install", "fixture/review_graph",
             "--inference-slot", "coordinator=setup:inference",
             "--inference-slot", "worker=setup:inference",
             "--inference-slot", "verifier=setup:inference"
@@ -721,7 +965,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     call(
         CONFIG_TOOL_NAME,
         json!({"argv": [
-            "pack", "install", "code_review", "--digest", digest,
+            "pack", "install", "fixture/review_graph", "--digest", digest,
             "--inference-slot", "coordinator=setup:inference",
             "--inference-slot", "worker=setup:inference",
             "--inference-slot", "verifier=setup:inference"
@@ -729,10 +973,59 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     )
     .await
     .expect("code-review pack installs");
+    // The `review_graph` fixture has no `prepare`, so this test passes the
+    // entry's workspace and ref fields directly, provisioned through the
+    // same production path as `git_diff`, and leaves out evidence. That is
+    // enough to start, observe and cancel the run.
+    let rev_parse = |rev: &str| -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{rev}^{{commit}}"),
+            ])
+            .output()
+            .expect("run git rev-parse");
+        assert!(output.status.success(), "git rev-parse {rev} failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let base_ref = rev_parse("HEAD^");
+    let head_ref = rev_parse("HEAD");
+    let access = graph_access(&node);
+    let workspace = crate::workspace::provision_read_only_workspace(
+        &access,
+        repository.path(),
+        &head_ref,
+        &agent_did,
+    )
+    .await
+    .expect("read-only workspace provisions");
+    let input = json!({
+        "repository_path": ".",
+        "base_ref": base_ref,
+        "head_ref": head_ref,
+        "workspace_id": workspace.workspace.workspace_id,
+        "workspace_authority": "readOnly",
+        "workspace_owner_agent_did": workspace.workspace.owner_agent_did,
+        "lens_count": "4",
+        "lens_min": "4",
+        "lens_max": "4",
+        "pr_number": "",
+        "focus": "Review the changed text.",
+    });
     // Running an admitted pack needs neither installation nor self-config.
     tool_config.enabled = false;
     tool_config.enable_pack_install = false;
-    let tools = build_self_config_tools(node, agent_did.clone(), Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node,
+        agent_did.clone(),
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
     assert!(!tools.iter().any(|t| t.name() == CONFIG_TOOL_NAME));
     let call = |name: &str, args: Value| {
         tools
@@ -744,11 +1037,8 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let started = call(
         RUN_GRAPH_TOOL_NAME,
         json!({
-            "package": "code_review",
-            "repository": repository.path().to_string_lossy(),
-            "base": "HEAD^",
-            "head": "HEAD",
-            "focus": "Review the changed text.",
+            "package": "review_graph",
+            "input": input,
         }),
     )
     .await
@@ -787,6 +1077,335 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     assert_ne!(cancelled["status"], "succeeded");
 }
 
+/// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
+/// `git_diff` host step: refused when the current behavior has no effective
+/// read authority, and refused again once it does but the named repository
+/// escapes the effective root. Both refusals happen before any plugin runs,
+/// so the fixture's prepare plugin never needs to actually resolve, and both
+/// go through the same entry selection the run itself uses (#RunGraphTool
+/// ceiling gate).
+#[tokio::test]
+async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("prepare-ceiling");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let options = crate::graph_package::GraphPackageInstallBindings {
+        agent_did: agent_did.clone(),
+        inference_slots: BTreeMap::from([
+            ("coordinator".to_owned(), "setup:inference".to_owned()),
+            ("worker".to_owned(), "setup:inference".to_owned()),
+            ("verifier".to_owned(), "setup:inference".to_owned()),
+        ]),
+    };
+    let mut package = crate::test_support::load_test_graph_package("review_graph", &options);
+    package.config.graph_intents[0].entries[0].prepare =
+        Some(crate::graph_pipeline::EntryPrepare {
+            host: vec![crate::graph_pipeline::HostInput::GitDiff {
+                repository_field: "repository".to_owned(),
+                base_field: "base".to_owned(),
+                head_field: "head".to_owned(),
+                unified_context_lines: 12,
+                rename_similarity_percent: 50,
+            }],
+            plugin: "review-evidence".to_owned(),
+            digest: Some(format!("sha256:{}", "0".repeat(64))),
+            writes: vec!["CodeReviewEvidenceManifest".to_owned()],
+        });
+    let access = graph_access(&node);
+    let receipt = crate::graph_package::install_loaded_graph_package(
+        &access,
+        &agent_did,
+        &package,
+        &options,
+        None,
+        &crate::graph_package::GraphInstallRecord::default(),
+    )
+    .await
+    .expect("mutated fixture installs");
+    crate::graph_pipeline::activate_graph_revision_with_access(
+        &access,
+        &agent_did,
+        &receipt.graph_id,
+        &receipt.revision_digest,
+        None,
+    )
+    .await
+    .expect("fixture revision activates");
+
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_graph_tools = true;
+
+    // No process ceiling has been granted at all: `process_ceiling` defaults
+    // to `file_mode: Off`, so effective authority is `Off` regardless of
+    // anything the behavior itself requests.
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did.clone(),
+        Some(identity.clone()),
+        &tool_config,
+        test_plugins(),
+    );
+    let off = tools
+        .iter()
+        .find(|tool| tool.name() == RUN_GRAPH_TOOL_NAME)
+        .expect("run_graph registered")
+        .call(json!({"package": "review_graph", "input": {}}).to_string())
+        .await
+        .expect_err("a git_diff prepare step requires effective read authority");
+    assert!(
+        off.to_string()
+            .contains("requires effective read authority"),
+        "{off:#}"
+    );
+
+    // Grant a read-only process ceiling rooted at a directory that does not
+    // contain the repository the operator is about to name, and request
+    // that same root on the behavior itself (the effective root is the meet
+    // of the two).
+    let allowed_root = tempfile::tempdir().expect("allowed root");
+    let outside = tempfile::tempdir().expect("outside directory");
+    tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(allowed_root.path().to_owned()),
+    };
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
+    let call = |name: &str, args: Value| {
+        tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+            .call(args.to_string())
+    };
+    call(
+        CONFIG_TOOL_NAME,
+        json!({"argv": [
+            "tools", "edit", "--set",
+            format!("host={}", json!({
+                "root": allowed_root.path().to_string_lossy(),
+                "files": {"mode": "ReadOnly"}
+            }))
+        ]}),
+    )
+    .await
+    .expect("current behavior receives effective read authority");
+
+    let outside_of_ceiling = call(
+        RUN_GRAPH_TOOL_NAME,
+        json!({
+            "package": "review_graph",
+            "input": {
+                "repository": outside.path().to_string_lossy(),
+                "base": "HEAD",
+                "head": "HEAD",
+            },
+        }),
+    )
+    .await
+    .expect_err("a repository outside the effective root is refused");
+    assert!(
+        outside_of_ceiling
+            .to_string()
+            .contains("escapes operator tool root"),
+        "{outside_of_ceiling:#}"
+    );
+}
+
+/// A model-invoked `run_graph` of an entry whose `prepare` declares a
+/// `git_diff` host step, end to end under a granted effective root: the
+/// repository named by the input resolves inside that root, the pack's
+/// prepare plugin runs on the collected facts, its evidence document is
+/// persisted, and the run starts on the plugin's input rather than the
+/// operator's.
+#[tokio::test]
+async fn run_graph_prepares_host_input_under_the_effective_root() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("prepare-under-root");
+    let agent_did = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+
+    let options = crate::graph_package::GraphPackageInstallBindings {
+        agent_did: agent_did.clone(),
+        inference_slots: BTreeMap::from([("worker".to_owned(), "setup:inference".to_owned())]),
+    };
+    let plugin_output = json!({
+        "input": {
+            "repository_path": ".",
+            "head_ref": "prepared-head",
+            "evidence_id": "evidence-1",
+            "summary": "prepared by the pack plugin",
+        },
+        "documents": [{
+            "collection": "FixtureEvidence",
+            "fields": {"evidence_id": "evidence-1", "head_ref": "prepared-head", "note": "prepared"},
+        }],
+    });
+    let package = crate::test_support::load_test_graph_package_with_plugin_output(
+        "prepared_graph",
+        &options,
+        &plugin_output,
+    );
+    let prepare = package.config.graph_intents[0].entries[0]
+        .prepare
+        .clone()
+        .expect("the fixture entry prepares");
+    let plugin_home = tempfile::tempdir().expect("plugin home");
+    let declaration = package.manifest.metadata.plugins[0].clone();
+    let afb = package
+        .asset(&declaration.artifact)
+        .expect("the plugin artifact")
+        .to_vec();
+    let digest = prepare.digest.clone().expect("the loader pins the plugin");
+    let hex = digest.strip_prefix("sha256:").expect("sha256 pin");
+    crate::plugin::store::store_bytes(plugin_home.path(), hex, &afb).expect("store artifact");
+    let granted =
+        crate::plugin::store::grant_on_install(plugin_home.path(), "fixture", &declaration, true)
+            .expect("operator consents to fixture limits");
+    crate::plugin::store::write_record(
+        plugin_home.path(),
+        &crate::plugin::store::InstalledPlugin {
+            namespace: "fixture".into(),
+            name: declaration.name.clone(),
+            version: "0.1.0".into(),
+            digest,
+            language: "rust".into(),
+            declaration,
+            granted,
+            instructions: None,
+            owner_pack_coordinate: None,
+            owner_pack_digest: None,
+            model_binding: None,
+        },
+    )
+    .expect("record the plugin");
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        plugin_home.path().to_owned(),
+    )));
+
+    let access = graph_access(&node);
+    let receipt = crate::graph_package::install_loaded_graph_package(
+        &access,
+        &agent_did,
+        &package,
+        &options,
+        None,
+        &crate::graph_package::GraphInstallRecord::default(),
+    )
+    .await
+    .expect("fixture installs");
+    crate::graph_pipeline::activate_graph_revision_with_access(
+        &access,
+        &agent_did,
+        &receipt.graph_id,
+        &receipt.revision_digest,
+        None,
+    )
+    .await
+    .expect("fixture revision activates");
+
+    let root = tempfile::tempdir().expect("root");
+    let root_path = std::fs::canonicalize(root.path()).expect("canonical root");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&root_path)
+            .args(["-c", "user.email=test@example.com", "-c", "user.name=Test"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    git(&["init", "--quiet"]);
+    std::fs::write(root_path.join("a.txt"), "one\n").expect("write");
+    git(&["add", "-A"]);
+    git(&["commit", "--quiet", "-m", "base"]);
+    std::fs::write(root_path.join("a.txt"), "two\n").expect("write");
+    git(&["add", "-A"]);
+    git(&["commit", "--quiet", "-m", "head"]);
+
+    let mut tool_config = config(&["tools"]);
+    tool_config.behavior_id = "setup".to_owned();
+    tool_config.enable_graph_tools = true;
+    tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
+        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tool_surface::BashMode::Off,
+        root: Some(root_path.clone()),
+    };
+    let tools = build_self_config_tools(
+        node.clone(),
+        agent_did,
+        Some(identity),
+        &tool_config,
+        plugins,
+    );
+    let call = |name: &str, args: Value| {
+        tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"))
+            .call(args.to_string())
+    };
+    call(
+        CONFIG_TOOL_NAME,
+        json!({"argv": [
+            "tools", "edit", "--set",
+            format!("host={}", json!({
+                "root": root_path.to_string_lossy(),
+                "files": {"mode": "ReadOnly"}
+            }))
+        ]}),
+    )
+    .await
+    .expect("current behavior receives effective read authority");
+
+    let started = call(
+        RUN_GRAPH_TOOL_NAME,
+        json!({
+            "package": "prepared_graph",
+            "input": {
+                "repository": root_path.to_string_lossy(),
+                "base": "HEAD~1",
+                "head": "HEAD",
+            },
+        }),
+    )
+    .await
+    .expect("a repository under the effective root prepares and starts");
+    let started: Value = serde_json::from_str(&started).expect("run_graph returns JSON");
+    assert_eq!(started["node_bound"], true, "{started}");
+
+    let evidence = access
+        .execute("{ FixtureEvidence { evidence_id head_ref note } }")
+        .await
+        .expect("query evidence");
+    assert_eq!(
+        evidence["data"]["FixtureEvidence"],
+        json!([{"evidence_id": "evidence-1", "head_ref": "prepared-head", "note": "prepared"}]),
+        "the plugin's evidence document is persisted"
+    );
+    let jobs = access
+        .execute("{ FixtureJob { summary head_ref evidence_id } }")
+        .await
+        .expect("query job");
+    assert_eq!(
+        jobs["data"]["FixtureJob"],
+        json!([{
+            "summary": "prepared by the pack plugin",
+            "head_ref": "prepared-head",
+            "evidence_id": "evidence-1",
+        }]),
+        "the run starts on the plugin's input, not the operator's"
+    );
+}
+
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
     let node = build_persona_node().await;
@@ -796,7 +1415,13 @@ async fn config_tools_cannot_self_grant_pack_install() {
 
     let mut tool_config = config(&["tools"]);
     tool_config.behavior_id = "setup".to_string();
-    let tools = build_self_config_tools(node, agent_did, Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -872,7 +1497,8 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
     crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
     let mut grants = config(&["automation"]);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    let tools =
+        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
     for verb in ["preview", "edit"] {
         let error = call_config_tool(
             &tools,
@@ -926,7 +1552,8 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
         .unwrap();
     let mut grants = config(&["automation"]);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    let tools =
+        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1000,8 +1627,13 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     let mut grants = config(&["tools", "behavior"]);
     grants.preview = true;
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
-    let denied_tools =
-        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let denied_tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &grants,
+        test_plugins(),
+    );
     let denied = call_config_tool(
         &denied_tools,
         command(&["skill", "import", "review", file.to_str().unwrap()]),
@@ -1027,7 +1659,13 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(
         outside.path().join("SKILL.md"),
@@ -1137,8 +1775,13 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     std::fs::write(source.join("config.toml"), fixture).unwrap();
 
     let mut grants = config(&["tools"]);
-    let denied_tools =
-        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let denied_tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &grants,
+        test_plugins(),
+    );
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
     let help = call_config_tool(&denied_tools, command(&["help", "discovery"]))
         .await
@@ -1189,7 +1832,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         .read_effective_config(&BTreeSet::new(), false, false)
         .await
         .unwrap();
-    let tools = build_self_config_tools(node, owner, Some(identity), &grants);
+    let tools = build_self_config_tools(node, owner, Some(identity), &grants, test_plugins());
     let outside = tempfile::tempdir().unwrap();
     let outside_error = call_config_tool(
         &tools,
@@ -1302,7 +1945,13 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let scan = vec![
         "discovery".into(),
         "scan".into(),
@@ -1483,7 +2132,13 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
     let mut grants = config(&["tools"]);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let expected_help = call_config_tool(&tools, command(&["help", "datastore"]))
         .await
@@ -1728,7 +2383,13 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     let mut settings = config(&["behavior"]);
     settings.behavior_id = "working".into();
     settings.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &settings);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner,
+        Some(identity),
+        &settings,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1782,7 +2443,13 @@ async fn config_errors_name_the_next_call() {
     crate::test_support::install_test_behavior(&node, &owner, &format!("{owner}:builder")).await;
     let mut grants = config(&["persona", "tools"]);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1891,7 +2558,8 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         "mcp_service",
     ]);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &grants);
+    let tools =
+        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1966,14 +2634,20 @@ async fn persona_category_gates_the_tool() {
         agent_did.clone(),
         None,
         &config(&["behavior"]),
+        test_plugins(),
     );
     let error = call_config_tool(&without_persona, vec!["behavior".into(), "list".into()])
         .await
         .expect_err("catalog read requires persona grant");
     assert!(error.contains("catalog grant"), "{error}");
 
-    let with_persona =
-        build_self_config_tools(node, agent_did, Some(identity), &config(&["persona"]));
+    let with_persona = build_self_config_tools(
+        node,
+        agent_did,
+        Some(identity),
+        &config(&["persona"]),
+        test_plugins(),
+    );
     assert!(with_persona
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
@@ -1988,6 +2662,7 @@ async fn persona_unknown_action_errors_cleanly() {
         identity.did().to_string(),
         Some(identity),
         &config(&["persona"]),
+        test_plugins(),
     );
 
     let error = call_config_tool(&tools, vec!["behavior".into(), "unknown-action".into()])
@@ -2008,7 +2683,13 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
     let mut tool_config = config(&["behavior"]);
     tool_config.behavior_id = "current".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2060,7 +2741,7 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     }
     let mut tool_config = config(&["persona", "profile", "backend"]);
     tool_config.behavior_id = "alpha".into();
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2148,7 +2829,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
     let mut tool_config = config(&["backend", "profile"]);
     tool_config.behavior_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(
         &call_config_tool(
@@ -2284,7 +2965,13 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     tool_config.behavior_id = "setup".into();
     tool_config.preview = true;
     tool_config.no_lockout = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
 
     call_config_tool(
         &tools,
@@ -2596,7 +3283,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     }
     let mut tool_config = config(&["persona", "tools", "profile", "backend"]);
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
 
     let referenced = call_config_tool(
         &tools,
@@ -2778,6 +3465,7 @@ async fn behavior_default_uses_the_signed_persona_request_owner() {
         agent_did.clone(),
         Some(identity.clone()),
         &tool_config,
+        test_plugins(),
     );
     let preview: Value = serde_json::from_str(
         &call_config_tool(
@@ -2851,6 +3539,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         agent_did.clone(),
         Some(identity.clone()),
         &config(&["persona"]),
+        test_plugins(),
     );
     let rejected_preview = call_config_tool(
         &tools,
@@ -3034,6 +3723,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         agent_did.clone(),
         Some(identity.clone()),
         &config(&["persona", "tools"]),
+        test_plugins(),
     );
     let selected = call_config_tool(
         &grant_tools,
@@ -3129,6 +3819,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         agent_did.clone(),
         Some(identity.clone()),
         &config(&["persona"]),
+        test_plugins(),
     );
     let tool = take_persona_tool(tools);
     let args = json!({"argv": [
@@ -3408,6 +4099,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         owner.clone(),
         Some(identity.clone()),
         &tool_config,
+        test_plugins(),
     );
     let profile_id = format!("{seed_behavior}:inference");
     let command = |preview: bool| {
@@ -3758,7 +4450,7 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
     let mut tool_config = config(&["tools"]);
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, None, &tool_config);
+    let tools = build_self_config_tools(node, owner, None, &tool_config, test_plugins());
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -3837,7 +4529,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     let mut tool_config = config(&["profile"]);
     tool_config.behavior_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let edit = |verb: &str, window: u64| -> Vec<String> {
         vec![
             "profile".into(),
@@ -3916,7 +4608,13 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     grants.behavior_id = "setup".into();
     grants.preview = true;
     grants.no_lockout = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     let ok = |result: Result<String, String>| -> Value {
         serde_json::from_str(&result.unwrap_or_else(|error| panic!("{error}"))).unwrap()
@@ -4407,7 +5105,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let mut tool_config = config(&["backend"]);
     tool_config.behavior_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let call = |argv: &[&str]| {
         let argv = std::iter::once("backend")
             .chain(argv.iter().copied())

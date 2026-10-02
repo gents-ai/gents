@@ -219,6 +219,15 @@ pub struct Gents {
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
+/// The executor for `home`'s installed plugins, answering the model calls of
+/// a plugin whose slot is bound through this node's inference profiles.
+pub(crate) fn plugin_executor(
+    home: Option<PathBuf>,
+    models: crate::plugin::model_calls::AccessModels<crate::config_client::ConfigAccess>,
+) -> crate::plugin::executor::PluginExecutor {
+    crate::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
+}
+
 impl Gents {
     pub fn builder() -> GentsBuilder {
         GentsBuilder::new()
@@ -264,6 +273,9 @@ impl Gents {
 
         let rendered_request_capture_factory =
             crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
+        let plugin_models = crate::plugin::model_calls::AccessModels(
+            crate::config_client::ConfigAccess::Local(node.clone()),
+        );
 
         Ok(Self {
             node,
@@ -295,9 +307,7 @@ impl Gents {
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
-            plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
-                options.plugin_home,
-            )),
+            plugins: Arc::new(plugin_executor(options.plugin_home, plugin_models)),
         })
     }
 

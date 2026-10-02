@@ -420,8 +420,19 @@ impl Drop for BackgroundExecutionReservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptTurnState {
     Idle,
-    AssistantBuilding { sequence: u32 },
-    AssistantPersisted { sequence: u32 },
+    AssistantBuilding {
+        sequence: u32,
+    },
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Hook conformance tests construct persisted-turn states."
+        )
+    )]
+    AssistantPersisted {
+        sequence: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -439,7 +450,6 @@ struct SessionState {
     sequence: u32,
     transcript_turn: TranscriptTurnState,
     persisted_tool_result_keys: HashSet<String>,
-    persisted_tool_result_message_sequences: HashMap<String, u32>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
 }
 
@@ -466,6 +476,7 @@ impl SessionState {
         }
     }
 
+    #[cfg(test)]
     fn persist_assistant_turn(&mut self) -> u32 {
         let sequence = match self.transcript_turn {
             TranscriptTurnState::AssistantBuilding { sequence } => sequence,
@@ -531,6 +542,7 @@ impl SessionState {
         self.mark_tool_result_keys_seen(keys)
     }
 
+    #[cfg(test)]
     fn mark_stream_tool_result_seen(
         &mut self,
         internal_call_id: &str,
@@ -552,13 +564,6 @@ impl SessionState {
             );
         }
         Ok(self.mark_tool_result_keys_seen(keys))
-    }
-
-    fn assistant_turn_persisted(&self) -> bool {
-        matches!(
-            self.transcript_turn,
-            TranscriptTurnState::AssistantPersisted { .. }
-        )
     }
 
     fn tool_result_dedupe_keys(
@@ -758,7 +763,6 @@ impl DefraSessionHook {
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
-                persisted_tool_result_message_sequences: HashMap::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -805,7 +809,6 @@ impl DefraSessionHook {
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
                 persisted_tool_result_keys: HashSet::new(),
-                persisted_tool_result_message_sequences: HashMap::new(),
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
@@ -1086,6 +1089,7 @@ impl DefraSessionHook {
         first_error.map_or(Ok(cancelled), Err)
     }
 
+    #[cfg(test)]
     pub(crate) async fn fail_in_flight_tool_calls(
         &self,
         result: &str,

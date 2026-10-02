@@ -601,6 +601,13 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     runtime
         .backend
         .enqueue_response("continue", StreamResponse::bad_request("provider failed"));
+    // Head selection orders whole-second creation times by logical ID on ties.
+    // This fixture needs its generated wake to be strictly newer than the
+    // scripted parent, whose name otherwise wins that tie.
+    let release_second = chrono::Utc::now().timestamp();
+    while chrono::Utc::now().timestamp() <= release_second {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     std::fs::write(&process_gate, b"release\n").expect("release held background process");
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
@@ -769,7 +776,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .await
     .expect("load persisted completion diagnostics");
     assert_eq!(diagnostics.pending_notifications, 1);
-    assert_eq!(diagnostics.stranded_notifications, 0);
+    assert_eq!(diagnostics.stranded_notifications, 0, "{diagnostics:?}");
     let notification_key = fetch_message_snapshots_for_session(&db.node, session_id)
         .await
         .into_iter()

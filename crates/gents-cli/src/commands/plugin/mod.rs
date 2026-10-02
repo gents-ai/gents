@@ -9,7 +9,9 @@
 //! running one to prove it works ([`run`]). Registry access is the client
 //! `gents pack` uses ([`crate::commands::pack::registry::RegistryClient`]).
 
+mod bind;
 mod build;
+mod dirs;
 mod install;
 mod run;
 pub(crate) use gents::plugin::store;
@@ -27,63 +29,10 @@ pub(crate) async fn dispatch(command: PluginCommand) -> Result<()> {
         PluginCommand::List(args) => list(args),
         PluginCommand::Remove(args) => remove(args),
         PluginCommand::Run(args) => run::run(args).await,
+        PluginCommand::Bind(args) => bind::bind(args).await,
+        PluginCommand::Unbind(args) => bind::unbind(args),
+        PluginCommand::Dirs { command } => dirs::dispatch(command),
     }
-}
-
-/// Installs one plugin a pack carries into the same content-addressed
-/// store [`install::install`] uses, so a plugin that arrived bundled in a
-/// pack is just as runnable by name (`gents plugin run <name>`) as one
-/// installed on its own. Called from `gents pack install`, not this
-/// module's own dispatch (a pack's plugins install as a side effect of
-/// installing the pack, not through a separate `gents plugin` command).
-///
-/// A plugin declared inline in a pack manifest carries neither a
-/// namespace nor a version of its own, so it takes its pack's: two packs
-/// from different namespaces may each carry a `format_check`, and
-/// recording both under one default namespace would have the second
-/// silently replace the first.
-///
-/// `pack_coordinate` (`{namespace}/{name}` of the pack this plugin ships
-/// in) is refused when the record already belongs to a different pack: see
-/// [`store::check_plugin_ownership`].
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn install_from_pack(
-    home: &std::path::Path,
-    pack_namespace: &str,
-    pack_coordinate: &str,
-    pack_version: &str,
-    pack_digest: &str,
-    plugin: &gents::pack::PackPlugin,
-    artifact_bytes: &[u8],
-    instructions: Option<String>,
-    consent: bool,
-) -> Result<store::InstalledPlugin> {
-    store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
-    let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
-    use sha2::{Digest, Sha256};
-    gents::plugin::PluginRunner::compile(artifact_bytes, plugin)
-        .with_context(|| format!("admitting pack plugin {}", plugin.name))?;
-    let digest_hex = format!("{:x}", Sha256::digest(artifact_bytes));
-    // Shared against `release_unreferenced_bytes`'s exclusive lock: bytes and
-    // the record that points at them are written before a concurrent
-    // `gents pack remove` can decide those bytes are unreferenced (store.rs's
-    // own doc).
-    let _lock = store::lock_store(home, false)?;
-    store::store_bytes(home, &digest_hex, artifact_bytes)?;
-    let record = store::InstalledPlugin {
-        namespace: pack_namespace.to_owned(),
-        name: plugin.name.clone(),
-        version: pack_version.to_owned(),
-        digest: format!("sha256:{digest_hex}"),
-        language: plugin.language.clone(),
-        declaration: plugin.clone(),
-        granted,
-        instructions,
-        owner_pack_coordinate: Some(pack_coordinate.to_owned()),
-        owner_pack_digest: Some(pack_digest.to_owned()),
-    };
-    store::write_record(home, &record)?;
-    Ok(record)
 }
 
 async fn publish(args: PluginPublishArgs) -> Result<()> {
@@ -205,6 +154,9 @@ pub(crate) fn declaration_from_artifact(
         input_schema: serde_json::json!({"type": "object"}),
         manifold: Some(serde_json::to_value(&afb.manifold).context("encoding plugin manifold")?),
         instructions: None,
+        bind_dir: None,
+        limits: None,
+        model_slot: None,
     })
 }
 
@@ -285,6 +237,38 @@ pub(crate) mod testing {
         use sha2::{Digest, Sha256};
         format!("{:x}", Sha256::digest(bytes))
     }
+
+    /// A fresh, built copy of the `bind_plugin_fixture` pack
+    /// (`crates/gents/tests/fixtures/packs`): a `list_files` plugin that
+    /// declares `bind_dir` over its `root` argument. Built rather than
+    /// checked in, since its `.afb` is gitignored like every other fixture
+    /// plugin's.
+    pub(crate) fn build_bind_plugin_fixture() -> tempfile::TempDir {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/packs/bind_plugin_fixture");
+        let dir = tempfile::tempdir().expect("tempdir");
+        copy_tree(&source, dir.path()).expect("copying the bind_plugin_fixture pack");
+        let _guard = crate::commands::afterburner_build::compile_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::commands::pack::build::build_pack(dir.path(), None)
+            .expect("building the bind_plugin_fixture pack");
+        dir
+    }
+
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let target = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_tree(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +328,7 @@ mod tests {
             name: format!("{namespace}/noop"),
             input: None,
             home: Some(home.path().to_owned()),
+            bind_dir: None,
         })
         .await
         .expect("running the just-installed plugin must succeed");

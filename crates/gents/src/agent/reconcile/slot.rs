@@ -40,6 +40,7 @@ pub(super) struct BehaviorSlot {
     pub(super) behavior_fingerprint: String,
     pub(super) tool_surface_fingerprint: String,
     pub(super) executor_capacity: usize,
+    #[cfg(test)]
     pub(super) worker_task_count: usize,
     pub(super) queue_capacity: usize,
     pub(super) generation: u64,
@@ -275,7 +276,6 @@ where
         );
     }
     let capacity = WorkerCapacity::new(executor_capacity);
-    let worker_task_count = executor_capacity;
     let (dispatcher, request_rx) = mpsc::channel(BEHAVIOR_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(BehaviorSlotState::Active);
@@ -305,7 +305,8 @@ where
         behavior_fingerprint,
         tool_surface_fingerprint,
         executor_capacity,
-        worker_task_count,
+        #[cfg(test)]
+        worker_task_count: executor_capacity,
         queue_capacity: BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
         generation,
     }

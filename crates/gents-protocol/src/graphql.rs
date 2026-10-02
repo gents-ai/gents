@@ -313,6 +313,10 @@ pub fn escape_graphql_string(value: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
+            ch if ch <= '\u{1f}' => {
+                use std::fmt::Write;
+                write!(escaped, "\\u{:04x}", ch as u32).expect("writing to a String");
+            }
             _ => escaped.push(ch),
         }
     }
@@ -947,6 +951,15 @@ fn graphql_string_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_literals_escape_every_json_control_character() {
+        let controls: String = (0..=31).map(char::from).collect();
+        let escaped = escape_graphql_string(&controls);
+        assert!(!escaped.chars().any(|ch| ch <= '\u{1f}'));
+        let decoded: String = serde_json::from_str(&format!("\"{escaped}\"")).unwrap();
+        assert_eq!(decoded, controls);
+    }
 
     #[test]
     fn turn_state_parser_derives_completed() {

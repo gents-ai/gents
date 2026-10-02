@@ -272,6 +272,8 @@ pub struct ConfigCommandTool {
     pub(super) allow_pack_install: bool,
     pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
+    /// Whose home holds the pack store and the plugin store this tool installs into.
+    pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
 impl Tool for ConfigCommandTool {
@@ -1495,6 +1497,7 @@ impl ConfigCommandTool {
         let installer = PackInstaller {
             core: self.core.clone(),
             node: self.node.clone(),
+            home: self.plugins.home().map(std::path::Path::to_path_buf),
         };
         let verb = argv
             .first()

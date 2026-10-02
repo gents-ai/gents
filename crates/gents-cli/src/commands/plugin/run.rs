@@ -12,8 +12,13 @@
 //! its typed [`gents::plugin::PluginOutcome`] into either the plugin's own
 //! JSON value or a clear refusal naming which bound was hit.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
-use gents::plugin::{PluginBudget, PluginRunner, PluginVerdict};
+use gents::plugin::executor::PluginExecutor;
+use gents::plugin::model_calls::AccessModels;
+use gents::plugin::{BoundDir, PluginOutcome, PluginVerdict};
 
 use crate::cli::args::PluginRunArgs;
 
@@ -29,29 +34,19 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
             home.display()
         )
     })?;
-    let digest_hex = record.digest.strip_prefix("sha256:").with_context(|| {
-        format!("the installed record for {namespace}/{name} has a malformed digest")
-    })?;
-    let bytes = store::read_bytes(&home, digest_hex)
-        .with_context(|| format!("reading the installed bytes for {namespace}/{name}"))?;
-
     let input = match &args.input {
         Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
             .with_context(|| format!("--input is not valid JSON: {raw:?}"))?,
         None => serde_json::Value::Null,
     };
-
-    // On a blocking thread, never on the async executor's own. Running a
-    // guest is synchronous, and the WASI runtime under it blocks on its own
-    // runtime to do host I/O: called directly from an async task, that
-    // panics with "cannot start a runtime from within a runtime" before the
-    // guest produces a byte. `spawn_blocking` uses tokio's existing
-    // blocking pool, so this costs no thread of its own.
-    let coordinate = format!("{namespace}/{name}");
-    let output = tokio::task::spawn_blocking(move || run_plugin(&bytes, &record, &input))
-        .await
-        .with_context(|| format!("running plugin {coordinate}"))?
-        .with_context(|| format!("running plugin {coordinate}"))?;
+    let mut executor = PluginExecutor::new(Some(home.clone()));
+    // The control plane is opened only for a plugin whose model slot is
+    // bound: any other call touches no store.
+    if record.declaration.model_slot.is_some() && record.model_binding.is_some() {
+        let (access, _) = crate::resolve_config_access(Some(&home), None).await?;
+        executor = executor.with_models(Arc::new(AccessModels(access)));
+    }
+    let output = run_plugin(&executor, &record, input, args.bind_dir.as_deref()).await?;
     crate::print_json(&output)
 }
 
@@ -60,25 +55,35 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
 ///
 /// Admission uses the declaration retained at installation. Artifact capability
 /// metadata is not a substitute for a pack author's narrower declaration.
-fn run_plugin(
-    bytes: &[u8],
+/// `bind_dir` is the operator's own directory (`--bind-dir`, `within =
+/// None`: the operator already named it directly, so nothing here narrows
+/// it further); `None` calls ordinarily. The executor runs the guest on a
+/// blocking thread (the WASI runtime under it blocks on its own runtime for
+/// host I/O, which panics on an async task's thread) and answers the
+/// plugin's model requests when its slot is bound.
+async fn run_plugin(
+    executor: &PluginExecutor,
     record: &InstalledPlugin,
-    input: &serde_json::Value,
+    input: serde_json::Value,
+    bind_dir: Option<&Path>,
 ) -> Result<serde_json::Value> {
-    let afb =
-        afterburner_cloud::Afb::from_bytes(bytes).context("this is not a readable plugin .afb")?;
     let coordinate = format!("{}/{}", record.namespace, record.name);
-    // Declared authority, narrowed to what the operator granted at install.
-    let runner = PluginRunner::compile_within(bytes, &record.declaration, &record.ceiling())
-        .with_context(|| format!("admitting plugin {coordinate}"))?;
-    // The default budget for *this* artifact, not the generic one: a
-    // plugin that has to boot an interpreter needs a memory ceiling its
-    // runtime can instantiate under and a wall clock that covers the boot,
-    // or it is admitted and then fails every call.
-    let outcome = runner
-        .call(input, &PluginBudget::for_artifact(&afb))
-        .with_context(|| format!("calling plugin {coordinate}"))?;
+    let call = match bind_dir {
+        Some(dir) => {
+            let bound = BoundDir::new(dir, None)
+                .with_context(|| format!("binding {} for {coordinate}", dir.display()))?;
+            executor.call_bound(record, input, bound).await
+        }
+        None => executor.call(record, input).await,
+    }
+    .with_context(|| format!("calling plugin {coordinate}"))?;
+    if let Some(note) = &call.binding_note {
+        eprintln!("{note}");
+    }
+    outcome_output(&coordinate, call.outcome)
+}
 
+fn outcome_output(coordinate: &str, outcome: PluginOutcome) -> Result<serde_json::Value> {
     match outcome.verdict {
         PluginVerdict::Success => Ok(outcome.output),
         PluginVerdict::Refused => {
@@ -116,6 +121,22 @@ fn run_plugin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::plugin::PluginRunner;
+
+    /// Stores `record` and its bytes in a fresh home and runs it there.
+    async fn run_installed(
+        bytes: &[u8],
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        bind_dir: Option<&Path>,
+    ) -> Result<serde_json::Value> {
+        let home = tempfile::tempdir().unwrap();
+        let digest_hex = record.digest.strip_prefix("sha256:").unwrap();
+        store::store_bytes(home.path(), digest_hex, bytes).unwrap();
+        store::write_record(home.path(), record).unwrap();
+        let executor = PluginExecutor::new(Some(home.path().to_owned()));
+        run_plugin(&executor, record, input, bind_dir).await
+    }
 
     /// The identity plugin, from the shared fixture: reads all of stdin
     /// and writes it back unchanged, which is what makes it the vehicle
@@ -139,28 +160,36 @@ mod tests {
             .unwrap(),
             owner_pack_coordinate: None,
             owner_pack_digest: None,
+            model_binding: None,
         }
     }
 
-    #[test]
-    fn plugin_run_returns_the_plugins_own_output() {
+    #[tokio::test]
+    async fn plugin_run_returns_the_plugins_own_output() {
         let bytes = build_echo_plugin();
         let input = serde_json::json!({"hello": "world", "n": 42});
-        let output =
-            run_plugin(&bytes, &sample_record(&bytes), &input).expect("the echo plugin must run");
+        let output = run_installed(&bytes, &sample_record(&bytes), input.clone(), None)
+            .await
+            .expect("the echo plugin must run");
         assert_eq!(output, input);
     }
 
-    #[test]
-    fn plugin_run_defaults_to_null_input() {
+    #[tokio::test]
+    async fn plugin_run_defaults_to_null_input() {
         let bytes = build_echo_plugin();
-        let output =
-            run_plugin(&bytes, &sample_record(&bytes), &serde_json::Value::Null).expect("must run");
+        let output = run_installed(
+            &bytes,
+            &sample_record(&bytes),
+            serde_json::Value::Null,
+            None,
+        )
+        .await
+        .expect("must run");
         assert_eq!(output, serde_json::Value::Null);
     }
 
-    #[test]
-    fn installed_pack_retains_authored_admission_metadata() {
+    #[tokio::test]
+    async fn installed_pack_retains_authored_admission_metadata() {
         let bytes = build_echo_plugin();
         let home = tempfile::tempdir().unwrap();
         let mut declaration = sample_record(&bytes).declaration;
@@ -171,7 +200,7 @@ mod tests {
         });
         // No declared authority: never replace this with artifact capabilities.
         declaration.manifold = None;
-        super::super::install_from_pack(
+        gents::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -188,7 +217,9 @@ mod tests {
         let runner = PluginRunner::compile(&bytes, &record.declaration).unwrap();
         assert_eq!(runner.definition(), &declaration);
         assert_eq!(
-            run_plugin(&bytes, &record, &serde_json::json!({"message": "ok"})).unwrap(),
+            run_installed(&bytes, &record, serde_json::json!({"message": "ok"}), None)
+                .await
+                .unwrap(),
             serde_json::json!({"message": "ok"})
         );
 
@@ -196,9 +227,13 @@ mod tests {
         // replaced by the valid manifold embedded in the artifact.
         let mut invalid = record;
         invalid.declaration.manifold = Some(serde_json::json!({"fs": "invalid"}));
-        assert!(run_plugin(&bytes, &invalid, &serde_json::Value::Null).is_err());
+        assert!(
+            run_installed(&bytes, &invalid, serde_json::Value::Null, None)
+                .await
+                .is_err()
+        );
         let empty_home = tempfile::tempdir().unwrap();
-        assert!(super::super::install_from_pack(
+        assert!(gents::plugin::install::install_from_pack(
             empty_home.path(),
             "team",
             "team/echo",
@@ -226,6 +261,7 @@ mod tests {
             name: "gents/echo".to_owned(),
             input: Some(r#"{"ok":true}"#.to_owned()),
             home: Some(home.path().to_owned()),
+            bind_dir: None,
         })
         .await
         .expect("running an installed plugin by name must succeed");
@@ -238,12 +274,105 @@ mod tests {
             name: "gents/does_not_exist".to_owned(),
             input: None,
             home: Some(home.path().to_owned()),
+            bind_dir: None,
         })
         .await
         .expect_err("an uninstalled plugin must be refused");
         let message = format!("{error:#}");
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
+    }
+
+    /// The `bind_plugin_fixture` plugin lists whatever directory it is
+    /// bound to, and nothing without a binding: with a binding it returns
+    /// exactly the files this test put there, and without one the same
+    /// `root` (a real, existing directory) is still unreachable, because
+    /// its declared manifold has no standing `fs` grant of its own -
+    /// binding is the only way in.
+    #[tokio::test]
+    async fn run_with_bind_dir_reads_only_the_bound_directory() {
+        let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
+        let manifest: gents::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        gents::plugin::install::install_pack_plugins(
+            home.path(),
+            &manifest,
+            archive.digest(),
+            |path| archive.asset(path),
+            false,
+        )
+        .unwrap();
+        let record = store::read_record(home.path(), "fixture", "list_files").unwrap();
+        let digest_hex = record.digest.strip_prefix("sha256:").unwrap();
+        let bytes = store::read_bytes(home.path(), digest_hex).unwrap();
+
+        let listing = tempfile::tempdir().unwrap();
+        std::fs::write(listing.path().join("one.txt"), b"1").unwrap();
+        std::fs::write(listing.path().join("two.txt"), b"2").unwrap();
+
+        let output = run_installed(
+            &bytes,
+            &record,
+            serde_json::json!({"root": "unused"}),
+            Some(listing.path()),
+        )
+        .await
+        .expect("running bound to the listing directory must succeed");
+        assert_eq!(output, serde_json::json!({"files": ["one.txt", "two.txt"]}));
+
+        // Same real directory, but named directly instead of bound: the
+        // plugin still has no way to reach it, proving the binding (not the
+        // directory's existence) is what grants access. With no preopen for
+        // an unbound path, the guest's own `std::fs::read_dir` call fails
+        // and its `.expect` panics, which surfaces here as a trap - not the
+        // `Success`/`Failed` verdict a routine bound would report.
+        let real_root = serde_json::json!({"root": listing.path().to_str().unwrap()});
+        let error = run_installed(&bytes, &record, real_root, None)
+            .await
+            .expect_err("without a binding the plugin has no filesystem access at all");
+        assert!(
+            format!("{error:#}").contains("trapped"),
+            "expected a hard trap from the guest's own failed filesystem access: {error:#}"
+        );
+    }
+
+    /// `gents plugin run <name> --bind-dir DIR` with no `--input` at all: the
+    /// binding supplies the plugin's only required field, so an omitted
+    /// operator input (which `run` turns into `Value::Null`) must not be
+    /// refused for not being an object.
+    #[tokio::test]
+    async fn run_with_bind_dir_and_no_input_succeeds() {
+        let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
+        let manifest: gents::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        gents::plugin::install::install_pack_plugins(
+            home.path(),
+            &manifest,
+            archive.digest(),
+            |path| archive.asset(path),
+            false,
+        )
+        .unwrap();
+
+        let listing = tempfile::tempdir().unwrap();
+        std::fs::write(listing.path().join("one.txt"), b"1").unwrap();
+
+        run(PluginRunArgs {
+            name: "fixture/list_files".to_owned(),
+            input: None,
+            home: Some(home.path().to_owned()),
+            bind_dir: Some(listing.path().to_owned()),
+        })
+        .await
+        .expect("a binding with no --input must supply the only field the plugin needs");
     }
 
     /// A plugin that asks for access is refused without consent, and the
@@ -257,7 +386,7 @@ mod tests {
             "crypto": false, "child_process": false
         }));
         let home = tempfile::tempdir().unwrap();
-        let error = super::super::install_from_pack(
+        let error = gents::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -275,7 +404,7 @@ mod tests {
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
 
-        let record = super::super::install_from_pack(
+        let record = gents::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -288,7 +417,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.granted.is_some());
-        super::super::install_from_pack(
+        gents::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",

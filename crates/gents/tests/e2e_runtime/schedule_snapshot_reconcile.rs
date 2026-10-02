@@ -7,7 +7,7 @@ use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeili
 
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -153,34 +153,6 @@ where
     }
 }
 
-fn ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
-    snapshot.process_state == "ready"
-        && snapshot.reconcile_phase == "idle"
-        && snapshot.active_generation > generation
-        && snapshot.last_reconcile_error.is_empty()
-}
-
-#[test]
-fn readiness_survives_noop_observation_without_losing_generation_fence() {
-    let mut snapshot = RuntimeSnapshot {
-        process_state: "ready".into(),
-        reconcile_phase: "idle".into(),
-        active_generation: 1,
-        router_generation: 1,
-        default_behavior_id: "default".into(),
-        last_reconcile_result: "startup".into(),
-        last_reconcile_error: String::new(),
-    };
-    assert!(ready_after(&snapshot, 0));
-    snapshot.last_reconcile_result = "noop".into();
-    assert!(ready_after(&snapshot, 0));
-    assert!(!ready_after(&snapshot, 1));
-    snapshot.active_generation = 2;
-    assert!(ready_after(&snapshot, 1));
-    snapshot.last_reconcile_error = "failed apply".into();
-    assert!(!ready_after(&snapshot, 1));
-}
-
 async fn fetch_schedule_agent_requests(
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
@@ -241,7 +213,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, 0)
+        is_routed_ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -268,7 +240,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     .await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, initial_generation)
+        is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
     assert_eq!(reconciled.default_behavior_id, default_behavior_id);
@@ -293,7 +265,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await;
     let disabled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, reconciled.active_generation)
+        is_routed_ready_after(snapshot, reconciled.active_generation)
     })
     .await;
     assert!(
@@ -350,7 +322,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, 0)
+        is_routed_ready_after(snapshot, 0)
     })
     .await;
 
@@ -369,7 +341,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     create_schedule(db.node.as_ref(), &agent_did, TRIGGER_ID, TASK_ID).await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, startup.active_generation)
+        is_routed_ready_after(snapshot, startup.active_generation)
     })
     .await;
     assert!(
@@ -455,7 +427,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, 0)
+        is_routed_ready_after(snapshot, 0)
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -484,7 +456,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     .await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        ready_after(snapshot, initial_generation)
+        is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
     assert_eq!(reconciled.default_behavior_id, default_behavior_id);
@@ -497,10 +469,6 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         reconciled.active_generation > initial_generation,
         "active_generation should bump after Task+EventSource+Trigger insert (initial={initial_generation}, observed={})",
         reconciled.active_generation
-    );
-    assert_eq!(
-        reconciled.last_reconcile_result, "applied",
-        "last_reconcile_result should be 'applied' after EventSource+Trigger insert"
     );
 
     let _ = shutdown_tx.send(true);

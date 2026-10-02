@@ -97,7 +97,9 @@ pub struct InstalledPlugin {
     /// Authored admission metadata, retained verbatim rather than reconstructed
     /// from artifact capabilities at execution time.
     pub declaration: crate::pack::PackPlugin,
-    /// The authority the operator granted at install; absent means sealed.
+    /// The authority the operator granted at install; absent means sealed with
+    /// no approved declared resource limits. A sealed `Some` can record consent
+    /// to the declaration's resource limits without granting host capabilities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted: Option<crate::plugin::Manifold>,
     /// The plugin's `TOOL.md`, kept with the install so a tool needs nothing
@@ -116,6 +118,11 @@ pub struct InstalledPlugin {
     /// replaces its own record regardless of version or digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_pack_digest: Option<String>,
+    /// The inference profile this installation bound the plugin's
+    /// `model_slot` to. Absent means the slot is unbound and the plugin runs
+    /// without model calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_binding: Option<super::model_calls::ModelBinding>,
 }
 
 impl InstalledPlugin {
@@ -180,11 +187,19 @@ pub fn grant_on_install(
     plugin: &crate::pack::PackPlugin,
     consent: bool,
 ) -> Result<Option<crate::plugin::Manifold>> {
-    let previous = read_record(home, namespace, &plugin.name)
-        .ok()
-        .map(|record| record.ceiling());
-    let granted = crate::plugin::authority::grant_for(plugin, previous.as_ref(), consent)?;
-    Ok((granted != crate::plugin::Manifold::sealed()).then_some(granted))
+    let previous = read_record(home, namespace, &plugin.name).ok();
+    let previous_limits = previous
+        .as_ref()
+        .filter(|record| record.granted.is_some())
+        .and_then(|record| record.declaration.limits.as_ref());
+    anyhow::ensure!(
+        super::authority::limits_consented(plugin.limits.as_ref(), previous_limits, consent),
+        "plugin {} asks for increased resource limits; install it with --grant-authority to allow that",
+        plugin.name
+    );
+    let previous_ceiling = previous.as_ref().map(InstalledPlugin::ceiling);
+    let granted = super::authority::grant_for(plugin, previous_ceiling.as_ref(), consent)?;
+    Ok((granted != super::Manifold::sealed() || plugin.limits.is_some()).then_some(granted))
 }
 
 /// Writes `bytes` into the content-addressed store under `digest_hex`.
@@ -387,11 +402,15 @@ mod tests {
                 input_schema: serde_json::json!({"type": "object"}),
                 manifold: None,
                 instructions: None,
+                bind_dir: None,
+                limits: None,
+                model_slot: None,
             },
             granted: None,
             instructions: None,
             owner_pack_coordinate: owner_pack_coordinate.map(str::to_owned),
             owner_pack_digest: owner_pack_coordinate.map(|_| "sha256:pack".to_owned()),
+            model_binding: None,
         }
     }
 
