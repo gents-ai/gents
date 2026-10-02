@@ -864,7 +864,8 @@ describe("configuration panels", () => {
           read: null,
           ...fields,
         });
-        const usage = [
+        /* built when a test renders, so the times shown are exact */
+        const usage = () => [
           view_("claude-work", { windows: [window("5h", 30), window("7d", 81)] }),
           view_("chatgpt-team", {
             windows: [window("5h", 20, { observedAt: at(-70), lastKnown: true })],
@@ -881,7 +882,7 @@ describe("configuration panels", () => {
         const setup = (item?: string) => {
           const { api, shell } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
-          api.readProviderUsage = vi.fn().mockResolvedValue(usage);
+          api.readProviderUsage = vi.fn().mockResolvedValue(usage());
           const view = render(
             <InferencePanel shell={shell} deployment={rowsDeployment} item={item} />,
           );
@@ -923,7 +924,7 @@ describe("configuration panels", () => {
             expect(
               await screen.findByText(
                 new RegExp(
-                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, [23]m ago$`,
+                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, 3m ago$`,
                 ),
               ),
             ).toBeVisible();
@@ -933,7 +934,7 @@ describe("configuration panels", () => {
           setup("chatgpt-team");
           expect(
             await screen.findByText(
-              /^20% used · .* · from response headers, 1h1[01]m ago · last known$/,
+              /^20% used · .* · from response headers, 1h10m ago · last known$/,
             ),
           ).toBeVisible();
         });
