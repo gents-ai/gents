@@ -317,6 +317,44 @@ fn openai_cache_scope_falls_back_to_request_id() {
 }
 
 #[test]
+fn codex_cache_key_stays_with_session_across_requests() {
+    let mut behavior = behavior_with_retry(Default::default());
+    behavior.backend_provider_kind = BackendProviderKind::ChatGptCodex;
+    behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
+    let mut request = request();
+    let first = request_additional_params(&behavior, &request).unwrap();
+    let config = loop_config_for_request(&behavior, "system".into(), &request, None, 0).unwrap();
+    let params = config.additional_params.unwrap();
+    assert_eq!(params["prompt_cache_key"], first["prompt_cache_key"]);
+    assert_eq!(params["reasoning"]["effort"], "medium");
+    request.request_id = "next-request".to_string();
+    assert_eq!(
+        request_additional_params(&behavior, &request),
+        Some(first.clone())
+    );
+    assert_eq!(
+        first,
+        serde_json::json!({"prompt_cache_key": "session-456"})
+    );
+    request.session_id = "another-session".to_string();
+    assert_ne!(request_additional_params(&behavior, &request), Some(first));
+}
+
+#[test]
+fn codex_cache_key_uses_request_when_session_is_absent() {
+    let mut behavior = behavior_with_retry(Default::default());
+    behavior.backend_provider_kind = BackendProviderKind::ChatGptCodex;
+    let mut request = request();
+    request.session_id = "  ".to_string();
+    assert_eq!(
+        request_additional_params(&behavior, &request),
+        Some(serde_json::json!({"prompt_cache_key": "request-123"}))
+    );
+    request.request_id.clear();
+    assert!(request_additional_params(&behavior, &request).is_none());
+}
+
+#[test]
 fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields {
         retry_interactive_max: Some(2),

@@ -492,6 +492,7 @@ mod tests {
         // Codex rejects still present, and a strict tool.
         let assembled = serde_json::json!({
             "model": "gpt-5-codex",
+            "prompt_cache_key": "session",
             "input": [
                 {"role": "system", "content": [{"type": "input_text", "text": "you are gents"}]},
                 {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
@@ -525,6 +526,7 @@ mod tests {
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1, "exactly one row for one completion body");
         let captured = &seen[0].request_json;
+        assert_eq!(captured["prompt_cache_key"], "session");
 
         assert_eq!(
             captured["instructions"], "you are gents",
