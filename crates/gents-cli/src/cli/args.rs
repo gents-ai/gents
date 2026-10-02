@@ -121,6 +121,8 @@ pub(crate) enum Command {
     Status(StatusArgs),
     #[command(about = "Run a read-only structured query against a DefraDB collection")]
     Query(QueryArgs),
+    #[command(about = "Preview and apply scoped application document mutations")]
+    Write(WriteArgs),
     #[command(about = "Create documents as the home principal")]
     Document {
         #[command(subcommand)]
@@ -1721,6 +1723,12 @@ pub(crate) struct ServeArgs {
     )]
     pub(crate) mcp_query_collections: Vec<String>,
     #[arg(
+        long = "mcp-write-collection",
+        requires = "enable_mcp",
+        help = "Expose write for exactly these application collections; each call must forward a caller-signed DefraDB bearer (repeatable)"
+    )]
+    pub(crate) mcp_write_collections: Vec<String>,
+    #[arg(
         long,
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
@@ -2043,11 +2051,21 @@ pub(crate) struct StatusArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct QueryArgs {
+    #[arg(value_parser=["find","fields","count","help"])]
+    pub(crate) verb: Option<String>,
+    #[arg(long, help = "Order as JSON, e.g. [{\"priority\":\"ASC\"}]")]
+    pub(crate) order: Option<String>,
+    #[arg(long, help = "Rows to skip, maximum 100000")]
+    pub(crate) offset: Option<u32>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Collection (GraphQL type) to read, e.g. AgentRequest")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Collection (GraphQL type) to read, e.g. AgentRequest"
+    )]
     pub(crate) collection: String,
     #[arg(
         long = "field",
@@ -2066,6 +2084,25 @@ pub(crate) struct QueryArgs {
         help = "Restrict the query to these collections (repeatable); omit for all"
     )]
     pub(crate) allow_collections: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct WriteArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        long,
+        help = "Structured write tool call as JSON; argv:[help] lists syntax"
+    )]
+    pub(crate) call: String,
+    #[arg(
+        long = "allow-collection",
+        required = true,
+        help = "Exact application collection grant (repeatable)"
+    )]
+    pub(crate) collections: Vec<String>,
 }
 
 #[derive(Subcommand)]

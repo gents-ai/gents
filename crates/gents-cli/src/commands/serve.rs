@@ -723,6 +723,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             .map(|path| path.to_string_lossy().into_owned()),
         Some(home_dir.to_string_lossy().into_owned()),
         mcp_query_scope,
+        args.mcp_write_collections.clone(),
         Some(backend_health.clone()),
         p2p_admission_state.clone(),
         Some(codex_shim_health.clone()),

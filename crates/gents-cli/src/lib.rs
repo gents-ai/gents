@@ -425,6 +425,7 @@ async fn async_main() -> Result<()> {
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Query(args) => commands::query::query(args).await,
+        Command::Write(args) => commands::write::write(args).await,
         Command::Document { command } => commands::document::dispatch(command).await,
         Command::Background { command } => commands::background::dispatch(command).await,
         Command::Mcp { command } => commands::mcp::dispatch(command).await,

@@ -239,7 +239,7 @@ async fn advertised_name_and_required_array_come_from_decl() {
 
     let def = Tool::definition(&tool, String::new()).await;
     assert_eq!(def.name, "request_action");
-    assert_eq!(def.description, "Emit one ActionRequest. Creates a new ActionRequest record; this can trigger automation watching that collection.");
+    assert_eq!(def.description, "Creates a new ActionRequest record; this can trigger automation watching that collection. Emit one ActionRequest.");
 
     let required = def.parameters["required"].as_array().unwrap();
     assert!(required.iter().any(|v| v == "drift_sig"));

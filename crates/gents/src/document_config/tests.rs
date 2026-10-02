@@ -381,7 +381,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 fn validate_rejects_write_tool_name_colliding_with_defra_query() {
     let decls = vec![WriteToolDecl {
         notification: None,
-        tool_name: "defra_query".to_string(),
+        tool_name: "query".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
         fields: Vec::new(),

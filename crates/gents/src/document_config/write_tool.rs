@@ -437,6 +437,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     // tool's availability, not the legitimacy of the name as a write-tool id.
     const SINGLETON_TOOL_NAMES: &[&str] = &[
         DEFRA_QUERY_TOOL_NAME,
+        crate::application_write::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
         crate::schema_tool::SCHEMA_TOOL_NAME,

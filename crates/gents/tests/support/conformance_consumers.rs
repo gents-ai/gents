@@ -210,6 +210,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "native_input_admission_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "application_write::tests::admission_matches_executable_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/application_write/tests.rs",
+            module_path: "application_write::tests",
+            function: "admission_matches_executable_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases",
             package: "gents",
             source_path: "crates/gents/src/config_client/desired_state/tests.rs",

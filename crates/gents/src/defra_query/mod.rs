@@ -1,14 +1,4 @@
-//! Read-only structured query tool over DefraDB collections.
-//!
-//! `defra_query` lets an agent (or, in future, an external management surface)
-//! read documents from DefraDB collections through a structured
-//! `{collection, filter, fields, limit}` contract instead of hand-rolling
-//! GraphQL. It is strictly read-only and renders all interpolated content
-//! through [`crate::graphql::escape_graphql_string`].
-//!
-//! The query core ([`query::execute_query`]) is intentionally decoupled from
-//! the [`crate::llm::tool::Tool`] integration so the same logic can later back an
-//! external (e.g. MCP/HTTP) management surface.
+//! Generic document reads share scope, credential and GraphQL rendering owners.
 
 use std::sync::Arc;
 
@@ -61,6 +51,10 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 }
 
 pub(crate) mod bounded;
+mod command;
+mod native_filter;
+pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
+pub(crate) use native_filter::validate_filter;
 pub(crate) mod query;
 pub(crate) mod render;
 pub(crate) mod schema;
@@ -75,7 +69,7 @@ pub use schema::{
     unknown_collection_message, CollectionSchema, SchemaField,
 };
 
-pub const DEFRA_QUERY_TOOL_NAME: &str = "defra_query";
+pub const DEFRA_QUERY_TOOL_NAME: &str = "query";
 
 #[derive(Debug)]
 pub struct DefraQueryError(anyhow::Error);
@@ -102,113 +96,61 @@ impl From<anyhow::Error> for DefraQueryError {
 pub struct DefraQueryTool {
     node: Arc<EmbeddedNode>,
     scope: CollectionScope,
+    actor: Option<::identity::Did>,
 }
 
 impl DefraQueryTool {
     pub fn new(node: Arc<EmbeddedNode>, scope: CollectionScope) -> Self {
-        Self { node, scope }
+        Self {
+            node,
+            scope,
+            actor: None,
+        }
+    }
+    pub fn with_actor(mut self, actor: ::identity::Did) -> Self {
+        self.actor = Some(actor);
+        self
     }
 }
 
 impl Tool for DefraQueryTool {
     const NAME: &'static str = DEFRA_QUERY_TOOL_NAME;
-
     type Error = DefraQueryError;
-    type Args = DefraQueryParams;
+    type Args = QueryParams;
     type Output = String;
-
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let scope_note = if self.scope.is_unrestricted() {
-            "Any collection may be queried.".to_string()
-        } else {
-            "Only a restricted set of collections may be queried; an error lists them if you pick one outside the set.".to_string()
-        };
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: format!(
-                "Read documents from a DefraDB collection with a structured, read-only query. \
-                 Provide a collection name, the fields to return, an optional DefraDB filter \
-                 object, and an optional limit. Returns JSON: {{collection, count, results}}. \
-                 Use this to inspect agent state and traces (e.g. AgentRequest, AgentOutputSegment, \
-                 AgentMessage, AgentToolCall, AgentSession) instead of hand-writing GraphQL. \
-                 To discover a collection's queryable fields before guessing, call with \
-                 fields: [\"*\"] — this returns the field inventory (names and types) instead \
-                 of documents. Invalid field names fail with a diagnostic listing the allowed \
-                 fields and close-match suggestions. {scope_note}"
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "collection": {
-                        "type": "string",
-                        "description": "Collection (GraphQL type) name to read, e.g. \"AgentRequest\"."
-                    },
-                    "fields": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Field names to return, e.g. [\"request_id\", \"status\"]. Required, non-empty. Pass [\"*\"] to list the collection's queryable fields instead of documents."
-                    },
-                    "filter": {
-                        "type": "object",
-                        "description": "Optional DefraDB filter object, e.g. {\"status\": {\"_eq\": \"pending\"}}. Supports operators (_eq, _ne, _gt, _lt, _ge, _le, _in, _nin, _like) and composition (_and, _or, _not)."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum rows to return (default 50, capped at 1000)."
-                    }
-                },
-                "required": ["collection", "fields"]
-            }),
-        }
+        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
     }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if args.is_discovery() {
-            self.scope.ensure_allowed(&args.collection)?;
-            let schema = query::fetch_collection_schema(&self.node, &args.collection)
-                .await?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "defra_query against {:?} failed: {}",
-                        args.collection,
-                        schema::unknown_collection_message(&args.collection)
-                    )
-                })?;
-            let payload = schema::discovery_payload(&args.collection, &schema);
-            return serde_json::to_string_pretty(&payload)
-                .map_err(|e| DefraQueryError(anyhow!("failed to serialize field inventory: {e}")));
+    async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+        let result = if let Some(actor) = &self.actor {
+            crate::config_client::ConfigAccess::transact_local(
+                &self.node,
+                Some(actor.clone()),
+                "application_query",
+                |txn| Box::pin(execute_command(txn, &args, &self.scope)),
+            )
+            .await
+        } else {
+            execute_command(
+                &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                &args,
+                &self.scope,
+            )
+            .await
+        };
+        match result {
+            Ok(value) => render_result(value).map_err(Into::into),
+            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }
-
-        let mut rows = query::execute_query(&self.node, &args, &self.scope).await?;
-        let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
-
-        let total_bytes = serde_json::to_string(&rows).map(|s| s.len()).unwrap_or(0);
-
-        let truncated = truncate_field_strings(&mut rows);
-
-        let mut payload = json!({
-            "collection": args.collection,
-            "count": count,
-            "truncated": truncated,
-            "total_bytes": total_bytes,
-            "results": rows,
-        });
-
-        if truncated {
-            payload["truncation_note"] = json!(format!(
-                "One or more string fields were truncated to {} bytes; total untruncated result size was {} bytes. \
-                 Use more specific filters or fewer fields to retrieve full values.",
-                MAX_FIELD_STRING_BYTES, total_bytes
-            ));
-        }
-
-        serde_json::to_string_pretty(&payload)
-            .map_err(|e| DefraQueryError(anyhow!("failed to serialize query results: {e}")))
     }
 }
 
-pub fn build_defra_query_tool(node: Arc<EmbeddedNode>, scope: CollectionScope) -> Box<dyn ToolDyn> {
-    Box::new(DefraQueryTool::new(node, scope))
+pub fn build_defra_query_tool(
+    node: Arc<EmbeddedNode>,
+    scope: CollectionScope,
+    actor: ::identity::Did,
+) -> Box<dyn ToolDyn> {
+    Box::new(DefraQueryTool::new(node, scope).with_actor(actor))
 }
 
 #[cfg(test)]

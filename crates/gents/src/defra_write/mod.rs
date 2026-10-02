@@ -244,8 +244,8 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
         ToolDefinition {
             name: self.decl.tool_name.clone(),
             description: format!(
-                "{} Creates a new {} record; this can trigger automation watching that collection.",
-                self.decl.description, self.decl.collection
+                "Creates a new {} record; this can trigger automation watching that collection. {}",
+                self.decl.collection, self.decl.description
             ),
             parameters: json!({
                 "type": "object",
