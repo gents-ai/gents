@@ -373,7 +373,7 @@ impl Tool for SchemaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Manage DefraDB application schemas: collections, versions, migrations and views. Commands go in argv as RESOURCE VERB; IDs follow the verb or use target_id. Read [\"help\"] for resources and [RESOURCE,VERB,\"--help\"] for parameters. Configuration and document access use their own tools.".into(),
+            description: "Manage DefraDB application schemas. Commands: argv:[RESOURCE,VERB]; IDs follow the verb or use target_id. Discover commands and SDL concepts with [\"help\"], then [\"help\",TOPIC,SUBTOPIC]; command inputs: [RESOURCE,VERB,\"--help\"]. Configuration and document access use their own tools.".into(),
             parameters: json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{
                 "argv":{"type":"array","items":{"type":"string"},"minItems":1},
                 "target_id":{"type":"string","description":"Collection name or exact version ID; may instead follow the verb in argv."},

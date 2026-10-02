@@ -3032,6 +3032,7 @@ mod tests {
             output_tokens: Some(300 * requests),
             reported_input_tokens: None,
             reported_output_tokens: None,
+            session_contexts: None,
             tool_calls: 3,
             failed_tool_calls: 1,
             tools: std::collections::BTreeMap::from([(

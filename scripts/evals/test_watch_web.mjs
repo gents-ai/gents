@@ -68,3 +68,14 @@ test('pending calls preserve reported token lower bounds without claiming exact 
  assert.equal(run("tokenText(tokenSummary(slots,'input_tokens'))"),'240');
  assert.equal(run("tokenText(tokenMean(slots,'input_tokens'))"),'80');
 });
+
+test('context separates missing measurements, peak input and the two compaction kinds',()=>{
+ const run=viewer();
+ assert.equal(run('contextCell({})'),'—');
+ run(`globalThis.live={session_contexts:[{session_id:'<s>',last_prompt_tokens:null,peak_prompt_tokens:8000,last_estimated_input_tokens:7000,context_window:128000,session_compactions:0,provider_reductions:2}]}`);
+ assert.match(run('contextCell(live)'),/— \/ 8K/);
+ assert.match(run('contextCell(live)'),/0 session \+ 2 in-request/);
+ assert.match(run('contextDetail(live)'),/&lt;s&gt;/);
+ assert.match(run('contextDetail(live)'),/Last input \(estimated\)/);
+ assert.doesNotMatch(run('contextDetail(live)'),/<s>/);
+});

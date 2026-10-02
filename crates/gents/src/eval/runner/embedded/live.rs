@@ -127,9 +127,11 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     let requests = crate::session::public_request_filter("");
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ {requests} }}) {{ _docID }}
-            InferenceCall {{ call_seq call_state failure_reason prompt_tokens completion_tokens }}
+            AgentRequest(filter: {{ {requests} }}) {{ _docID agent_did session_id requester_did }}
+            InferenceCall {{ call_id request_doc_id agent_did call_kind queued_at call_seq call_state failure_reason prompt_tokens completion_tokens context_accounting_json }}
             AgentToolCall {{ tool_name lifecycle_state }}
+            CompactionEntry {{ agent_did session_id requester_did }}
+            ProviderContextReduction {{ agent_did session_id requester_did }}
         }}"#
     );
     let response = graphql_with_transaction_retry(node, &query, "eval trial live snapshot").await?;
@@ -156,6 +158,7 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
         model_turns: evidence.inference_calls.len() as u64,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
+        session_contexts: super::live_context::session_contexts(&data),
         reported_input_tokens: Some(
             evidence
                 .inference_calls
