@@ -258,6 +258,23 @@ fn call_kind_picks_the_profile_when_both_share_the_backend() {
 }
 
 #[test]
+fn a_moved_profile_is_not_replaced_by_its_sibling() {
+    let stopped = |main_backend, summ_backend, call_kind| {
+        let call = call(A, call_kind, anthropic_rejected());
+        blocked(
+            &references(documents(main_backend, summ_backend)),
+            &accounts(),
+            &failed_request("limit"),
+            Some(&call),
+        )
+        .expect("blocked")
+        .profile
+    };
+    assert_eq!(stopped(B, A, "inference"), None, "main moved off A");
+    assert_eq!(stopped(A, B, "compaction"), None, "summ moved off A");
+}
+
+#[test]
 fn behaviors_on_profile_counts_direct_and_compaction_users() {
     let mut documents = documents(B, A);
     documents.extend(behavior("z", "summ", Some("main")));

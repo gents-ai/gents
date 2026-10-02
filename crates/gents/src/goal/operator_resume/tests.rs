@@ -115,7 +115,48 @@ impl Limited {
         .await
     }
 
+    /// The behavior's context compacts with `summ`, also on A.
+    async fn compacts_on_a(&self) {
+        let did = self.f.identity.did();
+        let documents = [
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did": did, "profile_id": "summ", "backend_id": self.a, "model_name": "model-s"}),
+            ),
+            (
+                Collection::Compaction,
+                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        self.access
+            .transact("test.resume_on.compaction", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+    }
+
     async fn profile_backend(&self) -> String {
+        self.backend_of(PROFILE).await
+    }
+
+    async fn backend_of(&self, profile: &str) -> String {
         let did = self.f.identity.did();
         let (_, value) = self
             .access
@@ -125,7 +166,7 @@ impl Limited {
                         txn,
                         Collection::InferenceProfile,
                         did,
-                        PROFILE,
+                        profile,
                     )
                     .await
                 })
@@ -200,6 +241,22 @@ async fn resume_on_retry_returns_the_same_child() {
     assert_eq!(retry.resume.request_id, first.resume.request_id);
     assert_eq!(limited.profile_backend().await, limited.b);
     assert_eq!(limited.children().await, [first.resume.request_id]);
+}
+
+#[tokio::test]
+async fn resume_on_retry_leaves_the_compaction_profile() {
+    let limited = Limited::new(&usage_limit()).await;
+    limited.compacts_on_a().await;
+    let first = limited.resume_on(&limited.b).await.unwrap();
+    assert_eq!(limited.profile_backend().await, limited.b);
+    let retry = limited.resume_on(&limited.b).await.unwrap();
+    assert!(
+        retry.switch.is_none(),
+        "no second switch write: {:?}",
+        retry.switch
+    );
+    assert_eq!(retry.resume.request_id, first.resume.request_id);
+    assert_eq!(limited.backend_of("summ").await, limited.a, "summ stays");
 }
 
 #[tokio::test]
