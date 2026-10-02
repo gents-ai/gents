@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/session_documents.rs",
+            module_path: "lean_vocab_test::support::session_documents::tests",
+            function: "generated_pending_timeline_cases_preserve_request_identities_and_order",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::durable_contract::generated_fire_transactions_are_atomic_and_owner_scoped",
             package: "gents",
             source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",
