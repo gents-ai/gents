@@ -54,6 +54,7 @@ pub(crate) mod bounded;
 mod command;
 mod native_filter;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
+pub(crate) use native_filter::validate_filter;
 pub(crate) mod query;
 pub(crate) mod render;
 pub(crate) mod schema;

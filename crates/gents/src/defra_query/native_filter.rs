@@ -26,7 +26,7 @@ struct InputField {
 /// of reporting invalid input. Its introspected input definitions and native
 /// scalar/operator codecs remain the authority for filter shape; this adapter
 /// checks that representation before any read, including write target preview.
-pub(super) async fn validate_filter(
+pub(crate) async fn validate_filter(
     access: &dyn ConfigRead,
     collection: &str,
     filter: &Value,
