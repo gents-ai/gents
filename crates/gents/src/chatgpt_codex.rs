@@ -696,7 +696,7 @@ mod tests {
             "tools": [
                 {
                     "type": "function",
-                    "name": "defra_query",
+                    "name": "query",
                     "strict": true,
                     "parameters": {
                         "type": "object",

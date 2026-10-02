@@ -395,7 +395,7 @@ fn explain_builtin_reads(
         if surface.defra_query_scope.is_unrestricted() {
             builder.warn(
                 "defra_query_empty_scope_all",
-                "defra_query has no collection allowlist (scope: all), so every collection except hard-blocked sensitive fields is readable.",
+                "query has no collection allowlist (scope: all); protected collections and restricted fields remain blocked.",
             );
         }
     } else if config.defra_query_requested() {
@@ -457,7 +457,7 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         .collect(),
     );
     summary.insert(
-        "defra_query".to_string(),
+        DEFRA_QUERY_TOOL_NAME.to_string(),
         vec![
             format!("enabled:{}", policy.defra_query),
             format!("collections:{}", policy.defra_collections.kind()),

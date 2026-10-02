@@ -47,10 +47,14 @@ function badge(state){return `<span class="badge ${esc(state)}">${esc(labels[sta
 function stageRail(s){const stages=s.run.cases.find(c=>c.case_id===s.case_id)?.stages||[];return `<div class="stages">${stages.map(name=>{const terminal=stageResult(s,name)?.terminal_state||s.latest?.stages?.find(t=>t.stage_id===name)?.terminal_state;return `<span class="stage ${s.stage===name?'active':terminal==='completed'?'done':''}">${esc(name.replaceAll('_',' '))}</span>`}).join('')}</div>`}
 function milestones(s){return `<div class="milestones">${s.goal.filter(g=>g.min>0).map(g=>{const n=goalValue(s,g),met=n!=null&&n>=g.min,over=g.max!=null&&n>g.max;return `<div class="milestone"><div class="label"><span>${esc(friendly[g.collection]||g.collection)}</span><span>${n??'—'}/${g.min}</span></div><div class="mini-track ${over?'over':met?'met':''}"><span style="width:${Math.min(100,Math.max(0,100*(n||0)/g.min))}%"></span></div></div>`}).join('')}</div>`}
 function stageResult(s,name){return s.live.stages?.[name]}
+const completionChecks=new Set(['crew_spec_match','schema_matches']);
+const stageLabel=name=>({setup:'Initial',repair:'Repaired'}[name]||name.replaceAll('_',' '));
+const scoreStages=slots=>[...new Set(slots.flatMap(s=>s.run?.cases?.find(c=>c.case_id===s.case_id)?.stages||Object.keys(s.live.stages||{})))];
 function configurationScore(s,name){
- const check=stageResult(s,name)?.checks?.find(v=>v.check==='crew_spec_match');
+ const checks=(stageResult(s,name)?.checks||[]).filter(v=>completionChecks.has(v.check)&&v.raw?.total>0);
+ const check=checks.length?{raw:{satisfied:checks.reduce((n,c)=>n+c.raw.satisfied,0),total:checks.reduce((n,c)=>n+c.raw.total,0)}}:null;
  if(check?.raw?.total>0)return {met:check.raw.satisfied,total:check.raw.total};
- const v=(s.verdicts||[]).find(v=>v.stage_id===name&&v.check==='crew_spec_match'),m=v?.detail?.match(/^(\d+) of (\d+) requirements met$/);
+ const v=(s.verdicts||[]).find(v=>v.stage_id===name&&completionChecks.has(v.check)),m=v?.detail?.match(/^(\d+) of (\d+) requirements met$/);
  return m?{met:Number(m[1]),total:Number(m[2])}:null;
 }
 function scoreCell(s,name){const v=configurationScore(s,name);return v?`<span class="percent">${(100*v.met/v.total).toFixed(1)}%</span><small class="cell-sub">${v.met}/${v.total} checked</small>`:'<span class="muted">—</span>'}
@@ -68,17 +72,18 @@ function contextDetail(l){
  return l.session_contexts.map(c=>`<h4>${esc(c.session_id)}</h4><table><tr><td>Last input (reported)</td><td>${contextNum(c.last_prompt_tokens)}</td></tr><tr><td>Peak input (reported)</td><td>${contextNum(c.peak_prompt_tokens)}</td></tr><tr><td>Last input (estimated)</td><td>${contextNum(c.last_estimated_input_tokens)}</td></tr><tr><td>Context window</td><td>${contextNum(c.context_window)}</td></tr><tr><td>Session compactions</td><td>${c.session_compactions}</td></tr><tr><td>In-request reductions</td><td>${c.provider_reductions}</td></tr></table>`).join('');
 }
 function trialTable(shown){
+ const stages=scoreStages(shown);
  const objects=['AgentBehavior','AgentContext','Tools','DatastoreToolSurface','InferenceProfile','SubagentTarget','EventSource','Task','Trigger','schemas'];
- return `<table class="trial-table"><caption>Object progress counts documents, including the seeded Engineer. Initial and repaired percentages are graded requirements; — means unavailable. Tokens marked ≥ are reported lower bounds. Context is the last / peak model input, not cumulative usage; peak covers reported calls. Compactions count persisted session and in-request reductions.</caption><thead><tr><th>Trial</th><th>Status / stage</th><th>Initial</th><th>Repaired</th><th>Objects</th>${objects.map(c=>`<th>${esc(friendly[c]||c)}</th>`).join('')}<th>Input tokens</th><th>Output tokens</th><th>Repair tokens<br>in / out</th><th>Context last / peak<br>Compactions</th><th>Elapsed</th><th>Failed / tools</th></tr></thead><tbody>${shown.map(s=>{
+ return `<table class="trial-table"><caption>Object progress counts documents, including the seeded Engineer. Stage percentages are graded requirements; — means unavailable. Tokens marked ≥ are reported lower bounds. Context is the last / peak model input, not cumulative usage; peak covers reported calls. Compactions count persisted session and in-request reductions.</caption><thead><tr><th>Trial</th><th>Status / stage</th>${stages.map(name=>`<th>${esc(stageLabel(name))}</th>`).join('')}<th>Objects</th>${objects.map(c=>`<th>${esc(friendly[c]||c)}</th>`).join('')}<th>Input tokens</th><th>Output tokens</th><th>Repair tokens<br>in / out</th><th>Context last / peak<br>Compactions</th><th>Elapsed</th><th>Failed / tools</th></tr></thead><tbody>${shown.map(s=>{
  const l=s.live,progress=objectProgress(s),repair=stageResult(s,'repair')?.usage,stale=s.state==='running'&&age(s.updated_at)>20;
- return `<tr class="${selectedTrial===s.key?'selected':''}"><td><button class="trial-link" data-trial="${esc(s.key)}">${esc(station(s.run))} · ${s.trial_index+1}<small>${esc(s.case_id)}</small></button></td><td>${badge(s.state)}${stageRail(s)}${stale?'<small class="stale">Snapshot stale</small>':''}</td><td>${scoreCell(s,'setup')}</td><td>${scoreCell(s,'repair')}</td><td>${progress==null?'—':progress.toFixed(0)+'%'}</td>${objects.map(c=>objectCell(s,c)).join('')}<td>${tokenText(tokenReading(l,'input_tokens'))}</td><td>${tokenText(tokenReading(l,'output_tokens'))}</td><td>${repair?num(repair.input_tokens)+' / '+num(repair.output_tokens):'—'}</td><td>${contextCell(l)}</td><td>${duration(l.elapsed_secs)}</td><td class="${l.failed_tool_calls?'errors':''}">${l.failed_tool_calls??'—'} / ${l.tool_calls??'—'}</td></tr>`;
+ return `<tr class="${selectedTrial===s.key?'selected':''}"><td><button class="trial-link" data-trial="${esc(s.key)}">${esc(station(s.run))} · ${s.trial_index+1}<small>${esc(s.case_id)}</small></button></td><td>${badge(s.state)}${stageRail(s)}${stale?'<small class="stale">Snapshot stale</small>':''}</td>${stages.map(name=>`<td>${scoreCell(s,name)}</td>`).join('')}<td>${progress==null?'—':progress.toFixed(0)+'%'}</td>${objects.map(c=>objectCell(s,c)).join('')}<td>${tokenText(tokenReading(l,'input_tokens'))}</td><td>${tokenText(tokenReading(l,'output_tokens'))}</td><td>${repair?num(repair.input_tokens)+' / '+num(repair.output_tokens):'—'}</td><td>${contextCell(l)}</td><td>${duration(l.elapsed_secs)}</td><td class="${l.failed_tool_calls?'errors':''}">${l.failed_tool_calls??'—'} / ${l.tool_calls??'—'}</td></tr>`;
  }).join('')}</tbody></table>`;
 }
 function failureDistribution(slots){
  const categories=new Map(),endings=new Map();let improved=0,worse=0,unchanged=0;
  for(const s of slots){
   for(const [stage,result] of Object.entries(s.live.stages||{})){
-   const values=result.checks?.find(c=>c.check==='crew_spec_match')?.raw?.categories||{};
+   const values=result.checks?.find(c=>completionChecks.has(c.check))?.raw?.categories||{};
    for(const [category,v] of Object.entries(values)){
     const key=JSON.stringify([stage,category]),r=categories.get(key)||{stage,category,affected:0,measured:0,met:0,total:0};
     r.measured++;r.affected+=v.satisfied<v.total?1:0;r.met+=v.satisfied;r.total+=v.total;categories.set(key,r);
@@ -102,9 +107,9 @@ function render(){
  const tools=slots.reduce((n,s)=>n+(s.live.tool_calls||0),0),failedTools=slots.reduce((n,s)=>n+(s.live.failed_tool_calls||0),0);
  $('title').textContent=selection==='batch'?'Selected eval batch':selection==='active'?'Active evals':runs[0]?suite(runs[0]):'Eval observatory';
  $('subtitle').textContent=runs.length?`${runs.length} run${runs.length===1?'':'s'} · ${slots.length} trials · ${[...new Set(runs.map(station))].join(' + ')}`:'No active runs. Choose a recent run to review its results.';
- const initialScores=slots.map(s=>configurationScore(s,'setup')).filter(Boolean), repairedScores=slots.map(s=>configurationScore(s,'repair')).filter(Boolean);
+ const measuredStages=scoreStages(slots).map(name=>({name,scores:slots.map(s=>configurationScore(s,name)).filter(Boolean)}));
  const meanScore=xs=>xs.length?(xs.reduce((n,v)=>n+100*v.met/v.total,0)/xs.length).toFixed(1)+'%':'—';
- const cards=[['Configuration',meanScore(initialScores)+' / '+meanScore(repairedScores),`${initialScores.length} initial / ${repairedScores.length} repaired measurements`],['Running',count('running'),`${ended} of ${slots.length} settled`],['Passed',count('pass'),`${count('fail')} failed · ${count('unknown')+count('not_evidence')} unresolved`],['Input tokens',tokenText(inputs),`${inputs.reporting}/${slots.length} trials reporting usage`],['Output tokens',tokenText(outputs),'≥ marks pending or missing usage'],['Tool calls',num(tools),`${exact(failedTools)} rejected or failed`]];
+ const cards=[['Completion',measuredStages.map(s=>meanScore(s.scores)).join(' / ')||'—',measuredStages.map(s=>`${stageLabel(s.name)}: ${s.scores.length} measured`).join(' · ')],['Running',count('running'),`${ended} of ${slots.length} settled`],['Passed',count('pass'),`${count('fail')} failed · ${count('unknown')+count('not_evidence')} unresolved`],['Input tokens',tokenText(inputs),`${inputs.reporting}/${slots.length} trials reporting usage`],['Output tokens',tokenText(outputs),'≥ marks pending or missing usage'],['Tool calls',num(tools),`${exact(failedTools)} rejected or failed`]];
  $('stats').innerHTML=cards.map(([label,value,sub])=>`<div class="stat"><div class="eyebrow">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`).join('');
  $('completion').textContent=`${ended} / ${slots.length} trials settled · ${count('stopped')+count('abandoned')} stopped`;
  $('elapsed').textContent=runs.length?`Started ${duration(Math.max(...runs.map(r=>age(r.run.created_at)||0)))} ago`:'';

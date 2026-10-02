@@ -1,0 +1,1106 @@
+{
+  "case_id": "shipment-count-page",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type Shipment { reference: String destination: String status: String priority: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-000",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 0
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-001",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 1
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-002",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 2
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-003",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 3
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-004",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 4
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-005",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 5
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-006",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 6
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-007",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 7
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-008",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 8
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-009",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 9
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-010",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 10
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-011",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 11
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-012",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 12
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-013",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 13
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-014",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 14
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-015",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 15
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-016",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 16
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-017",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 17
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-018",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 18
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-019",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 19
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-020",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 20
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-021",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 21
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-022",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 22
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-023",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 23
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-024",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 24
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-025",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 25
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-026",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 26
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-027",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 27
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-028",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 28
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-029",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 29
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-030",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 30
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-031",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 31
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-032",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 32
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-033",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 33
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-034",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 34
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-035",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 35
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-036",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 36
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-037",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 37
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-038",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 38
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-039",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 39
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-040",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 40
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-041",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 41
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-042",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 42
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-043",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 43
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-044",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 44
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-045",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 45
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-046",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 46
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-047",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 47
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-048",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 48
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-049",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 49
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-050",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 50
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-051",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 51
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-052",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 52
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-053",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 53
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-054",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 54
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-055",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 55
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-056",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 56
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-057",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 57
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-058",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 58
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-059",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 59
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-060",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 60
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-061",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 61
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-062",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 62
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-063",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 63
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-064",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 64
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-065",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 65
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-066",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 66
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-067",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 67
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-068",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 68
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-069",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 69
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-070",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 70
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-071",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 71
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-072",
+          "destination": "Oslo",
+          "status": "queued",
+          "priority": 72
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-073",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 73
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-074",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 74
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-075",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 75
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-076",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 76
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-077",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 77
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-078",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 78
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-079",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 79
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-080",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 80
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-081",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 81
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-082",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 82
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-083",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 83
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-084",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 84
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-085",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 85
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-086",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 86
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-087",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 87
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-088",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 88
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-089",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 89
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-090",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 90
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-091",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 91
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-092",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 92
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-093",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 93
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-094",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 94
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-095",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 95
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-096",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 96
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-097",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 97
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-098",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 98
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-099",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 99
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-100",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 100
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-101",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 101
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-102",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 102
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-103",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 103
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-104",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 104
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-105",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 105
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-106",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 106
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-107",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 107
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-108",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 108
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-109",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 109
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-110",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 110
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-111",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 111
+        }
+      },
+      {
+        "collection": "Shipment",
+        "document": {
+          "reference": "SHIP-112",
+          "destination": "Lima",
+          "status": "queued",
+          "priority": 112
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "I keep application records in Shipment. Enable your general read access only to Shipment, and general create/update/delete access only to Shipment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": []
+    },
+    {
+      "stage_id": "read",
+      "prompt": "How many queued shipments go to Oslo? Give the exact total across the collection. Then give the second page of five, ordered by priority ascending, including each reference and priority. Do not change any records.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "73",
+              "SHIP-005",
+              "SHIP-009"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "all",
+            "min": 113,
+            "max": 113
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash",
+              "schema"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "all",
+          "collection": "Shipment",
+          "fields": [
+            "reference",
+            "destination",
+            "status",
+            "priority"
+          ],
+          "filter": {}
+        }
+      ]
+    }
+  ]
+}

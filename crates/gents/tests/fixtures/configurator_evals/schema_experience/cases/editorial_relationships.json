@@ -1,0 +1,46 @@
+{
+  "case_id": "editorial-relationships",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "We need an editorial database: Writer { name, stories } and Story { headline, draft, writer }. Name and headline are text; draft is true/false. One writer has many stories and each story has one writer. Make both sides navigable. The headline also needs English word search with BM25; this is keyword relevance, not vector similarity.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Writer",
+            "Story"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Writer { name: String stories: [Story] } type Story { headline: String @fulltext(language:\"english\") draft: Boolean writer: Writer }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

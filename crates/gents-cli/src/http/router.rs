@@ -133,6 +133,7 @@ pub(crate) fn runtime_contract_router(
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
     defra_query_mcp_scope: Option<CollectionScope>,
+    mcp_write_collections: Vec<String>,
     backend_health: Option<gents::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
@@ -187,7 +188,11 @@ pub(crate) fn runtime_contract_router(
     if let Some(scope) = defra_query_mcp_scope {
         router = router.nest_service(
             "/mcp",
-            crate::http::mcp_server::defra_query_mcp_service(graphql_for_mcp, scope),
+            crate::http::mcp_server::defra_query_mcp_service(
+                graphql_for_mcp,
+                scope,
+                mcp_write_collections.into_iter().collect(),
+            ),
         );
     }
 

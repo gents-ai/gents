@@ -93,10 +93,10 @@ impl Check for CapturedRowsCount {
         }
         let rows = match stage.captures.get(&params.name) {
             Some(CaptureResult::Documents { rows }) => rows.len() as u64,
-            Some(CaptureResult::Files { .. }) => {
+            Some(CaptureResult::Files { .. } | CaptureResult::Schema { .. }) => {
                 return grader(
                     "missing_capture",
-                    format!("capture {} holds files, not documents", params.name),
+                    format!("capture {} does not hold documents", params.name),
                     None,
                 )
             }

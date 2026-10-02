@@ -152,6 +152,10 @@ pub struct StageSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Capture {
+    Schema {
+        name: String,
+        collections: Vec<String>,
+    },
     Documents {
         name: String,
         collection: String,
@@ -170,6 +174,10 @@ pub enum Capture {
 impl From<&EvalCapture> for Capture {
     fn from(capture: &EvalCapture) -> Self {
         match capture {
+            EvalCapture::Schema { name, collections } => Self::Schema {
+                name: name.clone(),
+                collections: collections.clone(),
+            },
             EvalCapture::Documents {
                 name,
                 collection,
@@ -220,6 +228,9 @@ pub struct StageEvidence {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CaptureResult {
+    Schema {
+        collections: Vec<Value>,
+    },
     Documents {
         rows: Vec<Value>,
     },

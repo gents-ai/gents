@@ -75,7 +75,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
             &format!(r#"{{"goal_id":{{"_eq":"{goal_id}"}}}}"#),
         ],
     )?;
-    assert_eq!(rows["count"], 1, "{rows}");
+    assert_eq!(rows["returned_count"], 1, "{rows}");
     assert_eq!(rows["results"][0]["_docID"], doc_id);
     assert_eq!(
         rows["results"][0]["objective"].as_str(),
@@ -192,6 +192,6 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
             &format!(r#"{{"goal_id":{{"_eq":"{goal_id}"}}}}"#),
         ],
     )?;
-    assert_eq!(rows["count"], 0, "{rows}");
+    assert_eq!(rows["returned_count"], 0, "{rows}");
     Ok(())
 }

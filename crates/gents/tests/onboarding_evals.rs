@@ -11,3 +11,5 @@ mod ladder;
 
 #[path = "onboarding_evals/sessions.rs"]
 mod sessions;
+#[path = "onboarding_evals/schema.rs"]
+mod schema;

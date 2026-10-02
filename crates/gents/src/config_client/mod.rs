@@ -105,6 +105,7 @@ use serde_json::{json, Value};
 pub struct GraphqlEndpoint {
     url: String,
     principal_did: Option<String>,
+    delegated_authorization: Option<reqwest::header::HeaderValue>,
 }
 
 impl GraphqlEndpoint {
@@ -112,6 +113,7 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: None,
+            delegated_authorization: None,
         }
     }
 
@@ -119,7 +121,29 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: Some(principal_did.into()),
+            delegated_authorization: None,
         }
+    }
+
+    /// Forward a caller's DefraDB bearer without minting a runtime-principal
+    /// credential. DefraDB checks its signature, DID, audience and ACP; this
+    /// endpoint never authenticates or widens the delegated authority.
+    pub fn with_delegated_authorization(
+        url: impl Into<String>,
+        authorization: &str,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            authorization.starts_with("Bearer ") && authorization.len() > 7,
+            "a DefraDB Bearer authorization is required"
+        );
+        let mut header = reqwest::header::HeaderValue::from_str(authorization)
+            .context("invalid authorization header")?;
+        header.set_sensitive(true);
+        Ok(Self {
+            url: url.into(),
+            principal_did: None,
+            delegated_authorization: Some(header),
+        })
     }
 
     /// **Must end with `/graphql`** — transaction begin/commit/discard derive
@@ -131,6 +155,9 @@ impl GraphqlEndpoint {
     /// `Authorization` header value for requests sent now, or `None` for an
     /// anonymous endpoint.
     pub fn authorization(&self) -> Result<Option<String>> {
+        if let Some(value) = &self.delegated_authorization {
+            return Ok(Some(value.to_str()?.to_owned()));
+        }
         let Some(did) = self.principal_did.as_deref() else {
             return Ok(None);
         };
@@ -180,11 +207,35 @@ impl std::fmt::Display for GraphqlEndpoint {
     }
 }
 
+#[derive(Clone)]
 pub enum ConfigAccess {
     Graphql(GraphqlEndpoint),
     /// Shared so callers that already hold the node (desktop client) can
     /// construct access without moving it; `EmbeddedNode` is not `Clone`.
     Local(Arc<EmbeddedNode>),
+}
+
+/// Executes reads through the existing access or transaction owner. A
+/// transaction retains its native DID and snapshot; adapters add no retry or
+/// authorization decision.
+#[async_trait::async_trait]
+pub trait ConfigRead: Send + Sync {
+    async fn execute_read(&self, document: &str) -> Result<Value>;
+}
+
+#[async_trait::async_trait]
+impl ConfigRead for ConfigAccess {
+    async fn execute_read(&self, document: &str) -> Result<Value> {
+        self.execute(document).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ConfigRead for ConfigApplyTxn<'_> {
+    async fn execute_read(&self, document: &str) -> Result<Value> {
+        graphql::ensure_query_document(document)?;
+        self.execute(document).await
+    }
 }
 
 impl ConfigAccess {

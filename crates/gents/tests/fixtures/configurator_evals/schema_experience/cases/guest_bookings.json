@@ -1,0 +1,46 @@
+{
+  "case_id": "guest-bookings",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Set up a guest register with Guest { name, bookings } and Booking { guest, arrives_at, leaves_at }. Name is text and the two dates are timestamps. A guest has many bookings and each booking belongs to one guest; make those links navigable both ways. Add an index on arrives_at so we can efficiently show arrivals in date order.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Guest",
+            "Booking"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Guest { name: String bookings: [Booking] } type Booking { guest: Guest arrives_at: DateTime @index leaves_at: DateTime }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}
