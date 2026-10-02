@@ -151,7 +151,7 @@
       "subject": "sessions/subject",
       "coverage": [
         "canonical discovery",
-        "exact scoped count",
+        "exact ACP-visible count",
         "wrong ID recovery",
         "filtered discovery"
       ],
