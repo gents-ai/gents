@@ -26,6 +26,7 @@ use crate::support::{test_db_from_home, test_p2p_config, TestDb, TestP2pAdmissio
 
 #[derive(Deserialize)]
 struct Case {
+    grading_version: u32,
     case_id: String,
     split: String,
     prompt: String,
@@ -43,6 +44,7 @@ fn cases() -> Vec<Case> {
 fn p2p_case_prompts_cover_distinct_native_outcomes() {
     let cases = cases();
     assert_eq!(cases.len(), 8);
+    assert!(cases.iter().all(|case| case.grading_version == 2));
     for split in ["train", "validation", "held_out"] {
         assert!(cases.iter().any(|c| c.split == split));
     }
@@ -432,7 +434,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             Some(rows(&remote, "DeploymentNote", "_docID text").await?)
         };
         let metrics = json!({"tool_calls":calls.len(),"failed_tool_calls":failed_calls,"errors_naming_next_call":actionable_errors,"tool_output_bytes":output_bytes});
-        let report = json!({"case_id":case.case_id,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        let report = json!({"case_id":case.case_id,"grading_version":case.grading_version,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
         std::fs::write(
             directory.join("evidence.json"),
             serde_json::to_vec_pretty(&report)?,
