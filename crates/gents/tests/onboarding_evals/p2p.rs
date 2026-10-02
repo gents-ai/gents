@@ -339,12 +339,52 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         .active
         .iter()
         .any(|e| e.request.request_id == enrollment.request_id);
+        let calls = rows(
+            &local,
+            "AgentToolCall",
+            "_docID tool_call_id tool_name request_id session_id requester_did lifecycle_state started_at completed_at",
+        )
+        .await?;
+        let access = ConfigAccess::Local(local.node.clone());
+        let mut trace = Vec::new();
+        let mut output_bytes = 0;
+        let mut failed_calls = 0;
+        let mut actionable_errors = 0;
+        for call in &calls {
+            let presentation = gents::session::load_tool_call_presentation(
+                &access,
+                call["_docID"].as_str().unwrap(),
+                &did,
+                call["session_id"].as_str().unwrap(),
+                call["requester_did"].as_str(),
+            )
+            .await?;
+            let failed = call["lifecycle_state"] == "failed";
+            failed_calls += usize::from(failed);
+            if let Some(result) = &presentation.result {
+                output_bytes += result.len();
+                actionable_errors += usize::from(failed && result.contains("next call:"));
+            }
+            trace.push(json!({"tool_call":call,"arguments":presentation.arguments,"result":presentation.result,"live_output":presentation.live_output}));
+        }
+        let observed_connection = trace.iter().any(|entry| {
+            entry["tool_call"]["tool_name"] == "p2p"
+                && entry["tool_call"]["lifecycle_state"] == "completed"
+                && entry["result"].as_str().is_some_and(|result| {
+                    serde_json::from_str::<Value>(result).is_ok_and(|value| {
+                        value["outcome"].get("connected_peers").is_some()
+                            || value["observations"].get("connected_peers").is_some()
+                            || value["outcome"].get("connected").is_some()
+                    })
+                })
+        });
         let passed = terminal
             == gents_protocol::request_lifecycle::RequestLifecycleState::Completed.as_str()
             && enrollment_active
             && match case.expectation.as_str() {
                 "peer_observation" => {
-                    answer.contains(&peer)
+                    observed_connection
+                        && answer.contains(&peer)
                         && answer.contains(&remote_did)
                         && lower.contains("connect")
                 }
@@ -381,34 +421,6 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
                 }
                 _ => false,
             };
-        let calls = rows(
-            &local,
-            "AgentToolCall",
-            "_docID tool_call_id tool_name request_id session_id requester_did lifecycle_state started_at completed_at",
-        )
-        .await?;
-        let access = ConfigAccess::Local(local.node.clone());
-        let mut trace = Vec::new();
-        let mut output_bytes = 0;
-        let mut failed_calls = 0;
-        let mut actionable_errors = 0;
-        for call in &calls {
-            let presentation = gents::session::load_tool_call_presentation(
-                &access,
-                call["_docID"].as_str().unwrap(),
-                &did,
-                call["session_id"].as_str().unwrap(),
-                call["requester_did"].as_str(),
-            )
-            .await?;
-            let failed = call["lifecycle_state"] == "failed";
-            failed_calls += usize::from(failed);
-            if let Some(result) = &presentation.result {
-                output_bytes += result.len();
-                actionable_errors += usize::from(failed && result.contains("next call:"));
-            }
-            trace.push(json!({"tool_call":call,"arguments":presentation.arguments,"result":presentation.result,"live_output":presentation.live_output}));
-        }
         std::fs::write(
             directory.join("tool-trace.json"),
             serde_json::to_vec_pretty(&trace)?,
@@ -420,7 +432,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             Some(rows(&remote, "DeploymentNote", "_docID text").await?)
         };
         let metrics = json!({"tool_calls":calls.len(),"failed_tool_calls":failed_calls,"errors_naming_next_call":actionable_errors,"tool_output_bytes":output_bytes});
-        let report = json!({"case_id":case.case_id,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"passed":passed,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        let report = json!({"case_id":case.case_id,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
         std::fs::write(
             directory.join("evidence.json"),
             serde_json::to_vec_pretty(&report)?,
