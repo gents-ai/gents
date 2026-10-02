@@ -312,6 +312,17 @@ async fn help_and_scope_distinguish_capability_limits_from_collection_grants() {
             "{error}"
         );
     }
+    let unknown = Tool::call(
+        &tool,
+        serde_json::from_value(json!({"argv":["replicators","list"]})).unwrap(),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        unknown.contains("next call: p2p {\"argv\":[\"help\"]}"),
+        "{unknown}"
+    );
     let scope = call(&tool, json!({"argv":["help","scope"]})).await;
     assert_eq!(scope["outcome"]["grant"]["mutations"], false);
     assert_eq!(

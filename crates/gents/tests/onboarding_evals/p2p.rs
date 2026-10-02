@@ -40,6 +40,165 @@ fn cases() -> Vec<Case> {
     .unwrap()
 }
 
+const NATIVE_GRADING_VERSION: u32 = 3;
+
+fn native_outcome(report: &Value, trace: &[Value]) -> bool {
+    if report["terminal"] != "completed" || report["enrollment_preserved"] != true {
+        return false;
+    }
+    let peer = &report["peer_id"];
+    let did = &report["peer_did"];
+    let owned: Vec<_> = report["desired_after"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["peer_id"] == *peer && row["source"] == "engineer")
+        .collect();
+    let replies: Vec<Value> = trace
+        .iter()
+        .filter(|entry| entry["tool_call"]["lifecycle_state"] == "completed")
+        .filter_map(|entry| serde_json::from_str(entry["result"].as_str()?).ok())
+        .collect();
+    let identity_observed = replies.iter().any(|reply| {
+        [
+            (&reply["outcome"]["peers"], "agent_did"),
+            (&reply["outcome"]["registered_peers"], "agent_did"),
+            (&reply["observations"]["enrolled_peers"], "peer_did"),
+        ]
+        .into_iter()
+        .any(|(rows, field)| {
+            rows.as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["peer_id"] == *peer && row[field] == *did)
+            })
+        }) || (reply["collection"] == "PeerRegistry"
+            && reply["results"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["peer_id"] == *peer && row["agent_did"] == *did)
+            }))
+    });
+    let connection_observed = replies.iter().any(|reply| {
+        reply["outcome"]["connected"].is_boolean()
+            || reply["outcome"]["connected_peers"]["items"].is_array()
+            || reply["observations"]["connected_peers"]["items"].is_array()
+    });
+    match report["expectation"].as_str() {
+        Some("peer_observation") => identity_observed && connection_observed,
+        Some("document_arrival") => {
+            owned.len() == 1
+                && report["local_documents"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|document| {
+                        document["_docID"] == report["document_id"] && document["text"] == "Keep the previous rollout image pinned until the owner approves replacement." &&
+                        replies.iter().any(|reply| reply["collection"] == "DeploymentNote" && reply["results"].as_array().is_some_and(|results| results.iter().any(|row| row["text"] == document["text"])))
+                    }))
+        }
+        Some("idempotent_pairing") => {
+            owned.len() == 1
+                && report["desired_before"] == report["desired_after"]
+                && report["applied"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row["peer_id"] == *peer
+                            && row["collections"].as_array().is_some_and(|names| {
+                                names.iter().any(|name| name == "DeploymentNote")
+                            })
+                    })
+                })
+        }
+        Some("identity_refusal") => {
+            owned.is_empty()
+                && identity_observed
+                && report["desired_before"] == report["desired_after"]
+        }
+        Some("collection_refusal") => {
+            owned.is_empty() && report["desired_before"] == report["desired_after"]
+        }
+        Some("offline_diagnosis") => {
+            owned.len() == 1
+                && report["local_documents"].as_array().is_some_and(|rows| {
+                    !rows
+                        .iter()
+                        .any(|row| row["_docID"] == report["document_id"])
+                })
+                && replies.iter().any(|reply| {
+                    reply["outcome"]["connected"] == false
+                        || reply["outcome"]["connected_peers"]["observed_count"] == 0
+                        || reply["observations"]["connected_peers"]["observed_count"] == 0
+                })
+        }
+        Some("overlay_revoked") => {
+            owned.is_empty()
+                && report["applied"].as_array().is_some_and(|rows| {
+                    rows.iter()
+                        .filter(|row| row["peer_id"] == *peer)
+                        .all(|row| {
+                            !row["collections"].as_array().is_some_and(|names| {
+                                names.iter().any(|name| name == "DeploymentNote")
+                            })
+                        })
+                })
+        }
+        Some("identifier_recovery") => {
+            owned.is_empty()
+                && trace.iter().any(|entry| {
+                    entry["tool_call"]["lifecycle_state"] == "failed"
+                        && entry["result"]
+                            .as_str()
+                            .is_some_and(|result| result.contains("invalid transport peer ID"))
+                })
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn native_grading_preserves_refusals_and_rejects_identity_substitution() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../fixtures/configurator_evals/p2p/grading_regressions.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        assert_eq!(
+            native_outcome(&case["report"], case["trace"].as_array().unwrap()),
+            case["expected_native_pass"].as_bool().unwrap(),
+            "trial {}",
+            case["trial"]
+        );
+        if case["trial"] == 0 || case["trial"] == 14 {
+            assert_eq!(case["original_v2_passed"], false);
+            assert!(case["report"]["answer"]
+                .as_str()
+                .is_some_and(|answer| !answer.is_empty()));
+            assert_eq!(case["expected_native_pass"], true);
+        }
+    }
+}
+
+#[test]
+#[ignore = "regrades retained JSON evidence without opening or modifying native homes"]
+fn regrade_retained_p2p_outcomes() -> Result<()> {
+    let directory = PathBuf::from(std::env::var("GENTS_P2P_REPLAY_INPUT")?);
+    let output = PathBuf::from(std::env::var("GENTS_P2P_REPLAY_OUTPUT")?);
+    ensure!(!output.exists(), "regrade output already exists");
+    let mut grades = Vec::new();
+    for entry in std::fs::read_dir(&directory)? {
+        let trial = entry?.path();
+        let path = trial.join("report.json");
+        if !path.exists() {
+            continue;
+        }
+        let reports: Vec<Value> = serde_json::from_slice(&std::fs::read(&path)?)?;
+        for report in reports {
+            let case = report["case_id"].as_str().unwrap();
+            let trace: Vec<Value> =
+                serde_json::from_slice(&std::fs::read(trial.join(case).join("tool-trace.json"))?)?;
+            grades.push(json!({"trial":trial.file_name().unwrap().to_str(),"case_id":case,"grading_version":NATIVE_GRADING_VERSION,"original_v2_passed":report.get("original_v2_passed").unwrap_or(&report["passed"]),"passed":native_outcome(&report,&trace),"answer_audit":"unassessed"}));
+        }
+    }
+    std::fs::write(output, serde_json::to_vec_pretty(&grades)?)?;
+    Ok(())
+}
+
 #[test]
 fn p2p_case_prompts_cover_distinct_native_outcomes() {
     let cases = cases();
@@ -446,7 +605,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             "Distinguish registry, signed enrollment, desired pairing, applied pairing and observed connectivity; do not certify the document supplier.",
             "Preserve supplied user inputs and identify only genuinely missing inputs."
         ]});
-        let report = json!({"case_id":case.case_id,"grading_version":case.grading_version,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"deterministic_grade":"native outcomes with lexical answer smoke checks; not semantic answer correctness","capability_evidence":capability_evidence,"answer_audit":answer_audit,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        let mut report = json!({"case_id":case.case_id,"grading_version":NATIVE_GRADING_VERSION,"prompt_fixture_version":case.grading_version,"original_v2_passed":passed,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"deterministic_grade":"native effects and successful read receipts; not semantic answer correctness","capability_evidence":capability_evidence,"answer_audit":answer_audit,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        report["passed"] = json!(native_outcome(&report, &trace));
         std::fs::write(
             directory.join("evidence.json"),
             serde_json::to_vec_pretty(&report)?,

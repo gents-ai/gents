@@ -248,17 +248,19 @@ impl P2pTool {
             ["pairings", "revoke"] => &["peer_id"],
             ["enrollment", "approve" | "revoke"] => &["request_id"],
             ["sync", "documents"] => &["peer_id", "collection", "doc_ids"],
-            _ => bail!(
-                "unknown P2P command; next call: p2p {{\"argv\":[\"help\",\"{}\"]}}",
-                words
-                    .first()
-                    .copied()
-                    .filter(|word| matches!(
+            _ => {
+                let resource = words.first().copied().filter(|word| {
+                    matches!(
                         *word,
                         "status" | "network" | "pairings" | "enrollment" | "sync"
-                    ))
-                    .unwrap_or("scope")
-            ),
+                    )
+                });
+                let next = resource.map_or(
+                    json!({"argv":["help"]}),
+                    |resource| json!({"argv":["help",resource]}),
+                );
+                bail!("unknown P2P command; next call: p2p {next}")
+            }
         };
         ensure!(
             options.keys().all(|key| allowed.contains(&key.as_str())),
