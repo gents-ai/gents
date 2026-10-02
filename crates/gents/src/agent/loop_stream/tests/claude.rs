@@ -376,93 +376,103 @@ async fn run_claude_fixture_turns(
 
 /// A key client from `build_backend_client` runs a Messages turn on the SSE
 /// fixture; the fixture path never asks the bearer for the key.
-#[tokio::test]
-async fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
+#[test]
+fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
     use crate::claude_messages::{
         install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
     };
     use crate::llm::backend_client::{build_backend_client, BackendClient};
     use rig::client::CompletionClient;
 
+    // The fixture lock spans the turn, so it is held outside the runtime:
+    // a std guard must not live across an await.
     let _guard = lock_fixtures_for_test();
-    install_messages_sse_fixtures(vec![sse_fixture_final_text("done")]);
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            install_messages_sse_fixtures(vec![sse_fixture_final_text("done")]);
+            let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    let identity = crate::identity::KeyIdentity::load_or_create(
-        std::env::temp_dir().join(format!("anthropic-key-turn-{}.key", uuid::Uuid::new_v4())),
-        None,
-    )
-    .unwrap();
-    let mut behavior = crate::agent::PendingAgentBehavior::new("anthropic-key-turn")
-        .build_with_identity_for_test(identity);
-    behavior.backend_provider_kind = crate::BackendProviderKind::AnthropicApiKey;
-    let client = build_backend_client(
-        node.clone(),
-        &behavior,
-        "placeholder-key",
-        std::time::Duration::from_secs(1),
-    )
-    .await
-    .expect("key client builds without I/O");
-    assert_eq!(client.provider_family(), "AnthropicApiKey");
-    let issuer = client.replay_issuer().expect("Messages route");
-    let BackendClient::AnthropicApiKey(client) = client else {
-        panic!("expected the AnthropicApiKey client");
-    };
+            let identity = crate::identity::KeyIdentity::load_or_create(
+                std::env::temp_dir()
+                    .join(format!("anthropic-key-turn-{}.key", uuid::Uuid::new_v4())),
+                None,
+            )
+            .unwrap();
+            let mut behavior = crate::agent::PendingAgentBehavior::new("anthropic-key-turn")
+                .build_with_identity_for_test(identity);
+            behavior.backend_provider_kind = crate::BackendProviderKind::AnthropicApiKey;
+            let client = build_backend_client(
+                node.clone(),
+                &behavior,
+                "placeholder-key",
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .expect("key client builds without I/O");
+            assert_eq!(client.provider_family(), "AnthropicApiKey");
+            let issuer = client.replay_issuer().expect("Messages route");
+            let BackendClient::AnthropicApiKey(client) = client else {
+                panic!("expected the AnthropicApiKey client");
+            };
 
-    let mut config = owned_config(2);
-    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
-        crate::BackendProviderKind::AnthropicApiKey,
-        crate::OpenAiWireApi::ChatCompletions,
-        "claude-sonnet-5",
-    ));
-    let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
-    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
-        scope_kind,
-    ));
-    let request_commit_cid = lifecycle
-        .request_commit_cid()
-        .expect("claimed request commit CID")
-        .to_owned();
-    config.replay = crate::provider_input::replay::owned_replay_input(
-        node.clone(),
-        lifecycle.request().clone(),
-        request_commit_cid.clone(),
-        scope_kind,
-        issuer,
-        crate::provider_input::ProviderInputProfile::ClaudeMessages,
-    );
-    let capture_factory =
-        crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
-    let capture_scope = crate::rendered_request::scope_from_factory(
-        crate::rendered_request::context_for_claimed_request(
-            lifecycle.request(),
-            &request_commit_cid,
-            "claude-sonnet-5".to_owned(),
-            Some("AnthropicApiKey".to_owned()),
-        ),
-        Some(&capture_factory),
-    )
-    .expect("DefraDB rendered-request capture scope");
-    let stream = run_loop_stream(
-        client.completion_model("claude-sonnet-5"),
-        Some(hook.clone()),
-        TaggedMessage::unassociated(Message::user("say done")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        config,
-    );
-    let collected = collect_owned_scripted_stream_with_capture_scope(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-        Some(capture_scope),
-    )
-    .await;
-    assert_eq!(collected.error, None);
-    assert_eq!(collected.final_text.as_deref(), Some("done"));
+            let mut config = owned_config(2);
+            config.provider_input_counter =
+                Arc::new(crate::provider_input::ProviderInputCounter::new(
+                    crate::BackendProviderKind::AnthropicApiKey,
+                    crate::OpenAiWireApi::ChatCompletions,
+                    "claude-sonnet-5",
+                ));
+            let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
+            config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+                scope_kind,
+            ));
+            let request_commit_cid = lifecycle
+                .request_commit_cid()
+                .expect("claimed request commit CID")
+                .to_owned();
+            config.replay = crate::provider_input::replay::owned_replay_input(
+                node.clone(),
+                lifecycle.request().clone(),
+                request_commit_cid.clone(),
+                scope_kind,
+                issuer,
+                crate::provider_input::ProviderInputProfile::ClaudeMessages,
+            );
+            let capture_factory =
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
+            let capture_scope = crate::rendered_request::scope_from_factory(
+                crate::rendered_request::context_for_claimed_request(
+                    lifecycle.request(),
+                    &request_commit_cid,
+                    "claude-sonnet-5".to_owned(),
+                    Some("AnthropicApiKey".to_owned()),
+                ),
+                Some(&capture_factory),
+            )
+            .expect("DefraDB rendered-request capture scope");
+            let stream = run_loop_stream(
+                client.completion_model("claude-sonnet-5"),
+                Some(hook.clone()),
+                TaggedMessage::unassociated(Message::user("say done")),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                config,
+            );
+            let collected = collect_owned_scripted_stream_with_capture_scope(
+                stream,
+                &hook,
+                &writer,
+                &mut lifecycle,
+                gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
+                Some(capture_scope),
+            )
+            .await;
+            assert_eq!(collected.error, None);
+            assert_eq!(collected.final_text.as_deref(), Some("done"));
+        });
 }
 
 /// Decodes both durable Claude sends for the request, in turn order, after
