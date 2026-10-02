@@ -213,6 +213,8 @@ async fn a_plugin_node_that_cannot_run_fails_the_run_with_its_reason() {
     node.shutdown().await;
 }
 
+/// Dispatch and recovery run separately so the artifact is restored before
+/// another attempt can consume the retry budget.
 #[tokio::test]
 async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
@@ -236,19 +238,6 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     materialize_graph_revision(&node, None, graph_test_owner(), &plan)
         .await
         .unwrap();
-    // The engine runs before the revision is activated, as it does in a
-    // runtime, so it has discovered the plugin node's route by the time the
-    // run's first document is written.
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let engine = tokio::spawn(crate::callback::run_callback_engine(
-        node.clone(),
-        graph_test_owner().to_owned(),
-        None,
-        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-            home.path().to_owned(),
-        ))),
-        cancel.clone(),
-    ));
     activate_graph_revision(
         &node,
         None,
@@ -272,24 +261,20 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     .await
     .unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let failed = loop {
-        let invocations = rows(
-            &node,
-            "{ CallbackInvocation { lifecycle_state attempts } }",
-            "CallbackInvocation",
-        )
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    crate::callback::scan_callbacks(node.clone(), graph_test_owner().to_owned(), plugins.clone())
         .await;
-        if invocations
-            .first()
-            .is_some_and(|row| row["lifecycle_state"] == "failed")
-            || Instant::now() >= deadline
-        {
-            break invocations;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    let failed = rows(
+        &node,
+        "{ CallbackInvocation { invocation_id lifecycle_state attempts } }",
+        "CallbackInvocation",
+    )
+    .await;
+    assert_eq!(failed.len(), 1, "{failed:?}");
     assert_eq!(failed[0]["lifecycle_state"], "failed", "{failed:?}");
+    assert_eq!(failed[0]["attempts"], 1, "{failed:?}");
     let waiting = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
         .await
         .unwrap();
@@ -299,17 +284,29 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     );
 
     std::fs::write(&artifact, &bytes).unwrap();
-    let view = loop {
-        let view = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+    let mut retryable = crate::callback::load_invocation(
+        &node,
+        failed[0]["invocation_id"].as_str().unwrap(),
+        graph_test_owner(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    retryable.claimed_at = Some(
+        (chrono::Utc::now() - chrono::Duration::from_std(crate::plugin::retry_backoff(1)).unwrap())
+            .to_rfc3339(),
+    );
+    assert!(
+        crate::callback::update_invocation(&node, &retryable, Some("failed"))
             .await
-            .unwrap();
-        if view.status != "running" || Instant::now() >= deadline {
-            break view;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    cancel.cancel();
-    let _ = engine.await;
+            .unwrap()
+    );
+    crate::callback::recover_local_invocations(&node, graph_test_owner(), None, &plugins)
+        .await
+        .unwrap();
+    let view = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
+        .await
+        .unwrap();
     assert_eq!(view.status, "succeeded", "{view:#?}");
     let invocation = &rows(
         &node,

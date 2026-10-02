@@ -147,3 +147,15 @@ pub async fn run_callback_engine(
             .await;
     }
 }
+
+#[cfg(test)]
+pub(crate) async fn scan_callbacks(
+    node: Arc<EmbeddedNode>,
+    agent_did: String,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+) {
+    let mut engine = CallbackEngine::new(node, agent_did, None, CancellationToken::new());
+    engine.plugins = plugins;
+    engine.reconcile_bindings().await;
+    engine.rescan_created_docs().await;
+}
