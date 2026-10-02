@@ -114,6 +114,12 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let admin = EmbeddedRemoteP2pAdmin::new(local.node.clone());
     let tick = reconcile_peer_tick(&admin, &store, &peer_id).await.unwrap();
     assert!(tick.live_route_matches, "{tick:?}");
+    let inspected = call(
+        &tool,
+        json!({"argv":["network","get"],"options":{"peer_id":peer_id}}),
+    )
+    .await;
+    assert_eq!(inspected["outcome"]["connected"], true, "{inspected}");
     assert!(store
         .load_applied(&peer_id)
         .await

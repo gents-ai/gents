@@ -265,7 +265,7 @@ impl P2pTool {
                 let observed_backlog_peers = sync.push_backlog.per_peer.len();
                 sync.push_backlog.per_peer.truncate(50);
                 Ok(reply(
-                    json!({"connected_peer_ids":peers,"listen_addresses":addresses}),
+                    json!({"connected_peers":peers,"listen_addresses":addresses}),
                     None,
                     json!({"sync":sync,"observed_backlog_peers":observed_backlog_peers,"peer_limit":50}),
                 ))
@@ -281,7 +281,7 @@ impl P2pTool {
                 Ok(reply(
                     json!({"peers":peers}),
                     None,
-                    json!({"connected_peer_ids":bounded_observation(admin.active_peers().await?),"limit":50}),
+                    json!({"connected_peers":bounded_observation(admin.active_peers().await?),"limit":50}),
                 ))
             }
             ["network", "get"] => {
@@ -295,7 +295,11 @@ impl P2pTool {
                         "peer_id agent_did display_name network_id addresses status updated_at",
                     )
                     .await?;
-                let connected = admin.active_peers().await?.iter().any(|id| id == peer);
+                let connected = admin.active_peers().await?.iter().any(|entry| {
+                    entry == peer
+                        || p2p::iroh::parse_public_peer_addr(entry)
+                            .is_ok_and(|(id, _)| id.as_str() == peer)
+                });
                 Ok(reply(
                     json!({"peer_id":peer,"registered_peers":peers,"connected":connected}),
                     peers.is_empty().then(|| json!({"argv":["network","list"]})),
@@ -324,7 +328,7 @@ impl P2pTool {
                 Ok(reply(
                     json!({"desired":desired,"applied":applied}),
                     None,
-                    json!({"enrolled_peers":enrolled,"connected_peer_ids":bounded_observation(admin.active_peers().await?),"replicators":bounded_observation(admin.list_replicators().await?),"limit":50}),
+                    json!({"enrolled_peers":enrolled,"connected_peers":bounded_observation(admin.active_peers().await?),"replicators":bounded_observation(admin.list_replicators().await?),"limit":50}),
                 ))
             }
             ["enrollment", "pending"] => {
@@ -456,7 +460,7 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Native P2P commands in argv: status; network list/get; pairings list/preview/apply/revoke; enrollment pending/approve/revoke; sync documents. Read [help,RESOURCE] for parameters. Identity comes from the running node. Mutation and collection grants are explicit.",
-        Some("status" | "network") => "[status] returns connected peer IDs and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. [network,get] takes options.peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority.",
+        Some("status" | "network") => "[status] returns native connected peer references (raw IDs or transport addresses) and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. [network,get] takes options.peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority.",
         Some("pairings") => "[pairings,list] shows desired, applied, enrolled and connected observations separately. [pairings,preview] and [pairings,apply] require options.peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. [pairings,revoke] requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect list after apply/revoke; submitted desired state is not proof of a live route.",
         Some("enrollment") => "[enrollment,pending] discovers signed request IDs. [enrollment,approve] or [enrollment,revoke] requires options.request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval uses its bounded default authorization lease. Do not invent a DID or substitute an unsigned pairing document.",
         Some("sync") => "[sync,documents] requires options.peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; the application collection must be allowed by the P2P grant. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
