@@ -250,6 +250,12 @@ jobs:
         if: matrix.suite == 'runtime'
         run: .github/scripts/compile-rust-ci-suite.sh runtime
 
+      - name: Check live test targets
+        if: matrix.suite == 'runtime'
+        run: |
+          cargo check -p gents --tests --features live-e2e
+          cargo check -p gents-cli --tests --features live-e2e
+
       - name: Build gents-loop for wasm32-wasip1
         if: matrix.suite == 'runtime'
         run: |
