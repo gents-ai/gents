@@ -311,6 +311,14 @@ source consistency checks, not a separate runtime compatibility version.
   `gents goal resume-on <account> --from <request>` moves the profile that
   hit a usage limit and resumes the Goal; retrying with the same `--from`
   returns the same continuation.
+- A usage-limited Goal can resume by itself at the reset time the provider
+  reported (#2121). `gents goal set --auto-resume on` turns it on per Goal
+  (off by default; the model's goal tools cannot set it). The Goal resumes
+  once, on the same account, when the reset passes; not when the provider
+  reported no reset, not after its profile moved to another account, and not
+  when that account is disabled or removed. A Goal limited again resumes at
+  its new reset. A restart keeps the schedule. `gents goal show` shows
+  `auto_resume_at_reset`.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
