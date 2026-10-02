@@ -5,6 +5,92 @@ use serde_json::{json, Value};
 
 use super::*;
 
+#[tokio::test]
+async fn vector_search_ranks_native_rows_and_preserves_query_boundaries() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema("type AdmiralReports { duty: String embedding: [Float32!] @index(vector: {dimensions: 2, hnsw: {metric: COSINE}}) }").await.unwrap();
+    for (duty, vector) in [
+        ("Coordinate crew duty rotations", "[1,0]"),
+        ("Inspect engine maintenance", "[0,1]"),
+        ("Plan the cargo manifest", "[-1,0]"),
+    ] {
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "seed_vector_query",
+            &format!("mutation {{ add_AdmiralReports(input: {{duty: \"{}\", embedding: {vector}}}) {{_docID}} }}", crate::graphql::escape_graphql_string(duty)),
+        ).await.unwrap();
+    }
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["AdmiralReports".into()]),
+    );
+    let base = json!({"argv":["search"],"collection":"AdmiralReports","options":{"fields":["duty"],"vector_field":"embedding","vector":[1,0],"limit":2}});
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, serde_json::from_value(base.clone()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["returned_count"], 2);
+    assert_eq!(
+        result["results"][0]["duty"],
+        "Coordinate crew duty rotations"
+    );
+    assert!(
+        result["results"][0]["_similarity"].as_f64().unwrap()
+            > result["results"][1]["_similarity"].as_f64().unwrap()
+    );
+    assert_eq!(result["collection"], "AdmiralReports");
+    for (key, value, expected) in [
+        ("vector", json!([]), "nonempty"),
+        ("vector", json!(["invented"]), "finite numbers"),
+        ("vector", json!([1]), "same length"),
+        (
+            "vector_field",
+            json!("embedding) { duty }"),
+            "invalid field name",
+        ),
+        (
+            "vector_field",
+            json!("missing"),
+            "not an available application field",
+        ),
+        ("limit", json!(0), "search limit"),
+        ("limit", json!(1001), "search limit"),
+        ("filter", json!({"missing":{"_eq":"x"}}), "unknown field"),
+    ] {
+        let mut args = base.clone();
+        args["options"][key] = value;
+        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{key}: {error}");
+        assert!(error.contains("search"), "{error}");
+    }
+    let mut text = base.clone();
+    text["options"].as_object_mut().unwrap().remove("vector");
+    text["options"]["text"] = json!("Coordinate crew duty rotations");
+    let error = Tool::call(&tool, serde_json::from_value(text).unwrap())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("text embedding is not exposed"), "{error}");
+    for collection in ["OtherReports", "OAuthCredential"] {
+        let mut args = base.clone();
+        args["collection"] = json!(collection);
+        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("scope") || error.contains("protected"),
+            "{error}"
+        );
+    }
+    node.shutdown().await;
+}
+
 async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -504,14 +590,14 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     );
     let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_schema(&format!(
-        "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String }}",
+        "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String embedding: [Float32!] @index(vector: {{dimensions: 2, hnsw: {{metric: COSINE}}}}) }}",
         crate::graphql::escape_graphql_string(&policy)
     ))
     .await
     .unwrap();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let mutation = format!(
-            "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
+            "mutation {{ add_PrivateRecord(input: {{label: \"{}\", embedding: [1,0]}}) {{_docID}} }}",
             crate::graphql::escape_graphql_string(label)
         );
         crate::config_client::ConfigAccess::transact_local(
@@ -539,6 +625,13 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, find).await.unwrap()).unwrap();
         assert_eq!(result["returned_count"], 1);
         assert_eq!(result["results"][0]["label"], label);
+        let search: QueryParams = serde_json::from_value(json!({"argv":["search"],"collection":"PrivateRecord","options":{"fields":["label"],"vector_field":"embedding","vector":[1,0],"limit":10}})).unwrap();
+        let result: Value =
+            serde_json::from_str(&Tool::call(&tool, search).await.unwrap()).unwrap();
+        assert_eq!(result["returned_count"], 1);
+        assert_eq!(result["results"][0]["label"], label);
+        assert!(result["results"][0]["_similarity"].is_number());
+
         let bounded = BoundedQueryTool::new(
             node.clone(),
             crate::document_config::QueryToolDecl {
