@@ -2074,13 +2074,24 @@ pub async fn set_goal(
 ) -> Result<GoalDocument> {
     crate::config_client::ConfigAccess::transact_local(node, None, "goal.set", move |txn| {
         Box::pin(async move {
-            set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+            set_goal_in_txn(
+                txn,
+                agent_did,
+                session_id,
+                objective,
+                status,
+                token_budget,
+                None,
+            )
+            .await
         })
     })
     .await
 }
 
 /// Configure a goal through the same transactional policy for local and HTTP access.
+/// `auto_resume` is the operator's opt-in to resume at the reported reset; `None`
+/// keeps the stored value. The model's goal tools never reach this argument.
 pub async fn set_goal_from_access(
     access: &crate::ConfigAccess,
     agent_did: &str,
@@ -2088,12 +2099,21 @@ pub async fn set_goal_from_access(
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
-    _auto_resume: Option<bool>,
+    auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     access
         .transact("goal.set_from_access", move |txn| {
             Box::pin(async move {
-                set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+                set_goal_in_txn(
+                    txn,
+                    agent_did,
+                    session_id,
+                    objective,
+                    status,
+                    token_budget,
+                    auto_resume,
+                )
+                .await
             })
         })
         .await
@@ -2214,6 +2234,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
             Some(objective),
             Some(GoalStatus::Active),
             Some(assignment.goal_token_budget),
+            None,
         )
         .await?;
     }
@@ -2294,6 +2315,7 @@ async fn set_goal_in_txn(
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
+    auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     let existing = load_canonical_goal_in_txn(txn, agent_did, session_id).await?;
     let objective = objective
@@ -2310,6 +2332,9 @@ async fn set_goal_in_txn(
     if budget.is_some_and(|value| value <= 0) {
         bail!("goal token budget must be positive");
     }
+    let auto_resume_field = auto_resume
+        .map(|on| format!("auto_resume_at_reset: {on},"))
+        .unwrap_or_default();
 
     let now = Utc::now();
     let now_string = now.to_rfc3339();
@@ -2352,6 +2377,7 @@ async fn set_goal_in_txn(
                         consecutive_blocked_audits: {blocked_audits},
                         wrapup_requested: {wrapup_requested},
                         wrapup_completed: {wrapup_completed},
+                        {auto_resume_field}
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}
@@ -2423,6 +2449,7 @@ async fn set_goal_in_txn(
                 wrapup_requested: {wrapup_requested},
                 wrapup_completed: {wrapup_completed},
                 infrastructure_retry_count: 0,
+                {auto_resume_field}
                 created_at: "{escaped_now}",
                 updated_at: "{escaped_now}"
             }}) {{ _docID }}
