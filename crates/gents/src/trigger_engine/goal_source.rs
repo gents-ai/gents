@@ -104,9 +104,12 @@ impl GoalSource {
         }
     }
 
-    async fn rescan(&mut self) -> Option<FireIntent> {
+    /// A reset is a clock event, so only the rescan `tick` resumes at one.
+    async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
         let agent_did = self.snapshot_rx.borrow().local_did.clone();
-        self.resume_at_reported_resets(&agent_did).await;
+        if tick {
+            self.resume_at_reported_resets(&agent_did).await;
+        }
         match self
             .load_goals(
                 &agent_did,
@@ -941,15 +944,16 @@ impl TriggerSource for GoalSource {
                     .subscription
                     .as_mut()
                     .expect("goal source subscription opened before polling");
-                tokio::select! {
+                let tick = tokio::select! {
                     biased;
                     _ = self.cancel.cancelled() => return None,
                     changed = self.snapshot_rx.changed() => {
                         if changed.is_err() {
                             return None;
                         }
+                        false
                     }
-                    _ = self.rescan_tick.tick() => {}
+                    _ = self.rescan_tick.tick() => true,
                     message = subscription.recv() => {
                         if message.is_none() {
                             tracing::warn!("goal source subscription channel closed; source exiting");
@@ -959,9 +963,10 @@ impl TriggerSource for GoalSource {
                         if dropped > 0 {
                             tracing::warn!(dropped, "goal source dropped updates; durable rescan is recovering");
                         }
+                        false
                     }
-                }
-                if let Some(intent) = self.rescan().await {
+                };
+                if let Some(intent) = self.rescan(tick).await {
                     return Some(intent);
                 }
             }
