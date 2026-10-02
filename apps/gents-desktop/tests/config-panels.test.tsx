@@ -985,6 +985,87 @@ describe("configuration panels", () => {
           );
         });
       });
+
+      describe("profiles pick accounts by provider and label", () => {
+        const pickDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-gone", "Gone", "ClaudeCliSubscription", "acct-gone"),
+          ],
+        };
+        const editProfileOn = (backendId: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          render(
+            <ProfileEditor
+              shell={shell}
+              deployment={pickDeployment}
+              profile={{ ...deployment.inferenceProfiles[0]!, backend_id: backendId }}
+            />,
+          );
+          return userEvent.setup();
+        };
+
+        it("the profile backend field names accounts and skips unusable ones", async () => {
+          const user = editProfileOn("openrouter");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          expect(
+            await screen.findByRole("option", { name: /^Work\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Personal\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Grok\s*Grok \/ xAI$/ }),
+          ).toBeVisible();
+          /* Side is disabled; Gone's account is not on this node */
+          expect(
+            screen.queryByRole("option", { name: /^Side/ }),
+          ).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("the profile backend field keeps an unusable backend that is the current one", async () => {
+          const user = editProfileOn("grok-side");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          await screen.findByRole("option", { name: /^Work/ });
+          expect(screen.getByRole("option", { name: /^Side/ })).toBeVisible();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        const personalOff = accounts.map((a) =>
+          a.label === "Personal" ? { ...a, enabled: false } : a,
+        );
+        it("new profile preselects the first enabled account, skipping a disabled first one", () => {
+          expect(
+            newProfileDocument(rowsDeployment, undefined, personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects the asked backend when its account is usable", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude-work", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects another backend when the asked one's account is disabled", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects the provider's first account in resolver order", () => {
+          const workFirst = [accounts[1]!, accounts[0]!, ...accounts.slice(2)];
+          expect(
+            newProfileDocument(rowsDeployment, undefined, workFirst).backend_id,
+          ).toBe("claude-work");
+        });
+      });
     });
   });
 
