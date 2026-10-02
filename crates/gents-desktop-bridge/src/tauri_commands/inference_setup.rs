@@ -782,6 +782,7 @@ pub(crate) struct ProviderAccountView {
     /// Which of the provider's accounts this is; `None` is the original
     /// account, which a backend without a reference runs on.
     pub account_ref: Option<String>,
+    pub label: String,
 }
 
 impl ProviderAccountView {
@@ -806,6 +807,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             enabled: credential.enabled,
             pending_save: false,
             account_ref: credential.account_ref.clone(),
+            label: String::new(),
         }
     }
 }
@@ -1703,6 +1705,39 @@ mod provider_account_tests {
         .expect("resolve")
         .map(|credential| credential.credential_id);
         assert_eq!(first_match, resolved);
+    }
+
+    #[tokio::test]
+    async fn the_account_view_carries_the_label_never_a_token_or_key() {
+        let access = serving_operator().await;
+        let agent = "did:key:zAgent";
+        gents::oauth_credential::store_sign_in(
+            &access,
+            claude_sign_in(agent, None, "acct-a", "SECRET-a"),
+            None,
+        )
+        .await
+        .expect("store the first account");
+        gents::oauth_credential::store_sign_in(
+            &access,
+            OAuthCredential {
+                provider_account_key: Some("KEY-SENTINEL".to_string()),
+                ..claude_sign_in(agent, None, "acct-b", "SECRET-b")
+            },
+            Some("Work"),
+        )
+        .await
+        .expect("store the labelled account");
+
+        let views =
+            observe_provider_accounts(&PendingOAuthCredentials::default(), Ok(access), agent)
+                .await
+                .expect("observe accounts");
+        let labels: Vec<&str> = views.iter().map(|view| view.label.as_str()).collect();
+        assert_eq!(labels, ["Claude", "Work"]);
+        let json = serde_json::to_string(&views).unwrap();
+        assert!(!json.contains("SECRET"));
+        assert!(!json.contains("KEY-SENTINEL"));
     }
 }
 
