@@ -1032,20 +1032,130 @@ pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
 /// Each stored backend's usage as the panel draws it, with the runtime's
 /// outcome when `reads` names it: by backend, else by its account.
 async fn backend_usage_views(
-    _access: &gents::ConfigAccess,
-    _agent_did: &str,
-    _reads: Option<&gents_server::accounts::UsageReads>,
-    _now: chrono::DateTime<chrono::Utc>,
+    access: &gents::ConfigAccess,
+    agent_did: &str,
+    reads: Option<&gents_server::accounts::UsageReads>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<Vec<BackendUsageView>> {
-    Ok(Vec::new())
+    use gents::backend_provider::BackendProviderOauthExt as _;
+    use gents::usage_observation::{account_usage::UsageSource, UsageRead};
+
+    let backends = access
+        .transact("desktop.usage_views", |txn| {
+            Box::pin(async move {
+                gents::config_client::list_inference_backends_in_txn(txn, agent_did).await
+            })
+        })
+        .await?;
+    let reads = reads
+        .filter(|reads| reads.agent_did == agent_did)
+        .map_or(&[][..], |reads| reads.reads.as_slice());
+    let time = |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339();
+    let mut views = Vec::with_capacity(backends.len());
+    for backend in backends {
+        let stored =
+            gents::usage_observation::usage_for_backend(access, agent_did, &backend).await?;
+        let usage =
+            gents::usage_observation::usage_view(stored.as_ref(), backend.provider_kind, now);
+        let account = match (backend.provider_kind.oauth_provider(), &backend.auth) {
+            (
+                Some(provider),
+                gents::document_config::BackendAuth::PrincipalOAuth { account_ref },
+            ) => Some((provider, account_ref)),
+            _ => None,
+        };
+        let read = reads.iter().find(|read| match &read.backend_id {
+            Some(backend_id) => *backend_id == backend.backend_id,
+            None => account.is_some_and(|(provider, account_ref)| {
+                read.provider == provider && read.account_ref == *account_ref
+            }),
+        });
+        views.push(BackendUsageView {
+            backend_id: backend.backend_id,
+            windows: usage
+                .windows
+                .into_iter()
+                .map(|window| UsageWindowView {
+                    label: window.label,
+                    window_minutes: window.window_minutes,
+                    used_pct: window.used_pct,
+                    resets_at: window.resets_at.map(time),
+                    source: match window.source {
+                        UsageSource::Header => "header",
+                        UsageSource::Endpoint => "endpoint",
+                        UsageSource::Error => "error",
+                    }
+                    .to_string(),
+                    observed_at: time(window.observed_at),
+                    last_known: window.last_known,
+                })
+                .collect(),
+            plan: usage.plan,
+            note: usage.note.map(str::to_owned),
+            read_at: usage.read_at.map(time),
+            read_error: usage.read_error,
+            read: read.map(|read| match &read.outcome {
+                UsageRead::Read => "read".to_string(),
+                UsageRead::SkippedRecent => "skipped_recent".to_string(),
+                UsageRead::SkippedUntilRefresh => "skipped_until_refresh".to_string(),
+                UsageRead::NotReported => "not_reported".to_string(),
+                UsageRead::Disabled => "disabled".to_string(),
+                UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
+            }),
+        });
+    }
+    Ok(views)
 }
 
+/// Asks the hosted runtime to read usage (on open, the reads it allows then;
+/// on Refresh, every read), signed with its own identity as `gents accounts
+/// list` signs it, then returns each backend's stored usage. A failed read on
+/// open still returns what is stored.
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
-    _request: ProviderUsageReadRequest,
-    _state: State<'_, DesktopAppState>,
+    request: ProviderUsageReadRequest,
+    state: State<'_, DesktopAppState>,
 ) -> Result<Vec<BackendUsageView>, BridgeError> {
-    Err(BridgeError::untyped("not implemented"))
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let agent_did = request.agent_did.trim();
+    let access = core
+        .operator_access(agent_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let trigger = if request.refresh {
+        gents::usage_observation::UsageTrigger::Refresh
+    } else {
+        gents::usage_observation::UsageTrigger::Open
+    };
+    let reads = async {
+        let signer = core.operator_signer(agent_did)?;
+        let graphql = core
+            .operator_graphql(agent_did)
+            .ok_or_else(|| anyhow::anyhow!("the agent's runtime has no operator endpoint"))?;
+        gents_server::accounts::request_usage_reads(
+            signer.as_ref(),
+            &graphql,
+            trigger,
+            request.provider.as_deref(),
+        )
+        .await
+    }
+    .await;
+    let reads = match reads {
+        Ok(reads) => Some(reads),
+        Err(error) if !request.refresh => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                error = %format!("{error:#}"),
+                "usage read on open failed; showing stored usage"
+            );
+            None
+        }
+        Err(error) => return Err(BridgeError::untyped(error.to_string())),
+    };
+    backend_usage_views(&access, agent_did, reads.as_ref(), chrono::Utc::now())
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
