@@ -6,7 +6,10 @@ import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
 
 describe("empty mailbox", () => {
   it("says what arrives here and offers a session as the way to start new work", () => {
-    const shell = { selectedDeployment: { mailboxItems: [] } } as unknown as Shell;
+    const shell = {
+      deployments: [],
+      selectedDeployment: { mailboxItems: [] },
+    } as unknown as Shell;
     render(<MailboxScreen shell={shell} />);
     expect(screen.getByText("Nothing needs your attention")).toBeVisible();
     expect(

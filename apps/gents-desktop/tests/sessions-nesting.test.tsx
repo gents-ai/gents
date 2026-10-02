@@ -53,13 +53,16 @@ const shell = (sessions: SessionSummary[]) =>
   ({
     holds: [],
     behaviorDescriptions: {},
-    selectedDeployment: {
-      sessions,
-      behaviors: [],
-      behaviorConfigs: [],
-      behaviorEnvironments: [],
-    },
+    deployments: [deploymentWith(sessions)],
+    selectedDeployment: deploymentWith(sessions),
   }) as unknown as Shell;
+const deploymentWith = (sessions: SessionSummary[]) => ({
+  agentDid: "did:key:node",
+  sessions,
+  behaviors: [],
+  behaviorConfigs: [],
+  behaviorEnvironments: [],
+});
 
 beforeEach(() =>
   vi.stubGlobal("localStorage", {

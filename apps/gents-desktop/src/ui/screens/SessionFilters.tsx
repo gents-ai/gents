@@ -5,15 +5,7 @@
    now, with the count it would leave behind faceted against the other two
    axes, so narrowing never hides the way back. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import {
-  Activity,
-  ChevronDown,
-  CircleX,
-  CornerDownRight,
-  Play,
-  User,
-  X,
-} from "lucide-react";
+import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
@@ -47,7 +39,11 @@ export type SessionFilter = {
   behaviors: string[];
 };
 
-export const emptyFilter: SessionFilter = { states: [], sources: [], behaviors: [] };
+export const emptyFilter: SessionFilter = {
+  states: [],
+  sources: [],
+  behaviors: [],
+};
 export const hasFilter = (f: SessionFilter) =>
   f.states.length > 0 || f.sources.length > 0 || f.behaviors.length > 0;
 
@@ -129,7 +125,7 @@ function HeldDot({ className }: { className?: string }) {
   return <span className={cn("size-2 rounded-full bg-brand", className)} />;
 }
 
-type Option<V extends string> = {
+export type Option<V extends string> = {
   value: V;
   label: string;
   icon: ComponentType<{ className?: string }>;
@@ -150,16 +146,20 @@ const SOURCES: Option<SessionSource>[] = [
 
 /* One axis: the icon of what is picked, or the axis's own icon when it is
    open to everything, and the menu of its options with their counts. */
-function Axis<V extends string>({
+export function Axis<V extends string>({
   label,
   icon: AxisIcon,
   options,
   counts,
   value,
   onChange,
+  wordless = false,
 }: {
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /** the trigger shows no word until something is picked: the mark alone
+      names the axis, as it already does below sm */
+  wordless?: boolean;
   options: Option<V>[];
   counts: Record<string, number>;
   value: V[];
@@ -186,10 +186,15 @@ function Axis<V extends string>({
         <AxisIcon className="size-4" />
         {/* on a phone the row has no width to name its axes: the marks
             carry the meaning and the words come back at sm */}
-        <span className="hidden text-xs sm:inline">
-          {picked.length === 1 ? picked[0].label : label}
-        </span>
-        <ChevronDown className="hidden size-3 opacity-50 sm:block" />
+        {(!wordless || picked.length > 0) && (
+          <span className="hidden text-xs sm:inline">
+            {picked.length === 1
+              ? picked[0].label
+              : picked.length > 1
+                ? `${picked.length} ${label.toLowerCase()}`
+                : label}
+          </span>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuGroup>
@@ -234,16 +239,26 @@ function BehaviorAxis({
   /* its popup is a dialog (it holds a search field), so it takes its turn
      with the shell's other popovers: opening Sync health closes it */
   const popover = useExclusivePopover();
+  /* the open state is an item too, so the menu can say it and clear to it */
+  const ANY = "*";
   return (
     <Combobox
       open={popover.open}
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
       multiple
-      items={behaviors.map((b) => b.id)}
-      itemToStringLabel={(id: string) => byId.get(id)?.name ?? id}
-      value={value}
-      onValueChange={(next: string[]) => onChange(next)}
+      items={[ANY, ...behaviors.map((b) => b.id)]}
+      itemToStringLabel={(id: string) =>
+        id === ANY ? "Any behavior" : (byId.get(id)?.name ?? id)
+      }
+      value={value.length ? value : [ANY]}
+      onValueChange={(next: string[]) =>
+        onChange(
+          next.includes(ANY) && !value.includes(ANY) && next.length > 1 && value.length
+            ? []
+            : next.filter((id) => id !== ANY),
+        )
+      }
     >
       <ComboboxTrigger
         render={
@@ -251,12 +266,10 @@ function BehaviorAxis({
             variant="quiet"
             size="sm"
             aria-label="Behavior"
-            /* the two dropdown axes hide their chevron below sm, where the
-               marks carry the row on their own; this trigger's chevron is
-               drawn by the kit, so it is hidden from here to match rather
-               than leaving one axis wider than its neighbors */
+            /* the node axis alone keeps its chevron; this trigger's is
+               drawn by the kit, so it is hidden from here */
             className={cn(
-              "gap-1.5 px-2 [&>svg:last-of-type]:hidden sm:[&>svg:last-of-type]:block",
+              "gap-1.5 px-2 [&>svg:last-of-type]:hidden",
               picked.length > 0 && "text-foreground",
             )}
           />
@@ -276,9 +289,11 @@ function BehaviorAxis({
         ) : (
           <Play className="size-4" />
         )}
-        <span className="hidden text-xs sm:inline">
-          {picked.length === 1 ? picked[0].name : "Behavior"}
-        </span>
+        {picked.length > 0 && (
+          <span className="hidden text-xs sm:inline">
+            {picked.length === 1 ? picked[0].name : `${picked.length} behaviors`}
+          </span>
+        )}
       </ComboboxTrigger>
       <ComboboxContent
         ref={popover.popupRef}
@@ -289,6 +304,16 @@ function BehaviorAxis({
         <ComboboxEmpty>No behavior by that name.</ComboboxEmpty>
         <ComboboxList>
           {(id: string) => {
+            if (id === ANY)
+              return (
+                <ComboboxItem key={id} value={id}>
+                  <Play className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">Any behavior</span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {behaviors.reduce((n, b) => n + b.count, 0)}
+                  </span>
+                </ComboboxItem>
+              );
             const b = byId.get(id);
             if (!b) return null;
             return (
@@ -321,12 +346,15 @@ export function SessionFilters({
   held,
   value,
   onChange,
+  nodes,
 }: {
   sessions: SessionSummary[];
   deployment: DeploymentView | null;
   held: Set<string>;
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
+  /** the node pick beside this row, so one clear empties the whole bar */
+  nodes?: { picked: boolean; clear: () => void };
 }): ReactNode {
   /* a count says what its option would leave: its own axis is dropped from
      the filter, so the numbers answer "and how many of those" as you narrow */
@@ -351,16 +379,25 @@ export function SessionFilters({
     count: countFor("behaviors", (c) => c.behaviorId === b.behaviorId),
   }));
 
-  if (sessions.length === 0) return null;
+  /* a node pick that empties the list still needs its clear */
+  if (sessions.length === 0 && !nodes?.picked) return null;
 
   return (
     <div
       aria-label="Session filters"
       className="flex min-w-0 shrink items-center gap-0.5 text-muted-foreground"
     >
+      {behaviors.length > 0 && (
+        <BehaviorAxis
+          behaviors={behaviors}
+          value={value.behaviors}
+          onChange={(next) => onChange({ ...value, behaviors: next })}
+        />
+      )}
       <Axis
         label="State"
         icon={Activity}
+        wordless
         options={STATES}
         counts={stateCounts}
         value={value.states}
@@ -369,26 +406,23 @@ export function SessionFilters({
       <Axis
         label="Started by"
         icon={User}
+        wordless
         options={SOURCES}
         counts={sourceCounts}
         value={value.sources}
         onChange={(sources) => onChange({ ...value, sources })}
       />
-      {behaviors.length > 0 && (
-        <BehaviorAxis
-          behaviors={behaviors}
-          value={value.behaviors}
-          onChange={(next) => onChange({ ...value, behaviors: next })}
-        />
-      )}
-      {hasFilter(value) && (
+      {(hasFilter(value) || nodes?.picked) && (
         <Button
           variant="quiet"
           size="icon-sm"
           aria-label="Clear filters"
           title="Clear filters"
           className="shrink-0"
-          onClick={() => onChange(emptyFilter)}
+          onClick={() => {
+            onChange(emptyFilter);
+            nodes?.clear();
+          }}
         >
           <X />
         </Button>

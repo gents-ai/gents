@@ -161,6 +161,7 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
     },
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
+    deployments: [],
     selectedDeployment: null,
     draft: "",
     setDraft: vi.fn(),

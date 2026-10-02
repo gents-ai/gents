@@ -44,12 +44,15 @@ const shellWith = (
 ) =>
   ({
     answerMailboxQuestion,
-    selectedDeployment: {
-      mailboxItems: items,
-      behaviors: [{ behaviorId: "engineer", displayName: "Engineer" }],
-      sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
-    },
+    deployments: [deploymentWith(items)],
+    selectedDeployment: deploymentWith(items),
   }) as unknown as Shell;
+const deploymentWith = (items: MailboxItemView[]) => ({
+  agentDid: "did:key:node",
+  mailboxItems: items,
+  behaviors: [{ behaviorId: "engineer", displayName: "Engineer" }],
+  sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
+});
 
 describe("mailbox item", () => {
   it("shows the title, sender, session, time, kind and status", () => {
@@ -61,7 +64,7 @@ describe("mailbox item", () => {
     expect(within(meta).getByText("Engineer")).toBeVisible();
     const link = within(meta).getByText("in Mailbox cleanup");
     expect(link.closest("a")).toHaveAttribute("href");
-    const times = screen.getAllByText("5m ago");
+    const times = screen.getAllByText("5m");
     expect(times[0]!.tagName).toBe("TIME");
     expect(times[0]).toHaveAttribute("title");
   });
@@ -97,10 +100,17 @@ describe("mailbox item", () => {
         ])}
       />,
     );
-    const [json, text] = screen.getAllByTestId("mailbox-item-body");
-    expect(json!.querySelector("pre")).toHaveTextContent('"pr": 42');
-    expect(text!.querySelector("h2")).toHaveTextContent("Next");
-    expect(text!.querySelector("ol li")).toHaveTextContent("review");
+    /* by card, not by position: the list orders items newest first, and
+       the two fixtures are created a moment apart */
+    const bodyOf = (title: string) =>
+      within(
+        screen.getByRole("heading", { name: title }).closest("article")!,
+      ).getByTestId("mailbox-item-body");
+    const json = bodyOf("json");
+    const text = bodyOf("text");
+    expect(json.querySelector("pre")).toHaveTextContent('"pr": 42');
+    expect(text.querySelector("h2")).toHaveTextContent("Next");
+    expect(text.querySelector("ol li")).toHaveTextContent("review");
   });
 
   it("folds a long body behind show more and unfolds it", () => {
