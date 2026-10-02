@@ -1,7 +1,9 @@
 use super::support::*;
 use super::*;
 use crate::lifecycle::queue::goal_continuation_identity;
-use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
+use gents_loop::provider_limit::{
+    classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -90,11 +92,27 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         }
         let accounts = f.claude_accounts().await;
         let facts = &case.facts;
+        let failure = usage_limit(facts.reset_at);
         f.fail_with_call(
             stopped,
             &accounts.a,
-            &usage_limit(facts.reset_at),
+            &failure,
             &at(facts.limit_started_at).to_rfc3339(),
+        )
+        .await;
+        // The goal source records the limit on the Goal it stops.
+        let Some(ProviderLimit::UsageExhausted(limit)) =
+            classify_provider_limit(&failure, Utc::now())
+        else {
+            panic!("{}: not a usage limit", case.name);
+        };
+        execute(
+            &f.node,
+            &format!(
+                r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ last_failure: "{}" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&f.goal.doc_id),
+                escape_graphql_string(&limit.to_string())
+            ),
         )
         .await;
         let did = f.identity.did();
@@ -139,7 +157,9 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 let receipt = result.unwrap_or_else(|| panic!("{}: no resume", case.name));
                 assert!(receipt.created, "{}", case.name);
                 assert_eq!(receipt.goal_status, GoalStatus::Active);
-                let expected = goal_continuation_identity(&goal.goal_id, stopped, 1).unwrap();
+                let sequence = case.expected["sequence"].as_i64().unwrap();
+                let expected =
+                    goal_continuation_identity(&goal.goal_id, stopped, sequence).unwrap();
                 assert_eq!(receipt.request_id, expected.request_id);
             }
             "deferred" | "illegal" => assert!(result.is_none(), "{}: {result:?}", case.name),

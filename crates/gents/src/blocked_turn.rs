@@ -97,20 +97,7 @@ pub(crate) fn blocked_turn_from(
             },
         };
         let backend_id = call.backend_id.as_deref();
-        // The profile that served the call's kind, while it is still on the
-        // call's backend; a sibling left there did not serve the call.
-        let served = if call.call_kind.as_deref() == Some("compaction") {
-            profiles.last()
-        } else {
-            profiles.first()
-        };
-        let profile = served.filter(|profile| {
-            references
-                .profile_with_backend(profile)
-                .ok()
-                .flatten()
-                .is_some_and(|(profile, _)| Some(profile.backend_id.as_str()) == backend_id)
-        });
+        let profile = served_profile(references, behavior_id, call);
         let started_at = call
             .started_at
             .as_deref()
@@ -129,7 +116,7 @@ pub(crate) fn blocked_turn_from(
                 started_at.is_some_and(|at| since.is_none_or(|since| at >= since))
             })
             .map(|backend| named(&backend, serving_account(&backend, accounts)));
-        Some((reason, account, profile.cloned(), resets_at))
+        Some((reason, account, profile, resets_at))
     });
     let (reason, account, profile, resets_at) = match stopped_by_call {
         Some(stopped) => stopped,
@@ -169,6 +156,30 @@ pub(crate) fn blocked_turn_from(
         profile,
         resets_at,
     })
+}
+
+/// The profile of `behavior_id` that served `call`'s kind, while it is still
+/// on the call's backend; a sibling left there did not serve the call.
+pub(crate) fn served_profile(
+    references: &ConfigReferences,
+    behavior_id: &str,
+    call: &FailedCall,
+) -> Option<String> {
+    let profiles = references.behavior_profiles(behavior_id);
+    let served = if call.call_kind.as_deref() == Some("compaction") {
+        profiles.last()
+    } else {
+        profiles.first()
+    };
+    served
+        .filter(|profile| {
+            references
+                .profile_with_backend(profile)
+                .ok()
+                .flatten()
+                .is_some_and(|(profile, _)| Some(&profile.backend_id) == call.backend_id.as_ref())
+        })
+        .cloned()
 }
 
 fn named(backend: &InferenceBackend, serving: ServingAccount) -> BlockedAccount {
@@ -241,28 +252,42 @@ pub async fn blocked_goal_turn(
     let accounts = list_accounts(access, agent_did).await?;
     let stopped = access
         .transact("blocked_turn.goal", |txn| {
-            Box::pin(async move {
-                let Some(goal) =
-                    crate::goal::load_canonical_goal_in_txn(txn, agent_did, session_id).await?
-                else {
-                    return Ok(None);
-                };
-                let filter = format!(
-                    r#"session_id: {{ _eq: "{}" }}"#,
-                    escape_graphql_string(session_id)
-                );
-                let requests = requests_in_txn(txn, agent_did, &filter).await?;
-                let Some(request) = crate::goal::latest_goal_request(&goal, &requests).cloned()
-                else {
-                    return Ok(None);
-                };
-                stopped_in_txn(txn, agent_did, request).await.map(Some)
-            })
+            Box::pin(goal_stopped_in_txn(txn, agent_did, session_id))
         })
         .await?;
-    Ok(stopped.and_then(|(references, request, call)| {
+    Ok(stopped.and_then(|(_, references, request, call)| {
         blocked_turn_from(&references, &accounts, &request, call.as_ref(), Utc::now())
     }))
+}
+
+/// `session_id`'s canonical Goal with one configuration snapshot, the Goal's
+/// latest request and that request's last failed call.
+pub(crate) async fn goal_stopped_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+) -> Result<
+    Option<(
+        crate::goal::GoalDocument,
+        ConfigReferences,
+        AgentRequestRow,
+        Option<FailedCall>,
+    )>,
+> {
+    let Some(goal) = crate::goal::load_canonical_goal_in_txn(txn, agent_did, session_id).await?
+    else {
+        return Ok(None);
+    };
+    let filter = format!(
+        r#"session_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(session_id)
+    );
+    let requests = requests_in_txn(txn, agent_did, &filter).await?;
+    let Some(request) = crate::goal::latest_goal_request(&goal, &requests).cloned() else {
+        return Ok(None);
+    };
+    let (references, request, call) = stopped_in_txn(txn, agent_did, request).await?;
+    Ok(Some((goal, references, request, call)))
 }
 
 /// `agent_did`'s requests matching `filter`, newest first.
