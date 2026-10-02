@@ -660,6 +660,183 @@ describe("configuration panels", () => {
           screen.queryByRole("button", { name: "Disconnect" }),
         ).not.toBeInTheDocument();
       });
+
+      describe("rename, disconnect and remove an account from its row", () => {
+        /* Work runs two backends: one a profile uses, one nothing uses */
+        const usedDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-work-spare", "Work spare", "ClaudeCliSubscription", "acct-2"),
+          ],
+          inferenceProfiles: [
+            {
+              ...deployment.inferenceProfiles[0]!,
+              profile_id: "writer",
+              display_name: "Writer",
+              backend_id: "claude-work",
+            },
+          ],
+        };
+        const setup = (item?: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.renameProviderAccount = vi.fn().mockResolvedValue(undefined);
+          api.removeProviderAccount = vi.fn().mockResolvedValue(undefined);
+          render(
+            <InferencePanel shell={shell} deployment={usedDeployment} item={item} />,
+          );
+          return { api, user: userEvent.setup() };
+        };
+        const openMenu = async (
+          user: ReturnType<typeof userEvent.setup>,
+          row: string,
+        ) =>
+          user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+        /* none of the account actions edits a profile or a backend */
+        const expectNoConfigWrite = (api: MockApi) => {
+          expect(api.patchConfigComponents).not.toHaveBeenCalled();
+          expect(api.applyConfigComponents).not.toHaveBeenCalled();
+          expect(api.saveInferenceProfileConfig).not.toHaveBeenCalled();
+          expect(api.deleteBackendConfig).not.toHaveBeenCalled();
+        };
+
+        it("offers the account items on account rows and Remove in place of Delete on an added account's", async () => {
+          const { user } = setup();
+          await openMenu(user, "Work");
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          expect(
+            screen.queryByRole("menuitem", { name: "Delete backend…" }),
+          ).not.toBeInTheDocument();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "Claude");
+          for (const item of [
+            "Rename account…",
+            "Disconnect…",
+            "Remove account…",
+            "Delete backend…",
+          ])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "openrouter");
+          expect(
+            await screen.findByRole("menuitem", { name: "Delete backend…" }),
+          ).toBeVisible();
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(
+              screen.queryByRole("menuitem", { name: item }),
+            ).not.toBeInTheDocument();
+        });
+
+        it("renames an account from its row and refuses a label another account shows", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Rename account…" }),
+          );
+          const dialog = await screen.findByRole("dialog");
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Personal");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+            "Personal",
+          );
+          expect(api.renameProviderAccount).not.toHaveBeenCalled();
+
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Work 2");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          await waitFor(() =>
+            expect(api.renameProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.renameProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+            "Work 2",
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("disconnects an account from its row after naming its profiles", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          let dialog = await screen.findByRole("dialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          await user.click(
+            within(dialog).getByRole("button", { name: "Keep connected" }),
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
+
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          dialog = await screen.findByRole("dialog");
+          await user.click(
+            within(dialog).getByRole("button", { name: "Disconnect now" }),
+          );
+          await waitFor(() =>
+            expect(api.disconnectProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("removes an account from its row after naming its profiles and backends", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Remove account…" }),
+          );
+          const dialog = await screen.findByRole("alertdialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          expect(dialog).toHaveTextContent("Deletes its unused backends: Work spare");
+          expect(dialog).toHaveTextContent("Keeps the backends a profile uses: Work");
+          const remove = within(dialog).getByRole("button", { name: /^Delete / });
+          expect(remove).toBeDisabled();
+          await user.type(within(dialog).getByRole("textbox"), "Work");
+          await user.click(remove);
+          await waitFor(() =>
+            expect(api.removeProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.removeProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("offers Remove account, not Delete backend, in an added account's Danger zone", async () => {
+          const { user } = setup("claude-work");
+          const zone = await screen.findByTestId("danger-zone");
+          expect(within(zone).queryByText(/Delete backend/)).not.toBeInTheDocument();
+          await user.click(within(zone).getByRole("button", { name: /account/ }));
+          expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+            "Deletes its unused backends: Work spare",
+          );
+        });
+      });
     });
   });
 
