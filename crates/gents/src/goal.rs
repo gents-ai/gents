@@ -12,6 +12,7 @@ mod claimed_publication;
 mod operator_resume;
 mod readiness_gate;
 mod request_head;
+mod reset_resume;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
@@ -29,6 +30,7 @@ pub(crate) use request_head::{
     assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
     latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
 };
+pub use reset_resume::resume_at_reset;
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";

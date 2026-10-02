@@ -323,6 +323,6 @@ async fn stage_resume(
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
-mod support;
+pub(super) mod support;
 #[cfg(test)]
 mod tests;

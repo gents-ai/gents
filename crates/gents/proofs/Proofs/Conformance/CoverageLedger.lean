@@ -1191,6 +1191,11 @@ def caseCoverage : List CoverageEntry :=
       "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_reset_resume_cases"
+      "GoalResetResumeCases"
+      "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "graph_pipeline_validation_cases"
       "GraphPipelineValidationCases"
       "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
