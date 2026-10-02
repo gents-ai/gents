@@ -812,6 +812,30 @@ impl From<&OAuthCredential> for ProviderAccountView {
     }
 }
 
+/// How a desktop sign-in was stored: a new account or a refresh of one
+/// already stored, the account's label and reference, and after a refresh how
+/// to reach another account.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SignInView {
+    /// `added` or `refreshed`.
+    pub result: String,
+    pub label: String,
+    pub account_ref: Option<String>,
+    pub hint: Option<String>,
+}
+
+impl From<&SignIn> for SignInView {
+    fn from(_signed: &SignIn) -> Self {
+        Self {
+            result: String::new(),
+            label: String::new(),
+            account_ref: None,
+            hint: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderAccountsRequest {
@@ -1738,6 +1762,83 @@ mod provider_account_tests {
         let json = serde_json::to_string(&views).unwrap();
         assert!(!json.contains("SECRET"));
         assert!(!json.contains("KEY-SENTINEL"));
+    }
+
+    #[tokio::test]
+    async fn a_labelled_sign_in_reports_its_result_and_keeps_its_label_on_retry() {
+        let node = serving_node().await;
+        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let agent = "did:key:zAgent";
+        let pending = PendingOAuthCredentials::default();
+        let labelled = |label: &str, account: &str, token: &str| OAuthCredential {
+            label: Some(label.to_string()),
+            ..claude_sign_in(agent, Some(account), account, token)
+        };
+        save_issued_credential(
+            &pending,
+            access(),
+            pending.issue(claude_sign_in(agent, Some("acct-a"), "acct-a", "SECRET-a")),
+        )
+        .await
+        .expect("save the first account");
+
+        let added = SignInView::from(
+            &save_issued_credential(
+                &pending,
+                access(),
+                pending.issue(labelled("Work", "acct-b", "SECRET-b")),
+            )
+            .await
+            .expect("add the labelled account"),
+        );
+        assert_eq!(added.result, "added");
+        assert_eq!(added.label, "Work");
+        assert!(added.account_ref.is_some());
+        assert_eq!(added.hint, None);
+
+        let refreshed = SignInView::from(
+            &save_issued_credential(
+                &pending,
+                access(),
+                pending.issue(claude_sign_in(agent, Some("acct-b"), "acct-b", "SECRET-c")),
+            )
+            .await
+            .expect("refresh the labelled account"),
+        );
+        assert_eq!(refreshed.result, "refreshed");
+        assert_eq!(refreshed.label, "Work");
+        assert_eq!(refreshed.account_ref, added.account_ref);
+        assert!(refreshed
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Work")));
+
+        save_issued_credential(
+            &pending,
+            Ok(unreachable_operator()),
+            pending.issue(labelled("Spare", "acct-d", "SECRET-d")),
+        )
+        .await
+        .expect_err("a runtime that is not serving cannot store the sign-in");
+        retry_pending_credential(
+            &pending,
+            access(),
+            agent,
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        )
+        .await
+        .expect("retry stores the held sign-in");
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), agent)
+            .await
+            .unwrap();
+        let spare = stored
+            .iter()
+            .find(|row| row.account_id.as_deref() == Some("acct-d"))
+            .expect("the retried account is stored");
+        assert_eq!(spare.label.as_deref(), Some("Spare"));
+
+        let json = serde_json::to_string(&[&added, &refreshed]).unwrap();
+        assert!(!json.contains("SECRET"));
     }
 }
 
