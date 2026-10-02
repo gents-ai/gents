@@ -5005,11 +5005,13 @@ async fn pack_inference_slot_cannot_pick_another_account() {
     tool_config.behavior_id = "pack-pick".into();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
         node,
         core.agent_did().to_owned(),
         Some(identity),
         &tool_config,
+        plugins,
     );
     let argv = |prefix: &[&str], profile: &str| {
         let mut argv: Vec<String> = prefix.iter().map(|arg| (*arg).to_owned()).collect();
@@ -5021,7 +5023,10 @@ async fn pack_inference_slot_cannot_pick_another_account() {
     };
     let error = call_config_tool(
         &tools,
-        argv(&["pack", "preview", "install", "code_review"], "p-chat-b"),
+        argv(
+            &["pack", "preview", "install", "fixture/review_graph"],
+            "p-chat-b",
+        ),
     )
     .await
     .expect_err("preview binding another account must be refused");
@@ -5029,7 +5034,10 @@ async fn pack_inference_slot_cannot_pick_another_account() {
     let preview: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            argv(&["pack", "preview", "install", "code_review"], "p-grok"),
+            argv(
+                &["pack", "preview", "install", "fixture/review_graph"],
+                "p-grok",
+            ),
         )
         .await
         .unwrap(),
@@ -5037,7 +5045,13 @@ async fn pack_inference_slot_cannot_pick_another_account() {
     .unwrap();
     assert_eq!(preview["ready"], true);
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let install = ["pack", "install", "code_review", "--digest", digest];
+    let install = [
+        "pack",
+        "install",
+        "fixture/review_graph",
+        "--digest",
+        digest,
+    ];
     let error = call_config_tool(&tools, argv(&install, "p-chat-b"))
         .await
         .expect_err("install binding another account must be refused");
