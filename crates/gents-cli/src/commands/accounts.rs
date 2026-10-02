@@ -113,9 +113,9 @@ impl UsageReadCommand {
 
 /// The runtime's answer to a [`UsageReadCommand`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct UsageReads {
-    pub(crate) agent_did: String,
-    pub(crate) reads: Vec<AccountUsageRead>,
+pub struct UsageReads {
+    pub agent_did: String,
+    pub reads: Vec<AccountUsageRead>,
 }
 
 pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
@@ -406,7 +406,7 @@ pub(crate) async fn account_rows(
 }
 
 /// Asks the runtime behind `graphql` to read usage now.
-pub(crate) async fn request_usage_reads(
+pub async fn request_usage_reads(
     identity: &dyn gents::AgentIdentity,
     graphql: &gents::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
@@ -718,7 +718,7 @@ pub(crate) async fn disable_account(
 /// Delete the account's row and, in the same transaction, the backends
 /// sign-in created for it (its reference) that no profile uses. A backend
 /// with no reference is never deleted: it is the provider's own backend.
-pub(crate) async fn remove_account(
+pub async fn remove_account(
     access: &ConfigAccess,
     agent_did: &str,
     account: &str,
