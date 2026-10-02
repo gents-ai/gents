@@ -2083,7 +2083,10 @@ pub(crate) struct QueryArgs {
         help = r#"DefraDB filter as JSON, e.g. '{"status":{"_eq":"completed"}}'"#
     )]
     pub(crate) filter: Option<String>,
-    #[arg(long, help = "Maximum rows to return (find defaults to 50; search to 10; maximum 1000)")]
+    #[arg(
+        long,
+        help = "Maximum rows to return (find defaults to 50; search to 10; maximum 1000)"
+    )]
     pub(crate) limit: Option<u32>,
     #[arg(
         long = "allow-collection",
