@@ -487,6 +487,27 @@ pub async fn discover_inference_models_for_core(
     })
 }
 
+/// The account a discovery for a backend naming `account_ref` reads, and the
+/// auth its catalog is published under.
+async fn discovery_account(
+    access: &gents::ConfigAccess,
+    agent_did: &str,
+    provider: &str,
+    _account_ref: Option<&str>,
+) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
+    let credential = gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await?;
+    Ok((
+        credential,
+        gents::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+    ))
+}
+
 /// Operator discovery is published as the credential-free catalog of every
 /// persisted backend already using this exact connection, so self-config can
 /// read it. Setup runs discovery again after persisting to publish it. A
@@ -2339,6 +2360,64 @@ mod provider_account_tests {
         for secret in ["SECRET", "KEY-SENTINEL", "IDENTITY"] {
             assert!(!json.contains(secret), "usage views leak {secret}: {json}");
         }
+    }
+
+    #[tokio::test]
+    async fn discovery_reads_the_account_its_backend_names() {
+        use gents::document_config::BackendAuth;
+
+        let access = serving_operator().await;
+        let agent = "did:key:zAgent";
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+        let a = gents::oauth_credential::store_sign_in(
+            &access,
+            claude_sign_in(agent, Some("account-a"), "acct-a", "SECRET-a"),
+            None,
+        )
+        .await
+        .expect("store the original account")
+        .credential;
+        let b = gents::oauth_credential::store_sign_in(
+            &access,
+            claude_sign_in(agent, Some("account-b"), "acct-b", "SECRET-b"),
+            Some("Work"),
+        )
+        .await
+        .expect("store the added account")
+        .credential;
+        assert!(b.account_ref.is_some());
+
+        let (credential, auth) =
+            discovery_account(&access, agent, provider, b.account_ref.as_deref())
+                .await
+                .expect("added account");
+        assert_eq!(
+            credential.map(|row| row.credential_id),
+            Some(b.credential_id.clone())
+        );
+        assert_eq!(
+            auth,
+            BackendAuth::PrincipalOAuth {
+                account_ref: b.account_ref.clone()
+            }
+        );
+
+        let (credential, auth) = discovery_account(&access, agent, provider, None)
+            .await
+            .expect("original account");
+        assert_eq!(
+            credential.map(|row| row.credential_id),
+            Some(a.credential_id)
+        );
+        assert_eq!(auth, BackendAuth::PrincipalOAuth { account_ref: None });
+
+        gents::oauth_credential::set_account_enabled(&access, agent, &b.credential_id, false)
+            .await
+            .expect("disable the added account");
+        let (credential, _) = discovery_account(&access, agent, provider, b.account_ref.as_deref())
+            .await
+            .expect("disabled account");
+        assert_eq!(credential, None);
     }
 }
 

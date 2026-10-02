@@ -335,6 +335,7 @@ describe("configuration panels", () => {
         provider: "xai-oauth",
         enabled: true,
         accountId: "person@example.test",
+        accountRef: "g-2",
         credentialId: "private-credential-id",
         planType: null,
         accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
@@ -357,6 +358,7 @@ describe("configuration panels", () => {
               endpoint: "https://cli-chat-proxy.grok.com/v1",
               probeStatus: "healthy",
               models: ["grok-4.5"],
+              accountRef: "g-2",
             },
           ],
         }}
@@ -379,6 +381,7 @@ describe("configuration panels", () => {
         provider: "grok",
         authMethod: "grok_oauth",
         apiKey: null,
+        accountRef: "g-2",
       }),
     );
     expect(api.probeInferenceEndpoint).not.toHaveBeenCalled();
