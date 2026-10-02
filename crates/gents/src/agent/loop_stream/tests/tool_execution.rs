@@ -1013,11 +1013,6 @@ async fn terminalization_scale_grid() {
 
 #[tokio::test]
 async fn background_output_query_work_is_independent_of_principal_history() {
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("gents::agent::loop_stream::tests=info")
-        .with_test_writer()
-        .finish();
-    let _trace = tracing::subscriber::set_default(subscriber);
     use crate::session::canonical_rows::{
         output_segment_create_variables, request_output_segments_query,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -1082,7 +1077,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     create(&node, &template).await;
     let query = request_output_segments_query(&request_id);
     let mut work = Vec::new();
-    let mut previous_work = Vec::new();
     for noise in [0, 160] {
         if noise > 0 {
             for replica in 0..noise {
@@ -1099,7 +1093,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 create(&node, &segment).await;
             }
         }
-        let query_started = std::time::Instant::now();
         let response = crate::graphql::graphql_with_transaction_retry(
             &node,
             &format!("query @explain(type: execute) {query}"),
@@ -1107,7 +1100,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         )
         .await
         .unwrap();
-        let query_elapsed = query_started.elapsed();
         let data = response.data.unwrap();
         let request_scan = scan(&data, "indexFetches")
             .unwrap_or_else(|| panic!("request output must report index execution work: {data}"));
@@ -1134,33 +1126,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 .as_u64()
                 .expect("execution must report index work"),
         );
-        let scoped_query = format!(
-            r#"query @explain(type: execute) {{ AgentOutputSegment(filter: {{ {}, request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            crate::session::session_scope_filter("did:test:owner", "session", None),
-            crate::graphql::escape_graphql_string(&request_id),
-            crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
-        );
-        let previous_started = std::time::Instant::now();
-        let previous = crate::graphql::graphql_with_transaction_retry(
-            &node,
-            &scoped_query,
-            "explain previous background output",
-        )
-        .await
-        .unwrap();
-        let previous_elapsed = previous_started.elapsed();
-        let previous_data = previous.data.unwrap();
-        let previous_scan = scan(&previous_data, "indexFetches").unwrap_or_else(|| {
-            panic!("previous output must report index execution work: {previous_data}")
-        });
-        tracing::info!(
-            noise,
-            request_query_micros = query_elapsed.as_micros(),
-            previous_query_micros = previous_elapsed.as_micros(),
-            "background query execution comparison"
-        );
-        previous_work.push(previous_scan["indexFetches"].as_u64().unwrap());
-        let started = std::time::Instant::now();
         let output = crate::background_tools::canonical_tool_output(
             &node,
             "tool-doc",
@@ -1171,7 +1136,6 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         )
         .await
         .unwrap();
-        let output_elapsed = started.elapsed();
         assert_eq!(output, "output");
         assert_eq!(
             crate::background_tools::observe_canonical_tool_output_with_access(
@@ -1187,23 +1151,13 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             crate::background_tools::CanonicalToolOutputObservation::Closed(output)
         );
 
-        tracing::info!(
-            noise,
-            index_fetches = work.last().unwrap(),
-            output_fetch_micros = output_elapsed.as_micros(),
-            "background output query scale"
-        );
+
     }
     assert_eq!(
         work[0], work[1],
         "request query work grew with unrelated history"
     );
     assert!(work[0] > 0);
-    tracing::info!(
-        ?work,
-        ?previous_work,
-        "request scoped background output scan comparison"
-    );
     drop(lifecycle);
     node.shutdown().await;
 }
