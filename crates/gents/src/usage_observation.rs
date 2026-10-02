@@ -512,14 +512,15 @@ type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 /// an OAuth account's bearer comes from the refresh owner, so an expired
 /// sign-in is renewed here like a request would renew it (one credential
 /// write, one runtime view reload). Every skip happens before any bearer is
-/// touched, so a skipped read never refreshes.
+/// touched, so a skipped read never refreshes. Open and Refresh read alike,
+/// Claude included: an account read within `READ_SKIP_WINDOW` is skipped.
 // ponytail: the skip check is not atomic, so two concurrent Opens of one
 // account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     backend: &InferenceBackend,
-    trigger: UsageTrigger,
+    _trigger: UsageTrigger,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
@@ -528,12 +529,8 @@ pub async fn read_account_usage(
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
     }
-    match (kind, trigger) {
-        (Kind::OpenAiCompatible, _) => return Ok(UsageRead::NotReported),
-        (Kind::ClaudeCliSubscription, UsageTrigger::Open) => {
-            return Ok(UsageRead::SkippedUntilRefresh)
-        }
-        _ => {}
+    if matches!(kind, Kind::OpenAiCompatible) {
+        return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
         Kind::OpenRouter => match backend.auth.resolve_api_key() {
