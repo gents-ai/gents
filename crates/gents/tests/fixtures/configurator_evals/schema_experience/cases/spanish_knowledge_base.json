@@ -1,0 +1,45 @@
+{
+  "case_id": "spanish-knowledge-base",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "Please prepare a Spanish-language knowledge base. ManualPage has code, heading and content, all text. Codes are unique. Heading and content should each support BM25 word search using Spanish stemming. I'll hook up the search interface separately.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "ManualPage"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type ManualPage { code: String @index(ordered:{unique:true}) heading: String @fulltext(language:\"spanish\") content: String @fulltext(language:\"spanish\") }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "case_id": "extend-customer-records",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "We already have Customer records in production. Add an optional notes text field and an optional newsletter true/false field. Keep the current name and email fields and every existing customer. Don't rebuild or replace the collection.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Customer"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "customers",
+          "collection": "Customer",
+          "filter": {},
+          "fields": [
+            "name",
+            "email"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Customer { name: String email: String notes: String newsletter: Boolean }",
+            "exact_nullability": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "customers",
+            "min": 2,
+            "max": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "customers",
+                "key": "name",
+                "id": "Mina",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "mina@example.test"
+                  }
+                ]
+              },
+              {
+                "capture": "customers",
+                "key": "name",
+                "id": "Owen",
+                "expect": [
+                  {
+                    "field": "email",
+                    "equals": "owen@example.test"
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ],
+  "fixtures": {
+    "schemas": [
+      "type Customer { name: String email: String }"
+    ],
+    "documents": [
+      {
+        "collection": "Customer",
+        "document": {
+          "name": "Mina",
+          "email": "mina@example.test"
+        }
+      },
+      {
+        "collection": "Customer",
+        "document": {
+          "name": "Owen",
+          "email": "owen@example.test"
+        }
+      }
+    ]
+  }
+}

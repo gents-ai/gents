@@ -1,0 +1,45 @@
+{
+  "case_id": "help-center-search",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "We're building a help center. Please set up HelpArticle records with slug, title and body as text. Slugs must be unique. Our articles are in English; people should be able to find relevant articles by words in the title or body, ranked with BM25. Set up the schema and search indexes; we'll connect the search UI later.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "HelpArticle"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type HelpArticle { slug: String @index(ordered: {unique:true}) title: String @fulltext(language:\"english\") body: String @fulltext(language:\"english\") }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

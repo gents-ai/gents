@@ -8,3 +8,6 @@ mod targets;
 
 #[path = "onboarding_evals/ladder.rs"]
 mod ladder;
+
+#[path = "onboarding_evals/schema.rs"]
+mod schema;

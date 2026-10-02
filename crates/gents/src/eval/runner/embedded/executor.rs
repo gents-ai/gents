@@ -1502,7 +1502,7 @@ async fn fired_request(node: &EmbeddedNode, doc_id: &str) -> Result<Option<Strin
 /// is not there reports `missing_capture`, which is no evidence about the
 /// subject; a check handed an empty one would score it zero.
 async fn run_captures(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     trial_did: &str,
     workspace: &Path,
     captures: &[Capture],
@@ -1510,6 +1510,31 @@ async fn run_captures(
     let mut results = BTreeMap::new();
     for capture in captures {
         match capture {
+            Capture::Schema { name, collections } => {
+                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                let mut versions = Vec::new();
+                let mut failed = false;
+                for collection in collections {
+                    match access.collection_version(collection).await {
+                        Ok(Some(version)) => versions.push(version),
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(error = %format!("{error:#}"), capture = %name,
+                                "eval schema capture failed; recording no capture");
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+                if !failed {
+                    results.insert(
+                        name.clone(),
+                        CaptureResult::Schema {
+                            collections: versions,
+                        },
+                    );
+                }
+            }
             Capture::Documents {
                 name,
                 collection,
@@ -1894,6 +1919,42 @@ mod tests {
         assert_eq!(provider_reason_from_failure("weird"), None);
         // A three-digit run inside a longer token is not a status.
         assert_eq!(provider_reason_from_failure("model gpt-4o-500k"), None);
+    }
+
+    #[tokio::test]
+    async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        ConfigAccess::Local(node.clone())
+            .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
+            .await
+            .unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let captures = run_captures(
+            &node,
+            "did:test",
+            workspace.path(),
+            &[
+                Capture::Schema {
+                    name: "present".into(),
+                    collections: vec!["SearchNote".into()],
+                },
+                Capture::Schema {
+                    name: "absent".into(),
+                    collections: vec!["NoSuchCollection".into()],
+                },
+            ],
+        )
+        .await;
+        let CaptureResult::Schema { collections } = &captures["present"] else {
+            panic!("schema evidence")
+        };
+        assert_eq!(collections[0]["FullTextIndexes"][0]["FieldName"], "body");
+        assert_eq!(
+            captures["absent"],
+            CaptureResult::Schema {
+                collections: vec![]
+            }
+        );
     }
 
     #[tokio::test]

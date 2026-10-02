@@ -102,6 +102,20 @@
       ],
       "title": "Graph authoring capability probe",
       "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
+    },
+    {
+      "id": "schema-experience",
+      "definition_id": "engineer-schema-experience",
+      "path": "schema_experience",
+      "subject": "ladder/engineer_subject",
+      "coverage": [
+        "BM25 index deployment",
+        "relational modeling",
+        "ordered, unique and vector indexes",
+        "additive updates preserve records",
+        "write and read configured records"
+      ],
+      "title": "Schema management"
     }
   ]
 }

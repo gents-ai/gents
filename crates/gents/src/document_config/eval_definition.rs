@@ -154,6 +154,11 @@ pub struct EvalCheckRef {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalCapture {
+    /// Active native collection definitions, including fields and indexes.
+    Schema {
+        name: String,
+        collections: Vec<String>,
+    },
     /// App-collection rows matching a DefraDB filter.
     Documents {
         name: String,
@@ -172,7 +177,9 @@ pub enum EvalCapture {
 impl EvalCapture {
     pub fn name(&self) -> &str {
         match self {
-            Self::Documents { name, .. } | Self::File { name, .. } => name,
+            Self::Documents { name, .. } | Self::File { name, .. } | Self::Schema { name, .. } => {
+                name
+            }
         }
     }
 }
@@ -436,6 +443,14 @@ impl EvalDefinition {
                         "eval definition {id} case {case_id} stage {stage_id} has duplicate capture name {name}"
                     );
                     match capture {
+                        EvalCapture::Schema { collections, .. } => {
+                            ensure!(!collections.is_empty(), "schema capture {name} needs collection names");
+                            let mut names = BTreeSet::new();
+                            for collection in collections {
+                                crate::graphql::validate_collection_identifier(collection)?;
+                                ensure!(names.insert(collection), "schema capture {name} repeats {collection}");
+                            }
+                        },
                         EvalCapture::Documents { collection, .. } => ensure!(
                             !collection.trim().is_empty(),
                             "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty collection"

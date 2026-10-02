@@ -1,0 +1,156 @@
+{
+  "case_id": "stock-records",
+  "split": "train",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "I keep spare parts for a repair shop. Please set up Part records: sku (text), label (text), quantity (whole number), reorder (true/false). A SKU identifies one part, so don't allow duplicate SKUs. Give yourself tools limited to adding parts and looking them up by SKU; I'll send the first entries next.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "Part"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type Part { sku: String @index(ordered:{unique:true}) label: String quantity: Int reorder: Boolean }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "use",
+      "prompt": "Add SKU WASH-8, label '8 mm washers', quantity 24, reorder false; and SKU SEAL-2, label 'pump seals', quantity 3, reorder true. Then look up SEAL-2 and tell me its label and quantity.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "parts",
+          "collection": "Part",
+          "filter": {},
+          "fields": [
+            "sku",
+            "label",
+            "quantity",
+            "reorder"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "parts",
+                "key": "sku",
+                "id": "WASH-8",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "8 mm washers"
+                  },
+                  {
+                    "field": "quantity",
+                    "equals": 24
+                  },
+                  {
+                    "field": "reorder",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "capture": "parts",
+                "key": "sku",
+                "id": "SEAL-2",
+                "expect": [
+                  {
+                    "field": "label",
+                    "equals": "pump seals"
+                  },
+                  {
+                    "field": "quantity",
+                    "equals": 3
+                  },
+                  {
+                    "field": "reorder",
+                    "equals": true
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "parts",
+            "min": 2,
+            "max": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              {
+                "matches": "(?is)(pump seals.*3|3.*pump seals)"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "Part"
+              },
+              {
+                "field": "results",
+                "contains": "SEAL-2"
+              },
+              {
+                "field": "results",
+                "contains": "pump seals"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

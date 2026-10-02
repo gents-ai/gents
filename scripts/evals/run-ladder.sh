@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run native onboarding evals with a live browser or terminal view.
 #
-#   scripts/evals/run-ladder.sh [all|l1..l6|factory-setup|list] [TRIALS] [CONCURRENCY]
+#   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
 #
 # `all` runs L1-L5 and the configuration-only capstone. L6 is an explicit
 # capability probe, excluded from acceptance while graph authoring is missing.

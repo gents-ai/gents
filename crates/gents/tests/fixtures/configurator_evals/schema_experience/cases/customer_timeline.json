@@ -1,0 +1,45 @@
+{
+  "case_id": "customer-timeline",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "configure",
+      "prompt": "We're recording customer events. Please create CustomerEvent with customer (text), occurred_at (timestamp), and message (text). Our main screen shows one customer's most recent events first; add a compound index ordered first by customer, then by occurred_at descending. Different events can share the same timestamp.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "schema",
+          "name": "schema",
+          "collections": [
+            "CustomerEvent"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "schema_matches",
+          "params": {
+            "name": "schema",
+            "sdl": "type CustomerEvent @index(ordered:{includes:[{field:\"customer\"},{field:\"occurred_at\",direction:DESC}]}) { customer: String occurred_at: DateTime message: String }"
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "schema"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

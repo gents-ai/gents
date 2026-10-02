@@ -226,10 +226,10 @@ impl Check for CapturedFieldsMatch {
         let name = &params.name;
         let rows = match stage.captures.get(name) {
             Some(CaptureResult::Documents { rows }) => rows,
-            Some(CaptureResult::Files { .. }) => {
+            Some(CaptureResult::Files { .. } | CaptureResult::Schema { .. }) => {
                 return grader(
                     "missing_capture",
-                    format!("capture {name} holds files, not documents"),
+                    format!("capture {name} does not hold documents"),
                 )
             }
             None => {
