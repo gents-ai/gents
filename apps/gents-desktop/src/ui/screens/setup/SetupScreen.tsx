@@ -353,6 +353,9 @@ function withoutProvider<T>(state: Partial<Record<ProviderId, T>>, id: ProviderI
   return next;
 }
 
+const notAdded = (label: string) =>
+  `This sign-in refreshed the account stored as ${label}. No account was added.`;
+
 export function SetupScreen({
   shell,
   onDone,
@@ -757,6 +760,9 @@ export function SetupScreen({
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
     if (!agentDid || !oauthProvider || !api.retrySaveProviderAccount) return;
     const pendingProvider = provider;
+    /* with a stored account, a store adds only under a new reference, so a
+       retry returning no reference refreshed the original account */
+    const hadStored = accountsOf(oauthProvider).length > 0;
     setBusy(true);
     setError(null);
     try {
@@ -774,11 +780,15 @@ export function SetupScreen({
         onDone(await api.fetchDesktopSnapshot());
         return;
       }
+      setPendingSave((current) => withoutProvider(current, pendingProvider));
+      if (purpose === "add-backend" && hadStored) {
+        setSignInHint(notAdded(account.label));
+        return;
+      }
       setSignedIn((current) => ({
         ...current,
         [pendingProvider]: account.credentialId,
       }));
-      setPendingSave((current) => withoutProvider(current, pendingProvider));
       invalidateDiscovery();
     } catch (cause) {
       if (bridgeErrorCode(cause) === "notFound") void observeAccounts(agentDid);
