@@ -174,7 +174,8 @@ fn type_kind(ty: Option<&Value>) -> Option<&str> {
 /// diagnostic and discovery mode.
 pub fn unknown_collection_message(collection: &str) -> String {
     format!(
-        "collection {collection:?} does not exist; check the collection (GraphQL type) name, e.g. \"AgentRequest\""
+        "collection {collection:?} does not exist; {}",
+        super::command::COLLECTION_GUIDANCE
     )
 }
 

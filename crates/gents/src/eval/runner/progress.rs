@@ -14,15 +14,15 @@
 //! optional, so a file written by an older runner still reads.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::runner::goal::GoalEntry;
+
+use super::files::write_json_atomically;
 
 pub const PROGRESS_FILE: &str = "progress.json";
 
@@ -350,7 +350,7 @@ impl ProgressWriter {
     fn update(&self, change: impl FnOnce(&mut Progress)) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         change(&mut state);
-        if let Err(error) = write_atomically(&self.path, &state) {
+        if let Err(error) = write_json_atomically(&self.path, &*state) {
             tracing::warn!(
                 error = %format!("{error:#}"),
                 path = %self.path.display(),
@@ -368,22 +368,6 @@ impl Drop for HolderGuard {
     fn drop(&mut self) {
         self.0.update(|progress| progress.holder = None);
     }
-}
-
-fn write_atomically(path: &Path, progress: &Progress) -> Result<()> {
-    // Never created here: a run directory `gents eval rm --force` removed
-    // under a live loop stays removed, and the write fails and is logged.
-    let dir = path.parent().context("progress.json has a run directory")?;
-    let mut staged = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("staging {}", path.display()))?;
-    // Serde emits small fragments; unbuffered file writes can exceed the
-    // runner's heartbeat interval and starve polling of completed trials.
-    let encoded = serde_json::to_vec_pretty(progress).context("encoding progress")?;
-    staged.write_all(&encoded).context("writing progress")?;
-    staged
-        .persist(path)
-        .with_context(|| format!("replacing {}", path.display()))?;
-    Ok(())
 }
 
 /// What an executor holds to report stage boundaries. The default reports

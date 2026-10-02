@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_sessions",
+  "version": "0.1.0",
+  "description": "Native sessions investigation evals",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "cases/discover_old.json",
+    "cases/count_closed.json",
+    "cases/wrong_id.json",
+    "cases/filtered_discovery.json",
+    "cases/transcript_evidence.json",
+    "cases/archive_evidence.json",
+    "cases/cross_agent_visible.json"
+  ],
+  "config": "pack_config.json"
+}

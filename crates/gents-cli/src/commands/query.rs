@@ -46,6 +46,15 @@ pub(crate) fn params_from_args(args: &QueryArgs) -> Result<(DefraQueryParams, Co
 pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let (command, scope) = command_from_args(args)?;
+    let output = gents::defra_query::execute_command(&*access, &command, &scope).await?;
+    print_json(&output)?;
+    Ok(())
+}
+
+fn command_from_args(
+    args: QueryArgs,
+) -> Result<(gents::defra_query::QueryParams, CollectionScope)> {
     let (params, scope) = params_from_args(&args)?;
     let mut command: gents::defra_query::QueryParams = params.into();
     if let Some(verb) = args.verb {
@@ -70,9 +79,15 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     if let Some(offset) = args.offset {
         command.options.insert("offset".into(), json!(offset));
     }
-    let output = gents::defra_query::execute_command(&*access, &command, &scope).await?;
-    print_json(&output)?;
-    Ok(())
+    if let Some(text) = args.text {
+        command.options.insert("text".into(), json!(text));
+    }
+    if !args.search_fields.is_empty() {
+        command
+            .options
+            .insert("search_fields".into(), json!(args.search_fields));
+    }
+    Ok((command, scope))
 }
 
 #[cfg(test)]
@@ -81,6 +96,44 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn query_search_cli_preserves_typed_search_options() {
+        use crate::cli::args::{Cli, Command};
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "gents",
+            "query",
+            "search",
+            "--collection",
+            "AdmiralReport",
+            "--field",
+            "name",
+            "--search-field",
+            "duty",
+            "--search-field",
+            "rank",
+            "--text",
+            "antisubmarine \"U-boats\"",
+            "--limit",
+            "1",
+            "--allow-collection",
+            "AdmiralReport",
+        ])
+        .unwrap();
+        let Command::Query(args) = cli.command else {
+            panic!("expected query")
+        };
+        let (params, scope) = command_from_args(args).unwrap();
+        assert_eq!(params.argv, ["search"]);
+        assert_eq!(params.collection.as_deref(), Some("AdmiralReport"));
+        assert_eq!(params.options["fields"], json!(["name"]));
+        assert_eq!(params.options["search_fields"], json!(["duty", "rank"]));
+        assert_eq!(params.options["text"], json!("antisubmarine \"U-boats\""));
+        assert_eq!(params.options["limit"], 1);
+        assert!(scope.ensure_allowed("AdmiralReport").is_ok());
+        assert!(scope.ensure_allowed("OtherReport").is_err());
+    }
+
     /// `gents query` with no `--allow-collection` is the widest scope the CLI
     /// offers, and it is the one an operator reaches for by default. A protected
     /// collection must still be refused there, before any request leaves the
@@ -88,6 +141,8 @@ mod tests {
     /// transport failure would not name the collection.
     fn protected_args(fields: Vec<String>) -> QueryArgs {
         QueryArgs {
+            text: None,
+            search_fields: Vec::new(),
             verb: None,
             mode: None,
             order: None,

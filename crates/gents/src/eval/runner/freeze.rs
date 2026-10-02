@@ -878,7 +878,7 @@ pub(crate) fn frozen_captures(run_dir: &Path) -> Result<Option<Vec<Capture>>> {
 fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
     std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
     let path = sidecar_path(run_dir);
-    std::fs::write(&path, serde_json::to_vec_pretty(sidecar)?)
+    super::files::write_json_atomically(&path, sidecar)
         .with_context(|| format!("writing {}", path.display()))
 }
 
@@ -890,7 +890,7 @@ pub const DEFINITION_FILE: &str = "definition.json";
 fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<()> {
     std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
     let path = run_dir.join(DEFINITION_FILE);
-    std::fs::write(&path, serde_json::to_vec_pretty(definition)?)
+    super::files::write_json_atomically(&path, definition)
         .with_context(|| format!("writing {}", path.display()))
 }
 
@@ -1112,6 +1112,43 @@ pub(crate) mod tests {
                 case("train-case", "train"),
             ],
         })
+    }
+
+    #[test]
+    fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = RunSidecar {
+            breaker_threshold: 5,
+            captures: Vec::new(),
+        };
+        let original: EvalDefinition = serde_json::from_value(definition()).unwrap();
+        write_sidecar(dir.path(), &before).unwrap();
+        write_frozen_definition(dir.path(), &original).unwrap();
+        let sidecar_reader = std::fs::File::open(sidecar_path(dir.path())).unwrap();
+        let definition_reader = std::fs::File::open(dir.path().join(DEFINITION_FILE)).unwrap();
+
+        let after = RunSidecar {
+            breaker_threshold: 10,
+            ..before.clone()
+        };
+        let mut revised = original.clone();
+        revised.comparability_version += 1;
+        write_sidecar(dir.path(), &after).unwrap();
+        write_frozen_definition(dir.path(), &revised).unwrap();
+
+        assert_eq!(
+            serde_json::from_reader::<_, RunSidecar>(sidecar_reader).unwrap(),
+            before
+        );
+        assert_eq!(
+            serde_json::from_reader::<_, EvalDefinition>(definition_reader).unwrap(),
+            original
+        );
+        assert_eq!(read_sidecar(dir.path()).unwrap(), Some(after));
+        assert_eq!(
+            read_frozen_definition(dir.path(), &definition_ref(&revised).unwrap()).unwrap(),
+            Some(revised)
+        );
     }
 
     fn case(case_id: &str, split: &str) -> Value {

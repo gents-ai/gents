@@ -74,6 +74,57 @@ mod tests {
     use super::*;
     use crate::eval::runner::{embedded::observe::ToolCallEvidence, ScriptedExecutor};
     #[test]
+    fn stock_records_accepts_requested_projection_without_requiring_filter_key_echo() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/configurator_evals/schema_experience/cases/stock_records.json"
+        )))
+        .unwrap();
+        let use_stage = fixture["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["stage_id"] == "use")
+            .unwrap();
+        let params = &use_stage["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["check"] == "tool_result_matches")
+            .unwrap()["params"];
+        let mut stage = ScriptedExecutor::passed_evidence("did:test", "use", "unused", vec![])
+            .stages
+            .remove(0);
+        stage.tool_calls = vec![ToolCallEvidence {
+            tool_name: "find_part_by_sku".into(),
+            status: Some("completed".into()),
+            lifecycle_state: Some("completed".into()),
+            tool_failure_class: None,
+            started_at: None,
+            completed_at: None,
+            args: json!({"fields":["label","quantity"],"sku":"SEAL-2"}),
+            result: json!({"collection":"Part","count":1,"results":[{"label":"pump seals","quantity":3}]}),
+        }];
+        assert_eq!(
+            ToolResultMatches.evaluate(params, &stage).score_bp,
+            Some(10000)
+        );
+        for incomplete in [
+            json!({"collection":"Part","count":1,"results":[{"sku":"SEAL-2"}]}),
+            json!({"collection":"Part","count":0,"results":[]}),
+            json!({"collection":"Other","count":1,"results":[{"label":"pump seals","quantity":3}]}),
+        ] {
+            stage.tool_calls[0].result = incomplete;
+            assert_ne!(
+                ToolResultMatches.evaluate(params, &stage).score_bp,
+                Some(10000)
+            );
+        }
+        stage.tool_calls.clear();
+        assert_eq!(ToolResultMatches.evaluate(params, &stage).score_bp, Some(0));
+    }
+
+    #[test]
     fn success_uses_one_real_tool_result_and_rejects_errors_or_cross_call_matches() {
         let mut stage = ScriptedExecutor::passed_evidence("did:test", "read", "unused", vec![])
             .stages

@@ -451,6 +451,32 @@ fn write_bindings() {
 }
 
 #[test]
+fn eval_capture_types_preserve_native_wire_tags() {
+    use gents::document_config::EvalCapture;
+    let declaration = EvalCapture::decl();
+    for capture in [
+        EvalCapture::Schema {
+            name: "schema".into(),
+            collections: vec!["Part".into()],
+        },
+        EvalCapture::Documents {
+            name: "rows".into(),
+            collection: "Part".into(),
+            filter: serde_json::json!({}),
+            fields: vec![],
+        },
+        EvalCapture::File {
+            name: "files".into(),
+            glob: "*.json".into(),
+        },
+    ] {
+        let wire = serde_json::to_value(capture).unwrap();
+        let tag = format!("\"kind\": \"{}\"", wire["kind"].as_str().unwrap());
+        assert!(declaration.contains(&tag), "{declaration}");
+    }
+}
+
+#[test]
 fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     let dir = tempfile::tempdir().expect("generated directory");
     gents::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_pack_experience",
+  "version": "0.1.0",
+  "description": "Registry discovery and pinned graph pack installation, inspection, upgrade and removal without execution.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "cases/discover_review_workflow.json",
+    "cases/install_review_workflow.json",
+    "cases/upgrade_review_workflow.json",
+    "cases/remove_review_workflow.json"
+  ],
+  "config": "pack_config.json"
+}

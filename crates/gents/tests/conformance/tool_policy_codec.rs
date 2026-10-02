@@ -199,6 +199,8 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         self_config: view.self_config,
         memory: view.memory,
         schema_management: view.schema_management,
+        p2p_read: view.p2p_read,
+        p2p_mutate: view.p2p_mutate,
         session_history: view.session_history,
         context_budget: view.context_budget,
         session_messages: view.session_messages,
@@ -209,6 +211,10 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         defra_collections: unit_scope_from_strings(
             &view.defra_collections_scope_kind,
             &view.defra_collections_keys,
+        ),
+        p2p_collections: unit_scope_from_strings(
+            &view.p2p_collections_scope_kind,
+            &view.p2p_collections_keys,
         ),
         self_config_categories: unit_scope_from_strings(
             &view.self_config_categories_scope_kind,
@@ -241,6 +247,8 @@ fn view_from_surface(
     mcp_probe: String,
     write_probe_tool: String,
     write_probe_collection: String,
+    p2p_overlay_before: Vec<String>,
+    p2p_overlay_after: Vec<String>,
 ) -> View {
     let write_probe = (write_probe_tool.clone(), write_probe_collection.clone());
     let write_fields = surface
@@ -258,6 +266,13 @@ fn view_from_surface(
         self_config: surface.self_config,
         memory: surface.memory,
         schema_management: surface.schema_management,
+        p2p_read: surface.p2p_read,
+        p2p_mutate: surface.p2p_mutate,
+        p2p_mutation_allowed: surface.permits_p2p_mutation(),
+        p2p_overlay_allowed: surface
+            .permits_p2p_overlay_mutation(&p2p_overlay_before, &p2p_overlay_after),
+        p2p_overlay_before,
+        p2p_overlay_after,
         session_history: surface.session_history,
         context_budget: surface.context_budget,
         session_messages: surface.session_messages,
@@ -284,6 +299,8 @@ fn view_from_surface(
         mcp_services: surface.mcp_services.keys(),
         defra_collections_scope_kind: surface.defra_collections.kind().to_string(),
         defra_collections_keys: surface.defra_collections.keys(),
+        p2p_collections_scope_kind: surface.p2p_collections.kind().to_string(),
+        p2p_collections_keys: surface.p2p_collections.keys(),
         self_config_categories_scope_kind: surface.self_config_categories.kind().to_string(),
         self_config_categories_keys: surface.self_config_categories.keys(),
         subagent_targets_scope_kind: surface.subagent_targets.kind().to_string(),
@@ -324,5 +341,7 @@ pub(super) fn compose(behavior: &View, ceiling: &View, runtime: &View) -> View {
         behavior.mcp_probe.clone(),
         behavior.write_probe_tool.clone(),
         behavior.write_probe_collection.clone(),
+        behavior.p2p_overlay_before.clone(),
+        behavior.p2p_overlay_after.clone(),
     )
 }

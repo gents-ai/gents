@@ -1152,6 +1152,9 @@ fn tools_for_package(
             enable_memory: Some(enable_memory),
             enable_session_history_tool: None,
             enable_schema_tool: None,
+            enable_p2p_tool: None,
+            enable_p2p_mutations: None,
+            p2p_collections: Vec::new(),
             enable_context_budget: Some(true),
         }),
         datastore: Some(DatastoreTools {

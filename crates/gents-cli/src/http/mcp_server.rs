@@ -52,7 +52,7 @@ impl DefraQueryMcp {
 #[tool_router]
 impl DefraQueryMcp {
     #[tool(
-        description = "Read documents: argv:[fields], [find], [count], [explain], [help,COMMAND]. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute."
+        description = "Read documents: argv:[fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page; search ranks keywords with native BM25. Explain inspects a native plan; executing it requires options.mode:execute."
     )]
     async fn query(&self, Parameters(args): Parameters<McpQueryArgs>) -> Result<String, ErrorData> {
         let params = QueryParams {

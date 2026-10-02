@@ -164,6 +164,9 @@ pub struct ResolvedToolSelection {
     pub enable_memory: bool,
     pub enable_session_history_tool: bool,
     pub enable_schema_tool: bool,
+    pub enable_p2p_tool: bool,
+    pub enable_p2p_mutations: bool,
+    pub p2p_collections: Vec<String>,
     pub enable_context_budget: bool,
     pub enable_defra_query: bool,
     pub defra_query_collections: Vec<String>,
@@ -206,6 +209,9 @@ impl Default for ResolvedToolSelection {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
             enable_context_budget: true,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
@@ -363,6 +369,15 @@ impl ResolvedToolSelection {
             enable_schema_tool: built_ins
                 .and_then(|built| built.enable_schema_tool)
                 .unwrap_or(false),
+            enable_p2p_tool: built_ins
+                .and_then(|built| built.enable_p2p_tool)
+                .unwrap_or(false),
+            enable_p2p_mutations: built_ins
+                .and_then(|built| built.enable_p2p_mutations)
+                .unwrap_or(false),
+            p2p_collections: built_ins
+                .map(|built| built.p2p_collections.clone())
+                .unwrap_or_default(),
             enable_session_history_tool: built_ins
                 .and_then(|built| built.enable_session_history_tool)
                 .unwrap_or(false),

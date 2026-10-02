@@ -104,6 +104,20 @@
       "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
     },
     {
+      "id": "schema-experience",
+      "definition_id": "engineer-schema-experience",
+      "path": "schema_experience",
+      "subject": "ladder/engineer_subject",
+      "coverage": [
+        "BM25 index deployment",
+        "relational modeling",
+        "ordered, unique and vector indexes",
+        "additive updates preserve records",
+        "write and read configured records"
+      ],
+      "title": "Schema management"
+    },
+    {
       "id": "engineer-datastore",
       "definition_id": "engineer-datastore",
       "path": "engineer_datastore",
@@ -128,6 +142,34 @@
         "empty results",
         "schema recovery",
         "protected collection refusal"
+      ]
+    },
+    {
+      "id": "sessions",
+      "definition_id": "engineer-sessions",
+      "path": "sessions",
+      "subject": "sessions/subject",
+      "coverage": [
+        "canonical discovery",
+        "exact ACP-visible count",
+        "wrong ID recovery",
+        "filtered discovery"
+      ],
+      "title": "Engineer sessions"
+    },
+    {
+      "id": "packs",
+      "definition_id": "engineer-packs",
+      "path": "packs",
+      "subject": "ladder/engineer_subject",
+      "title": "Registry packs",
+      "coverage": [
+        "registry discovery without installation",
+        "inference slot binding",
+        "saved installation and graph state",
+        "blocked upgrade preserves installed version",
+        "removal preserves unrelated configuration",
+        "no graph execution"
       ]
     }
   ]

@@ -93,6 +93,10 @@ pub struct SchemaError(String);
 #[error("missing or stale digest: run the returned preview call, inspect the effect, then use its next_call. options.digest binds the command and observed schema")]
 struct SchemaDigestMismatch;
 
+#[derive(Debug, thiserror::Error)]
+#[error("SDL definition is invalid")]
+struct SchemaSdlFailure;
+
 #[derive(Clone)]
 pub struct SchemaTool {
     node: Arc<EmbeddedNode>,
@@ -184,7 +188,7 @@ impl SchemaTool {
                 if words[0] == "view" {
                     text("query")?;
                 }
-                let definitions = query::parse_sdl(text("sdl")?)?;
+                let definitions = query::parse_sdl(text("sdl")?).context(SchemaSdlFailure)?;
                 ensure!(
                     !definitions.is_empty(),
                     "SDL must declare at least one collection"
@@ -269,14 +273,13 @@ impl SchemaTool {
             ["collection", "create"] => {
                 let plan =
                     crate::config_client::preview_schema_install(&access, text("sdl")?).await?;
-                serde_json::to_value(
-                    crate::config_client::apply_schema_install(
-                        &access,
-                        text("sdl")?,
-                        &plan.artifact_digest,
-                    )
-                    .await?,
-                )?
+                let installed = crate::config_client::apply_schema_install(
+                    &access,
+                    text("sdl")?,
+                    &plan.artifact_digest,
+                )
+                .await?;
+                json!({"collections":installed.collection_contracts.keys().collect::<Vec<_>>()})
             }
             ["collection", "update"] => {
                 let mut patch = option("patch")?
@@ -373,11 +376,11 @@ impl Tool for SchemaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Manage DefraDB application schemas. Commands: argv:[RESOURCE,VERB]; IDs follow the verb or use target_id. Discover commands and SDL concepts with [\"help\"], then [\"help\",TOPIC,SUBTOPIC]; command inputs: [RESOURCE,VERB,\"--help\"]. Configuration and document access use their own tools.".into(),
+            description: "Manage DefraDB application schemas. Commands: argv:[RESOURCE,VERB]. collection/view create names come from options.sdl; omit IDs. Commands taking an ID accept it after the verb or in target_id. Discover commands and SDL concepts with [\"help\"], then [\"help\",TOPIC,SUBTOPIC]; command inputs: [RESOURCE,VERB,\"--help\"]. Configuration and document access use their own tools.".into(),
             parameters: json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{
-                "argv":{"type":"array","items":{"type":"string"},"minItems":1},
-                "target_id":{"type":"string","description":"Collection name or exact version ID; may instead follow the verb in argv."},
-                "options":{"type":"object","additionalProperties":true}
+                "argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Required array of command strings, not a single string. Start with a resource, not a collection name. Copy returned next_call.args for apply."},
+                "target_id":{"type":"string","description":"Existing collection name or exact version ID for commands that take one. Omit for collection/view create: names come from options.sdl."},
+                "options":{"type":"object","additionalProperties":true,"description":"JSON object of command inputs, not a JSON-encoded string. Put SDL text in options.sdl. Read command --help for its fields."}
             }})
         }
     }
@@ -430,16 +433,29 @@ impl SchemaTool {
             }
             args.argv.truncate(2);
             args.argv.insert(0, "help".into());
+            args.target_id = None;
+            args.options.clear();
         }
         if args.argv.first().is_some_and(|s| s == "help") {
             if args.target_id.is_some() || !args.options.is_empty() {
-                return Err(SchemaError(
-                    "help accepts argv only; omit target_id and options".into(),
+                return Err(schema_error(
+                    anyhow::anyhow!("help accepts argv only; use this call to inspect the topic"),
+                    json!({"tool":"schema","args":{"argv":args.argv}}),
                 ));
             }
             return help::page(&args.argv[1..])
                 .map(str::to_owned)
-                .map_err(|e| SchemaError(e.to_string()));
+                .map_err(|error| {
+                    let mut argv = vec!["help".to_owned()];
+                    argv.extend(help::recovery_path(&args.argv[1..]));
+                    schema_error(error, json!({"tool":"schema","args":{"argv":argv}}))
+                });
+        }
+        if let Some((message, next)) = argument_correction(&args) {
+            return Err(schema_error(
+                anyhow::anyhow!(message),
+                json!({"tool":"schema","args":next}),
+            ));
         }
         let command = match SchemaCommand::parse(args.clone()) {
             Ok(command) => command,
@@ -481,6 +497,8 @@ impl SchemaTool {
                     error.downcast_ref::<crate::config_client::SchemaInstallMismatch>()
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
+                } else if error.is::<SchemaSdlFailure>() {
+                    sdl_help_call(args, &format!("{error:#}"))
                 } else {
                     help_call(args)
                 };
@@ -490,17 +508,113 @@ impl SchemaTool {
     }
 }
 
+fn argument_correction(args: &SchemaParams) -> Option<(String, SchemaParams)> {
+    let mut next = args.clone();
+    if next.argv.get(1).is_some_and(|word| word == "preview") {
+        next.argv.remove(1);
+    }
+    let mut reasons = Vec::new();
+    let create = matches!(
+        next.argv.first().map(String::as_str),
+        Some("collection" | "view")
+    ) && next.argv.get(1).is_some_and(|word| word == "create");
+    if create && (next.target_id.is_some() || next.argv.len() == 3) {
+        next.target_id = None;
+        next.argv.truncate(2);
+        reasons.push(
+            "create takes collection names from options.sdl; omit target_id and positional names",
+        );
+    }
+    if create && !next.options.contains_key("sdl") && next.options.contains_key("schema") {
+        let sdl = next.options.remove("schema").unwrap();
+        next.options.insert("sdl".into(), sdl);
+        reasons.push("SDL belongs in options.sdl, not options.schema");
+    }
+    let read = matches!(
+        next.argv
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        ["collection" | "version", "list" | "get"] | ["collection" | "version", "list" | "get", _]
+    );
+    if read
+        && (args.argv.get(1).is_some_and(|word| word == "preview")
+            || next.options.contains_key("digest"))
+    {
+        next.options.remove("digest");
+        reasons.push("reads need neither preview nor digest");
+    }
+    if reasons.is_empty() {
+        return None;
+    }
+    if !read {
+        next = preview_call(&next);
+    }
+    Some((
+        format!(
+            "{}. Review the corrected call; it has not been executed",
+            reasons.join("; ")
+        ),
+        next,
+    ))
+}
+
 fn help_call(args: &SchemaParams) -> Value {
-    let resource = args.argv.first().map(String::as_str).unwrap_or("");
-    let argv = if matches!(resource, "collection" | "version" | "migration" | "view") {
-        if args.argv.len() >= 2 && help::page(&args.argv[..2]).is_ok() {
-            vec!["help", resource, args.argv[1].as_str()]
-        } else {
-            vec!["help", resource]
-        }
+    let mut path = args.argv.clone();
+    if path.get(1).is_some_and(|word| word == "preview") {
+        path.remove(1);
+    }
+    path.truncate(2);
+    let mut argv = vec!["help".to_owned()];
+    argv.extend(help::recovery_path(&path));
+    json!({"tool":"schema","args":{"argv":argv}})
+}
+
+fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
+    let error = error.to_ascii_lowercase();
+    let path = if error.contains("no type found")
+        || error.contains("nonnull")
+        || error.contains("unknown type")
+    {
+        "fields types"
+    } else if error.contains("relation") || error.contains("primary") {
+        "relationships"
     } else {
-        vec!["help"]
+        let sdl = args
+            .options
+            .get("sdl")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let topics = [
+            ("fulltext", "indexes fulltext"),
+            ("embedding", "embeddings"),
+            ("vector", "indexes vector"),
+            ("index", "indexes"),
+            ("default", "fields defaults"),
+            ("crdt", "fields crdt"),
+            ("immutable", "fields immutable"),
+            ("constraints", "fields constraints"),
+            ("relation", "relationships"),
+            ("primary", "relationships"),
+            ("policy", "collections policy"),
+            ("governed", "collections governed"),
+            ("downsample", "collections downsample"),
+            ("branchable", "collections branchable"),
+        ];
+        topics
+            .iter()
+            .find(|(term, _)| error.contains(term))
+            .or_else(|| {
+                topics
+                    .iter()
+                    .find(|(term, _)| sdl.contains(&format!("@{term}")))
+            })
+            .map(|(_, path)| *path)
+            .unwrap_or("fields")
     };
+    let mut argv = vec!["help"];
+    argv.extend(path.split_whitespace());
     json!({"tool":"schema","args":{"argv":argv}})
 }
 

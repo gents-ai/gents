@@ -15,7 +15,6 @@
 //! the node open derives the same view from them through [`run_view`].
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -25,6 +24,8 @@ use crate::eval::report::EvalReport;
 use crate::eval::runner::goal::GoalEntry;
 use crate::eval::runner::progress::LiveSnapshot;
 use crate::eval::Anchor;
+
+use super::files::write_json_atomically;
 
 pub const EVIDENCE_FILE: &str = "evidence.json";
 pub const REPORT_FILE: &str = "report.json";
@@ -58,7 +59,7 @@ pub fn read_evidence_record(trial_dir: &Path) -> Option<EvidenceRecord> {
 pub(crate) fn write_evidence_record(trial_dir: &Path, record: &EvidenceRecord) -> Result<()> {
     std::fs::create_dir_all(trial_dir)
         .with_context(|| format!("creating {}", trial_dir.display()))?;
-    write_atomically(&trial_dir.join(EVIDENCE_FILE), record)
+    write_json_atomically(&trial_dir.join(EVIDENCE_FILE), record)
 }
 
 /// `<run dir>/report.json`.
@@ -104,22 +105,5 @@ pub fn read_run_view(run_dir: &Path) -> Option<RunView> {
 /// Never creates `run_dir`: a run directory removed under a live loop stays
 /// removed, and the write fails.
 pub(crate) fn write_run_view(run_dir: &Path, view: &RunView) -> Result<()> {
-    write_atomically(&run_dir.join(REPORT_FILE), view)
-}
-
-fn write_atomically(path: &Path, value: &impl Serialize) -> Result<()> {
-    let dir = path
-        .parent()
-        .with_context(|| format!("{} has a directory", path.display()))?;
-    let mut staged = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("staging {}", path.display()))?;
-    let encoded =
-        serde_json::to_vec_pretty(value).with_context(|| format!("encoding {}", path.display()))?;
-    staged
-        .write_all(&encoded)
-        .with_context(|| format!("writing {}", path.display()))?;
-    staged
-        .persist(path)
-        .with_context(|| format!("replacing {}", path.display()))?;
-    Ok(())
+    write_json_atomically(&run_dir.join(REPORT_FILE), view)
 }

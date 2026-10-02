@@ -8,6 +8,12 @@ use super::{
 };
 use crate::config_client::ConfigRead;
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(super) struct CollectionDiscoveryError(String);
+
+pub(super) const COLLECTION_GUIDANCE: &str = "collection names a GraphQL type, not a datastore surface or tool. Discover names with schema collection list; inspect a surface with config datastore get SURFACE_ID";
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryParams {
@@ -41,9 +47,10 @@ impl From<DefraQueryParams> for QueryParams {
 
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
-        None => Ok("query reads documents. argv: [fields], [find], [count], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows. Configuration uses config; schema definitions use schema."),
+        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Relationship selections, fulltext/BM25 and vector search are not exposed by this command family or bounded query tools; use the authenticated native GraphQL interface for those shapes."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for BM25 keywords. Relationship selections and vector search are not exposed here."),
+        Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}}. Returns native BM25 _score, highest first; zero-score rows may follow matches. search_fields are String fields; fields selects returned values. Default limit 10, maximum 1000. Optional filter uses native operators; optional order uses find’s typed field-order tie-breakers. _docID breaks remaining ties. Configure fulltext indexes through schema help indexes fulltext; no embeddings needed."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
         _ => bail!("unknown query command; call query with {{\"argv\":[\"help\"]}}"),
@@ -99,7 +106,7 @@ pub fn build_paged_query(
         .collect::<Vec<_>>()
         .join(", ");
     let insertion = base
-        .find(") {")
+        .rfind(") {")
         .context("query renderer omitted argument boundary")?;
     let mut out = base;
     out.insert_str(
@@ -129,20 +136,28 @@ pub async fn execute_command(
     }
     ensure!(
         argv.len() == 1,
-        "use argv:[fields|find|count|explain]; call query with {{\"argv\":[\"help\"]}}"
+        "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
     );
     let command = argv[0];
     query_help(Some(command))?;
-    let collection = args
-        .collection
-        .as_deref()
-        .context("collection is required; discover collections through schema collection list")?;
-    super::render::validate_identifier(collection)?;
+    let collection = args.collection.as_deref().ok_or_else(|| {
+        CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
+    })?;
+    super::render::validate_identifier(collection)
+        .map_err(|error| CollectionDiscoveryError(format!("{error}; {COLLECTION_GUIDANCE}")))?;
     scope.ensure_allowed(collection)?;
     let allowed: &[&str] = match command {
         "fields" => &[],
         "count" => &["filter"],
         "find" => &["fields", "filter", "limit", "offset", "order"],
+        "search" => &[
+            "fields",
+            "filter",
+            "limit",
+            "order",
+            "search_fields",
+            "text",
+        ],
         "explain" => &["fields", "filter", "limit", "offset", "order", "mode"],
         _ => unreachable!(),
     };
@@ -156,7 +171,7 @@ pub async fn execute_command(
         .execute_read(&introspection_query(collection)?)
         .await?;
     let schema = parse_collection_schema(schema_response.get("data"))
-        .with_context(|| super::unknown_collection_message(collection))?;
+        .ok_or_else(|| CollectionDiscoveryError(super::unknown_collection_message(collection)))?;
     if command == "fields" {
         return Ok(discovery_payload(collection, &schema));
     }
@@ -193,6 +208,8 @@ pub async fn execute_command(
             .transpose()?;
         let arguments = filter.map(|f| format!("filter: {f}")).unwrap_or_default();
         format!("{{ COUNT({collection}: {{ {arguments} }}) }}")
+    } else if command == "search" {
+        super::search::build_search_query(&params, scope, &schema, &args.options)?
     } else {
         let offset = args
             .options
@@ -267,9 +284,11 @@ pub async fn execute_command(
     let returned_count = rows.as_array().unwrap().len();
     let total_bytes = serde_json::to_vec(&rows)?.len();
     let truncated = super::truncate_field_strings(&mut rows);
-    Ok(
-        json!({"results":rows,"returned_count":returned_count,"collection":collection,"truncated":truncated,"total_bytes":total_bytes}),
-    )
+    let mut result = json!({"results":rows,"returned_count":returned_count,"collection":collection,"truncated":truncated,"total_bytes":total_bytes});
+    if command == "search" {
+        result["ranking"] = json!("bm25");
+    }
+    Ok(result)
 }
 
 fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
@@ -316,6 +335,7 @@ pub fn render_result(value: Value) -> Result<String> {
                 "fields",
                 "returned_count",
                 "collection",
+                "ranking",
                 "truncated",
                 "total_bytes",
             ],

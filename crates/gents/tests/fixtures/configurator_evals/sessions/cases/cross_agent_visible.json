@@ -1,0 +1,179 @@
+{
+  "case_id": "cross-agent-visible",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollout review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "support-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": null,
+          "title": {
+            "text": "Support triage",
+            "source": "user"
+          },
+          "tags": [
+            "support"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "$trial",
+          "requester_did": "$trial",
+          "session_id": "launch-followup",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Atlas rollback followup",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "session_id": "partner-review",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Partner release review",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      },
+      {
+        "collection": "AgentSession",
+        "document": {
+          "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "session_id": "partner-archive",
+          "behavior_id": "engineer",
+          "created_at": "2025-01-01T00:00:00Z",
+          "closed_at": "2025-01-02T00:00:00Z",
+          "title": {
+            "text": "Partner rotation ledger",
+            "source": "user"
+          },
+          "tags": [
+            "release"
+          ]
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "investigate",
+      "prompt": "Find the partner rotation ledger session with sessions, even if another agent owns it. Report its session ID, title and whether it is closed. Include its canonical session document ID so I can check the source.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "partner-archive",
+              "Partner rotation ledger",
+              {
+                "matches": "(?i)closed"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "sessions"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "links": [
+              {
+                "capture": "source_sessions",
+                "source_match": {
+                  "field": "session_id",
+                  "equals": "partner-archive"
+                },
+                "field": "_docID",
+                "target_capture": "source_sessions",
+                "target_key": "_docID",
+                "reported_fields": [
+                  "_docID"
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "source_sessions",
+          "collection": "AgentSession",
+          "filter": {
+            "agent_did": {
+              "_eq": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
+            },
+            "session_id": {
+              "_eq": "partner-archive"
+            }
+          },
+          "fields": [
+            "_docID",
+            "session_id",
+            "agent_did"
+          ]
+        }
+      ]
+    }
+  ]
+}

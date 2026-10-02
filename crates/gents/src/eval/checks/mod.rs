@@ -10,6 +10,7 @@ pub mod captured_rows_count;
 pub mod crew_spec_match;
 pub mod final_message_matches;
 pub mod handoff_delivery;
+pub mod schema_matches;
 pub mod tool_calls_expected;
 pub mod tool_result_matches;
 
@@ -90,6 +91,7 @@ impl CheckRegistry {
         registry.register(Box::new(HandoffDelivery));
         registry.register(Box::new(ToolCallsExpected));
         registry.register(Box::new(tool_result_matches::ToolResultMatches));
+        registry.register(Box::new(schema_matches::SchemaMatches));
         registry
     }
 
@@ -285,6 +287,7 @@ mod tests {
                 "crew_spec_match",
                 "final_message_matches",
                 "handoff_delivery",
+                "schema_matches",
                 "tool_calls_expected",
                 "tool_result_matches"
             ]

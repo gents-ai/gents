@@ -63,6 +63,7 @@ pub mod oauth_credential;
 pub(crate) mod oauth_http;
 pub mod openai_wire;
 pub mod p2p_observability;
+pub mod p2p_tool;
 pub mod pack;
 pub mod pack_archive;
 pub mod pack_registry;

@@ -4,7 +4,7 @@
  * Evidence a stage collects from the trial after it ends, keyed by `name`
  * for the checks of that stage.
  */
-export type EvalCapture = { "Documents": { name: string, collection: string,
+export type EvalCapture = { "kind": "schema", name: string, collections: Array<string>, } | { "kind": "documents", name: string, collection: string,
 /**
  * A DefraDB filter object for `collection`.
  */
@@ -12,4 +12,4 @@ filter: unknown,
 /**
  * Fields to read; empty reads every field.
  */
-fields: Array<string>, } } | { "File": { name: string, glob: string, } };
+fields: Array<string>, } | { "kind": "file", name: string, glob: string, };

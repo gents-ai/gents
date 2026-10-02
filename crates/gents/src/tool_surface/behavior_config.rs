@@ -65,6 +65,9 @@ impl BehaviorToolConfig {
         behavior_policy.defra_collections = EndpointScope::none();
         behavior_policy.self_config = false;
         behavior_policy.schema_management = false;
+        behavior_policy.p2p_read = false;
+        behavior_policy.p2p_mutate = false;
+        behavior_policy.p2p_collections = EndpointScope::none();
         behavior_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
@@ -226,7 +229,10 @@ impl BehaviorToolConfig {
             backgroundable_tool_names,
             enable_memory,
             enable_session_history_tool: _,
+            p2p_collections: _,
             enable_schema_tool: _,
+            enable_p2p_tool: _,
+            enable_p2p_mutations: _,
             enable_context_budget,
             enable_defra_query: _,
             defra_query_collections: _,
@@ -550,6 +556,9 @@ impl BehaviorToolConfig {
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
             enable_schema_tool: effective_policy.schema_management,
+            enable_p2p_tool: effective_policy.p2p_read,
+            enable_p2p_mutations: effective_policy.permits_p2p_mutation(),
+            p2p_collections: effective_policy.p2p_collections.clone(),
             enable_defra_query: effective_policy.include_defra_query(),
             defra_query_scope: effective_policy.defra_query_collection_scope(),
             application_write_collections: effective_policy

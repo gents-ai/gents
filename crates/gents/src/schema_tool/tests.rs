@@ -7,64 +7,7 @@ fn args(value: Value) -> SchemaParams {
 
 #[test]
 fn concept_help_examples_use_supported_native_sdl() {
-    let paths = [
-        "collections",
-        "collections policy",
-        "collections branchable",
-        "collections governed",
-        "collections downsample",
-        "views",
-        "views virtual",
-        "views materialized",
-        "views refresh",
-        "fields",
-        "fields types",
-        "fields nullability",
-        "fields arrays",
-        "fields defaults",
-        "fields crdt",
-        "fields immutable",
-        "fields constraints",
-        "relationships",
-        "relationships one-to-many",
-        "relationships one-to-one",
-        "relationships named",
-        "relationships self",
-        "indexes",
-        "indexes ordered",
-        "indexes unique",
-        "indexes composite",
-        "indexes vector",
-        "indexes vector dimensions",
-        "indexes vector metrics",
-        "indexes vector hnsw",
-        "indexes vector flat",
-        "indexes vector ivfpq",
-        "indexes vector ivfflat",
-        "indexes vector ssg",
-        "indexes fulltext",
-        "indexes encrypted",
-        "embeddings",
-        "embeddings generation",
-        "embeddings indexing",
-        "evolution",
-        "evolution additive",
-        "evolution versions",
-        "evolution migrations",
-        "migration workflow",
-        "migration authoring",
-        "migration authoring rust",
-        "migration build",
-        "migration contract",
-        "migration contract memory",
-        "migration contract documents",
-        "migration arguments",
-        "migration inverse",
-        "migration versions",
-        "migration verify",
-        "migration verify host",
-        "migration recovery",
-    ];
+    let paths = help::PATHS;
     for path in paths {
         let words: Vec<_> = path.split_whitespace().map(str::to_owned).collect();
         let page = help::page(&words).unwrap_or_else(|error| panic!("{path}: {error}"));
@@ -88,6 +31,60 @@ fn concept_help_examples_use_supported_native_sdl() {
         }
     }
     assert!(help::page(&[]).unwrap().len() < 2_000);
+}
+
+#[test]
+fn concept_discovery_resolves_inventory_topics_without_failed_calls() {
+    for (requested, canonical) in [
+        ("collections fields", "fields"),
+        ("collection fields types", "fields types"),
+        ("collections relationships", "relationships"),
+        ("collections indexes fulltext", "indexes fulltext"),
+        ("collections create", "collection create"),
+        ("fulltext", "indexes fulltext"),
+        ("unique", "indexes unique"),
+        ("index", "indexes"),
+        ("index vector hnsw", "indexes vector hnsw"),
+        ("concepts SDL", ""),
+    ] {
+        let words = |text: &str| {
+            text.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            help::page(&words(requested)).unwrap(),
+            help::page(&words(canonical)).unwrap()
+        );
+    }
+    for path in help::PATHS {
+        let words: Vec<_> = path.split_whitespace().map(str::to_owned).collect();
+        assert_eq!(help::resolve(&words).unwrap(), words, "{path}");
+    }
+}
+
+#[test]
+fn discovery_does_not_guess_ambiguous_topics_or_arbitrary_plurals() {
+    for topic in ["create", "get", "indexess", "collectionss"] {
+        let path = vec![topic.to_owned()];
+        assert!(help::resolve(&path).is_none(), "{topic}");
+        assert!(help::page(&path).is_err(), "{topic}");
+        assert!(help::recovery_path(&path).is_empty());
+    }
+}
+
+#[test]
+fn argument_recovery_does_not_choose_between_conflicting_sdl_inputs() {
+    let request = args(
+        json!({"argv":["collection","preview","create"],"options":{"schema":"type A { name: String }","sdl":"type B { name: String }"}}),
+    );
+    assert!(argument_correction(&request).is_none());
+    let read = args(
+        json!({"argv":["version","preview","get","exact-version"],"options":{"digest":"old"}}),
+    );
+    let (_, next) = argument_correction(&read).unwrap();
+    assert_eq!(next.argv, ["version", "get", "exact-version"]);
+    assert!(next.options.is_empty());
 }
 
 #[test]
@@ -179,11 +176,15 @@ async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::Local(node.clone());
-    apply(
+    let installed = apply(
         &tool,
         json!({"argv":["collection","create"],"options":{"sdl":"type WorkItem { title: String }"}}),
     )
     .await;
+    assert_eq!(
+        installed,
+        json!({"committed":true,"result":{"collections":["WorkItem"]}})
+    );
     ConfigAccess::write_local(
         &node,
         "schema_test.seed",
@@ -557,4 +558,94 @@ fn schema_command_normalizes_config_conventions_without_changing_the_intent() {
         json!({"argv":["collection","create"],"options":{"digest":false}})
     ))
     .is_err());
+}
+
+#[tokio::test]
+async fn schema_argument_recovery_preserves_intent_without_publishing() {
+    let node = node().await;
+    let tool = SchemaTool::new(node.clone());
+    let sdl = "type SyntaxProbe { title: String }";
+    for request in [
+        json!({"argv":["collection","create","SyntaxProbe"],"options":{"schema":sdl}}),
+        json!({"argv":["collection","create"],"target_id":"SyntaxProbe","options":{"sdl":sdl,"digest":"old"}}),
+    ] {
+        let error = tool.call(args(request)).await.unwrap_err();
+        let error: Value = serde_json::from_str(&error.to_string()).unwrap();
+        let next = &error["recovery"]["args"];
+        assert_eq!(next["argv"], json!(["collection", "preview", "create"]));
+        assert!(next.get("target_id").is_none());
+        assert_eq!(next["options"]["sdl"], sdl);
+        assert!(next["options"].get("digest").is_none());
+        assert!(next["options"].get("schema").is_none());
+        call(&tool, next.clone()).await;
+        assert!(ConfigAccess::Local(node.clone())
+            .collection_version("SyntaxProbe")
+            .await
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[tokio::test]
+async fn schema_help_with_command_context_does_not_mutate() {
+    let node = node().await;
+    let tool = SchemaTool::new(node.clone());
+    let help = tool.call(args(json!({"argv":["collection","update","--help"],"target_id":"Absent","options":{"patch":[{"op":"remove","path":"/Absent/Fields/0"}]}}))).await.unwrap();
+    assert!(help.starts_with("collection preview update"));
+    let error = tool
+        .call(args(
+            json!({"argv":["help","indexes","vector","imaginary"]}),
+        ))
+        .await
+        .unwrap_err();
+    let error: Value = serde_json::from_str(&error.to_string()).unwrap();
+    assert_eq!(
+        error["recovery"]["args"]["argv"],
+        json!(["help", "indexes", "vector"])
+    );
+    tool.call(args(error["recovery"]["args"].clone()))
+        .await
+        .unwrap();
+    assert!(ConfigAccess::Local(node)
+        .collection_version("Absent")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
+    let node = node().await;
+    let tool = SchemaTool::new(node.clone());
+    for (sdl, expected) in [
+        (
+            "type BadScalar { active: Bool }",
+            vec!["help", "fields", "types"],
+        ),
+        (
+            "type BadText { body: String } @fulltext(fields: [body]) type BadText",
+            vec!["help", "indexes", "fulltext"],
+        ),
+    ] {
+        let error = tool
+            .call(args(
+                json!({"argv":["collection","preview","create"],"options":{"sdl":sdl}}),
+            ))
+            .await
+            .unwrap_err();
+        let error: Value = serde_json::from_str(&error.to_string()).unwrap();
+        assert_eq!(error["recovery"]["args"]["argv"], json!(expected));
+        let page = tool
+            .call(args(error["recovery"]["args"].clone()))
+            .await
+            .unwrap();
+        assert!(page.contains("```graphql"));
+    }
+    for name in ["BadScalar", "BadText"] {
+        assert!(ConfigAccess::Local(node.clone())
+            .collection_version(name)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }

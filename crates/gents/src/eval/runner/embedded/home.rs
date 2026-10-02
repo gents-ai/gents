@@ -65,9 +65,16 @@ impl EmbeddedHome {
     }
 
     pub async fn create_retained(dir: &Path) -> Result<Self> {
+        Self::create_retained_with_p2p(dir, None).await
+    }
+
+    pub async fn create_retained_with_p2p(
+        dir: &Path,
+        p2p: Option<P2PConfigForPath>,
+    ) -> Result<Self> {
         ensure!(!dir.exists(), "trial home {} already exists", dir.display());
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        Self::open_at(dir.to_path_buf(), None).await
+        Self::open_at(dir.to_path_buf(), p2p).await
     }
 
     pub async fn open_retained(dir: &Path) -> Result<Self> {

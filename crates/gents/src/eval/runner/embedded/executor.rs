@@ -178,6 +178,9 @@ impl EmbeddedExecutor {
         // only once the pack's triggers can see the write.
         let (event_sources_ready, ready) = watch::channel(None);
         let mut options = self.runtime_options.clone();
+        // Pack and plugin writes must stay in this trial, including when the
+        // caller supplies an operator home in its runtime options.
+        options.plugin_home = Some(home.path().to_path_buf());
         // Replaces any observer the caller's options carried: the trial's
         // latch is the only reader of this runtime's snapshots.
         options.runtime_snapshot_observer = Some(Arc::new(EventSourcesReady(event_sources_ready)));
@@ -445,7 +448,14 @@ impl TrialExecutor for EmbeddedExecutor {
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,
                 inference_calls: evidence.inference_calls,
-                captures: run_captures(&home.node, &at.trial_agent_did, &workspace, captures).await,
+                captures: run_captures(
+                    &home.node,
+                    &at.trial_agent_did,
+                    &at.session_id,
+                    &workspace,
+                    captures,
+                )
+                .await,
             });
         }
         let usage = home_usage(&home.node).await;
@@ -587,8 +597,22 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
     )?;
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
-    let config = root_host_tools(config, workspace)?;
+    let mut config = root_host_tools(config, workspace)?;
+    config
+        .agent_principal
+        .default_behavior_id
+        .get_or_insert_with(|| spec.behavior_id.clone());
     let access = ConfigAccess::Local(home.node.clone());
+    for path in &manifest.schemas {
+        let bytes = assets
+            .get(path)
+            .with_context(|| format!("pack has no schema asset {path:?}"))?;
+        let sdl =
+            std::str::from_utf8(bytes).with_context(|| format!("decoding pack schema {path:?}"))?;
+        install_schema(&access, sdl)
+            .await
+            .with_context(|| format!("installing pack schema {path:?}"))?;
+    }
     // The binding first: the pack's behaviors now reference the profile by id,
     // and a reference is only installable once what it names exists.
     apply(
@@ -789,10 +813,9 @@ async fn install_fixtures(
     trial_did: &str,
 ) -> Result<()> {
     for sdl in &fixtures.schemas {
-        access
-            .add_schema(sdl)
+        install_schema(access, sdl)
             .await
-            .context("adding a fixture schema")?;
+            .context("installing a fixture schema")?;
     }
     for fixture in &fixtures.documents {
         create_document(
@@ -812,6 +835,12 @@ async fn install_fixtures(
         std::fs::write(&path, &file.contents)
             .with_context(|| format!("writing {}", path.display()))?;
     }
+    Ok(())
+}
+
+async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
+    let plan = crate::config_client::preview_schema_install(access, sdl).await?;
+    crate::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
     Ok(())
 }
 
@@ -957,6 +986,7 @@ async fn run_stage(
         captures: run_captures(
             &home.node,
             &locator.trial_agent_did,
+            &locator.session_id,
             workspace,
             &stage.captures,
         )
@@ -1620,20 +1650,54 @@ async fn fired_request(node: &EmbeddedNode, doc_id: &str) -> Result<Option<Strin
 /// is not there reports `missing_capture`, which is no evidence about the
 /// subject; a check handed an empty one would score it zero.
 async fn run_captures(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     trial_did: &str,
+    session_id: &str,
     workspace: &Path,
     captures: &[Capture],
 ) -> BTreeMap<String, CaptureResult> {
     let mut results = BTreeMap::new();
     for capture in captures {
         match capture {
+            Capture::Schema { name, collections } => {
+                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                let mut versions = Vec::new();
+                let mut failed = false;
+                for collection in collections {
+                    match access.collection_version(collection).await {
+                        Ok(Some(version)) => versions.push(version),
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(error = %format!("{error:#}"), capture = %name,
+                                "eval schema capture failed; recording no capture");
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+                if !failed {
+                    results.insert(
+                        name.clone(),
+                        CaptureResult::Schema {
+                            collections: versions,
+                        },
+                    );
+                }
+            }
             Capture::Documents {
                 name,
                 collection,
                 filter,
                 fields,
-            } => match capture_documents(node, collection, filter, fields, trial_did).await {
+            } => match capture_documents(
+                node,
+                collection,
+                &bind_capture_session(filter, session_id),
+                fields,
+                trial_did,
+            )
+            .await
+            {
                 Ok(rows) => {
                     results.insert(name.clone(), CaptureResult::Documents { rows });
                 }
@@ -1651,6 +1715,27 @@ async fn run_captures(
         }
     }
     results
+}
+
+/// `$session` in document captures denotes the durable trial session, not any
+/// other session owned by the same principal. It is bound before GraphQL escaping.
+fn bind_capture_session(value: &Value, session_id: &str) -> Value {
+    match value {
+        Value::String(text) if text == "$session" => Value::String(session_id.into()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| bind_capture_session(v, session_id))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, v)| (key.clone(), bind_capture_session(v, session_id)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 async fn capture_documents(
@@ -2015,6 +2100,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        ConfigAccess::Local(node.clone())
+            .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
+            .await
+            .unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let captures = run_captures(
+            &node,
+            "did:test",
+            "session-test",
+            workspace.path(),
+            &[
+                Capture::Schema {
+                    name: "present".into(),
+                    collections: vec!["SearchNote".into()],
+                },
+                Capture::Schema {
+                    name: "absent".into(),
+                    collections: vec!["NoSuchCollection".into()],
+                },
+            ],
+        )
+        .await;
+        let CaptureResult::Schema { collections } = &captures["present"] else {
+            panic!("schema evidence")
+        };
+        assert_eq!(collections[0]["FullTextIndexes"][0]["FieldName"], "body");
+        assert_eq!(
+            captures["absent"],
+            CaptureResult::Schema {
+                collections: vec![]
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn delegation_case_capture_excludes_session_title_requests() {
         let home = EmbeddedHome::create_temp("eval-normal-request-capture")
             .await
@@ -2068,6 +2190,49 @@ mod tests {
         assert_eq!(normal.len(), 1);
         assert_eq!(normal[0]["request_id"], "normal");
         home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
+        access
+            .add_schema("type CaptureHeader { session_id: String sequence: Int }")
+            .await
+            .unwrap();
+        let session_id = "trial\"session";
+        for session in [session_id, "background-session"] {
+            access.write("eval.test.capture_session", &format!(
+                "mutation {{ create_CaptureHeader(input: {{session_id: \"{}\", sequence: 1}}) {{ _docID }} }}",
+                escape_graphql_string(session)
+            )).await.unwrap();
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let captures = run_captures(
+            &node,
+            "did:test",
+            session_id,
+            workspace.path(),
+            &[Capture::Documents {
+                name: "source_headers".into(),
+                collection: "CaptureHeader".into(),
+                filter: json!({"session_id": {"_eq": "$session"}, "sequence": {"_eq": 1}}),
+                fields: vec!["session_id".into(), "sequence".into()],
+            }],
+        )
+        .await;
+        let CaptureResult::Documents { rows } = &captures["source_headers"] else {
+            panic!("document capture")
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["session_id"], session_id);
+        assert_eq!(rows[0]["sequence"], 1);
+        assert!(rows[0]["_docID"].as_str().is_some());
+        assert_eq!(
+            bind_capture_session(&json!("literal $session text"), session_id),
+            json!("literal $session text")
+        );
+        node.shutdown().await;
     }
 
     #[test]
@@ -2311,6 +2476,49 @@ mod tests {
         home.node.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn a_trial_subject_supplies_an_omitted_default_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+        let path = pack_dir.join("pack_config.json");
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["agent_principal"] = json!({});
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let spec = TrialSpec {
+            pack_digest: materialized_digest(&pack_dir),
+            pack_dir,
+            behavior_id: "subject".into(),
+            inference: frozen_binding(json!("frozen-profile")),
+            ..TrialSpec::empty_for_tests("subject-default")
+        };
+        let home = EmbeddedHome::create_temp("subject-default").await.unwrap();
+        install(&spec, &home, &dir.path().join("workspace"))
+            .await
+            .unwrap();
+
+        let access = ConfigAccess::Local(home.node.clone());
+        let response = access
+            .execute("query { AgentPrincipal { default_behavior_id } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["AgentPrincipal"][0]["default_behavior_id"],
+            "subject"
+        );
+        let agent = crate::Gents::from_default_behavior_documents(
+            home.node.clone(),
+            home.identity.clone(),
+            DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(agent.default_behavior_id(), "subject");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        home.node.shutdown().await;
+    }
+
     /// The pack declares a slot and the frozen binding names no profile to bind
     /// it to, so nothing is installed and the trial learned nothing.
     #[tokio::test]
@@ -2351,6 +2559,89 @@ mod tests {
         let evidence = executor.execute(&spec, CancellationToken::new()).await;
         assert!(evidence.stages.is_empty(), "{:?}", evidence.stages);
         assert_eq!(evidence.anchor.requests, 0);
+    }
+
+    #[tokio::test]
+    async fn subject_schemas_are_installed_before_documents_without_fixture_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack_dir = dir.path().join("pack");
+        write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+        let schema_path = "schemas/submission.graphql";
+        let sdl = "type EvalSubmission { message: String }";
+        std::fs::create_dir_all(pack_dir.join("schemas")).unwrap();
+        std::fs::write(pack_dir.join(schema_path), sdl).unwrap();
+        let manifest_path = pack_dir.join("manifest.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["schemas"] = json!([schema_path]);
+        manifest["assets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(schema_path));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let config_path = pack_dir.join("pack_config.json");
+        let mut config: Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        config["datastore_tool_surfaces"] = json!([{
+            "surface_id": "submissions",
+            "entries": [{
+                "tool_name": "submit_message",
+                "collection": "EvalSubmission",
+                "description": "Record a submission.",
+                "fields": [{"name": "message", "required": true}]
+            }]
+        }]);
+        std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let spec = TrialSpec {
+            pack_digest: materialized_digest(&pack_dir),
+            pack_dir,
+            behavior_id: "subject".into(),
+            inference: frozen_binding(json!("frozen-profile")),
+            fixtures: TrialFixtures {
+                documents: vec![FixtureDocument {
+                    collection: "EvalSubmission".into(),
+                    document: json!({"message": "from the fixture"}),
+                }],
+                ..Default::default()
+            },
+            ..TrialSpec::empty_for_tests("subject-schema")
+        };
+        let home = EmbeddedHome::create_temp("subject-schema").await.unwrap();
+        let workspace = dir.path().join("workspace");
+        install(&spec, &home, &workspace).await.unwrap();
+        let access = ConfigAccess::Local(home.node.clone());
+        let response = access
+            .execute("query { EvalSubmission { message } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["EvalSubmission"],
+            json!([{"message": "from the fixture"}])
+        );
+
+        let fixtures = TrialFixtures {
+            schemas: vec![sdl.into()],
+            ..Default::default()
+        };
+        install_fixtures(&access, &fixtures, &workspace, home.did())
+            .await
+            .unwrap();
+        let incompatible = TrialFixtures {
+            schemas: vec!["type EvalSubmission { message: Int }".into()],
+            ..Default::default()
+        };
+        let error = install_fixtures(&access, &incompatible, &workspace, home.did())
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("EvalSubmission"));
+        assert_eq!(
+            access
+                .execute("query { EvalSubmission { message } }")
+                .await
+                .unwrap(),
+            response
+        );
+        home.node.shutdown().await;
     }
 
     fn materialized_digest(pack_dir: &Path) -> String {

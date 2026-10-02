@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_schema_experience",
+  "version": "0.1.0",
+  "description": "Native Engineer schema tasks: search indexing, relationships, records and additive changes.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "cases/help_center_search.json",
+    "cases/projects_and_tasks.json",
+    "cases/stock_records.json",
+    "cases/customer_timeline.json",
+    "cases/catalog_neighbors.json",
+    "cases/extend_customer_records.json",
+    "cases/editorial_relationships.json",
+    "cases/spanish_knowledge_base.json",
+    "cases/guest_bookings.json",
+    "cases/admiral_report_search.json"
+  ],
+  "config": "pack_config.json"
+}

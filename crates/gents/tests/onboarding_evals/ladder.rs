@@ -74,6 +74,9 @@ fn every_native_case_validates_and_uses_shipped_checks() {
                             EvalCapture::Documents { .. } => {
                                 CaptureResult::Documents { rows: vec![] }
                             }
+                            EvalCapture::Schema { .. } => CaptureResult::Schema {
+                                collections: vec![],
+                            },
                             EvalCapture::File { .. } => CaptureResult::Files {
                                 files: vec![],
                                 outside_workspace: vec![],

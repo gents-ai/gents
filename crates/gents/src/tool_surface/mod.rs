@@ -72,6 +72,9 @@ pub struct ToolSurface {
     pub(super) enable_context_budget_tool: bool,
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_schema_tool: bool,
+    pub(super) enable_p2p_tool: bool,
+    pub(super) enable_p2p_mutations: bool,
+    pub(super) p2p_collections: EndpointScope<String, ()>,
     pub(super) enable_defra_query: bool,
     pub(super) defra_query_scope: CollectionScope,
     pub(super) application_write_collections: Vec<String>,
@@ -236,6 +239,9 @@ impl ToolSurface {
         if self.enable_schema_tool {
             names.push(crate::schema_tool::SCHEMA_TOOL_NAME.to_string());
         }
+        if self.enable_p2p_tool {
+            names.push(crate::p2p_tool::P2P_TOOL_NAME.to_string());
+        }
         if self.enable_session_history_tool {
             names.push(SESSION_HISTORY_TOOL_NAME.to_string());
         }
@@ -329,6 +335,14 @@ impl ToolSurface {
         if self.enable_schema_tool {
             tools.push(Box::new(crate::schema_tool::SchemaTool::new(
                 runtime.node.clone(),
+            )));
+        }
+        if self.enable_p2p_tool {
+            tools.push(Box::new(crate::p2p_tool::P2pTool::new(
+                runtime.node.clone(),
+                runtime.identity.clone(),
+                self.enable_p2p_mutations,
+                self.p2p_collections.clone(),
             )));
         }
         if self.enable_session_history_tool {
@@ -500,6 +514,9 @@ impl std::fmt::Debug for ToolSurface {
                 &self.enable_context_budget_tool,
             )
             .field("enable_schema_tool", &self.enable_schema_tool)
+            .field("enable_p2p_tool", &self.enable_p2p_tool)
+            .field("enable_p2p_mutations", &self.enable_p2p_mutations)
+            .field("p2p_collections", &self.p2p_collections)
             .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,

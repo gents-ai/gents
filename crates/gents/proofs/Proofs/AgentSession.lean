@@ -2,6 +2,8 @@ import Proofs.Request.State
 
 /-! Durable session owner; Nat identifiers/times abstract validated canonical
 strings. Authorization and atomic query/write remain DB adapter obligations.
+Read-only session discovery uses the authenticated caller's DefraDB ACP visibility;
+agent/requester fields identify a selected row, not additional read permissions.
 Presentation and provenance never select execution configuration. -/
 namespace AgentSession
 structure Scope where

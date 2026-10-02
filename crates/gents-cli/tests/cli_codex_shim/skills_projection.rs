@@ -9,7 +9,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     let model_name = format!("mock-skill-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, "ok")?;
     let server_port = allocate_port()?;
-    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-codex-skill-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -26,7 +25,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut serve = spawn_server_with_env(
+    let (mut serve, server_port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
         server_port,
         &[
@@ -39,7 +38,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         ],
         &[],
     )?;
-    wait_for_port(server_port, &mut serve)?;
+    let graphql = graphql_url(server_port);
     wait_for_port(shim_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
@@ -233,7 +232,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     let model_name = format!("mock-skill-inject-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
-    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-skill-inject-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -250,7 +248,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut serve = spawn_server_with_env(
+    let (mut serve, server_port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
         server_port,
         &[
@@ -263,7 +261,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
         ],
         &[],
     )?;
-    wait_for_port(server_port, &mut serve)?;
+    let graphql = graphql_url(server_port);
     wait_for_port(shim_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(
@@ -381,7 +379,6 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let model_name = format!("mock-skill-scope-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
     let server_port = allocate_port()?;
-    let graphql = graphql_url(server_port);
     let agent_name = format!("cli-skill-scope-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -398,7 +395,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    let mut serve = spawn_server_with_env(
+    let (mut serve, server_port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
         server_port,
         &[
@@ -411,7 +408,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
         ],
         &[],
     )?;
-    wait_for_port(server_port, &mut serve)?;
+    let graphql = graphql_url(server_port);
     wait_for_port(shim_port, &mut serve)?;
     serve
         .capturing(wait_for_runtime_ready(

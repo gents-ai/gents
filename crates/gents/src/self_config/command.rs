@@ -134,21 +134,27 @@ impl ConfigCommandParams {
                 ),
             }
         }
-        for (name, value) in self.options {
-            let verb = argv.iter().skip(1).find(|word| word.as_str() != "preview");
-            let composition = argv.first().is_some_and(|r| r == "behavior")
-                && verb.is_some_and(|v| matches!(v.as_str(), "create" | "clone"));
-            if !composition
-                && matches!(verb.map(String::as_str), Some("create" | "update" | "edit"))
-            {
-                if let Some(target) = argv.first().and_then(|r| crud::resource_target(r)) {
-                    let backend_option = target == SelfConfigTarget::InferenceBackend
-                        && verb.is_some_and(|v| v == "create")
-                        && matches!(name.as_str(), "endpoint" | "name");
-                    anyhow::ensure!(backend_option || !target.is_writable(&name),
-                        "{name:?} is a {} field: put it in set.{name}, not options; field names keep their underscores", target.collection_name());
-                }
+        let verb = argv.iter().skip(1).find(|word| word.as_str() != "preview");
+        let composition = argv.first().is_some_and(|r| r == "behavior")
+            && verb.is_some_and(|v| matches!(v.as_str(), "create" | "clone"));
+        if !composition && matches!(verb.map(String::as_str), Some("create" | "update" | "edit")) {
+            if let Some(target) = argv.first().and_then(|r| crud::resource_target(r)) {
+                let misplaced: Vec<_> = self
+                    .options
+                    .keys()
+                    .filter(|name| {
+                        let backend_option = target == SelfConfigTarget::InferenceBackend
+                            && verb.is_some_and(|v| v == "create")
+                            && matches!(name.as_str(), "endpoint" | "name");
+                        !backend_option && target.is_writable(name)
+                    })
+                    .collect();
+                anyhow::ensure!(misplaced.is_empty(),
+                    "{} fields belong in set, not options: {}. Move all listed fields together; preserve values and keep command selectors such as behavior in options",
+                    target.collection_name(), misplaced.iter().map(|name| format!("set.{name}")).collect::<Vec<_>>().join(", "));
             }
+        }
+        for (name, value) in self.options {
             anyhow::ensure!(
                 name.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
                     && name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
@@ -541,6 +547,15 @@ impl ConfigCommandTool {
         if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
             return (message, json!({"next_call":hint.next_call}));
         }
+        if let Some(schema) = error.downcast_ref::<crate::config_client::OutcomeSourceSchemaError>()
+        {
+            let next = if schema.missing_handoff {
+                json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
+            } else {
+                json!({"argv":["collection","get",schema.collection]})
+            };
+            return (message, json!({"tool":"schema","next_call":next}));
+        }
         if let Some(missing) = error.downcast_ref::<super::ops::MissingConfigDocument>() {
             if let Some((resource, _)) = HELP_INDEX
                 .iter()
@@ -646,6 +661,12 @@ impl ConfigCommandTool {
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
+                    if command == "datastore" && verb == "validate" {
+                        return Err(CommandGuidance {
+                            message: "validate audits saved configuration, including datastore selections; it is a top-level command.".into(),
+                            next_call: json!({"argv":["validate"]}),
+                        }.into());
+                    }
                     return Err(CommandGuidance {
                         message: format!("unknown {command} verb {verb:?}; configuration documents use list, get, create, update and delete. Runtime history belongs to sessions."),
                         next_call: json!({"argv":[command,"--help"]}),
@@ -1504,6 +1525,34 @@ impl ConfigCommandTool {
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
         match verb {
+            "search" => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                anyhow::ensure!(
+                    parsed.switches.is_empty() && parsed.positionals.len() <= 1,
+                    "pack search takes an optional query and options.page; see [\"help\",\"pack\"]"
+                );
+                for name in parsed.options.keys() {
+                    anyhow::ensure!(
+                        matches!(name.as_str(), "query" | "page"),
+                        "unknown pack search option {name:?}; use options.query and options.page"
+                    );
+                }
+                let option_query = parsed.one("query")?;
+                anyhow::ensure!(
+                    option_query.is_none() || parsed.positionals.is_empty(),
+                    "supply the search query in argv or options.query, not both"
+                );
+                let query = option_query
+                    .or_else(|| parsed.positionals.first().map(String::as_str))
+                    .unwrap_or("");
+                let page = parsed
+                    .one("page")?
+                    .unwrap_or("1")
+                    .parse::<u32>()
+                    .context("pack search options.page must be a positive integer")?;
+                anyhow::ensure!(page > 0, "pack search options.page starts at 1");
+                installer.search(query, page).await
+            }
             "list" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
                 parsed.reject_mutation_flags()?;
@@ -2353,7 +2402,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","max_read_chars":"integer 1..1000000|null; default 32000; read_file bytes, default and maximum","max_list_entries":"integer 1..5000|null; default 200","max_matches":"integer 1..5000|null; default 200; glob and grep"}, "bash":{"mode":"Off|ReadOnly|Unrestricted; default Off; ReadOnly still runs shell commands","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default host --command-timeout-secs (120); clamped to the host maximum","max_timeout_secs":"positive integer|null; default timeout_secs if set, else host maximum; clamped to host --command-timeout-max-secs","background_timeout_secs":"positive integer|null; default 36000; clamped to 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600; clamped to 600","max_output_chars":"integer 1..1000000|null; default 16000; stdout and stderr each"}, "cli":[{"name":"string; host-registered CLI tool name (cli default [])","timeout_secs":"positive integer|null; default host registration (10); clamped to host --command-timeout-max-secs","max_output_chars":"integer 1..1000000|null; default host registration (16000); stdout and stderr each"}]},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer (default 36000; clamped to 36000),wait_timeout_secs?:integer (default 30),max_wait_timeout_secs?:integer (default 600; clamped to 600)}>; default []"},
                 "subagents": {"target_ids":"array<existing same-principal SubagentTarget ID>; default []; the agents agent_new may address (create them with subagent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt and agent_list, plus agent_new when target_ids selects a target"},
-                "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_context_budget":"boolean|null"},
+                "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-principal DatastoreToolSurface ID>|null"},
                 "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-principal EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null}>|null"},
                 "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<behavior|tools|profile|backend|mcp_service|automation|persona>|null; absent selects behavior, tools, profile; persona is the behavior catalog grant (every behavior, not only the current one)","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; cannot be self-granted"},
@@ -2848,6 +2897,40 @@ mod tests {
                 .into_argv()
                 .is_err());
         }
+    }
+
+    #[test]
+    fn misplaced_document_fields_are_reported_together() {
+        let mut input = json!({
+            "argv":["subagent-target","create"],"target_id":"helper",
+            "options":{"behavior":"engineer","behavior_id":"analyst","name":"Analyst","description":"Analyze records"}
+        });
+        let error = serde_json::from_value::<ConfigCommandParams>(input.clone())
+            .unwrap()
+            .into_argv()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("set.behavior_id, set.description, set.name"),
+            "{error}"
+        );
+        input["set"] = json!({});
+        for field in ["behavior_id", "description", "name"] {
+            input["set"][field] = input["options"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field)
+                .unwrap();
+        }
+        assert!(serde_json::from_value::<ConfigCommandParams>(input)
+            .unwrap()
+            .into_argv()
+            .is_ok());
+        let backend = json!({"argv":["backend","create"],"target_id":"local","options":{"endpoint":"http://localhost:8000/v1","name":"Local"}});
+        assert!(serde_json::from_value::<ConfigCommandParams>(backend)
+            .unwrap()
+            .into_argv()
+            .is_ok());
     }
 
     #[test]

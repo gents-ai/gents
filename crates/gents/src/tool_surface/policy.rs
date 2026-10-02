@@ -93,6 +93,13 @@ where
         }
     }
 
+    pub fn permits_all<'key>(&self, keys: impl IntoIterator<Item = &'key K>) -> bool
+    where
+        K: 'key,
+    {
+        keys.into_iter().all(|key| self.permits(key))
+    }
+
     pub fn lookup(&self, key: &K) -> Option<&V> {
         match self {
             Self::Only(keys) => keys.get(key),
@@ -202,6 +209,8 @@ pub struct ToolPolicySurface {
     pub self_config: bool,
     pub memory: bool,
     pub schema_management: bool,
+    pub p2p_read: bool,
+    pub p2p_mutate: bool,
     pub session_history: bool,
     pub context_budget: bool,
     pub session_messages: bool,
@@ -210,6 +219,7 @@ pub struct ToolPolicySurface {
     pub cli_tools: EndpointScope<String, BTreeSet<String>>,
     pub mcp_services: EndpointScope<String, ()>,
     pub defra_collections: EndpointScope<String, ()>,
+    pub p2p_collections: EndpointScope<String, ()>,
     pub self_config_categories: EndpointScope<String, ()>,
     pub subagent_targets: EndpointScope<(String, String), ()>,
     pub background_tools: EndpointScope<String, ()>,
@@ -221,6 +231,14 @@ pub struct ToolPolicySurface {
 }
 
 impl ToolPolicySurface {
+    pub fn permits_p2p_mutation(&self) -> bool {
+        self.p2p_read && self.p2p_mutate
+    }
+
+    pub fn permits_p2p_overlay_mutation(&self, before: &[String], after: &[String]) -> bool {
+        self.permits_p2p_mutation() && self.p2p_collections.permits_all(before.iter().chain(after))
+    }
+
     pub fn secure_minimal() -> Self {
         Self {
             file: FileToolMode::Off,
@@ -232,6 +250,8 @@ impl ToolPolicySurface {
             self_config: false,
             memory: false,
             schema_management: false,
+            p2p_read: false,
+            p2p_mutate: false,
             session_history: false,
             context_budget: false,
             session_messages: false,
@@ -240,6 +260,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::none(),
             mcp_services: EndpointScope::none(),
             defra_collections: EndpointScope::none(),
+            p2p_collections: EndpointScope::none(),
             self_config_categories: EndpointScope::none(),
             subagent_targets: EndpointScope::none(),
             background_tools: EndpointScope::none(),
@@ -274,6 +295,8 @@ impl ToolPolicySurface {
             self_config: true,
             memory: true,
             schema_management: true,
+            p2p_read: true,
+            p2p_mutate: true,
             session_history: true,
             context_budget: true,
             session_messages: true,
@@ -282,6 +305,7 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::all(),
             mcp_services: EndpointScope::all(),
             defra_collections: EndpointScope::all(),
+            p2p_collections: EndpointScope::all(),
             self_config_categories: EndpointScope::all(),
             subagent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
@@ -396,6 +420,8 @@ impl ToolPolicySurface {
             self_config: selection.enable_self_config,
             memory: selection.enable_memory,
             schema_management: selection.enable_schema_tool,
+            p2p_read: selection.enable_p2p_tool,
+            p2p_mutate: selection.enable_p2p_mutations,
             session_history: selection.enable_session_history_tool,
             context_budget: selection.enable_context_budget,
             session_messages: subagent_tools.enabled,
@@ -404,6 +430,9 @@ impl ToolPolicySurface {
             cli_tools: EndpointScope::only_map(cli_tools),
             mcp_services,
             defra_collections,
+            p2p_collections: EndpointScope::<String, ()>::only_units(
+                selection.p2p_collections.iter().cloned(),
+            ),
             self_config_categories,
             subagent_targets: EndpointScope::<(String, String), ()>::only_units(
                 subagent_tools.targets.iter().map(subagent_target_key),
@@ -442,6 +471,8 @@ impl ToolPolicySurface {
             self_config: self.self_config && other.self_config,
             memory: self.memory && other.memory,
             schema_management: self.schema_management && other.schema_management,
+            p2p_read: self.p2p_read && other.p2p_read,
+            p2p_mutate: self.p2p_mutate && other.p2p_mutate,
             session_history: self.session_history && other.session_history,
             context_budget: self.context_budget && other.context_budget,
             session_messages: self.session_messages && other.session_messages,
@@ -456,6 +487,9 @@ impl ToolPolicySurface {
             defra_collections: self
                 .defra_collections
                 .meet_with(&other.defra_collections, |(), ()| ()),
+            p2p_collections: self
+                .p2p_collections
+                .meet_with(&other.p2p_collections, |(), ()| ()),
             self_config_categories: self
                 .self_config_categories
                 .meet_with(&other.self_config_categories, |(), ()| ()),

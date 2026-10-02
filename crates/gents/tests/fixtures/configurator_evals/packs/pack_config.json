@@ -1,0 +1,22 @@
+{
+  "agent_principal": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-packs",
+      "comparability_version": 1,
+      "title": "Engineer pack lifecycle",
+      "subject": {
+        "kind": "behavior",
+        "inference_slots": [
+          "engineer"
+        ]
+      },
+      "cases": [
+        "./cases/discover_review_workflow.json",
+        "./cases/install_review_workflow.json",
+        "./cases/upgrade_review_workflow.json",
+        "./cases/remove_review_workflow.json"
+      ]
+    }
+  ]
+}

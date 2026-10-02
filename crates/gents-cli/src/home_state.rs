@@ -192,6 +192,13 @@ pub(crate) fn resolve_graphql_endpoint(
         return Ok(home_graphql_endpoint(&home_dir, runtime_state.graphql));
     }
 
+    anyhow::ensure!(
+        home.is_none(),
+        "home {} has no running server recorded; start `gents server --home {}` or pass --graphql explicitly",
+        home_dir.display(),
+        home_dir.display()
+    );
+
     Ok(home_graphql_endpoint(
         &home_dir,
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
@@ -277,7 +284,62 @@ pub(crate) fn display_host(host: IpAddr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::endpoint_serves_home;
+    use super::{endpoint_serves_home, resolve_graphql_endpoint};
+
+    #[test]
+    fn an_explicit_unserved_home_has_no_graphql_endpoint() {
+        let home = tempfile::tempdir().unwrap();
+        let error = resolve_graphql_endpoint(None, Some(home.path())).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&home.path().display().to_string()));
+        assert!(message.contains("gents server --home"));
+        assert!(message.contains("--graphql"));
+    }
+
+    #[test]
+    fn malformed_runtime_state_does_not_fall_back_to_another_node() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(crate::RUNTIME_STATE_FILE_NAME), "{").unwrap();
+        let error = resolve_graphql_endpoint(None, Some(home.path())).unwrap_err();
+        assert!(error.to_string().contains("decoding runtime state"));
+    }
+
+    #[test]
+    fn an_explicit_endpoint_takes_precedence_over_home_runtime_state() {
+        let home = tempfile::tempdir().unwrap();
+        let url = "https://runtime.example.com/api/v0/graphql";
+        for state in [None, Some("{")] {
+            if let Some(state) = state {
+                std::fs::write(home.path().join(crate::RUNTIME_STATE_FILE_NAME), state).unwrap();
+            }
+            let endpoint = resolve_graphql_endpoint(Some(url), Some(home.path())).unwrap();
+            assert_eq!(endpoint.url(), url);
+        }
+    }
+
+    #[test]
+    fn an_explicit_home_uses_its_recorded_endpoint() {
+        let home = tempfile::tempdir().unwrap();
+        let url = "http://127.0.0.1:28191/api/v0/graphql";
+        std::fs::write(
+            home.path().join(crate::RUNTIME_STATE_FILE_NAME),
+            serde_json::to_vec(&serde_json::json!({
+                "home": home.path(),
+                "graphql": url,
+                "agent_name": "trial",
+                "agent_did": "did:key:z6Mk",
+                "default_behavior_id": "subject",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_graphql_endpoint(None, Some(home.path()))
+                .unwrap()
+                .url(),
+            url
+        );
+    }
 
     #[test]
     fn bearers_go_only_to_the_homes_runtime_or_loopback() {

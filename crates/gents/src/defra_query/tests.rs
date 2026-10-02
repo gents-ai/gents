@@ -5,6 +5,116 @@ use serde_json::{json, Value};
 
 use super::*;
 
+#[tokio::test]
+async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema("type Reports { duty: String @fulltext rank: String }")
+        .await
+        .unwrap();
+    for (duty, rank) in [
+        ("Coordinate crew duty rotations", "Captain"),
+        ("Inspect engine maintenance", "Commander"),
+        ("Plan the cargo manifest", "Captain"),
+    ] {
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "seed_keyword_query",
+            &format!(
+                "mutation {{ add_Reports(input: {{duty: \"{}\", rank: \"{}\"}}) {{_docID}} }}",
+                crate::graphql::escape_graphql_string(duty),
+                crate::graphql::escape_graphql_string(rank)
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["Reports".into()]),
+    );
+    let base = json!({"argv":["search"],"collection":"Reports","options":{"fields":["duty"],"search_fields":["duty"],"text":"crew duty","limit":3,"order":[{"rank":"ASC"}]}});
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, serde_json::from_value(base.clone()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["returned_count"], 3);
+    assert_eq!(
+        result["results"][0]["duty"],
+        "Coordinate crew duty rotations"
+    );
+    assert!(result["results"][0]["_score"].as_f64().unwrap() > 0.0);
+    assert_eq!(result["results"][1]["_score"], 0.0);
+    assert_eq!(result["ranking"], "bm25");
+    let mut filtered = base.clone();
+    filtered["options"]["filter"] = json!({"rank":{"_eq":"Commander"}});
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, serde_json::from_value(filtered).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["returned_count"], 1);
+    assert_eq!(result["results"][0]["duty"], "Inspect engine maintenance");
+    for (key, value, expected) in [
+        ("text", json!(""), "nonempty search terms"),
+        ("text", json!(42), "nonempty search terms"),
+        ("search_fields", json!([]), "at least one field"),
+        (
+            "search_fields",
+            json!(["duty) { rank }"]),
+            "invalid field name",
+        ),
+        (
+            "search_fields",
+            json!(["missing"]),
+            "available String field",
+        ),
+        ("search_fields", json!(["BM25"]), "available String field"),
+        ("limit", json!(0), "search limit"),
+        ("limit", json!(1001), "search limit"),
+        (
+            "filter",
+            json!({"missing":{"_eq":"x"}}),
+            "unknown filter field",
+        ),
+        ("order", json!({"duty":"SIDEWAYS"}), "ASC or DESC"),
+    ] {
+        let mut args = base.clone();
+        args["options"][key] = value;
+        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{key}: {error}");
+        assert!(error.contains("search"), "{error}");
+    }
+    let mut escaped = base.clone();
+    escaped["options"]["text"] = json!("crew\" ) { rank } #");
+    escaped["options"]["filter"] = json!({"duty":{"_neq":") { order: ["}});
+    let result: Value = serde_json::from_str(
+        &Tool::call(&tool, serde_json::from_value(escaped).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["returned_count"], 3);
+    for collection in ["OtherReports", "OAuthCredential"] {
+        let mut args = base.clone();
+        args["collection"] = json!(collection);
+        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("scope") || error.contains("protected"),
+            "{error}"
+        );
+    }
+    node.shutdown().await;
+}
+
 async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -430,6 +540,27 @@ async fn unknown_collection_reports_does_not_exist() {
     let msg = err.to_string();
     assert!(msg.contains("NoSuchCollection"), "{msg}");
     assert!(msg.contains("does not exist"), "{msg}");
+    for collection in ["NoSuchCollection", "surface-name"] {
+        let error = Tool::call(
+            &tool,
+            QueryParams {
+                argv: vec!["fields".into()],
+                collection: Some(collection.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        let result: Value = serde_json::from_str(&error.to_string()).unwrap();
+        assert_eq!(
+            result["recovery"],
+            json!({"tool":"schema","args":{"argv":["collection","list"]}})
+        );
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("config datastore get"));
+    }
 }
 
 /// Mixing "*" with concrete fields is rejected with a pointer at discovery.
@@ -504,7 +635,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     );
     let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_schema(&format!(
-        "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String }}",
+        "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         crate::graphql::escape_graphql_string(&policy)
     ))
     .await
@@ -539,6 +670,14 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, find).await.unwrap()).unwrap();
         assert_eq!(result["returned_count"], 1);
         assert_eq!(result["results"][0]["label"], label);
+        let search: QueryParams = serde_json::from_value(json!({"argv":["search"],"collection":"PrivateRecord","options":{"fields":["label"],"search_fields":["label"],"text":label,"limit":10}})).unwrap();
+        let result: Value =
+            serde_json::from_str(&Tool::call(&tool, search).await.unwrap()).unwrap();
+        assert_eq!(result["returned_count"], 1);
+        assert_eq!(result["results"][0]["label"], label);
+        assert!(result["results"][0]["_score"].as_f64().unwrap() > 0.0);
+        assert_eq!(result["ranking"], "bm25");
+
         let bounded = BoundedQueryTool::new(
             node.clone(),
             crate::document_config::QueryToolDecl {
