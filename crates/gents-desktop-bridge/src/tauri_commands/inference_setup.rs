@@ -980,20 +980,53 @@ pub(crate) struct UsageWindowView {
 
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
-    _app: AppHandle<R>,
-    _request: ProviderAccountRenameRequest,
-    _state: State<'_, DesktopAppState>,
+    app: AppHandle<R>,
+    request: ProviderAccountRenameRequest,
+    state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    Err(BridgeError::untyped("not implemented"))
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let agent_did = request.agent_did.trim();
+    let access = core
+        .operator_access(agent_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    gents::oauth_credential::set_account_label(
+        &access,
+        agent_did,
+        &request.credential_id,
+        &request.label,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("config"),
+    );
+    Ok(())
 }
 
+/// Removes the account as `gents accounts remove --yes` does, with the
+/// backends its sign-in created that no profile uses.
 #[tauri::command]
 pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
-    _app: AppHandle<R>,
-    _request: ProviderAccountRemoveRequest,
-    _state: State<'_, DesktopAppState>,
+    app: AppHandle<R>,
+    request: ProviderAccountRemoveRequest,
+    state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
-    Err(BridgeError::untyped("not implemented"))
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let agent_did = request.agent_did.trim();
+    let access = core
+        .operator_access(agent_did)
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    gents_server::accounts::remove_account(&access, agent_did, &request.credential_id, None, true)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("config"),
+    );
+    Ok(())
 }
 
 #[tauri::command]

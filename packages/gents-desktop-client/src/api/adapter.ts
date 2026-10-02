@@ -27,6 +27,7 @@ import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
+import type { BackendUsageView } from "../generated/BackendUsageView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
@@ -284,6 +285,18 @@ export function createDesktopApiAdapter(
     retrySaveProviderAccount: (agentDid, provider) =>
       invokeDesktop<ProviderAccountView>("desktop_provider_account_retry_save", {
         request: { agentDid, provider },
+      }),
+    renameProviderAccount: (agentDid, credentialId, label) =>
+      invokeDesktop<void>("desktop_provider_account_rename", {
+        request: { agentDid, credentialId, label },
+      }),
+    removeProviderAccount: (agentDid, credentialId) =>
+      invokeDesktop<void>("desktop_provider_account_remove", {
+        request: { agentDid, credentialId },
+      }),
+    readProviderUsage: (agentDid, refresh, provider) =>
+      invokeDesktop<BackendUsageView[]>("desktop_provider_usage_read", {
+        request: { agentDid, refresh, provider: provider ?? null },
       }),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {

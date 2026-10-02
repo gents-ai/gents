@@ -22,12 +22,13 @@ use ts_rs::TS;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
-    CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
+    BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
+    CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
-    InferenceRecommendationRequest, ProviderAccountDisconnectRequest,
-    ProviderAccountRetrySaveRequest, ProviderAccountView, ProviderAccountsRequest, SignInView,
+    InferenceRecommendationRequest, ProviderAccountDisconnectRequest, ProviderAccountRemoveRequest,
+    ProviderAccountRenameRequest, ProviderAccountRetrySaveRequest, ProviderAccountView,
+    ProviderAccountsRequest, ProviderUsageReadRequest, SignInView, UsageWindowView,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -233,6 +234,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ProviderAccountsRequest,
         ProviderAccountDisconnectRequest,
         ProviderAccountRetrySaveRequest,
+        ProviderAccountRenameRequest,
+        ProviderAccountRemoveRequest,
+        ProviderUsageReadRequest,
     );
 
     export_types!(
@@ -289,6 +293,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ClaudeLoginUrl,
         ProviderAccountView,
         SignInView,
+        BackendUsageView,
+        UsageWindowView,
     );
 
     normalize_generated_types(dir)?;

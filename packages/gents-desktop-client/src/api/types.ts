@@ -8,6 +8,7 @@ import type { ManagedServerResetResult } from "../generated/ManagedServerResetRe
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
+import type { BackendUsageView } from "../generated/BackendUsageView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryRequest } from "../generated/InferenceDiscoveryRequest.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
@@ -274,6 +275,25 @@ export type DesktopApiAdapter = {
     agentDid: string,
     provider: string,
   ) => Promise<ProviderAccountView>;
+  renameProviderAccount?: (
+    agentDid: string,
+    credentialId: string,
+    label: string,
+  ) => Promise<void>;
+  /** Removes the account and the backends its sign-in created that no
+   *  profile uses. */
+  removeProviderAccount?: (
+    agentDid: string,
+    credentialId: string,
+  ) => Promise<void>;
+  /** Asks the runtime to read usage (`refresh` false: the reads it allows
+   *  when the panel opens), then returns each backend's stored usage.
+   *  `provider` is a credential kind. */
+  readProviderUsage?: (
+    agentDid: string,
+    refresh: boolean,
+    provider?: string | null,
+  ) => Promise<BackendUsageView[]>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
