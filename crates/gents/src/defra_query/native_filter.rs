@@ -139,6 +139,11 @@ fn validate_value<'a>(
             let Some(field) = fields.iter().find(|field| field.name == canonical) else {
                 let available = fields
                     .iter()
+                    .filter(|field| {
+                        name.strip_suffix("FilterArg").is_none_or(|collection| {
+                            !super::query::is_restricted_field(collection, &field.name)
+                        })
+                    })
                     .map(|field| field.name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -197,6 +202,15 @@ mod tests {
                     .is_err(),
                 "invalid filter was accepted: {filter}"
             );
+        }
+        node.add_schema("type OAuthCredential { credential_id: String access_token: String refresh_token: String id_token: String }").await.unwrap();
+        let error = validate_filter(&access, "OAuthCredential", &json!({"unknown_field":"x"}))
+            .await
+            .unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("credential_id"));
+        for field in ["access_token", "refresh_token", "id_token"] {
+            assert!(!diagnostic.contains(field), "{diagnostic}");
         }
         node.shutdown().await;
     }
