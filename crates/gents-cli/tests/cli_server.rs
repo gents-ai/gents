@@ -2745,7 +2745,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP write must fail"
     );
     let _identity = identity_from_init(&init)?;
-    let access = gents::config_client::ConfigAccess::graphql_as_principal(
+    let access = gents::config_client::ConfigAccess::graphql_as(
         graphql.clone(),
         agent_did.clone(),
     );
