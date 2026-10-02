@@ -142,6 +142,15 @@ fn load_operator_principal(record: &crate::client::PeerRecord) -> Result<()> {
     Ok(())
 }
 
+/// The co-hosted runtime's own identity, which signs the operator commands
+/// its HTTP routes take (the usage read), under the same checks as
+/// [`load_operator_principal`].
+pub fn operator_signer(
+    _record: &crate::client::PeerRecord,
+) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
+    anyhow::bail!("not implemented")
+}
+
 pub(crate) fn load_standard_runtime_identity(
     agent_home: &Path,
 ) -> Result<Arc<dyn gents::identity::AgentIdentity>> {
