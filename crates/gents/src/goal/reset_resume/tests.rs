@@ -1,4 +1,4 @@
-use super::contract_tests::{at, usage_limit};
+use super::contract_tests::{at, connect_accounts_at, usage_limit};
 use super::support::*;
 use super::*;
 use crate::lifecycle::queue::goal_continuation_identity;
@@ -10,6 +10,7 @@ const T: i64 = 3600;
 
 /// An opted-in Goal stopped by `PARENT`, whose call of `kind` on Claude
 /// account A started at 0 and reported a reset; B is another enabled account.
+/// Both connected at -1.
 struct Reset {
     f: Fixture,
     accounts: ClaudeAccounts,
@@ -24,6 +25,7 @@ impl Reset {
         }))
         .await;
         let accounts = f.claude_accounts().await;
+        connect_accounts_at(&f, -1).await;
         if kind == "compaction" {
             f.compacts_on(&accounts.access, &accounts.a).await;
         }

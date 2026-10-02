@@ -37,6 +37,20 @@ pub(super) fn at(seconds: i64) -> DateTime<Utc> {
     "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::seconds(seconds)
 }
 
+/// Stamp the fixture's accounts connected at `seconds`: a sign-in records the
+/// wall clock, which must not decide whether it precedes a limited call.
+pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
+    execute(
+        &f.node,
+        &format!(
+            r#"mutation {{ update_OAuthCredential(filter: {{ agent_did: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(f.identity.did()),
+            at(seconds).to_rfc3339()
+        ),
+    )
+    .await;
+}
+
 /// The text a usage-limited call records: the Anthropic rejected-headers
 /// reset when one is reported, else a body with no reset.
 pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
@@ -91,6 +105,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             name => panic!("unmapped generated reset case {name}"),
         }
         let accounts = f.claude_accounts().await;
+        connect_accounts_at(&f, -1).await;
         let facts = &case.facts;
         let failure = usage_limit(facts.reset_at);
         f.fail_with_call(
