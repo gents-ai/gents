@@ -12,9 +12,9 @@
         ]
       },
       "cases": [
-        "./cases/indexed-versus-scan.json",
-        "./cases/empty-report-execution.json",
-        "./cases/recover-and-refuse.json"
+        "./cases/indexed_versus_scan.json",
+        "./cases/empty_report_execution.json",
+        "./cases/recover_and_refuse.json"
       ]
     }
   ]
