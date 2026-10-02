@@ -284,10 +284,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 - The desktop draws every signed-in account as its own backend row (#2124):
   its label, whether it is signed in, disabled or not on this node (or "off"
-  when the backend is switched off), and a usage bar from the last stored observation. Opening the row shows each usage
-  window with its reset countdown, source and age, or "unknown", "not
-  reported" or "no cap on this key", and a Refresh button, after which
-  Claude's windows show;
+  when the backend is switched off), and a usage bar from the last stored
+  observation. Opening the row shows each usage window with its reset
+  countdown, source and age, or "unknown", "not reported" or "no cap on this
+  key", and a Refresh button, after which Claude's windows show;
   opening the Providers page asks the runtime for the reads it allows on open,
   and nothing polls. "Add another <Provider>" and "New backend" sign in a
   further account for every provider, with an optional label, and say whether
