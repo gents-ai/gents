@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import type {
   BackendProviderKind,
   BackendSaveRequest,
+  BackendUsageView,
   DeploymentView,
   InferenceBackend,
   InferenceBackendView,
@@ -19,6 +20,7 @@ import type {
   ProviderAccountView,
   InferenceAuthMethod,
   InferenceProviderId,
+  UsageWindowView,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
@@ -167,6 +169,110 @@ export function useAccounts(shell: Shell, agentDid: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentDid, shell.snapshot]);
   return { accounts, reload: load };
+}
+
+/* usage, read when the panel opens (the reads the runtime allows then) and
+   on Refresh; nothing polls, and a snapshot change does not read again */
+function useProviderUsage(shell: Shell, agentDid: string) {
+  const [usage, setUsage] = useState<BackendUsageView[]>([]);
+  useEffect(() => {
+    let live = true;
+    shell.api.readProviderUsage?.(agentDid, false, null).then(
+      (views) => {
+        if (live) setUsage(views);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [shell.api, agentDid]);
+  const refresh = async (provider: string | null) => {
+    const views = await shell.api.readProviderUsage?.(agentDid, true, provider);
+    if (views) setUsage(views);
+  };
+  return { usage, refresh };
+}
+
+/* "2h13m", "3m", "<1m": the CLI's short durations */
+function shortDuration(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 60_000));
+  const [days, hours, minutes] = [
+    Math.floor(total / 1440),
+    Math.floor((total % 1440) / 60),
+    total % 60,
+  ];
+  if (days) return hours ? `${days}d${hours}h` : `${days}d`;
+  if (hours) return minutes ? `${hours}h${minutes}m` : `${hours}h`;
+  return minutes ? `${minutes}m` : "<1m";
+}
+
+const USAGE_SOURCE: Record<string, string> = {
+  header: "from response headers",
+  endpoint: "from the usage endpoint",
+  error: "from a rejected request",
+};
+
+function windowText(w: UsageWindowView, now: number) {
+  const parts = [`${Math.round(w.usedPct)}% used`];
+  if (w.resetsAt) {
+    const at = new Date(w.resetsAt);
+    const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    parts.push(`resets in ${shortDuration(at.getTime() - now)} (${time})`);
+  }
+  parts.push(
+    `${USAGE_SOURCE[w.source] ?? w.source}, ${shortDuration(now - Date.parse(w.observedAt))} ago`,
+  );
+  if (w.lastKnown) parts.push("last known");
+  return parts.join(" · ");
+}
+
+/* a row's usage: its most-used window, labelled, the one that blocks first */
+function UsageBar({ view }: { view?: BackendUsageView }) {
+  const top = view?.windows.reduce<UsageWindowView | undefined>(
+    (most, w) => (!most || w.usedPct > most.usedPct ? w : most),
+    undefined,
+  );
+  if (!top) return null;
+  const pct = Math.round(top.usedPct);
+  return (
+    <span className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground tabular-nums">
+      {top.label}{" "}
+      <span aria-hidden className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
+        <span
+          className="block h-full bg-foreground/60"
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </span>
+      {pct}%
+    </span>
+  );
+}
+
+/* the opened row's usage: each window, or why there is no number, and how
+   this read went */
+function UsageRows({ view }: { view?: BackendUsageView }) {
+  const now = Date.now();
+  const read =
+    view?.read === "skipped_until_refresh"
+      ? "Refresh to read usage"
+      : view?.read?.startsWith("unavailable: ")
+        ? `Not read: ${view.read.slice("unavailable: ".length)}`
+        : view?.readError;
+  return (
+    <>
+      {view?.windows.length ? (
+        view.windows.map((w) => (
+          <FactRow key={w.label} label={w.label}>
+            {windowText(w, now)}
+          </FactRow>
+        ))
+      ) : (
+        <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>
+      )}
+      {read && <FactRow label="Last read">{read}</FactRow>}
+    </>
+  );
 }
 
 /* the stored account a subscription backend runs on: the one with the
@@ -486,6 +592,7 @@ export function BackendEditor({
   backend,
   accounts,
   reload,
+  usage,
   embedded = false,
 }: {
   shell: Shell;
@@ -493,6 +600,11 @@ export function BackendEditor({
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
+  /* this backend's usage and the read again; absent, no Usage group */
+  usage?: {
+    view?: BackendUsageView;
+    refresh: (provider: string | null) => Promise<void>;
+  };
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
@@ -585,6 +697,20 @@ export function BackendEditor({
   }, [d.draft.providerKind, d.draft.endpoint]);
   /* an added account's backend is deleted by removing the account */
   const removable = backend.accountRef ? backendAccount(accounts, backend) : undefined;
+  const signIn = SUBSCRIPTION[backend.providerKind ?? ""];
+  /* a disabled or missing account draws no usage */
+  const usable = !signIn || backendAccount(accounts, backend)?.enabled;
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshUsage = async () => {
+    setRefreshing(true);
+    try {
+      await usage?.refresh(signIn?.provider ?? null);
+    } catch (error) {
+      toast(`Refresh failed: ${setupErrorMessage(error)}`);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const users = deployment.inferenceProfiles
     .filter((p) => p.backend_id === backend.backendId)
     .map((p) => p.display_name ?? p.profile_id);
@@ -766,6 +892,23 @@ export function BackendEditor({
           </>
         )}
       </Group>
+      {usage && usable && (
+        <Group
+          title="Usage"
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={refreshing}
+              onClick={refreshUsage}
+            >
+              Refresh
+            </Button>
+          }
+        >
+          <UsageRows view={usage.view} />
+        </Group>
+      )}
       <Group title="Endpoint and models">
         <TextRow
           id={id("endpoint")}
@@ -959,6 +1102,9 @@ export function InferencePanel({
   };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
   const [acting, setActing] = useState<AccountAction | null>(null);
+  const providerUsage = useProviderUsage(shell, deployment.agentDid);
+  const usageOf = (backendId: string) =>
+    providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog(shell);
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
@@ -1053,69 +1199,74 @@ export function InferencePanel({
             badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
             badgeTone: "bad" as const,
             trailing: (
-              <RowMenu
-                name={b.name ?? b.backendId}
-                base={base}
-                id={b.backendId}
-                enabled={{
-                  checked: b.enabled !== false,
-                  onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.patchConfigComponents({
-                        agentDid: deployment.agentDid,
-                        patches: [
-                          {
-                            collection: "InferenceBackend",
-                            id: b.backendId,
-                            changes: { enabled },
-                          },
-                        ],
-                      }),
-                    ),
-                }}
-                /* an added account's backend goes with Remove account */
-                onDelete={
-                  b.accountRef && stored
-                    ? undefined
-                    : () =>
-                        shell.applyConfig((api) =>
-                          api.deleteBackendConfig({
-                            backendId: b.backendId,
-                            agentDid: deployment.agentDid,
-                          }),
-                        )
-                }
-                warning={dependentsWarning(deployment, "backend", b.backendId)}
-              >
-                <DropdownMenuItem onClick={() => setAdding(provider)}>
-                  Add another{" "}
-                  {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                </DropdownMenuItem>
-                {stored && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => setActing({ action: "rename", account: stored })}
-                    >
-                      Rename account…
-                    </DropdownMenuItem>
-                    {stored.enabled && (
-                      <DropdownMenuItem
-                        onClick={() =>
-                          setActing({ action: "disconnect", account: stored })
-                        }
-                      >
-                        Disconnect…
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setActing({ action: "remove", account: stored })}
-                    >
-                      Remove account…
-                    </DropdownMenuItem>
-                  </>
+              <>
+                {(!SUBSCRIPTION[b.providerKind ?? ""] || stored?.enabled) && (
+                  <UsageBar view={usageOf(b.backendId)} />
                 )}
-              </RowMenu>
+                <RowMenu
+                  name={b.name ?? b.backendId}
+                  base={base}
+                  id={b.backendId}
+                  enabled={{
+                    checked: b.enabled !== false,
+                    onChange: (enabled) =>
+                      shell.applyConfig((api) =>
+                        api.patchConfigComponents({
+                          agentDid: deployment.agentDid,
+                          patches: [
+                            {
+                              collection: "InferenceBackend",
+                              id: b.backendId,
+                              changes: { enabled },
+                            },
+                          ],
+                        }),
+                      ),
+                  }}
+                  /* an added account's backend goes with Remove account */
+                  onDelete={
+                    b.accountRef && stored
+                      ? undefined
+                      : () =>
+                          shell.applyConfig((api) =>
+                            api.deleteBackendConfig({
+                              backendId: b.backendId,
+                              agentDid: deployment.agentDid,
+                            }),
+                          )
+                  }
+                  warning={dependentsWarning(deployment, "backend", b.backendId)}
+                >
+                  <DropdownMenuItem onClick={() => setAdding(provider)}>
+                    Add another{" "}
+                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
+                  </DropdownMenuItem>
+                  {stored && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={() => setActing({ action: "rename", account: stored })}
+                      >
+                        Rename account…
+                      </DropdownMenuItem>
+                      {stored.enabled && (
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setActing({ action: "disconnect", account: stored })
+                          }
+                        >
+                          Disconnect…
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setActing({ action: "remove", account: stored })}
+                      >
+                        Remove account…
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </RowMenu>
+              </>
             ),
           })),
           ...orphans,
@@ -1167,6 +1318,10 @@ export function InferencePanel({
               backend={backend}
               accounts={accounts}
               reload={reload}
+              usage={{
+                view: usageOf(backend.backendId),
+                refresh: providerUsage.refresh,
+              }}
             />
           );
         }}
