@@ -13,10 +13,7 @@ pub(super) fn page(path: &[String]) -> Result<&'static str> {
         if lookup(&path[start..]).is_ok() {
             let mut next = vec!["help".to_owned()];
             next.extend_from_slice(&path[start..]);
-            bail!(
-                "this topic lives at argv:{}",
-                serde_json::to_string(&next)?
-            );
+            bail!("this topic lives at argv:{}", serde_json::to_string(&next)?);
         }
     }
     for depth in (1..path.len()).rev() {
