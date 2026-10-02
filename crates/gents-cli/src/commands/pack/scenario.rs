@@ -608,7 +608,13 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> R
             .and_then(|datastore| datastore.enable_defra_query)
             .unwrap_or(false)
         {
-            advertised.insert("defra_query".to_string());
+            advertised.insert(gents::defra_query::DEFRA_QUERY_TOOL_NAME.to_string());
+        }
+        if datastore
+            .and_then(|settings| settings.write_collections.as_ref())
+            .is_some_and(|collections| !collections.is_empty())
+        {
+            advertised.insert(gents::application_write::WRITE_TOOL_NAME.to_string());
         }
         for surface_id in datastore
             .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
