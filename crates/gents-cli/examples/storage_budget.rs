@@ -144,10 +144,8 @@ async fn main() -> Result<()> {
             .with_context(|| format!("profile {profile}, payload {bytes}, write {ordinal}"))?;
         latencies.push(write_start.elapsed().as_micros() as u64);
         if ordinal + 1 == writes {
-            last_doc_id = inserted["data"]["create_StorageBudgetRecord"][0]["_docID"]
-                .as_str()
-                .context("last created document ID")?
-                .to_owned();
+            last_doc_id =
+                gents_protocol::graphql::extract_mutation_doc_id(&inserted, "StorageBudgetRecord")?;
             last_payload = payload;
         }
         if ordinal % 16 == 0 {
