@@ -167,6 +167,14 @@ async fn waits_after_the_profile_moved() {
 }
 
 #[tokio::test]
+async fn waits_for_a_sign_in_after_the_limited_call() {
+    let reset = Reset::new("inference", Some(T)).await;
+    // The backend's account connected after the call started: another sign-in.
+    connect_accounts_at(&reset.f, 1).await;
+    reset.waits().await;
+}
+
+#[tokio::test]
 async fn waits_after_the_account_was_disabled() {
     let reset = Reset::new("inference", Some(T)).await;
     crate::oauth_credential::set_account_enabled(
