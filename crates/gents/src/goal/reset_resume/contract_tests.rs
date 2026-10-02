@@ -33,13 +33,13 @@ struct Contracts {
 }
 
 /// Lean times are seconds after this instant.
-fn at(seconds: i64) -> DateTime<Utc> {
+pub(super) fn at(seconds: i64) -> DateTime<Utc> {
     "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::seconds(seconds)
 }
 
 /// The text a usage-limited call records: the Anthropic rejected-headers
 /// reset when one is reported, else a body with no reset.
-fn usage_limit(reset_at: Option<i64>) -> String {
+pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
     let text = match reset_at {
         Some(seconds) => {
             let reset = at(seconds).timestamp().to_string();
@@ -95,6 +95,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         let failure = usage_limit(facts.reset_at);
         f.fail_with_call(
             stopped,
+            "inference",
             &accounts.a,
             &failure,
             &at(facts.limit_started_at).to_rfc3339(),

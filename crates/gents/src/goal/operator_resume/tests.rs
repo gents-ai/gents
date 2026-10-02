@@ -1,9 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use crate::config_client::{read_desired_state_record_in_txn, ConfigAccess};
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;
@@ -27,8 +24,14 @@ impl Limited {
         }))
         .await;
         let accounts = f.claude_accounts().await;
-        f.fail_with_call(PARENT, &accounts.a, call_failure, &Utc::now().to_rfc3339())
-            .await;
+        f.fail_with_call(
+            PARENT,
+            "inference",
+            &accounts.a,
+            call_failure,
+            &Utc::now().to_rfc3339(),
+        )
+        .await;
         Self {
             f,
             access: accounts.access,
@@ -53,39 +56,7 @@ impl Limited {
 
     /// The behavior's context compacts with `summ`, also on A.
     async fn compacts_on_a(&self) {
-        let did = self.f.identity.did();
-        let documents = [
-            (
-                Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "summ", "backend_id": self.a, "model_name": "model-s"}),
-            ),
-            (
-                Collection::Compaction,
-                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
-            ),
-            (
-                Collection::AgentContext,
-                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
-            ),
-        ];
-        let plan = DesiredStateApplyPlan::new(
-            documents
-                .into_iter()
-                .map(|(collection, value)| DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                })
-                .collect(),
-        )
-        .unwrap();
-        self.access
-            .transact("test.resume_on.compaction", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
+        self.f.compacts_on(&self.access, &self.a).await;
     }
 
     async fn profile_backend(&self) -> String {
@@ -114,24 +85,11 @@ impl Limited {
     }
 
     async fn goal_status(&self) -> String {
-        load_canonical_goal(&self.f.node, self.f.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap()
-            .status
+        self.f.goal_status().await
     }
 
     async fn children(&self) -> Vec<String> {
-        request_rows(&self.f.node)
-            .await
-            .into_iter()
-            .filter(|row| {
-                row.retry_key
-                    .as_deref()
-                    .is_some_and(|key| key.starts_with("goal-continuation:"))
-            })
-            .map(|row| row.request_id)
-            .collect()
+        self.f.children().await
     }
 }
 

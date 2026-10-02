@@ -239,9 +239,75 @@ impl Fixture {
         }
     }
 
-    /// Fail `request_id` with one failed inference call on `backend` that
+    /// The behavior's context compacts with profile `summ` on `backend`.
+    pub async fn compacts_on(&self, access: &ConfigAccess, backend: &str) {
+        let did = self.identity.did();
+        let documents = [
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
+            ),
+            (
+                Collection::Compaction,
+                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        access
+            .transact("test.compacts_on", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub async fn goal_status(&self) -> String {
+        load_canonical_goal(&self.node, self.identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+    }
+
+    /// The Goal's continuation requests, newest first.
+    pub async fn children(&self) -> Vec<String> {
+        request_rows(&self.node)
+            .await
+            .into_iter()
+            .filter(|row| {
+                row.retry_key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("goal-continuation:"))
+            })
+            .map(|row| row.request_id)
+            .collect()
+    }
+
+    /// Fail `request_id` with one failed call of `kind` on `backend` that
     /// queued, started and ended at `at`.
-    pub async fn fail_with_call(&self, request_id: &str, backend: &str, failure: &str, at: &str) {
+    pub async fn fail_with_call(
+        &self,
+        request_id: &str,
+        kind: &str,
+        backend: &str,
+        failure: &str,
+        at: &str,
+    ) {
         let did = self.identity.did();
         let failure = escape_graphql_string(failure);
         execute(
@@ -254,7 +320,7 @@ impl Fixture {
                     create_InferenceCall(input: {{
                         call_id: "call-{request_id}" request_id: "{request_id}" call_seq: 1
                         backend_id: "{backend}" behavior_id: "contract-behavior" agent_did: "{did}"
-                        call_kind: "inference" attempt: 1 call_state: "failed"
+                        call_kind: "{kind}" attempt: 1 call_state: "failed"
                         failure_reason: "{failure}"
                         queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
                     }}) {{ _docID }}

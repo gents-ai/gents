@@ -115,3 +115,5 @@ fn reported_reset(text: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc
 use super::operator_resume::support;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod tests;
