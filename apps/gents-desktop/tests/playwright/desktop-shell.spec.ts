@@ -143,14 +143,17 @@ test.describe("kit shell", () => {
           top: frame.top,
           bottom: frame.bottom,
           headerTop: header.getBoundingClientRect().top,
-          headerInset: getComputedStyle(header).paddingLeft,
+          headerInset: getComputedStyle(document.querySelector(".app-bar-first")!)
+            .paddingLeft,
           editorBottom: editor.bottom,
           height: window.innerHeight,
         };
       });
       expect(bounds.top).toBe(0);
       expect(bounds.headerTop).toBe(0);
-      expect(bounds.headerInset).toBe("16px");
+      /* the bar's plain inset: a native title bar sits above the webview,
+         so no room is left for traffic lights */
+      expect(bounds.headerInset).toBe("12px");
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
       expect(bounds.editorBottom).toBeLessThanOrEqual(bounds.height);
     }
@@ -210,7 +213,7 @@ test.describe("kit shell", () => {
 
   test("agents and configuration are reachable", async ({ page }) => {
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     await expect(page.getByTestId("agents-screen")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
     await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
@@ -223,7 +226,7 @@ test.describe("kit shell", () => {
     page,
   }) => {
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
     const syncDialog = page.getByRole("dialog", { name: "Database sync details" });
 
@@ -427,7 +430,7 @@ test.describe("kit shell", () => {
   test("keeps dialogs inside short windows", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page);
-    await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+    await page.getByRole("link", { name: "Agents" }).first().click();
     await page.getByRole("button", { name: "Add agent" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Add agent" });
@@ -501,7 +504,7 @@ test.describe("kit shell", () => {
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
 
     await page
-      .getByTestId("session-screen")
+      .getByTestId("window-bar")
       .getByRole("link", { name: "Sessions" })
       .last()
       .click();
@@ -515,7 +518,7 @@ test.describe("kit shell", () => {
     ).toBeVisible();
 
     await page
-      .getByTestId("session-screen")
+      .getByTestId("window-bar")
       .getByRole("link", { name: "Sessions" })
       .last()
       .click();

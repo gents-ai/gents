@@ -7,6 +7,7 @@
    12px from the edge) so nothing appears to move when it opens. Opens
    after a short rest, closes when the pointer leaves; keyboard focus
    inside keeps it open. */
+import { createContext } from "react";
 import { useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-react";
 import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
@@ -18,7 +19,7 @@ import type { NavMode } from "@/nav";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 
-const OPEN_AFTER = 260;
+const OPEN_AFTER = 80;
 const CLOSE_AFTER = 180;
 const RECENT = 8;
 
@@ -68,6 +69,7 @@ export function NavPanel({
   nodeCount,
   holds = new Set<string>(),
   settings,
+  foot,
 }: {
   route: Route;
   agentName: string | null;
@@ -78,6 +80,8 @@ export function NavPanel({
   holds?: Set<string>;
   /** the settings menu, as a row at the foot */
   settings?: ReactNode;
+  /** what sits above Nodes at the foot: the sync chip, from the app */
+  foot?: ReactNode;
   /** the newest sessions in scope, from the app; absent, the node's own */
   recent?: SessionSummary[];
   /** the node this machine runs; null when the client is paired only to remote nodes */
@@ -230,8 +234,10 @@ export function NavPanel({
           </a>
         </>
       )}
-      <div className="mt-auto">
-        <div className="mx-3 mb-2 h-px bg-border" />
+      {/* the same rhythm as the rail's foot (AppShell): 4px between chip, rule, Nodes and Settings */}
+      <div className="mt-auto flex flex-col gap-1">
+        {foot}
+        <div className="mx-3 h-px bg-border" />
         <Item
           to={href({ name: "nodes" })}
           active={route.name === "nodes" || route.name === "agents"}
@@ -246,7 +252,12 @@ export function NavPanel({
   );
 }
 
+/* whether the hover flyout is showing: what the rail draws under the
+   flyout's own rows hides itself while it is, so there is one control */
+export const FlyoutOpenContext = createContext(false);
+
 export function RailFlyout({
+  mark,
   route,
   agentName,
   agentDid,
@@ -256,6 +267,7 @@ export function RailFlyout({
   holds = new Set<string>(),
   mode = "hover",
   settings,
+  foot,
   recent,
   working,
   nodeCount,
@@ -277,6 +289,9 @@ export function RailFlyout({
   working?: DeploymentView | null;
   nodeCount?: number;
   /** the collapsed rail */
+  foot?: ReactNode;
+  /** the rail's mark: drawn above the expanded panel, left visible beside the flyout */
+  mark?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -290,6 +305,11 @@ export function RailFlyout({
     timer.current = window.setTimeout(() => setOpen(next), ms);
   };
   if (mode === "collapsed") return <>{children}</>;
+  /* the mark row: the nav's top padding, the 28px mark and its 8px gap, so the
+     panel's first row lands where the rail's avatar sits */
+  /* with the mark in the window bar the rail's first row is the avatar,
+     and the panel's first row (8px in) lands on it from 4px down */
+  const belowMark = mark ? "calc(0.75rem + 1.75rem + 0.5rem)" : "0.25rem";
   const shown = mode === "expanded" || open;
   const hover = mode === "hover";
   return (
@@ -320,17 +340,28 @@ export function RailFlyout({
       onKeyDown={(e) => hover && e.key === "Escape" && setOpen(false)}
     >
       <PortalContainerProvider value={portal}>
-        {hover && children}
+        <FlyoutOpenContext.Provider value={hover && open}>
+          {hover && children}
+        </FlyoutOpenContext.Provider>
+        {!hover && mark && (
+          <div
+            className="flex flex-col items-center"
+            style={{ paddingTop: "0.75rem", width: "3.5rem" }}
+          >
+            <div className="mb-2">{mark}</div>
+          </div>
+        )}
         <div
           aria-hidden={!shown}
+          style={{ top: belowMark }}
           className={cn(
-            "flex w-72 flex-col gap-2 overflow-hidden bg-raised pt-4 pb-2",
+            "flex w-72 flex-col gap-2 overflow-hidden bg-raised pt-2 pb-2",
             /* the flyout sits exactly where the expanded panel sits, so
                switching modes moves nothing but whether it stays */
             "rounded-2xl border border-border/60",
             hover
-              ? "absolute top-0 bottom-2 left-2 z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
-              : "mb-2 ml-2 h-[calc(100%-0.5rem)] shadow-xs",
+              ? "absolute bottom-2 left-2 z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
+              : "absolute bottom-2 left-2 shadow-xs",
             hover &&
               (open
                 ? "translate-x-0 opacity-100"
@@ -346,6 +377,7 @@ export function RailFlyout({
             mailboxCount={mailboxCount}
             holds={holds}
             settings={settings}
+            foot={foot}
             recent={recent}
             working={working}
             nodeCount={nodeCount}
