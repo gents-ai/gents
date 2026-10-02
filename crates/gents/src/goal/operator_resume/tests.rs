@@ -1,8 +1,5 @@
+use super::support::*;
 use super::*;
-// The generated cases use the rest of the shared fixture.
-#[allow(dead_code)]
-#[path = "support.rs"]
-mod support;
 use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 use crate::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, write_inference_backend_document,
@@ -12,7 +9,6 @@ use crate::oauth_credential::{preset_account_backend, store_sign_in};
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;
-use support::*;
 
 const PROFILE: &str = "contract-behavior:inference";
 

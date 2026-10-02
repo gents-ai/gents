@@ -186,6 +186,30 @@ pub async fn blocked_turn(
     agent_did: &str,
     request_id: &str,
 ) -> Result<Option<BlockedTurn>> {
+    let (accounts, references, request, call) =
+        stopped_request(access, agent_did, request_id).await?;
+    Ok(blocked_turn_from(
+        &references,
+        &accounts,
+        &request,
+        call.as_ref(),
+        Utc::now(),
+    ))
+}
+
+/// What [`blocked_turn_from`] reads for `request_id`: the principal's
+/// accounts, then one configuration snapshot, the request row and its last
+/// failed call. An unknown request is an error.
+pub(crate) async fn stopped_request(
+    access: &ConfigAccess,
+    agent_did: &str,
+    request_id: &str,
+) -> Result<(
+    Vec<AccountSummary>,
+    ConfigReferences,
+    AgentRequestRow,
+    Option<FailedCall>,
+)> {
     let accounts = list_accounts(access, agent_did).await?;
     let (references, request, call) = access
         .transact("blocked_turn.request", |txn| {
@@ -203,13 +227,7 @@ pub async fn blocked_turn(
             })
         })
         .await?;
-    Ok(blocked_turn_from(
-        &references,
-        &accounts,
-        &request,
-        call.as_ref(),
-        Utc::now(),
-    ))
+    Ok((accounts, references, request, call))
 }
 
 /// [`blocked_turn`] for the latest request of `session_id`'s canonical Goal.

@@ -13,7 +13,9 @@ mod operator_resume;
 mod readiness_gate;
 mod request_head;
 pub(crate) use claimed_publication::publish_claimed_continuation;
-pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
+pub use operator_resume::{
+    resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
+};
 pub use readiness_gate::{
     gate_goal_continuation, goal_behavior_observation, goal_failure_cause,
     goal_readiness_newer_than_terminal, may_materialize_claimed_goal_continuation,
