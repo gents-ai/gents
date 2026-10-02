@@ -1357,7 +1357,7 @@ pub(crate) enum AccountsCommand {
         target: AccountsTargetArgs,
         #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
         output: OutputFormat,
-        #[arg(long, help = "Also read Claude usage now; needs a running runtime")]
+        #[arg(long, help = "Read usage now; fails without a running runtime")]
         refresh: bool,
     },
     #[command(about = "Rename an account")]
