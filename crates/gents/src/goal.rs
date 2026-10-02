@@ -573,6 +573,8 @@ pub struct GoalDocument {
     #[serde(default)]
     pub completion_evidence: Option<String>,
     #[serde(default)]
+    pub auto_resume_at_reset: Option<bool>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
@@ -1148,6 +1150,7 @@ async fn stage_goal_and_claim(
             infrastructure_retry_count: Some(0),
             last_failure: None,
             completion_evidence: None,
+            auto_resume_at_reset: None,
             created_at: Some(now.to_string()),
             updated_at: Some(now.to_string()),
         },
@@ -2979,6 +2982,30 @@ mod tests {
             "req-4",
         );
         assert_eq!((changed, accepted), (1, false));
+    }
+
+    #[tokio::test]
+    async fn auto_resume_field_round_trips_through_the_live_schema() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:key:z6MkTestOwner";
+        let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(goal.auto_resume_at_reset, None);
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ update_Goal(filter: {{_docID: {{_eq: "{}"}}}},
+                input: {{auto_resume_at_reset: true}}) {{_docID}} }}"#,
+                goal.doc_id
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let stored = load_canonical_goal(&node, owner, "session")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.auto_resume_at_reset, Some(true));
     }
 }
 
