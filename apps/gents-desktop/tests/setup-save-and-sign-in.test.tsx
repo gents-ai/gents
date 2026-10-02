@@ -336,6 +336,21 @@ describe("add another account", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
+  it("says no account was added when a refresh has no hint", async () => {
+    const { api, onDone } = addForm("anthropic", {
+      claudeLogin: signedIn("refreshed", null, null),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(
+      await screen.findByText(
+        "This sign-in refreshed the account stored as Work. No account was added.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
   it("closes after Retry save stores an added account", async () => {
     const work = {
       ...stored(KIND.anthropic),
