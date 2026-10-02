@@ -129,6 +129,31 @@ async fn resumes_once_at_the_reset() {
 }
 
 #[tokio::test]
+async fn a_held_row_waits_once_the_opt_in_is_off() {
+    let reset = Reset::new("inference", Some(T)).await;
+    let goal = reset.goal().await;
+    reset.opt_in(false).await;
+    assert!(reset.resume_with(&goal, T).await.is_none());
+    assert_eq!(reset.f.goal_status().await, "usage_limited");
+    assert!(reset.f.children().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_held_row_waits_for_the_latest_reset() {
+    let reset = Reset::new("inference", Some(T)).await;
+    // A rescan's row names reset T; meanwhile the Goal resumed and its
+    // child stopped on a limit that resets at 3T.
+    let goal = reset.goal().await;
+    let first = reset.resume(T).await.expect("first resume");
+    reset
+        .limit(&first.request_id, "inference", T, Some(3 * T))
+        .await;
+    assert!(reset.resume_with(&goal, 2 * T).await.is_none());
+    assert_eq!(reset.f.goal_status().await, "usage_limited");
+    assert_eq!(reset.f.children().await, [first.request_id]);
+}
+
+#[tokio::test]
 async fn resumes_after_a_compaction_limit() {
     let reset = Reset::new("compaction", Some(T)).await;
     assert!(reset.resume(T - 1).await.is_none());
