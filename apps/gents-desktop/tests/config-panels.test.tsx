@@ -866,7 +866,10 @@ describe("configuration panels", () => {
         });
         /* built when a test renders, so the times shown are exact */
         const usage = () => [
-          view_("claude-work", { windows: [window("5h", 30), window("7d", 81)] }),
+          view_("claude-work", {
+            /* the most-used window is neither the first, the last nor the longest */
+            windows: [window("7d", 30), window("5h", 81), window("1h", 10)],
+          }),
           view_("chatgpt-team", {
             windows: [window("5h", 20, { observedAt: at(-70), lastKnown: true })],
           }),
@@ -909,18 +912,18 @@ describe("configuration panels", () => {
 
         it("draws the most-used window on a row and no percent without a window", async () => {
           setup();
-          expect(await screen.findByText("7d 81%")).toBeVisible();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
           expect(screen.getByText("5h 20%")).toBeVisible();
           /* the disabled Side account draws no usage; no other row has a window */
           expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
-            "7d 81%",
+            "5h 81%",
             "5h 20%",
           ]);
         });
 
         it("opens a row with each window's percent, reset, source and age", async () => {
           setup("claude-work");
-          for (const pct of [30, 81])
+          for (const pct of [30, 81, 10])
             expect(
               await screen.findByText(
                 new RegExp(
