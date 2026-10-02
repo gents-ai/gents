@@ -663,8 +663,8 @@ resources:
         let doc = ConfigAccess::transact_local(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
             let did = owner_did.clone();
             Box::pin(async move {
-                let value = txn.execute(&format!("mutation {{create_AgentSession(input: {{agent_did: {}, requester_did: \"different-requester\", session_id: \"shared\", behavior_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
-                Ok(value["data"]["create_AgentSession"][0]["_docID"].as_str().unwrap().to_owned())
+                let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{agent_did: {}, requester_did: \"different-requester\", session_id: \"shared\", behavior_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
+                Ok(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
             })
         }).await.unwrap();
         node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())
