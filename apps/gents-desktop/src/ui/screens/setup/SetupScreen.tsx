@@ -770,6 +770,10 @@ export function SetupScreen({
       );
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
+      if (purpose === "add-backend" && account.accountRef !== null) {
+        onDone(await api.fetchDesktopSnapshot());
+        return;
+      }
       setSignedIn((current) => ({
         ...current,
         [pendingProvider]: account.credentialId,
