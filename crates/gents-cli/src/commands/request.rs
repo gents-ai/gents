@@ -954,11 +954,18 @@ fn render_request_show_text(
         }
         if blocked.reason == BlockedReason::UsageLimit {
             line.push_str(&match blocked.resets_at {
-                Some(at) => format!(
-                    ", resets at {} (in {})",
-                    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    super::accounts::short_duration((at - now).num_seconds())
-                ),
+                Some(at) => {
+                    let secs = (at - now).num_seconds();
+                    let at = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                    if secs > 0 {
+                        format!(
+                            ", resets at {at} (in {})",
+                            super::accounts::short_duration(secs)
+                        )
+                    } else {
+                        format!(", reset at {at} (passed)")
+                    }
+                }
                 None => ", reset not reported".to_owned(),
             });
         }
