@@ -152,6 +152,18 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         read["data"]["DeploymentNote"][0]["text"],
         "Previous image remains pinned until review"
     );
+    let absent_id = "bae-00000000-0000-5000-8000-000000000000";
+    let partial = call(
+        &tool,
+        json!({"argv":["sync","documents"],"options":{"peer_id":peer_id,"collection":"DeploymentNote","doc_ids":[doc_id,absent_id]}}),
+    )
+    .await;
+    assert_eq!(partial["outcome"]["observed_document_ids"], json!([doc_id]));
+    assert_eq!(
+        partial["outcome"]["missing_document_ids"],
+        json!([absent_id])
+    );
+    assert!(partial["next_call"].is_object());
     call(
         &tool,
         json!({"argv":["pairings","revoke"],"options":{"peer_id":peer_id}}),
