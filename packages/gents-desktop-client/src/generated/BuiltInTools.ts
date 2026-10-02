@@ -23,4 +23,18 @@ enable_goal_creation?: boolean | null, enable_memory?: boolean | null, enable_se
  * Tools writers may configure this capability like other built-ins; an
  * operator that must forbid it must clamp the tool-policy ceiling.
  */
-enable_schema_tool?: boolean | null, enable_context_budget?: boolean | null, };
+enable_schema_tool?: boolean | null,
+/**
+ * Native node P2P observations. Unset is disabled.
+ */
+enable_p2p_tool?: boolean | null,
+/**
+ * Native P2P changes also require enable_p2p_tool. Enrollment and DefraDB
+ * remain the authorization owners. Unset is disabled.
+ */
+enable_p2p_mutations?: boolean | null,
+/**
+ * Exact collection names allowed for application pairing overlays and sync.
+ * Missing or empty grants no collections; the policy ceiling can only narrow.
+ */
+p2p_collections?: Array<string> | null, enable_context_budget?: boolean | null, };
