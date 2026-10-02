@@ -1062,6 +1062,91 @@ struct FaultingRequests<'a> {
     fault: Option<RequestFault>,
 }
 
+struct CountingRequests<'a> {
+    node: &'a EmbeddedNode,
+    rows: std::sync::atomic::AtomicUsize,
+    commits: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ReplayRequestReader for CountingRequests<'_> {
+    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
+        self.rows.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.node.request_rows(query).await
+    }
+
+    async fn request_commits(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
+        self.commits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.node.request_commits(id).await
+    }
+}
+
+#[tokio::test]
+async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_candidate() {
+    let mut fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    let mut duplicate = fixture.header.clone();
+    duplicate.sequence += 1;
+    duplicate.message_key.push_str("-physical-duplicate");
+    let access = crate::config_client::ConfigAccess::Local(fixture.node.clone());
+    access
+        .transact("test.replay.duplicate_header", |txn| {
+            let duplicate = duplicate.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    CREATE_AGENT_MESSAGE_MUTATION,
+                    &transcript_message_create_variables(&duplicate)?,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    fixture.boundary = capture_source_boundary(
+        &fixture.node,
+        SESSION_ID,
+        AGENT_DID,
+        None,
+        &fixture.request_doc_id,
+        &fixture.request_commit_cid,
+    )
+    .await
+    .unwrap();
+    let requests = CountingRequests {
+        node: &fixture.node,
+        rows: std::sync::atomic::AtomicUsize::new(0),
+        commits: std::sync::atomic::AtomicUsize::new(0),
+    };
+    for resolution in 1..=2 {
+        let candidates = super::output::load_canonical_assistant_candidates_with(
+            &fixture.node,
+            &requests,
+            fixture.scope(),
+            &fixture.boundary,
+        )
+        .await
+        .unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_ne!(candidates[0].header_doc_id, candidates[1].header_doc_id);
+        assert!(candidates.iter().all(|candidate| candidate.has_capture()));
+        assert_eq!(
+            requests.rows.load(std::sync::atomic::Ordering::Relaxed),
+            resolution
+        );
+        assert_eq!(
+            requests.commits.load(std::sync::atomic::Ordering::Relaxed),
+            resolution
+        );
+    }
+}
+
 #[async_trait::async_trait]
 impl ReplayRequestReader for FaultingRequests<'_> {
     async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {

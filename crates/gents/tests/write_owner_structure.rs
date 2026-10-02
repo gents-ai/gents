@@ -47,7 +47,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/oauth_credential.rs", 4),
     ("crates/gents/src/registry.rs", 1),
     ("crates/gents/src/rendered_request/commits.rs", 1),
-    ("crates/gents/src/rendered_request/mod.rs", 1),
     ("crates/gents/src/self_config/mod.rs", 2),
     ("crates/gents/src/session/observations.rs", 1),
     ("crates/gents/src/session/query.rs", 1),
