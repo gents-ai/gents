@@ -15,6 +15,7 @@ use gents::inference_setup::{
 };
 use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
+use gents_desktop_core::client::ClientCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -184,6 +185,14 @@ async fn retry_pending_credential(
         Ok(signed) => Ok(signed.credential),
         Err(error) => Err(credential_not_saved(&credential, &error)),
     }
+}
+
+/// Tells the webview the agent's configuration changed.
+async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, _core: &ClientCore) {
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent::coarse("config"),
+    );
 }
 
 /// Stored provider accounts plus the redacted view of sign-ins the bridge
@@ -770,10 +779,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
 
     // Storing the credential is exactly the signal the runtime reconciles on to
     // flip a ChatGptCodex behavior available; nudge the UI to refetch health.
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
 
     Ok(CodexLoginResult::redacted(&signed))
 }
@@ -970,10 +976,7 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     )
     .await
     .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
     Ok(())
 }
 
@@ -1055,10 +1058,7 @@ pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
     )
     .await
     .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
     Ok(())
 }
 
@@ -1079,10 +1079,7 @@ pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
     gents_server::accounts::remove_account(&access, agent_did, &request.credential_id, None, true)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
     Ok(())
 }
 
@@ -1248,10 +1245,7 @@ pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
         provider,
     )
     .await?;
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
     Ok(ProviderAccountView::from(&credential))
 }
 
@@ -1336,10 +1330,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     )
     .await?;
 
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
 
     Ok(GrokLoginResult::redacted(&signed))
 }
@@ -2000,6 +1991,88 @@ mod provider_account_tests {
         assert_eq!(view(&first[0].credential_id), None);
         assert!(second.account_ref.is_some());
         assert_eq!(view(&second.credential_id), second.account_ref);
+    }
+
+    /// The added account's backend is written on the runtime through its
+    /// operator GraphQL, which never replicates to the desktop node, so the
+    /// row shows only once the client store is refreshed from the runtime.
+    #[tokio::test]
+    async fn an_added_accounts_backend_is_in_the_client_snapshot_after_sign_in() {
+        use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+
+        let temp = tempfile::TempDir::new().expect("tmpdir");
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("free port");
+        let runtime = gents::defra_node::EmbeddedNode::builder()
+            .with_http(gents::defra_node::HttpConfig::with_addr(address))
+            .build()
+            .await
+            .expect("runtime node");
+        gents::ensure_runtime_schemas(&runtime)
+            .await
+            .expect("schemas");
+        let graphql = format!("http://{address}/api/v0/graphql");
+        let options = || gents_protocol::graphql::GraphqlRequestOptions {
+            timeout: Duration::from_secs(1),
+            max_attempts: 1,
+            retry_backoff: Duration::ZERO,
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !gents_protocol::graphql::graphql_endpoint_available(&graphql, options()).await {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("runtime GraphQL listener");
+
+        let agent = "did:key:zAgent";
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().join("client")),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .expect("client core");
+        let home = temp.path().join("agent");
+        core.add_managed_enrollment_peer_for_test(agent, &graphql, &home.to_string_lossy(), 1)
+            .await
+            .expect("runtime record");
+        core.set_selected_agent_did(Some(agent.to_string()));
+        assert!(matches!(
+            core.operator_access(agent),
+            Ok(gents::ConfigAccess::Graphql(_))
+        ));
+
+        let pending = PendingOAuthCredentials::default();
+        let (a, b) = two_accounts(agent, true);
+        for account in [a, b] {
+            save_issued_credential(
+                &pending,
+                core.operator_access(agent),
+                pending.issue(account),
+            )
+            .await
+            .expect("save the account");
+        }
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        notify_config_changed(app.handle(), &core).await;
+
+        let snapshot = core.store().snapshot();
+        let backends: Vec<_> = snapshot
+            .inference_backends
+            .iter()
+            .filter(|backend| backend.agent_did == agent)
+            .map(|backend| backend.backend_id.as_str())
+            .collect();
+        assert!(
+            backends
+                .iter()
+                .any(|id| id.starts_with("claude-subscription-")),
+            "the added account's backend is in the client snapshot: {backends:?}"
+        );
+        core.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
@@ -2712,10 +2785,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     )
     .await?;
 
-    let _ = app.emit(
-        "desktop://client-updated",
-        ClientUpdateEvent::coarse("config"),
-    );
+    notify_config_changed(&app, &core).await;
 
     Ok(ClaudeLoginResult::redacted(&signed))
 }
