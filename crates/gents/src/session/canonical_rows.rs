@@ -87,12 +87,10 @@ pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<Transcri
 /// the request alone; apply the principal scope with
 /// [`decode_scoped_request_output_segments`].
 ///
-/// DefraDB plans a query over one single-field index, choosing the first
-/// declared among equally scored equality filters, and treats `_docID` as a
-/// residual filter. `agent_did` precedes `request_doc_id` on this
-/// collection, so a filter that also names the principal reads every segment
-/// the principal ever wrote. Appends and terminalization read here under the
-/// process-wide write gate, where that cost would grow with all past output.
+/// DefraDB selects one single-field index. With multiple usable indexes it
+/// estimates each candidate with capped entry scans before choosing the most
+/// selective one. Naming only `request_doc_id` avoids estimation of principal
+/// and session history and makes the scan independent of their selectivity.
 pub fn request_output_segments_query(request_doc_id: &str) -> String {
     format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
@@ -201,6 +199,63 @@ mod tests {
             ],
             "created_at": "2026-09-09T22:30:00Z"
         })
+    }
+
+    #[test]
+    fn request_scope_drops_malformed_foreign_payloads_before_decoding() {
+        let accepted = terminal_only_segment_row();
+        let mut rows = vec![accepted.clone()];
+        for (field, value) in [
+            ("agent_did", "foreign"),
+            ("requester_did", "foreign"),
+            ("session_id", "foreign"),
+        ] {
+            let mut row = accepted.clone();
+            row[field] = serde_json::json!(value);
+            row["source"] = serde_json::json!("malformed");
+            rows.push(row);
+        }
+        let decoded =
+            decode_scoped_request_output_segments(&rows, "agent", Some("session"), None).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&decoded[0].segment).unwrap(),
+            serde_json::to_value(decode_output_segment_row(&accepted).unwrap().segment).unwrap()
+        );
+        let mut malformed = accepted;
+        malformed["source"] = serde_json::json!("malformed");
+        assert!(decode_scoped_request_output_segments(
+            &[malformed],
+            "agent",
+            Some("session"),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn hydration_request_scope_keeps_other_sessions_and_exact_requester() {
+        let mut row = terminal_only_segment_row();
+        row["requester_did"] = serde_json::json!("requester");
+        assert_eq!(
+            decode_scoped_request_output_segments(&[row.clone()], "agent", None, Some("requester"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(decode_scoped_request_output_segments(
+            &[row.clone()],
+            "agent",
+            Some("other-session"),
+            Some("requester")
+        )
+        .unwrap()
+        .is_empty());
+        assert!(
+            decode_scoped_request_output_segments(&[row], "agent", None, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
