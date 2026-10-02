@@ -63,6 +63,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
     use gents::config_client::ConfigAccess;
     use gents::defra_node::EmbeddedNode;
     use gents::session::load_tool_call_presentation;
+    use gents::{AgentIdentity, KeyIdentity};
     use serde_json::json;
 
     let run = std::path::PathBuf::from(std::env::var("GENTS_SESSION_METRICS_RUN")?);
@@ -74,7 +75,14 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
         if !home.is_dir() {
             continue;
         }
-        let node = Arc::new(EmbeddedNode::builder().data_path(&home).build().await?);
+        let identity = KeyIdentity::load_or_create(home.join("node.key"), None)?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(&home)
+                .with_node_identity_did(identity.did())
+                .build()
+                .await?,
+        );
         let access = ConfigAccess::Local(node.clone());
         let rows = access.execute("{ AgentToolCall(filter: {tool_name: {_eq: \"sessions\"}}) { _docID agent_did session_id requester_did lifecycle_state } }").await?;
         let calls = rows["data"]["AgentToolCall"]
