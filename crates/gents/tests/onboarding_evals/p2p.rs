@@ -279,7 +279,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         .active
         .iter()
         .any(|e| e.request.request_id == enrollment.request_id);
-        let passed = enrollment_active
+        let passed = terminal == gents_protocol::request_lifecycle::RequestLifecycleState::Completed.as_str()
+            && enrollment_active
             && match case.expectation.as_str() {
                 "peer_observation" => {
                     answer.contains(&peer)

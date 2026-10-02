@@ -63,6 +63,17 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     .unwrap_err()
     .to_string()
     .contains("mutations are disabled"));
+    let malformed = Tool::call(
+        &tool,
+        serde_json::from_value(
+            json!({"argv":["network","get"],"options":{"peer_id":"not-a-peer-id"}}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(malformed.to_string().contains("invalid transport peer ID"));
+    assert!(malformed.to_string().contains("network"));
     let forbidden = Tool::call(&tool, serde_json::from_value(json!({"argv":["sync","documents"],"options":{"peer_id":peer_id,"collection":"OAuthCredential","doc_ids":["copied-credential-id"]}})).unwrap()).await.unwrap_err();
     assert!(forbidden.to_string().contains("protocol collections"));
     let applied = call(

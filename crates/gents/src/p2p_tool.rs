@@ -231,6 +231,7 @@ impl P2pTool {
             ["status"] | ["network", "list"] | ["pairings", "list"] | ["enrollment", "pending"] => {
                 &[]
             }
+            ["network", "get"] => &["peer_id"],
             ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections"],
             ["pairings", "revoke"] => &["peer_id"],
             ["enrollment", "approve" | "revoke"] => &["request_id"],
@@ -274,6 +275,24 @@ impl P2pTool {
                     json!({"peers":peers}),
                     None,
                     json!({"connected_peer_ids":bounded_observation(admin.active_peers().await?),"limit":50}),
+                ))
+            }
+            ["network", "get"] => {
+                let peer = text("peer_id")?;
+                defra_p2p_adapter::TransportPeerId::new(peer.to_owned()).map_err(anyhow::Error::msg)
+                    .context("invalid transport peer ID; next call: p2p {\"argv\":[\"network\",\"list\"]}")?;
+                let peers = self
+                    .rows(
+                        "PeerRegistry",
+                        Some(&format!("{{peer_id: {{_eq: {}}}}}", quoted(peer))),
+                        "peer_id agent_did display_name network_id addresses status updated_at",
+                    )
+                    .await?;
+                let connected = admin.active_peers().await?.iter().any(|id| id == peer);
+                Ok(reply(
+                    json!({"peer_id":peer,"registered_peers":peers,"connected":connected}),
+                    peers.is_empty().then(|| json!({"argv":["network","list"]})),
+                    Value::Null,
                 ))
             }
             ["pairings", "list"] => {
@@ -429,8 +448,8 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
-        None => "Native P2P commands in argv: status; network list; pairings list/preview/apply/revoke; enrollment pending/approve/revoke; sync documents. Read [help,RESOURCE] for parameters. Identity comes from the running node. Mutation and collection grants are explicit.",
-        Some("status" | "network") => "[status] returns connected peer IDs and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. A registry entry is discovery, not enrollment authority.",
+        None => "Native P2P commands in argv: status; network list/get; pairings list/preview/apply/revoke; enrollment pending/approve/revoke; sync documents. Read [help,RESOURCE] for parameters. Identity comes from the running node. Mutation and collection grants are explicit.",
+        Some("status" | "network") => "[status] returns connected peer IDs and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. [network,get] takes options.peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority.",
         Some("pairings") => "[pairings,list] shows desired, applied, enrolled and connected observations separately. [pairings,preview] and [pairings,apply] require options.peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. [pairings,revoke] requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Inspect list after apply/revoke; submitted desired state is not proof of a live route.",
         Some("enrollment") => "[enrollment,pending] discovers signed request IDs. [enrollment,approve] or [enrollment,revoke] requires options.request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval uses its bounded default authorization lease. Do not invent a DID or substitute an unsigned pairing document.",
         Some("sync") => "[sync,documents] requires options.peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; the application collection must be allowed by the P2P grant. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
