@@ -179,6 +179,17 @@ async fn set_account(
     Ok(serde_json::to_value(receipt)?)
 }
 
+/// The backend `account` names: a sign-in account's backend, else an
+/// API-key backend by id or name.
+pub(crate) async fn backend_for_account(
+    _access: &ConfigAccess,
+    _agent_did: &str,
+    _account: &str,
+    _provider: Option<&str>,
+) -> Result<String> {
+    Ok(String::new())
+}
+
 /// The one backend that runs on `account`.
 fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<String> {
     let backends: Vec<_> = snapshot

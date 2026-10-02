@@ -18,6 +18,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
         GoalCommand::Show(args) => goal_show(args).await,
         GoalCommand::Set(args) => goal_set(args).await,
         GoalCommand::ResumeRequest(args) => goal_resume(args).await,
+        GoalCommand::ResumeOn(_) => anyhow::bail!("not implemented"),
         GoalCommand::Clear(args) => goal_clear(args).await,
     }
 }
@@ -317,6 +318,73 @@ mod tests {
         for secret in ["SECRET", "IDENTITY"] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+    }
+
+    #[tokio::test]
+    async fn resume_on_maps_the_account_to_its_backend() {
+        let node = std::sync::Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        gents::ensure_agent_principal(node.as_ref(), DID)
+            .await
+            .unwrap();
+        let access = ConfigAccess::Local(node);
+        let backend = serde_json::from_value(serde_json::json!({
+            "agent_did": DID, "backend_id": "claude", "name": "Claude",
+            "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
+            "auth": {"kind": "principal_oauth"},
+        }))
+        .unwrap();
+        gents::config_client::write_inference_backend_document(&access, &backend)
+            .await
+            .unwrap();
+        let mut signed = Vec::new();
+        for (who, label) in [("a", None), ("b", Some("label-b"))] {
+            let credential = gents::claude_oauth::credential_from_login_tokens(
+                DID,
+                "claude-subscription",
+                &gents::claude_oauth::ClaudeLoginTokens {
+                    access_token: format!("access-SECRET-{who}"),
+                    refresh_token: format!("refresh-SECRET-{who}"),
+                    expires_in: Some(3600),
+                    scope: None,
+                    account_id: Some("IDENTITY".into()),
+                    organization_uuid: Some("org-1".into()),
+                    account_uuid: Some(format!("account-{who}")),
+                },
+                Utc::now(),
+            );
+            signed.push(
+                gents::oauth_credential::store_sign_in(&access, credential, label)
+                    .await
+                    .unwrap()
+                    .credential,
+            );
+        }
+        let backend = crate::commands::config::profile::backend_for_account(
+            &access,
+            DID,
+            "label-b",
+            Some("claude-subscription"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            backend,
+            format!(
+                "claude-subscription-{}",
+                signed[1].account_ref.as_deref().unwrap()
+            )
+        );
+        assert!(crate::commands::config::profile::backend_for_account(
+            &access, DID, "label-z", None
+        )
+        .await
+        .is_err());
     }
 
     #[test]

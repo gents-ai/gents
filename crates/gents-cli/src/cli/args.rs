@@ -3846,6 +3846,10 @@ pub(crate) enum GoalCommand {
     Set(GoalSetArgs),
     #[command(about = "Resume a goal and atomically enqueue its continuation")]
     ResumeRequest(GoalResumeArgs),
+    #[command(
+        about = "Move the profile a usage limit stopped to another account, then resume the goal"
+    )]
+    ResumeOn(GoalResumeOnArgs),
     #[command(about = "Delete the durable goal for a session")]
     Clear(GoalShowArgs),
 }
@@ -3883,6 +3887,30 @@ pub(crate) struct GoalResumeArgs {
         help = "Terminal predecessor; reuse this ID when retrying the same resume"
     )]
     pub(crate) from: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalResumeOnArgs {
+    #[arg(
+        help = "The account to move to: its label, credential_id or account_ref, or an API-key \
+                backend's id or name"
+    )]
+    pub(crate) account: String,
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(
+        long,
+        value_name = "REQUEST_ID",
+        help = "The request the usage limit stopped; reuse this ID when retrying"
+    )]
+    pub(crate) from: String,
+    #[arg(long, value_parser = ACCOUNT_PROVIDERS, help = "Narrows the account to this sign-in provider")]
+    pub(crate) provider: Option<String>,
+    /// Also move the other profiles of the profile's behaviors on the same account.
+    #[arg(long)]
+    pub(crate) with_compaction: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }
