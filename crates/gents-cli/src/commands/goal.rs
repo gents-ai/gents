@@ -26,12 +26,21 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal show", &[OutputFormat::Json])?;
     let (access, agent_did) = access_and_did(&args.scope).await?;
-    let goal = load_goal(&access, &agent_did, &args.scope.session)
+    print_json(&goal_show_value(&access, &agent_did, &args.scope.session, Utc::now()).await?)
+}
+
+/// `goal show`'s JSON: the Goal's snapshot.
+async fn goal_show_value(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<serde_json::Value> {
+    let goal = load_goal(access, agent_did, session_id)
         .await?
-        .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    print_json(&serde_json::to_value(GoalSnapshot::from_document(
-        &goal,
-        Utc::now(),
+        .with_context(|| format!("no durable goal for session {session_id}"))?;
+    Ok(serde_json::to_value(GoalSnapshot::from_document(
+        &goal, now,
     ))?)
 }
 
@@ -198,6 +207,110 @@ impl From<GoalStatusArg> for GoalStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DID: &str = "did:key:z6MkTestGoalShowBlocked";
+
+    async fn seeded() -> ConfigAccess {
+        let node = std::sync::Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        gents::ensure_agent_principal(node.as_ref(), DID)
+            .await
+            .unwrap();
+        let access = ConfigAccess::Local(node);
+        let backend = serde_json::from_value(serde_json::json!({
+            "agent_did": DID, "backend_id": "claude", "name": "Claude",
+            "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
+            "auth": {"kind": "principal_oauth"},
+        }))
+        .unwrap();
+        gents::config_client::write_inference_backend_document(&access, &backend)
+            .await
+            .unwrap();
+        let credential = gents::claude_oauth::credential_from_login_tokens(
+            DID,
+            "claude-subscription",
+            &gents::claude_oauth::ClaudeLoginTokens {
+                access_token: "access-SECRET".into(),
+                refresh_token: "refresh-SECRET".into(),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some("IDENTITY".into()),
+                organization_uuid: None,
+                account_uuid: None,
+            },
+            Utc::now(),
+        );
+        gents::oauth_credential::store_sign_in(&access, credential, None)
+            .await
+            .unwrap();
+        for (session, status) in [
+            ("session-limited", GoalStatus::UsageLimited),
+            ("session-active", GoalStatus::Active),
+        ] {
+            set_goal_from_access(&access, DID, session, Some("ship it"), Some(status), None)
+                .await
+                .unwrap();
+        }
+        let at = (Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
+        let failure = "provider usage limit reached (resets at 2030-01-01T00:00:00Z): The usage limit has been reached";
+        access
+            .write(
+                "test.goal_show.rows",
+                &format!(
+                    r#"mutation {{
+                        create_AgentRequest(input: {{
+                            request_id: "request-limited" purpose: "normal" agent_did: "{DID}"
+                            behavior_id: "general" session_id: "session-limited" content: "run"
+                            lifecycle_state: "failed" failure_reason: "{failure}" created_at: "{at}"
+                        }}) {{ _docID }}
+                        create_InferenceCall(input: {{
+                            call_id: "call-limited" request_id: "request-limited" call_seq: 1
+                            backend_id: "claude" behavior_id: "general" agent_did: "{DID}"
+                            call_kind: "inference" attempt: 1 call_state: "failed"
+                            failure_reason: "{failure}"
+                            queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
+                        }}) {{ _docID }}
+                    }}"#
+                ),
+            )
+            .await
+            .unwrap();
+        access
+    }
+
+    #[tokio::test]
+    async fn blocked_goal_show_carries_the_stopped_turn() {
+        let access = seeded().await;
+        let limited = goal_show_value(&access, DID, "session-limited", Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(limited["status"], "usage_limited");
+        assert_eq!(
+            limited.pointer("/blocked/reason"),
+            Some(&serde_json::json!("usage_limit"))
+        );
+        assert_eq!(
+            limited.pointer("/blocked/resets_at"),
+            Some(&serde_json::json!("2030-01-01T00:00:00Z"))
+        );
+        assert_eq!(
+            limited.pointer("/blocked/account/label"),
+            Some(&serde_json::json!("Claude"))
+        );
+        let active = goal_show_value(&access, DID, "session-active", Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(active.get("blocked"), Some(&serde_json::Value::Null));
+        let text = format!("{limited} {active}");
+        for secret in ["SECRET", "IDENTITY"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
 
     #[test]
     fn goal_cli_status_values_cover_runtime_vocabulary() {

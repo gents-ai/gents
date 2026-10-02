@@ -132,7 +132,10 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
             print_json(&value)?;
         }
         OutputFormat::Text => {
-            print!("{}", render_request_show_text(&snapshot));
+            print!(
+                "{}",
+                render_request_show_text(&snapshot, chrono::Utc::now())
+            );
         }
         _ => unreachable!("ensure_supported restricts request show output formats"),
     }
@@ -155,6 +158,7 @@ struct RequestShowSnapshot {
     native_executors_available: bool,
     native_executors: Vec<NativeExecutorView>,
     child_requests: Vec<ChildRequestView>,
+    blocked: Option<gents::blocked_turn::BlockedTurn>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -373,6 +377,7 @@ async fn load_request_show_snapshot(
         native_executors_available,
         native_executors,
         child_requests,
+        blocked: None,
     })
 }
 
@@ -901,7 +906,10 @@ fn unsigned_field(row: &Value, field: &str) -> Option<u64> {
     })
 }
 
-fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
+fn render_request_show_text(
+    snapshot: &RequestShowSnapshot,
+    _now: chrono::DateTime<chrono::Utc>,
+) -> String {
     let mut lines = Vec::new();
     let request = &snapshot.request;
     lines.push(format!("Request {}", request.request_id));
@@ -1430,6 +1438,82 @@ mod tests {
             },
             output,
         }
+    }
+
+    fn show_snapshot(blocked: Option<gents::blocked_turn::BlockedTurn>) -> RequestShowSnapshot {
+        let row = json!({
+            "request_id": "request", "lifecycle_state": "failed",
+            "failure_reason": "provider usage limit reached (reset time not reported)",
+        });
+        RequestShowSnapshot {
+            request: request_header_view(&row, None, Vec::new()).unwrap(),
+            output: CliOutputObservation::Absent,
+            cancel_cause: None,
+            tool_calls: Vec::new(),
+            backgrounded_tools: Vec::new(),
+            native_executors_available: false,
+            native_executors: Vec::new(),
+            child_requests: Vec::new(),
+            blocked,
+        }
+    }
+
+    fn usage_limit(
+        resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> gents::blocked_turn::BlockedTurn {
+        gents::blocked_turn::BlockedTurn {
+            reason: gents::blocked_turn::BlockedReason::UsageLimit,
+            account: Some(gents::blocked_turn::BlockedAccount {
+                label: "label-b".into(),
+                provider: "claude-subscription".into(),
+            }),
+            profile: Some("main".into()),
+            behaviors_on_profile: vec!["x".into(), "y".into()],
+            resets_at,
+            switch_command: Some("gents config profile set-account main <account>".into()),
+        }
+    }
+
+    fn show_now() -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(2026, 9, 25, 16, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn blocked_usage_limit_prints_account_reset_and_switch() {
+        let resets_at = show_now() + chrono::Duration::minutes(133);
+        let snapshot = show_snapshot(Some(usage_limit(Some(resets_at))));
+        let text = render_request_show_text(&snapshot, show_now());
+        assert!(
+            text.contains(
+                r#"blocked: usage limit on account "label-b", resets at 2026-09-25T18:13:00Z (in 2h13m)"#
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "profile main (used by 2 behaviors); switch: gents config profile set-account main <account>"
+            ),
+            "{text}"
+        );
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value.pointer("/blocked/reason"),
+            Some(&json!("usage_limit"))
+        );
+        let value = serde_json::to_value(show_snapshot(None)).unwrap();
+        assert_eq!(value.get("blocked"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn blocked_without_a_reset_prints_reset_not_reported() {
+        let text = render_request_show_text(&show_snapshot(Some(usage_limit(None))), show_now());
+        assert!(
+            text.contains(r#"blocked: usage limit on account "label-b", reset not reported"#),
+            "{text}"
+        );
+        let text = render_request_show_text(&show_snapshot(None), show_now());
+        assert!(!text.contains("blocked:"), "{text}");
     }
 
     #[test]
