@@ -36,6 +36,8 @@ pub struct SessionHistoryParams {
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -546,19 +548,24 @@ impl Tool for SessionHistoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Discover, count and search your persisted sessions; inspect canonical transcript evidence. Call action=help for syntax.".into(),
+            description: "Discover, count and search your persisted sessions; inspect canonical transcript evidence. Use help for available actions and help topic for action syntax.".into(),
             parameters: json!({
                 "type":"object", "additionalProperties":false,
                 "properties": {
-                    "action":{"type":"string","enum":["help","list","count","search","get","transcript"]},
+                    "action":{"type":"string","enum":["help","list","count","search","get","transcript"],"description":"Defaults to list. Search requires query; get and transcript require session_id."},
+                    "topic":{"type":"string","enum":["list","count","search","get","transcript"],"description":"Action to explain when action is help."},
                     "limit":{"type":"integer","minimum":1,"maximum":100},
-                    "session_id":{"type":"string"},
+                    "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript."},
                     "filter":{"type":"object","additionalProperties":false,"properties":{
                         "behavior_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
-                        "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string"}
+                        "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
-                    "cursor":{"type":"string"},"query":{"type":"string"},"details":{"type":"boolean"}
-                }
+                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."}
+                },
+                "allOf":[
+                    {"if":{"required":["action"],"properties":{"action":{"const":"search"}}},"then":{"required":["query"]}},
+                    {"if":{"required":["action"],"properties":{"action":{"enum":["get","transcript"]}}},"then":{"required":["session_id"]}}
+                ]
             }),
         }
     }

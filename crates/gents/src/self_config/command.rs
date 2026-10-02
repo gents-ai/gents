@@ -646,6 +646,12 @@ impl ConfigCommandTool {
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
+                    if command == "datastore" && verb == "validate" {
+                        return Err(CommandGuidance {
+                            message: "validate audits saved configuration, including datastore selections; it is a top-level command.".into(),
+                            next_call: json!({"argv":["validate"]}),
+                        }.into());
+                    }
                     return Err(CommandGuidance {
                         message: format!("unknown {command} verb {verb:?}; configuration documents use list, get, create, update and delete. Runtime history belongs to sessions."),
                         next_call: json!({"argv":[command,"--help"]}),

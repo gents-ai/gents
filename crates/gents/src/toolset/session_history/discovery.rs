@@ -8,18 +8,52 @@ use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
-const HELP: &str = r#"sessions reads your canonical sessions in your exact requester scope.
-Commands:
-  {"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}
-  {"action":"count","filter":{"status":"closed","tag":"release"}}
-  {"action":"search","query":"rollback decision","limit":10}
-  {"action":"transcript","session_id":"<ID>","limit":10}
-  {"action":"get","session_id":"<ID>","details":true}
-Filters: behavior_id, status (open or closed), tag, created_after (inclusive), created_before (exclusive), text (case-insensitive title or session ID substring).
-List order is created_at descending, then session_id descending. Pass next_cursor as cursor with the same filter. Counts are exact, independent of list limits and request volume.
-Search is literal case-insensitive substring search over titles, IDs and reconstructed transcript text; it scans authorized canonical content. It is not semantic or indexed vector retrieval. Hits name physical message IDs and canonical payload references. Limits are 1 through 100; transcript returns up to six messages and 8000 characters per chunk. Follow next_cursor to read remaining text. Search and transcript pages use next_cursor. Get details=true adds timeline, tool/token/context accounting and compaction observations.
-No principal/requester override or node-wide mode is available. A copied session ID grants no access.
-"#;
+const HELP: &str = "Read your canonical sessions in your requester scope. Actions: list, count, search, get, transcript. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; no requester override is available.";
+
+fn action_help(topic: Option<&str>) -> Result<&'static str> {
+    Ok(match topic {
+        None => HELP,
+        Some("list") => {
+            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: behavior_id, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
+        }
+        Some("count") => {
+            r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
+        }
+        Some("search") => {
+            r#"{"action":"search","query":"rollback decision","limit":10}. Query is required: literal case-insensitive substring of titles, IDs and reconstructed transcript text, not semantic or indexed retrieval. filter.text restricts title/ID, not transcript. Hits include physical message IDs and payload references. Use a shorter substring if no hits. Pass next_cursor as cursor with the same query and filter. Limit: 1–100. Use help topic=list for filters."#
+        }
+        Some("get") => {
+            r#"{"action":"get","session_id":"<ID>","details":true}. Session ID is required; discover it with list or search. details=true adds timeline, tool/token/context accounting and compaction observations."#
+        }
+        Some("transcript") => {
+            r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text with physical message IDs and payload references, up to six messages and 8000 characters per chunk. Pass next_cursor as cursor with the same session_id to continue."#
+        }
+        Some(_) => bail!("unknown help topic; next call: sessions {{\"action\":\"help\"}}"),
+    })
+}
+
+fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
+    let mut next = json!({"action":"search","query":"<text to find>"});
+    if let Some(filter) = &args.filter {
+        let mut filter = serde_json::to_value(filter).expect("session filter serializes");
+        filter
+            .as_object_mut()
+            .unwrap()
+            .retain(|_, value| !value.is_null());
+        if let Some(text) = filter.as_object_mut().unwrap().remove("text") {
+            if text.as_str().is_some_and(|text| !text.trim().is_empty()) {
+                next["query"] = text;
+            }
+        }
+        if !filter.as_object().unwrap().is_empty() {
+            next["filter"] = filter;
+        }
+    }
+    if let Some(limit) = args.limit {
+        next["limit"] = json!(limit);
+    }
+    anyhow::anyhow!("search requires query; filter.text matches only titles and IDs; next call: sessions {next}")
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -193,7 +227,7 @@ pub(super) async fn run(
     action: &str,
 ) -> Result<Value> {
     if action == "help" {
-        return Ok(json!({"help":HELP}));
+        return Ok(json!({"help":action_help(args.topic.as_deref())?}));
     }
     let current = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
     if let Some(context) = &current {
@@ -334,7 +368,12 @@ async fn execute(
         return Ok(json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester}}));
     }
     let needle = if action == "search" {
-        Some(args.query.as_deref().filter(|query| !query.trim().is_empty()).context("query required; next call: sessions {\"action\":\"search\",\"query\":\"decision\"}")?)
+        Some(
+            args.query
+                .as_deref()
+                .filter(|query| !query.trim().is_empty())
+                .ok_or_else(|| missing_search_query(args))?,
+        )
     } else {
         None
     };
@@ -655,6 +694,26 @@ mod tests {
         node.shutdown().await;
     }
 
+    #[test]
+    fn search_recovery_preserves_literal_text_and_requires_a_query_when_none_was_supplied() {
+        for text in ["quoted \"decision\"\nline", "日本語", ""] {
+            let args =
+                serde_json::from_value(json!({"action":"search","filter":{"text":text}})).unwrap();
+            let error = missing_search_query(&args).to_string();
+            let next: Value =
+                serde_json::from_str(error.split_once("next call: sessions ").unwrap().1).unwrap();
+            assert_eq!(
+                next["query"],
+                if text.is_empty() {
+                    "<text to find>"
+                } else {
+                    text
+                }
+            );
+            assert!(next.get("filter").is_none());
+        }
+    }
+
     #[tokio::test]
     async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         let identities = tempfile::tempdir().unwrap();
@@ -692,6 +751,36 @@ mod tests {
         )
         .await;
         let tool = SessionHistoryTool::new(node.clone(), owner.did());
+        let error = Tool::call(&tool, serde_json::from_value(json!({"action":"search","filter":{"text":"retry decision","tag":"release"},"limit":1})).unwrap()).await.unwrap_err();
+        let error = error.to_string();
+        let recovery: Value =
+            serde_json::from_str(error.split_once("next call: sessions ").unwrap().1).unwrap();
+        assert_eq!(recovery["query"], "retry decision");
+        assert_eq!(recovery["filter"], json!({"tag":"release"}));
+        assert_eq!(recovery["limit"], 1);
+        let recovered = call(&tool, recovery).await;
+        assert_eq!(recovered["hits"][0]["session_id"], "work");
+        assert_eq!(recovered["hits"][0]["sequence"], 1);
+        let definition = Tool::definition(&tool, String::new()).await;
+        let validator = jsonschema::validator_for(&definition.parameters).unwrap();
+        for invalid in [
+            json!({"action":"search"}),
+            json!({"action":"get"}),
+            json!({"action":"transcript"}),
+        ] {
+            assert!(!validator.is_valid(&invalid), "{invalid}");
+        }
+        for valid in [
+            json!({}),
+            json!({"action":"search","query":"retry"}),
+            json!({"action":"get","session_id":"work"}),
+            json!({"action":"transcript","session_id":"work"}),
+        ] {
+            assert!(validator.is_valid(&valid), "{valid}");
+        }
+        let help = call(&tool, json!({"action":"help","topic":"search"})).await;
+        assert!(help["help"].as_str().unwrap().contains("literal"));
+        assert!(!help["help"].as_str().unwrap().contains("compaction"));
         let first = call(&tool, json!({"action":"search","query":"retry","limit":1})).await;
         assert_eq!(first["hits"][0]["sequence"], 1);
         assert!(first["hits"][0]["message_doc_id"].is_string());
