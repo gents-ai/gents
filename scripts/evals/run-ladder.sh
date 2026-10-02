@@ -214,7 +214,7 @@ echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature $TEMPERATUR
 # The subject is the Engineer this checkout seeds: its Setup prompt and grant,
 # copied over the pack's so the cell never drifts from gents_protocol.
 SUBJECT="$EVAL_HOME/engineer_subject-$SHA"
-rm -rf "$SUBJECT" && cp -R "$LADDER/engineer_subject" "$SUBJECT"
+rm -rf "$SUBJECT" && cp -R "${GENTS_EVAL_SUBJECT:-$LADDER/engineer_subject}" "$SUBJECT"
 cp "$ROOT/crates/gents-protocol/prompts/setup.md" "$SUBJECT/agent_behaviors/engineer/system_prompt.md"
 python3 - "$SUBJECT/pack_config.json" "$ROOT/crates/gents-protocol/presets/setup-self-config.json" <<'PY'
 import json, sys

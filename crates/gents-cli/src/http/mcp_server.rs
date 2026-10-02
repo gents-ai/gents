@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::defra_query::{CollectionScope, DefraQueryParams};
+use gents::defra_query::{CollectionScope, QueryParams};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
@@ -12,39 +12,39 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::commands::query::run_defra_query;
-
-/// MCP-facing arguments for the `defra_query` tool. Mirrors `DefraQueryParams`
-/// but derives `JsonSchema` so the MCP tool advertises a typed input contract.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct McpQueryArgs {
-    /// Collection (GraphQL type) to read, e.g. "AgentRequest".
-    collection: String,
-    /// Field names to return; at least one is required. Pass ["*"] to list the
-    /// collection's queryable fields instead of documents.
+    argv: Vec<String>,
     #[serde(default)]
-    fields: Vec<String>,
-    /// Optional DefraDB filter object, e.g. {"status": {"_eq": "completed"}}.
+    collection: Option<String>,
     #[serde(default)]
-    filter: Option<Value>,
-    /// Maximum rows to return (default 50, capped at 1000).
-    #[serde(default)]
-    limit: Option<u32>,
+    options: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone)]
 pub(crate) struct DefraQueryMcp {
     graphql: String,
     scope: CollectionScope,
+    write_collections: std::collections::BTreeSet<String>,
     tool_router: ToolRouter<Self>,
 }
 
 impl DefraQueryMcp {
-    fn new(graphql: String, scope: CollectionScope) -> Self {
+    fn new(
+        graphql: String,
+        scope: CollectionScope,
+        write_collections: std::collections::BTreeSet<String>,
+    ) -> Self {
+        let mut tool_router = Self::tool_router();
+        if write_collections.is_empty() {
+            tool_router.remove_route("write");
+        }
         Self {
             graphql,
             scope,
-            tool_router: Self::tool_router(),
+            tool_router,
+            write_collections,
         }
     }
 }
@@ -52,26 +52,53 @@ impl DefraQueryMcp {
 #[tool_router]
 impl DefraQueryMcp {
     #[tool(
-        description = "Read-only structured query over a DefraDB collection. Provide a collection name, the fields to return, an optional DefraDB filter object (operators _eq/_gt/_in/_and/_or/_not), and an optional limit. Returns JSON {collection, count, results}. Call with fields: [\"*\"] to discover a collection's queryable fields (names and types) before guessing; invalid field names fail with a diagnostic listing the allowed fields and close-match suggestions. Sensitive fields (e.g. inference backend API keys) are always blocked."
+        description = "Read documents: argv:[fields], [find], [count], [help,COMMAND]. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page."
     )]
-    async fn defra_query(
+    async fn query(&self, Parameters(args): Parameters<McpQueryArgs>) -> Result<String, ErrorData> {
+        let params = QueryParams {
+            argv: args.argv,
+            collection: args.collection,
+            options: args.options,
+        };
+        let access = gents::config_client::ConfigAccess::graphql(self.graphql.clone());
+        let value=gents::defra_query::execute_command(&access,&params,&self.scope).await
+            .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
+        gents::defra_query::render_result(value)
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))
+    }
+    #[tool(
+        description = "Preview/apply application create/update/delete within an exact collection grant. argv:[help] gives syntax. Caller-signed DefraDB bearer required on every call; preview returns its bound next_call."
+    )]
+    async fn write(
         &self,
         Parameters(args): Parameters<McpQueryArgs>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<String, ErrorData> {
-        let params = DefraQueryParams {
+        let parts = ctx
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .ok_or_else(|| {
+                ErrorData::invalid_request("write requires HTTP caller authorization", None)
+            })?;
+        let authorization=parts.headers.get(axum::http::header::AUTHORIZATION).and_then(|h|h.to_str().ok()).ok_or_else(||ErrorData::invalid_request("write requires a caller-signed DefraDB Bearer authorization; query remains anonymous",None))?;
+        let endpoint = gents::config_client::GraphqlEndpoint::with_delegated_authorization(
+            self.graphql.clone(),
+            authorization,
+        )
+        .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?;
+        let tool = gents::application_write::WriteTool::new(
+            gents::config_client::ConfigAccess::Graphql(endpoint),
+            self.write_collections.clone(),
+            None,
+        );
+        let call = gents::application_write::WriteParams {
+            argv: args.argv,
             collection: args.collection,
-            filter: args.filter,
-            fields: args.fields,
-            limit: args.limit,
+            options: args.options,
         };
-        // An unauthenticated read surface: it reads as anonymous, never as the
-        // served principal.
-        let graphql = gents::config_client::GraphqlEndpoint::anonymous(self.graphql.clone());
-        let value = run_defra_query(&graphql, &params, &self.scope)
+        gents::llm::tool::Tool::call(&tool, call)
             .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        serde_json::to_string_pretty(&value)
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 }
 
@@ -81,12 +108,7 @@ impl ServerHandler for DefraQueryMcp {
         #[allow(clippy::field_reassign_with_default)]
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(
-            "gents read-only query surface. Use the `defra_query` tool to read agent \
-             collections (AgentRequest, AgentOutputSegment, AgentMessage, AgentToolCall, \
-             AgentSession, ...) as structured JSON."
-                .to_string(),
-        );
+        info.instructions = Some("Read-only document access through query; call argv:[help] for commands. Writes, when explicitly exposed, require caller-signed DefraDB bearer authorization.".into());
         info
     }
 }
@@ -94,9 +116,16 @@ impl ServerHandler for DefraQueryMcp {
 pub(crate) fn defra_query_mcp_service(
     graphql: String,
     scope: CollectionScope,
+    write_collections: std::collections::BTreeSet<String>,
 ) -> StreamableHttpService<DefraQueryMcp, LocalSessionManager> {
     StreamableHttpService::new(
-        move || Ok(DefraQueryMcp::new(graphql.clone(), scope.clone())),
+        move || {
+            Ok(DefraQueryMcp::new(
+                graphql.clone(),
+                scope.clone(),
+                write_collections.clone(),
+            ))
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     )

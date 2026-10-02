@@ -48,6 +48,7 @@ pub struct BoundedQueryTool {
     node: Arc<EmbeddedNode>,
     decl: QueryToolDecl,
     surface_id: Option<String>,
+    actor: Option<::identity::Did>,
 }
 
 impl BoundedQueryTool {
@@ -56,7 +57,13 @@ impl BoundedQueryTool {
             node,
             decl,
             surface_id: None,
+            actor: None,
         }
+    }
+
+    pub fn with_actor(mut self, actor: ::identity::Did) -> Self {
+        self.actor = Some(actor);
+        self
     }
 
     /// The DatastoreToolSurface that declared this tool, named by refusals.
@@ -337,12 +344,25 @@ impl Tool for BoundedQueryTool {
             fields,
             limit: Some(limit),
         };
-        let mut rows = query::execute_query(
-            &self.node,
-            &params,
-            &CollectionScope::restricted(vec![self.decl.collection.clone()]),
-        )
-        .await?;
+        let scope = CollectionScope::restricted(vec![self.decl.collection.clone()]);
+        let command = params.into();
+        let result = if let Some(actor) = &self.actor {
+            crate::config_client::ConfigAccess::transact_local(
+                &self.node,
+                Some(actor.clone()),
+                "bounded_application_query",
+                |txn| Box::pin(super::execute_command(txn, &command, &scope)),
+            )
+            .await?
+        } else {
+            super::execute_command(
+                &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                &command,
+                &scope,
+            )
+            .await?
+        };
+        let mut rows = result["results"].clone();
         let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
         let total_bytes = serde_json::to_string(&rows).map(|s| s.len()).unwrap_or(0);
         let truncated = truncate_field_strings(&mut rows);

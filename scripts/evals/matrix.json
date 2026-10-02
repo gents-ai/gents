@@ -102,6 +102,19 @@
       ],
       "title": "Graph authoring capability probe",
       "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
+    },
+    {
+      "id": "engineer-datastore",
+      "definition_id": "engineer-datastore",
+      "path": "engineer_datastore",
+      "subject": "ladder/engineer_subject",
+      "title": "Application datastore",
+      "coverage": [
+        "filtered count",
+        "ordered pagination",
+        "durable create/update/delete",
+        "protected data and owner selection"
+      ]
     }
   ]
 }

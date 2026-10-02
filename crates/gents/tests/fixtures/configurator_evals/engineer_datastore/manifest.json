@@ -1,0 +1,20 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_datastore",
+  "version": "0.1.0",
+  "description": "Native application datastore evaluations",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "pack_config.json",
+    "cases/shipment-count-page.json",
+    "cases/shipment-lifecycle.json",
+    "cases/protected-and-wrong-scope.json"
+  ],
+  "config": "pack_config.json"
+}

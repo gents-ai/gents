@@ -2,12 +2,10 @@
 //! GraphQL query.
 
 use anyhow::{anyhow, bail, Result};
-use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::render::{render_filter, validate_identifier};
-use crate::graphql::{graphql_response_with_transaction_retry, graphql_with_transaction_retry};
 
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 1000;
@@ -218,45 +216,6 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
         args = args.join(", "),
         fields = params.fields.join(" "),
     ))
-}
-
-pub(crate) async fn fetch_collection_schema(
-    node: &EmbeddedNode,
-    collection: &str,
-) -> Result<Option<super::schema::CollectionSchema>> {
-    let query = super::schema::introspection_query(collection)?;
-    let operation = format!("schema introspection for {collection:?}");
-    let resp = graphql_with_transaction_retry(node, &query, &operation).await?;
-    Ok(super::schema::parse_collection_schema(resp.data.as_ref()))
-}
-
-pub(crate) async fn execute_query(
-    node: &EmbeddedNode,
-    params: &DefraQueryParams,
-    scope: &CollectionScope,
-) -> Result<Value> {
-    let query = build_query(params, scope)?;
-    // Keep the raw response here because this tool enriches DefraDB's error
-    // with a collection-schema diagnostic before returning it to the agent.
-    let resp = graphql_response_with_transaction_retry(node, &query, "defra_query").await?;
-    if resp.has_errors() {
-        let raw = format!("{:?}", resp.errors);
-        let diagnostic = match fetch_collection_schema(node, &params.collection).await {
-            Ok(schema) => super::schema::diagnose_failed_query(params, schema.as_ref(), &raw),
-            Err(_) => raw,
-        };
-        bail!(
-            "defra_query against {:?} failed: {diagnostic}",
-            params.collection
-        );
-    }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get(&params.collection))
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
-    Ok(rows)
 }
 
 #[cfg(test)]

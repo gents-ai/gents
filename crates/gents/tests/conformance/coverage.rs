@@ -772,6 +772,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ToolPolicyCases".to_string(),
         ));
     }
+    if !snapshot.application_write_cases.is_empty() {
+        emitted.insert((
+            "application_write_cases".to_string(),
+            "ApplicationWriteCases".to_string(),
+        ));
+    }
     if !snapshot.write_input_cases.is_empty() {
         emitted.insert((
             "write_input_cases".to_string(),

@@ -14,6 +14,7 @@ pub(crate) mod support;
 pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
+pub mod application_write;
 pub mod backend_health;
 pub mod backend_provider;
 pub mod backend_registry;
