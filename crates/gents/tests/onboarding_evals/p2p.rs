@@ -176,6 +176,54 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         ) {
             Tool::call(&native_tool,serde_json::from_value(json!({"argv":["pairings","apply"],"options":{"peer_id":peer,"peer_did":remote_did,"collections":["DeploymentNote"]}}))?).await?;
         }
+        if matches!(
+            case.expectation.as_str(),
+            "idempotent_pairing" | "overlay_revoked"
+        ) {
+            use gents::agent::p2p_reconcile::{
+                reconcile_peer_tick, EmbeddedRemoteP2pAdmin, EnrollmentEndpointEntry,
+                GraphqlEnrollmentStore, GraphqlPairingStateStore, PairingStateStore,
+            };
+            let projection =
+                GraphqlEnrollmentStore::new(local.node.clone(), local.node_identity.clone())
+                    .load_projection()
+                    .await?;
+            let active = projection
+                .active
+                .iter()
+                .find(|e| e.request.request_id == enrollment.request_id)
+                .unwrap();
+            let endpoint = EnrollmentEndpointEntry {
+                desired_id: peer.clone(),
+                peer_id: peer.clone(),
+                agent_did: remote_did.clone(),
+                address: address.clone(),
+                request_digest: active.request.request_digest.clone(),
+                authorization_sequence: active.revision.sequence,
+                authorization_expires_at: active.revision.authorization_expires_at.clone(),
+            };
+            let store = GraphqlPairingStateStore::for_enrollment_materialization(
+                local.node.clone(),
+                local.node_identity.clone(),
+                endpoint,
+            );
+            let tick = reconcile_peer_tick(
+                &EmbeddedRemoteP2pAdmin::new(local.node.clone()),
+                &store,
+                &peer,
+            )
+            .await?;
+            ensure!(
+                tick.live_route_matches
+                    && store
+                        .load_applied(&peer)
+                        .await?
+                        .state
+                        .collections
+                        .contains("DeploymentNote"),
+                "fixture did not apply its pre-existing pairing"
+            );
+        }
         if case.expectation == "offline_diagnosis" {
             remote.node.shutdown().await;
         }
@@ -279,7 +327,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         .active
         .iter()
         .any(|e| e.request.request_id == enrollment.request_id);
-        let passed = terminal == gents_protocol::request_lifecycle::RequestLifecycleState::Completed.as_str()
+        let passed = terminal
+            == gents_protocol::request_lifecycle::RequestLifecycleState::Completed.as_str()
             && enrollment_active
             && match case.expectation.as_str() {
                 "peer_observation" => {
