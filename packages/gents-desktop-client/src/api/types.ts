@@ -248,16 +248,19 @@ export type DesktopApiAdapter = {
   codexLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<CodexLoginResult>;
   cancelCodexLogin: () => Promise<void>;
   grokLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
   claudeLogin: (
     agentDid: string,
     provider?: string | null,
+    label?: string | null,
   ) => Promise<ClaudeLoginResult>;
   cancelClaudeLogin: () => Promise<void>;
   listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;

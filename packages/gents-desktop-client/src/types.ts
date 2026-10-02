@@ -150,6 +150,7 @@ export type {
   InferenceCallSummary,
 } from "./types/backendHealth.js";
 export type { ProviderAccountView } from "./generated/ProviderAccountView.js";
+export type { SignInView } from "./generated/SignInView.js";
 export type { ProviderAccountsRequest } from "./generated/ProviderAccountsRequest.js";
 export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccountDisconnectRequest.js";
 export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";

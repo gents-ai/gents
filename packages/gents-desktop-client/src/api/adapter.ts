@@ -258,19 +258,19 @@ export function createDesktopApiAdapter(
         "desktop_inference_backend_recommendation",
         { request },
       ),
-    codexLogin: (agentDid, provider) =>
+    codexLogin: (agentDid, provider, label) =>
       invokeDesktop<CodexLoginResult>("desktop_codex_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelCodexLogin: () => invokeDesktop<void>("desktop_codex_login_cancel"),
-    grokLogin: (agentDid, provider) =>
+    grokLogin: (agentDid, provider, label) =>
       invokeDesktop<GrokLoginResult>("desktop_grok_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
-    claudeLogin: (agentDid, provider) =>
+    claudeLogin: (agentDid, provider, label) =>
       invokeDesktop<ClaudeLoginResult>("desktop_claude_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
     listProviderAccounts: (agentDid) =>

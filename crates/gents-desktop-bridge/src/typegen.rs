@@ -27,7 +27,7 @@ use crate::tauri_commands::inference_setup::{
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
     InferenceRecommendationRequest, ProviderAccountDisconnectRequest,
-    ProviderAccountRetrySaveRequest, ProviderAccountView, ProviderAccountsRequest,
+    ProviderAccountRetrySaveRequest, ProviderAccountView, ProviderAccountsRequest, SignInView,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -288,6 +288,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ClaudeLoginResult,
         ClaudeLoginUrl,
         ProviderAccountView,
+        SignInView,
     );
 
     normalize_generated_types(dir)?;

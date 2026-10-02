@@ -13,7 +13,7 @@ use gents::inference_setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
     InferenceSetupCatalog,
 };
-use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn};
+use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,7 +80,19 @@ async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
 ) -> anyhow::Result<SignIn> {
-    gents::oauth_credential::store_sign_in(&access?, credential, None).await
+    let label = credential.label.clone();
+    gents::oauth_credential::store_sign_in(&access?, credential, label.as_deref()).await
+}
+
+/// The label a sign-in request names: trimmed, empty is none, and checked
+/// before the browser opens so a bad label never costs a sign-in.
+fn sign_in_label(label: Option<&str>) -> Result<Option<String>, BridgeError> {
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(gents::oauth_credential::validate_account_label)
+        .transpose()
+        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))
 }
 
 fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> BridgeError {
@@ -586,6 +598,9 @@ pub(crate) struct CodexLoginRequest {
     pub agent_did: String,
     #[serde(default)]
     pub provider: Option<String>,
+    /// The new account's label; empty or absent leaves the store's default.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// A redacted view of a stored credential. Tokens never cross the bridge into
@@ -602,12 +617,14 @@ pub(crate) struct CodexLoginResult {
     pub is_fedramp: bool,
     pub access_token_expires_at: String,
     pub enabled: bool,
+    pub sign_in: SignInView,
 }
 
 impl CodexLoginResult {
-    fn redacted(doc_id: String, credential: &OAuthCredential) -> Self {
+    fn redacted(signed: &SignIn) -> Self {
+        let credential = &signed.credential;
         Self {
-            doc_id,
+            doc_id: signed.doc_id.clone(),
             credential_id: credential.credential_id.clone(),
             agent_did: credential.agent_did.clone(),
             provider: credential.provider.clone(),
@@ -616,6 +633,7 @@ impl CodexLoginResult {
             is_fedramp: credential.is_fedramp,
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             enabled: credential.enabled,
+            sign_in: SignInView::from(signed),
         }
     }
 }
@@ -633,6 +651,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     if agent_did.is_empty() {
         return Err(BridgeError::untyped("agent_did is required"));
     }
+    let label = sign_in_label(request.label.as_deref())?;
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
     require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
         .await?;
@@ -674,14 +693,17 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         }
     };
 
-    let credential = OAuthCredential::from_login_tokens(
-        &agent_did,
-        &provider,
-        &tokens.id_token,
-        tokens.access_token,
-        tokens.refresh_token,
-        chrono::Utc::now(),
-    );
+    let credential = OAuthCredential {
+        label,
+        ..OAuthCredential::from_login_tokens(
+            &agent_did,
+            &provider,
+            &tokens.id_token,
+            tokens.access_token,
+            tokens.refresh_token,
+            chrono::Utc::now(),
+        )
+    };
     let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
@@ -696,10 +718,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(CodexLoginResult::redacted(
-        signed.doc_id,
-        &signed.credential,
-    ))
+    Ok(CodexLoginResult::redacted(&signed))
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -731,6 +750,9 @@ pub(crate) struct GrokLoginRequest {
     pub agent_did: String,
     #[serde(default)]
     pub provider: Option<String>,
+    /// The new account's label; empty or absent leaves the store's default.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Redacted credential metadata for the webview (tokens never cross the bridge).
@@ -743,17 +765,20 @@ pub(crate) struct GrokLoginResult {
     pub provider: String,
     pub access_token_expires_at: String,
     pub enabled: bool,
+    pub sign_in: SignInView,
 }
 
 impl GrokLoginResult {
-    fn redacted(doc_id: String, credential: &OAuthCredential) -> Self {
+    fn redacted(signed: &SignIn) -> Self {
+        let credential = &signed.credential;
         Self {
-            doc_id,
+            doc_id: signed.doc_id.clone(),
             credential_id: credential.credential_id.clone(),
             agent_did: credential.agent_did.clone(),
             provider: credential.provider.clone(),
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             enabled: credential.enabled,
+            sign_in: SignInView::from(signed),
         }
     }
 }
@@ -826,12 +851,16 @@ pub(crate) struct SignInView {
 }
 
 impl From<&SignIn> for SignInView {
-    fn from(_signed: &SignIn) -> Self {
+    fn from(signed: &SignIn) -> Self {
         Self {
-            result: String::new(),
-            label: String::new(),
-            account_ref: None,
-            hint: None,
+            result: match signed.result {
+                SignInResult::Added => "added",
+                SignInResult::Refreshed => "refreshed",
+            }
+            .to_string(),
+            label: gents::oauth_credential::effective_account_label(&signed.credential),
+            account_ref: signed.credential.account_ref.clone(),
+            hint: signed.account_chooser_hint(),
         }
     }
 }
@@ -952,6 +981,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     if agent_did.is_empty() {
         return Err(BridgeError::untyped("agent_did is required"));
     }
+    let label = sign_in_label(request.label.as_deref())?;
     let provider = normalize_xai_provider(request.provider.as_deref().unwrap_or_default());
     require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
         .await?;
@@ -1000,8 +1030,10 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
         }
     };
 
-    let credential =
-        credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now());
+    let credential = OAuthCredential {
+        label,
+        ..credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now())
+    };
     let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
@@ -1014,7 +1046,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(GrokLoginResult::redacted(signed.doc_id, &signed.credential))
+    Ok(GrokLoginResult::redacted(&signed))
 }
 
 #[cfg(test)]
@@ -1867,6 +1899,9 @@ pub(crate) struct ClaudeLoginRequest {
     pub agent_did: String,
     #[serde(default)]
     pub provider: Option<String>,
+    /// The new account's label; empty or absent leaves the store's default.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Redacted credential metadata for the webview (tokens never cross the bridge).
@@ -1879,17 +1914,20 @@ pub(crate) struct ClaudeLoginResult {
     pub provider: String,
     pub access_token_expires_at: String,
     pub enabled: bool,
+    pub sign_in: SignInView,
 }
 
 impl ClaudeLoginResult {
-    fn redacted(doc_id: String, credential: &OAuthCredential) -> Self {
+    fn redacted(signed: &SignIn) -> Self {
+        let credential = &signed.credential;
         Self {
-            doc_id,
+            doc_id: signed.doc_id.clone(),
             credential_id: credential.credential_id.clone(),
             agent_did: credential.agent_did.clone(),
             provider: credential.provider.clone(),
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             enabled: credential.enabled,
+            sign_in: SignInView::from(signed),
         }
     }
 }
@@ -1918,6 +1956,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     if agent_did.is_empty() {
         return Err(BridgeError::untyped("agent_did is required"));
     }
+    let label = sign_in_label(request.label.as_deref())?;
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
     require_reachable_configuration(core.operator_access(&agent_did), &agent_did, &provider)
         .await?;
@@ -1970,8 +2009,10 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         organization_uuid: tokens.organization_uuid,
         account_uuid: tokens.account_uuid,
     };
-    let credential =
-        credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());
+    let credential = OAuthCredential {
+        label,
+        ..credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now())
+    };
     let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
@@ -1984,10 +2025,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(ClaudeLoginResult::redacted(
-        signed.doc_id,
-        &signed.credential,
-    ))
+    Ok(ClaudeLoginResult::redacted(&signed))
 }
 
 #[tauri::command]
