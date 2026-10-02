@@ -159,11 +159,13 @@ impl P2pTool {
         let actor = self.actor()?.did().to_owned();
         let identity = actor.parse()?;
         let peer = peer.to_owned();
+        let collections_scope = self.collections.clone();
         ConfigAccess::transact_local(&self.node, Some(identity), "tool.p2p.overlay", move |txn| {
             let actor = actor.clone();
             let peer = peer.clone();
             let desired = desired.clone();
             let fields = fields.clone();
+            let collections_scope = collections_scope.clone();
             Box::pin(async move {
                 let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id agent_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
                 let rows = response["data"]["DataPlanePairingDesired"].as_array().context("missing pairing documents")?;
@@ -171,6 +173,11 @@ impl P2pTool {
                 let before = rows.first();
                 if let Some(row) = before {
                     ensure!(row["agent_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
+                    let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).context("malformed existing collection scope")?};
+                    ensure!(collections_scope.permits_all(before_collections.iter()), "existing pairing contains collections outside the P2P grant; next call: p2p {{\"argv\":[\"pairings\",\"list\"]}}");
+                    if !before_collections.is_empty() {
+                        admit_app_collections(before_collections.into_iter().collect()).context("existing pairing contains protocol collections")?;
+                    }
                 }
                 let unchanged = match (&desired, before) {
                     (None, None) => true,
@@ -450,7 +457,7 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
         None => "Native P2P commands in argv: status; network list/get; pairings list/preview/apply/revoke; enrollment pending/approve/revoke; sync documents. Read [help,RESOURCE] for parameters. Identity comes from the running node. Mutation and collection grants are explicit.",
         Some("status" | "network") => "[status] returns connected peer IDs and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. [network,get] takes options.peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority.",
-        Some("pairings") => "[pairings,list] shows desired, applied, enrolled and connected observations separately. [pairings,preview] and [pairings,apply] require options.peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. [pairings,revoke] requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Inspect list after apply/revoke; submitted desired state is not proof of a live route.",
+        Some("pairings") => "[pairings,list] shows desired, applied, enrolled and connected observations separately. [pairings,preview] and [pairings,apply] require options.peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. [pairings,revoke] requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect list after apply/revoke; submitted desired state is not proof of a live route.",
         Some("enrollment") => "[enrollment,pending] discovers signed request IDs. [enrollment,approve] or [enrollment,revoke] requires options.request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval uses its bounded default authorization lease. Do not invent a DID or substitute an unsigned pairing document.",
         Some("sync") => "[sync,documents] requires options.peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; the application collection must be allowed by the P2P grant. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
         Some(_) => bail!("unknown P2P help resource; next call: p2p {{\"argv\":[\"help\"]}}"),

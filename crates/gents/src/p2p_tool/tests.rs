@@ -191,6 +191,24 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     .unwrap_err();
     assert!(result.to_string().contains("another owner"));
     assert!(tool.overlay("foreign-route").await.unwrap().is_some());
+    access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", agent_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()))).await.unwrap();
+    let scoped = P2pTool::new(
+        db.node.clone(),
+        Some(db.node_identity.clone()),
+        true,
+        EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]),
+    );
+    let result = Tool::call(
+        &scoped,
+        serde_json::from_value(
+            json!({"argv":["pairings","revoke"],"options":{"peer_id":"mixed-route"}}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(result.to_string().contains("outside the P2P grant"));
+    assert!(scoped.overlay("mixed-route").await.unwrap().is_some());
     let key_dir = tempfile::tempdir().unwrap();
     let foreign = Arc::new(
         crate::identity::KeyIdentity::load_or_create(key_dir.path().join("foreign.key"), None)

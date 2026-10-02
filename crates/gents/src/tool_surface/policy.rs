@@ -93,6 +93,13 @@ where
         }
     }
 
+    pub fn permits_all<'key>(&self, keys: impl IntoIterator<Item = &'key K>) -> bool
+    where
+        K: 'key,
+    {
+        keys.into_iter().all(|key| self.permits(key))
+    }
+
     pub fn lookup(&self, key: &K) -> Option<&V> {
         match self {
             Self::Only(keys) => keys.get(key),
@@ -226,6 +233,10 @@ pub struct ToolPolicySurface {
 impl ToolPolicySurface {
     pub fn permits_p2p_mutation(&self) -> bool {
         self.p2p_read && self.p2p_mutate
+    }
+
+    pub fn permits_p2p_overlay_mutation(&self, before: &[String], after: &[String]) -> bool {
+        self.permits_p2p_mutation() && self.p2p_collections.permits_all(before.iter().chain(after))
     }
 
     pub fn secure_minimal() -> Self {

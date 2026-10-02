@@ -10,7 +10,7 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
     let cases = lean_tool_policy_cases();
     assert_eq!(
         cases.len(),
-        28,
+        31,
         "Lean tool-policy composition matrix drifted"
     );
     for case in cases {

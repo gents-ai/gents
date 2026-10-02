@@ -138,6 +138,29 @@ theorem effective_p2pMutate_le_ceiling :
 /-- A mutation grant does not expose node observations on its own. -/
 def permitsP2pMutation (surface : Surface) : Bool := surface.p2pRead && surface.p2pMutate
 
+/-- The collection grant covers removals as well as additions. An overlay replacement
+    or revoke must retain authority over every collection in both snapshots. -/
+def permitsP2pOverlayMutation (surface : Surface) (before after : List ToolId) : Bool :=
+  permitsP2pMutation surface && (before ++ after).all (fun key => decide (surface.p2pCollections.permits key))
+
+theorem permitsP2pOverlayMutation_requires_authority (surface : Surface) (before after : List ToolId) :
+    permitsP2pOverlayMutation surface before after = true → permitsP2pMutation surface = true := by
+  exact bool_and_left
+
+theorem permitsP2pOverlayMutation_covers_before (surface : Surface) (before after : List ToolId)
+    (key : ToolId) (member : key ∈ before) :
+    permitsP2pOverlayMutation surface before after = true → surface.p2pCollections.permits key := by
+  intro allowed
+  have all := List.all_eq_true.mp (bool_and_right allowed)
+  exact of_decide_eq_true (all key (List.mem_append.mpr (Or.inl member)))
+
+theorem permitsP2pOverlayMutation_covers_after (surface : Surface) (before after : List ToolId)
+    (key : ToolId) (member : key ∈ after) :
+    permitsP2pOverlayMutation surface before after = true → surface.p2pCollections.permits key := by
+  intro allowed
+  have all := List.all_eq_true.mp (bool_and_right allowed)
+  exact of_decide_eq_true (all key (List.mem_append.mpr (Or.inr member)))
+
 theorem permitsP2pMutation_requires_read (surface : Surface) :
     permitsP2pMutation surface = true → surface.p2pRead = true := by
   exact bool_and_left

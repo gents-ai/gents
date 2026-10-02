@@ -247,6 +247,8 @@ fn view_from_surface(
     mcp_probe: String,
     write_probe_tool: String,
     write_probe_collection: String,
+    p2p_overlay_before: Vec<String>,
+    p2p_overlay_after: Vec<String>,
 ) -> View {
     let write_probe = (write_probe_tool.clone(), write_probe_collection.clone());
     let write_fields = surface
@@ -267,6 +269,10 @@ fn view_from_surface(
         p2p_read: surface.p2p_read,
         p2p_mutate: surface.p2p_mutate,
         p2p_mutation_allowed: surface.permits_p2p_mutation(),
+        p2p_overlay_allowed: surface
+            .permits_p2p_overlay_mutation(&p2p_overlay_before, &p2p_overlay_after),
+        p2p_overlay_before,
+        p2p_overlay_after,
         session_history: surface.session_history,
         context_budget: surface.context_budget,
         session_messages: surface.session_messages,
@@ -335,5 +341,7 @@ pub(super) fn compose(behavior: &View, ceiling: &View, runtime: &View) -> View {
         behavior.mcp_probe.clone(),
         behavior.write_probe_tool.clone(),
         behavior.write_probe_collection.clone(),
+        behavior.p2p_overlay_before.clone(),
+        behavior.p2p_overlay_after.clone(),
     )
 }
