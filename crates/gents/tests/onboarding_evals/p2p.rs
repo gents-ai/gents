@@ -244,16 +244,28 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &local,
             local.node_identity.clone(),
             DocumentRuntimeOptions {
-                tool_ceiling: ToolCeiling::meta_only().with_policy(policy),
+                tool_ceiling: ToolCeiling::meta_only().with_policy(policy.clone()),
                 ..Default::default()
             },
         )
         .await?;
-        let behavior = agent
+        let ready_agent = gents::Gents::from_default_behavior_documents(
+            local.node.clone(),
+            local.node_identity.clone(),
+            DocumentRuntimeOptions {
+                tool_ceiling: ToolCeiling::meta_only().with_policy(policy),
+                backend_health: Some(agent.backend_health()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let behavior = ready_agent
             .behaviors()
             .iter()
             .find(|b| b.behavior_id == "engineer")
-            .unwrap();
+            .ok_or_else(|| {
+                anyhow::anyhow!("ready runtime did not resolve the Engineer behavior")
+            })?;
         let surface = behavior.tools.resolve(&local.node, &did).await?;
         let tool_context = ToolRuntimeContext::new_with_agent_did(
             local.node.clone(),
