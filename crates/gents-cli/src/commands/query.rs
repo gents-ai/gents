@@ -58,6 +58,9 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
             command.options.clear();
         }
     }
+    if let Some(mode) = args.mode {
+        command.options.insert("mode".into(), json!(mode));
+    }
     if let Some(order) = args.order {
         command.options.insert(
             "order".into(),
@@ -86,6 +89,7 @@ mod tests {
     fn protected_args(fields: Vec<String>) -> QueryArgs {
         QueryArgs {
             verb: None,
+            mode: None,
             order: None,
             offset: None,
             home: None,

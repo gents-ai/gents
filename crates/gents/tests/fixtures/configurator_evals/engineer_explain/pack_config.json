@@ -1,0 +1,21 @@
+{
+  "agent_principal": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-explain",
+      "comparability_version": 2,
+      "title": "Native query plans and bounded execution diagnostics",
+      "subject": {
+        "kind": "behavior",
+        "inference_slots": [
+          "engineer"
+        ]
+      },
+      "cases": [
+        "./cases/indexed_versus_scan.json",
+        "./cases/empty_report_execution.json",
+        "./cases/recover_and_refuse.json"
+      ]
+    }
+  ]
+}

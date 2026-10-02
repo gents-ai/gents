@@ -1,0 +1,560 @@
+{
+  "case_id": "empty-report-execution",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "schemas": [
+      "type DeliveryAudit { reference: String status: String priority: Int }"
+    ],
+    "documents": [
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-01",
+          "status": "queued",
+          "priority": 1
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-02",
+          "status": "queued",
+          "priority": 2
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-03",
+          "status": "queued",
+          "priority": 3
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-04",
+          "status": "queued",
+          "priority": 4
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-05",
+          "status": "queued",
+          "priority": 5
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-06",
+          "status": "queued",
+          "priority": 6
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-07",
+          "status": "queued",
+          "priority": 7
+        }
+      },
+      {
+        "collection": "DeliveryAudit",
+        "document": {
+          "reference": "Q-08",
+          "status": "queued",
+          "priority": 8
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "access",
+      "prompt": "Enable your general read access only to DeliveryAudit. Keep shell execution off and leave all other permissions alone. Inspect the available fields before preparing reports.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": []
+    },
+    {
+      "stage_id": "plan",
+      "prompt": "The delivered-shipment report is empty. Show its plan on DeliveryAudit using reference and status, with a five-row limit, without executing the report. Leave records and schema unchanged.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "DeliveryAudit"
+              },
+              {
+                "field": "mode",
+                "equals": "simple"
+              },
+              {
+                "field": "plan",
+                "contains": "scanNode"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "records",
+            "min": 8,
+            "max": 8
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-01",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-01"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 1
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-02",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-02"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 2
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-03",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-03"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 3
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-04",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-04"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 4
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-05",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-05"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 5
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-06",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-06"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 6
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-07",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-07"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 7
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-08",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-08"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 8
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "DeliveryAudit",
+          "fields": [
+            "reference",
+            "status",
+            "priority"
+          ],
+          "filter": {}
+        }
+      ]
+    },
+    {
+      "stage_id": "execute",
+      "prompt": "Now execute that bounded delivered-shipment report with the five-row limit and show the actual work metrics. Confirm whether any records matched. Leave records and schema unchanged.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "final_message_matches",
+          "params": {
+            "any": [
+              "0",
+              "zero",
+              "no records",
+              "no documents"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "collection",
+                "equals": "DeliveryAudit"
+              },
+              {
+                "field": "mode",
+                "equals": "execute"
+              },
+              {
+                "field": "plan.executionSuccess",
+                "equals": true
+              },
+              {
+                "field": "plan",
+                "contains": "planExecutions"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "forbidden": [
+              "bash"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "captured_rows_count",
+          "params": {
+            "name": "records",
+            "min": 8,
+            "max": 8
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "rows": [
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-01",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-01"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 1
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-02",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-02"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 2
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-03",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-03"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 3
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-04",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-04"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 4
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-05",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-05"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 5
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-06",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-06"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 6
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-07",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-07"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 7
+                  }
+                ]
+              },
+              {
+                "capture": "records",
+                "key": "reference",
+                "id": "Q-08",
+                "expect": [
+                  {
+                    "field": "reference",
+                    "equals": "Q-08"
+                  },
+                  {
+                    "field": "status",
+                    "equals": "queued"
+                  },
+                  {
+                    "field": "priority",
+                    "equals": 8
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "records",
+          "collection": "DeliveryAudit",
+          "fields": [
+            "reference",
+            "status",
+            "priority"
+          ],
+          "filter": {}
+        }
+      ]
+    }
+  ]
+}

@@ -119,7 +119,7 @@ impl Tool for DefraQueryTool {
     type Args = QueryParams;
     type Output = String;
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
+        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
         let result = if let Some(actor) = &self.actor {

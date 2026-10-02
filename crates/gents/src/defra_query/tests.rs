@@ -568,3 +568,90 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn explain_preserves_native_plan_and_requires_explicit_execution() {
+    let node = Arc::new(
+        crate::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    node.add_schema("type PlanTicket { reference: String status: String @index }")
+        .await
+        .unwrap();
+    crate::config_client::ConfigAccess::write_local(
+        &node,
+        "seed_plan",
+        r#"mutation { add_PlanTicket(input:{reference:"P1",status:"open"}){_docID} }"#,
+    )
+    .await
+    .unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let scope = CollectionScope::restricted(vec!["PlanTicket".into()]);
+    let args: QueryParams = serde_json::from_value(json!({"argv":["explain"],"collection":"PlanTicket","options":{"fields":["reference"],"filter":{"status":{"_eq":"closed"}},"limit":5}})).unwrap();
+    let result = execute_command(&access, &args, &scope).await.unwrap();
+    let params = DefraQueryParams {
+        collection: "PlanTicket".into(),
+        fields: vec!["reference".into()],
+        filter: args.options.get("filter").cloned(),
+        limit: Some(5),
+    };
+    let rendered = build_paged_query(&params, &scope, None, 0).unwrap();
+    let native = access
+        .execute(&format!("query @explain(type: simple) {rendered}"))
+        .await
+        .unwrap();
+    assert_eq!(result["plan"], native["data"]["explain"]);
+    assert_eq!(result["mode"], "simple");
+    assert!(result["plan"].get("executionSuccess").is_none());
+    assert!(result["plan"].to_string().contains("indexName"));
+    node.add_schema("type PlainTicket { reference: String status: String }")
+        .await
+        .unwrap();
+    let plain_scope = CollectionScope::restricted(vec!["PlainTicket".into()]);
+    let mut plain = args.clone();
+    plain.collection = Some("PlainTicket".into());
+    let full_scan = execute_command(&access, &plain, &plain_scope)
+        .await
+        .unwrap();
+    assert!(full_scan["plan"].to_string().contains("scanNode"));
+    assert!(!full_scan["plan"].to_string().contains("indexName"));
+    assert!(full_scan["findings"].to_string().contains("no indexName"));
+    let mut bad_field = args.clone();
+    bad_field
+        .options
+        .insert("fields".into(), json!(["shipment_reference"]));
+    let error = execute_command(&access, &bad_field, &scope)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("reference"));
+    let mut execute = args.clone();
+    execute.options.insert("mode".into(), json!("execute"));
+    let executed = execute_command(&access, &execute, &scope).await.unwrap();
+    assert_eq!(executed["plan"]["executionSuccess"], true);
+    assert!(executed["plan"].get("planExecutions").is_some());
+    let mut invalid = args.clone();
+    invalid.options.insert("mode".into(), json!("debug"));
+    assert!(execute_command(&access, &invalid, &scope)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("simple or execute"));
+    invalid.collection = Some("OAuthCredential".into());
+    assert!(execute_command(&access, &invalid, &CollectionScope::all())
+        .await
+        .is_err());
+    invalid.collection = Some("EvalVerdict".into());
+    assert!(execute_command(&access, &invalid, &CollectionScope::all())
+        .await
+        .is_err());
+    invalid.collection = Some("OtherTicket".into());
+    assert!(execute_command(&access, &invalid, &scope).await.is_err());
+    let persisted = access
+        .execute("{ PlanTicket { reference status } }")
+        .await
+        .unwrap();
+    assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
+    node.shutdown().await;
+}
