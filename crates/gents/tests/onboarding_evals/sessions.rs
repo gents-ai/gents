@@ -131,3 +131,61 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
     )?;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires GENTS_EVAL_TRACE_HOME, GENTS_EVAL_TRACE_DID and GENTS_EVAL_TRACE_OUTPUT"]
+async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()> {
+    use std::sync::Arc;
+
+    use anyhow::Context;
+    use gents::config_client::ConfigAccess;
+    use gents::defra_node::EmbeddedNode;
+    use gents::graphql::escape_graphql_string;
+    use gents::session::load_tool_call_presentation;
+    use gents::{AgentIdentity, KeyIdentity};
+    use serde_json::json;
+
+    let home = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_HOME")?);
+    let did = std::env::var("GENTS_EVAL_TRACE_DID")?;
+    let output = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_OUTPUT")?);
+    anyhow::ensure!(
+        home.join("node.key").is_file(),
+        "retained trial identity is missing"
+    );
+    let identity = KeyIdentity::load_or_create(home.join("node.key"), None)?;
+    anyhow::ensure!(
+        identity.did() == did,
+        "trace DID does not own retained trial home"
+    );
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(&home)
+            .with_node_identity_did(identity.did())
+            .build()
+            .await?,
+    );
+    let access = ConfigAccess::Local(node);
+    let response = access.execute(&format!("{{AgentToolCall(filter: {{agent_did: {{_eq: \"{}\"}}}}, order: {{started_at: ASC}}) {{_docID agent_did session_id requester_did tool_name lifecycle_state started_at}}}}",escape_graphql_string(&did))).await?;
+    let rows = response["data"]["AgentToolCall"]
+        .as_array()
+        .context("missing canonical tool calls")?;
+    let mut calls = Vec::new();
+    for row in rows {
+        let presentation = load_tool_call_presentation(
+            &access,
+            row["_docID"]
+                .as_str()
+                .context("missing physical tool identity")?,
+            &did,
+            row["session_id"].as_str().context("missing tool session")?,
+            row["requester_did"].as_str(),
+        )
+        .await?;
+        calls.push(json!({"tool_call":row,"arguments":presentation.arguments,"result":presentation.result,"live_output":presentation.live_output}));
+    }
+    std::fs::write(
+        output,
+        serde_json::to_vec_pretty(&json!({"home":home,"agent_did":did,"calls":calls}))?,
+    )?;
+    Ok(())
+}
