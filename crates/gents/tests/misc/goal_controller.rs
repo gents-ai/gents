@@ -2494,10 +2494,8 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
     );
 }
 
-/// One rescan pass over a Goal stopped by a limit whose reset has passed:
-/// returns the Goal's status and its continuation count.
-async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
-    let db = test_db(name).await;
+/// An active Goal whose request failed on a limit whose reset has passed.
+async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     let did = db.node_identity.did();
     crate::support::fixtures::bind_behavior_backend(
         db.node.as_ref(),
@@ -2575,13 +2573,11 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
         .await
         .expect("opt in");
     }
-    let (mut source, _snapshot_tx) = source(&db).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_canonical_goal(db.node.as_ref(), did, SESSION)
+}
+
+/// The Goal's status and its continuation count.
+async fn goal_and_children(db: &TestDb) -> (Option<GoalStatus>, usize) {
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -2597,6 +2593,57 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
         })
         .count();
     (goal.parsed_status(), children)
+}
+
+/// One rescan pass over a Goal stopped by a limit whose reset has passed.
+async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
+    let db = test_db(name).await;
+    seed_a_passed_reset(&db, opted_in).await;
+    let (mut source, _snapshot_tx) = source(&db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err()
+    );
+    goal_and_children(&db).await
+}
+
+#[tokio::test]
+async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
+    let db = test_db("goal-reset-update").await;
+    seed_a_passed_reset(&db, true).await;
+    publish_behavior_readiness(
+        &db,
+        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        None,
+    )
+    .await;
+    let updates = MockUpdateSubscriptionSource::new();
+    let (_snapshot_tx, rx) = watch::channel(snapshot(db.node_identity.did()));
+    let mut source = GoalSource::with_subscription_source(
+        Arc::new(updates.clone()),
+        rx,
+        db.node.clone(),
+        CancellationToken::new(),
+    )
+    .with_rescan_interval(Duration::from_secs(3600));
+    // The first tick stops the Goal on its limit; the next is an hour away.
+    let pass = Duration::from_millis(300);
+    assert!(tokio::time::timeout(pass, source.next_fire())
+        .await
+        .is_err());
+    assert_eq!(
+        goal_and_children(&db).await,
+        (Some(GoalStatus::UsageLimited), 0)
+    );
+    updates.publish_update("Goal", "goal-doc");
+    assert!(tokio::time::timeout(pass, source.next_fire())
+        .await
+        .is_err());
+    assert_eq!(
+        goal_and_children(&db).await,
+        (Some(GoalStatus::UsageLimited), 0)
+    );
 }
 
 #[tokio::test]
