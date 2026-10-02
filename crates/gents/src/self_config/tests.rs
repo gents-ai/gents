@@ -742,8 +742,11 @@ async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
         .contains("could not be opened"));
 }
 
+static PACK_REGISTRY_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offline() {
+    let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
@@ -5215,6 +5218,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
 
 #[tokio::test]
 async fn pack_search_uses_registry_pagination_without_installing() {
+    let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let app = axum::Router::new().route("/api/v1/packs", axum::routing::get(
         |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>| async move {
             assert_eq!(query.get("q").map(String::as_str), Some("code review"));
