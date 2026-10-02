@@ -1052,7 +1052,8 @@ mod tests {
 
     #[test]
     fn debug_redacts_every_token() {
-        let credential = sample_credential();
+        let mut credential = sample_credential();
+        credential.provider_account_key = Some("pak-sentinel".to_string());
         let refreshed = RefreshedTokens {
             access_token: credential.access_token.clone(),
             refresh_token: credential.refresh_token.clone(),
@@ -1063,7 +1064,7 @@ mod tests {
             access_token_expires_at: credential.access_token_expires_at,
         };
         let debug = format!("{credential:?} {credential:#?} {refreshed:?} {refreshed:#?}");
-        for token in ["access-tok", "refresh-tok", "id-tok"] {
+        for token in ["access-tok", "refresh-tok", "id-tok", "pak-sentinel"] {
             assert!(!debug.contains(token), "{token} leaked: {debug}");
         }
         assert!(debug.contains("acct-1"), "{debug}");
