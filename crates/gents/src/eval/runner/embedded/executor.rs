@@ -178,6 +178,9 @@ impl EmbeddedExecutor {
         // only once the pack's triggers can see the write.
         let (event_sources_ready, ready) = watch::channel(None);
         let mut options = self.runtime_options.clone();
+        // Pack and plugin writes must stay in this trial, including when the
+        // caller supplies an operator home in its runtime options.
+        options.plugin_home = Some(home.path().to_path_buf());
         // Replaces any observer the caller's options carried: the trial's
         // latch is the only reader of this runtime's snapshots.
         options.runtime_snapshot_observer = Some(Arc::new(EventSourcesReady(event_sources_ready)));
