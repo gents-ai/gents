@@ -1,0 +1,437 @@
+{
+  "case_id": "discover-review-workflow",
+  "split": "train",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentContext",
+        "document": {
+          "agent_did": "$trial",
+          "context_id": "personal-notes",
+          "display_name": "My notes",
+          "system_prompt": "Keep my existing notes unchanged."
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "discover",
+      "prompt": "I would like a reusable code-review workflow rather than building one from scratch. Search the pack registry and tell me which published package looks suitable. Do not install anything or start a review.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installation",
+          "collection": "PackInstallation",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "gents/code_review"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "graphs",
+          "collection": "GraphDefinition",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "graph_id",
+            "enabled",
+            "active_revision_digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "GraphRun",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "run_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "roles",
+          "collection": "AgentBehavior",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "behavior_id": {
+              "_in": [
+                "review-recon",
+                "review-scan",
+                "review-verify",
+                "review-triage"
+              ]
+            }
+          },
+          "fields": [
+            "behavior_id",
+            "inference_profile_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "profiles",
+          "collection": "InferenceProfile",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "profile_id",
+            "backend_id",
+            "model_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "AgentContext",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "context_id": {
+              "_eq": "personal-notes"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "installation",
+                "min": 0,
+                "max": 0,
+                "category": "installation"
+              },
+              {
+                "capture": "graphs",
+                "min": 0,
+                "max": 0,
+                "category": "graph"
+              },
+              {
+                "capture": "runs",
+                "min": 0,
+                "max": 0,
+                "category": "not_started"
+              },
+              {
+                "capture": "roles",
+                "min": 0,
+                "max": 0,
+                "category": "roles"
+              },
+              {
+                "capture": "profiles",
+                "min": 1,
+                "max": 1,
+                "category": "existing_inference"
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notes",
+                "key": "context_id",
+                "id": "personal-notes",
+                "category": "preservation",
+                "expect": [
+                  {
+                    "field": "system_prompt",
+                    "equals": "Keep my existing notes unchanged."
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "items",
+                "contains": "code_review"
+              },
+              {
+                "field": "registry",
+                "matches": ".+"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "inspect_candidate",
+      "prompt": "Inspect the code-review package you found. Tell me its exact name, published version, model roles, and what installation would add. Do not install it or start any work.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installation",
+          "collection": "PackInstallation",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "gents/code_review"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "graphs",
+          "collection": "GraphDefinition",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "graph_id",
+            "enabled",
+            "active_revision_digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "GraphRun",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "run_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "roles",
+          "collection": "AgentBehavior",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "behavior_id": {
+              "_in": [
+                "review-recon",
+                "review-scan",
+                "review-verify",
+                "review-triage"
+              ]
+            }
+          },
+          "fields": [
+            "behavior_id",
+            "inference_profile_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "profiles",
+          "collection": "InferenceProfile",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "profile_id",
+            "backend_id",
+            "model_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "AgentContext",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "context_id": {
+              "_eq": "personal-notes"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "installation",
+                "min": 0,
+                "max": 0,
+                "category": "installation"
+              },
+              {
+                "capture": "graphs",
+                "min": 0,
+                "max": 0,
+                "category": "graph"
+              },
+              {
+                "capture": "runs",
+                "min": 0,
+                "max": 0,
+                "category": "not_started"
+              },
+              {
+                "capture": "roles",
+                "min": 0,
+                "max": 0,
+                "category": "roles"
+              },
+              {
+                "capture": "profiles",
+                "min": 1,
+                "max": 1,
+                "category": "existing_inference"
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notes",
+                "key": "context_id",
+                "id": "personal-notes",
+                "category": "preservation",
+                "expect": [
+                  {
+                    "field": "system_prompt",
+                    "equals": "Keep my existing notes unchanged."
+                  }
+                ]
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "gents/code_review",
+              "coordinator",
+              "worker",
+              "verifier"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "manifest.namespace",
+                "equals": "gents"
+              },
+              {
+                "field": "manifest.name",
+                "equals": "code_review"
+              },
+              {
+                "field": "inference.slots",
+                "contains": "coordinator"
+              },
+              {
+                "field": "inference.slots",
+                "contains": "worker"
+              },
+              {
+                "field": "inference.slots",
+                "contains": "verifier"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

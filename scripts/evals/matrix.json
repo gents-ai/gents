@@ -156,6 +156,21 @@
         "filtered discovery"
       ],
       "title": "Engineer sessions"
+    },
+    {
+      "id": "packs",
+      "definition_id": "engineer-packs",
+      "path": "packs",
+      "subject": "ladder/engineer_subject",
+      "title": "Registry packs",
+      "coverage": [
+        "registry discovery without installation",
+        "inference slot binding",
+        "saved installation and graph state",
+        "blocked upgrade preserves installed version",
+        "removal preserves unrelated configuration",
+        "no graph execution"
+      ]
     }
   ]
 }

@@ -1601,7 +1601,8 @@ impl PackInstaller {
         .await?;
         let distribution = ConfigPackDistribution(resolved);
         anyhow::ensure!(
-            distribution.manifest().metadata.kind == crate::pack::PackKind::Graph,
+            operation == "get"
+                || distribution.manifest().metadata.kind == crate::pack::PackKind::Graph,
             "pack {:?} is {:?}; the model-facing installer supports graph packs only",
             distribution.manifest().name,
             distribution.manifest().metadata.kind
@@ -1712,8 +1713,39 @@ impl PackInstaller {
                 "next_cursor": next_cursor,
             },
             "items": items,
-            "registry_lookup": "Use pack get NAMESPACE/NAME for registry discovery; list shows only the packs this home's store already holds.",
+            "registry_lookup": "Use pack search to discover registry packages, then pack get NAMESPACE/NAME to inspect one. List shows only packs this home's store already holds.",
         }))?)
+    }
+
+    async fn search(&self, query: &str, page: u32) -> anyhow::Result<String> {
+        let registry = crate::pack_registry::resolve_registry_url(None);
+        let response = crate::pack_registry::RegistryClient::new(registry.clone())
+            .search(query, page)
+            .await?;
+        let packs = response["packs"]
+            .as_array()
+            .context("registry search returned no packs array")?;
+        let items = packs
+            .iter()
+            .map(|pack| {
+                let mut item = pack.clone();
+                if let (Some(namespace), Some(name)) =
+                    (pack["namespace"].as_str(), pack["name"].as_str())
+                {
+                    item["inspect"] = json!({"argv":["pack","get",format!("{namespace}/{name}")]});
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        let has_more = response["has_more"].as_bool().unwrap_or(false);
+        ordered! {
+            "items": items,
+            "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports graph packs; search includes other kinds too.",
+            "registry": registry,
+            "page": page,
+            "has_more": has_more,
+        }.pretty()
     }
 
     async fn get(&self, package: &str) -> anyhow::Result<String> {
@@ -1746,6 +1778,7 @@ impl PackInstaller {
             "inference": inference,
             "installed": installed,
             "installable": installable,
+            "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
             "supported_operations": installable.then_some(["preview install", "install", "preview update", "update", "remove"]),
         }))?)
     }
@@ -1787,6 +1820,31 @@ impl PackInstaller {
             "effect": "The package's graph and documents were removed. Package SDL schemas and run history stay.",
         }
         .pretty()
+    }
+
+    fn plugin_install_blockers(&self, manifest: &crate::pack::PackManifest) -> Vec<Value> {
+        manifest
+            .metadata
+            .plugins
+            .iter()
+            .filter_map(|plugin| {
+                let result = self
+                    .home
+                    .as_deref()
+                    .context("this runtime has no plugin home")
+                    .and_then(|home| {
+                        crate::plugin::store::grant_on_install(
+                            home,
+                            &manifest.metadata.namespace,
+                            plugin,
+                            false,
+                        )
+                    });
+                result
+                    .err()
+                    .map(|error| json!({"plugin":plugin.name,"reason":format!("{error:#}")}))
+            })
+            .collect()
     }
 
     /// Installs the plugins `distribution` ships into the home's plugin store,
@@ -1902,9 +1960,13 @@ impl PackInstaller {
                 })
             })
             .collect::<Vec<_>>();
+        let blockers = self.plugin_install_blockers(distribution.manifest());
+        let ready = blockers.is_empty();
         Ok(serde_json::to_string_pretty(&json!({
             "committed": false,
-            "ready": true,
+            "ready": ready,
+            "installation_blockers": blockers,
+            "operator_action": (!ready).then_some("An operator must review the plugin requirements and install this pinned package with gents pack install --grant-authority, selecting the intended --home and the same inference slots. The config tool cannot grant plugin authority; leave the current installation intact."),
             "operation": operation,
             "package": package.manifest.name,
             "version": package.manifest.version,
@@ -1922,11 +1984,11 @@ impl PackInstaller {
                 "schema_digests": prepared.schema_digests,
             },
             "installed": installed,
-            "apply_with": {
+            "apply_with": ready.then(|| json!({
                 "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
                 "repeat_inference_slots": inference.bindings,
                 "repeat_variables": args.variables,
-            },
+            })),
         }))?)
     }
 

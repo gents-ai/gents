@@ -1,0 +1,586 @@
+{
+  "case_id": "install-review-workflow",
+  "split": "validation",
+  "reducer": "all",
+  "fixtures": {
+    "documents": [
+      {
+        "collection": "AgentContext",
+        "document": {
+          "agent_did": "$trial",
+          "context_id": "personal-notes",
+          "display_name": "My notes",
+          "system_prompt": "Keep my existing notes unchanged."
+        }
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "install",
+      "prompt": "Install gents/code_review@1.6.0 here so I can use it later. Use the model connection and profile you already use for every role it needs. Inspect what the package needs before applying it, then verify the installed version and explain what is ready. Keep my existing notes. Do not start a review or delegate any work.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installation",
+          "collection": "PackInstallation",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "gents/code_review"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "graphs",
+          "collection": "GraphDefinition",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "graph_id",
+            "enabled",
+            "active_revision_digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "GraphRun",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "run_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "roles",
+          "collection": "AgentBehavior",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "behavior_id": {
+              "_in": [
+                "review-recon",
+                "review-scan",
+                "review-verify",
+                "review-triage"
+              ]
+            }
+          },
+          "fields": [
+            "behavior_id",
+            "inference_profile_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "profiles",
+          "collection": "InferenceProfile",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "profile_id",
+            "backend_id",
+            "model_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "AgentContext",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "context_id": {
+              "_eq": "personal-notes"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "installation",
+                "min": 1,
+                "max": 1,
+                "category": "installation"
+              },
+              {
+                "capture": "graphs",
+                "min": 1,
+                "max": 1,
+                "category": "graph"
+              },
+              {
+                "capture": "runs",
+                "min": 0,
+                "max": 0,
+                "category": "not_started"
+              },
+              {
+                "capture": "roles",
+                "min": 4,
+                "max": 4,
+                "category": "roles"
+              },
+              {
+                "capture": "profiles",
+                "min": 1,
+                "max": 1,
+                "category": "existing_inference"
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notes",
+                "key": "context_id",
+                "id": "personal-notes",
+                "category": "preservation",
+                "expect": [
+                  {
+                    "field": "system_prompt",
+                    "equals": "Keep my existing notes unchanged."
+                  }
+                ]
+              },
+              {
+                "capture": "installation",
+                "key": "coordinate",
+                "id": "gents/code_review",
+                "category": "installation",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.6.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[a-f0-9]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "graphs",
+                "key": "graph_id",
+                "id": "code-review",
+                "category": "graph",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "active_revision_digest",
+                    "matches": ".+"
+                  }
+                ]
+              }
+            ],
+            "links": [
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-recon",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-scan",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-verify",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-triage",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "inspect",
+      "prompt": "What is installed now? Check the installed package, tell me the version and the model roles it uses, and confirm whether any review has run. Make no changes.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "installation",
+          "collection": "PackInstallation",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "coordinate": {
+              "_eq": "gents/code_review"
+            }
+          },
+          "fields": [
+            "coordinate",
+            "version",
+            "digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "graphs",
+          "collection": "GraphDefinition",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "graph_id",
+            "enabled",
+            "active_revision_digest"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "runs",
+          "collection": "GraphRun",
+          "filter": {
+            "owner_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "run_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "roles",
+          "collection": "AgentBehavior",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "behavior_id": {
+              "_in": [
+                "review-recon",
+                "review-scan",
+                "review-verify",
+                "review-triage"
+              ]
+            }
+          },
+          "fields": [
+            "behavior_id",
+            "inference_profile_id"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "profiles",
+          "collection": "InferenceProfile",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "profile_id",
+            "backend_id",
+            "model_name"
+          ]
+        },
+        {
+          "kind": "documents",
+          "name": "notes",
+          "collection": "AgentContext",
+          "filter": {
+            "agent_did": {
+              "_eq": "$trial"
+            },
+            "context_id": {
+              "_eq": "personal-notes"
+            }
+          },
+          "fields": [
+            "context_id",
+            "system_prompt"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "crew_spec_match",
+          "params": {
+            "present": [
+              {
+                "capture": "installation",
+                "min": 1,
+                "max": 1,
+                "category": "installation"
+              },
+              {
+                "capture": "graphs",
+                "min": 1,
+                "max": 1,
+                "category": "graph"
+              },
+              {
+                "capture": "runs",
+                "min": 0,
+                "max": 0,
+                "category": "not_started"
+              },
+              {
+                "capture": "roles",
+                "min": 4,
+                "max": 4,
+                "category": "roles"
+              },
+              {
+                "capture": "profiles",
+                "min": 1,
+                "max": 1,
+                "category": "existing_inference"
+              }
+            ],
+            "rows": [
+              {
+                "capture": "notes",
+                "key": "context_id",
+                "id": "personal-notes",
+                "category": "preservation",
+                "expect": [
+                  {
+                    "field": "system_prompt",
+                    "equals": "Keep my existing notes unchanged."
+                  }
+                ]
+              },
+              {
+                "capture": "installation",
+                "key": "coordinate",
+                "id": "gents/code_review",
+                "category": "installation",
+                "expect": [
+                  {
+                    "field": "version",
+                    "equals": "1.6.0"
+                  },
+                  {
+                    "field": "digest",
+                    "matches": "^sha256:[a-f0-9]{64}$"
+                  }
+                ]
+              },
+              {
+                "capture": "graphs",
+                "key": "graph_id",
+                "id": "code-review",
+                "category": "graph",
+                "expect": [
+                  {
+                    "field": "enabled",
+                    "equals": true
+                  },
+                  {
+                    "field": "active_revision_digest",
+                    "matches": ".+"
+                  }
+                ]
+              }
+            ],
+            "links": [
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-recon",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-scan",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-verify",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              },
+              {
+                "capture": "roles",
+                "key": "behavior_id",
+                "id": "review-triage",
+                "field": "inference_profile_id",
+                "target_capture": "profiles",
+                "target_key": "profile_id",
+                "expect": [
+                  {
+                    "field": "model_name",
+                    "matches": ".+"
+                  }
+                ],
+                "category": "inference_binding"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "config"
+            ],
+            "forbidden": [
+              "bash",
+              "run_graph",
+              "agent_message",
+              "agent_new"
+            ],
+            "config_read_only": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "manifest.name",
+                "equals": "code_review"
+              },
+              {
+                "field": "manifest.version",
+                "equals": "1.6.0"
+              },
+              {
+                "field": "installed.graph_id",
+                "equals": "code-review"
+              }
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

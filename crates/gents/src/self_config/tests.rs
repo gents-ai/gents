@@ -847,6 +847,11 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
     preview_argv.extend(slot);
     let preview: Value =
         serde_json::from_str(&config_call(&tools, &preview_argv).await.unwrap()).unwrap();
+    assert_eq!(preview["ready"], false);
+    assert!(preview["apply_with"].is_null());
+    assert!(preview["installation_blockers"]
+        .to_string()
+        .contains("api.example.com"));
     let digest = preview["artifact_digest"].as_str().unwrap();
     let mut install_argv = vec![
         "pack",
@@ -5206,4 +5211,156 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }
     let bound = call(&["get"]).await;
     assert!(bound["observation"].get("catalog").is_some(), "{bound}");
+}
+
+#[tokio::test]
+async fn pack_search_uses_registry_pagination_without_installing() {
+    let app = axum::Router::new().route("/api/v1/packs", axum::routing::get(
+        |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>| async move {
+            assert_eq!(query.get("q").map(String::as_str), Some("code review"));
+            let page = &query["page"];
+            axum::Json(json!({"packs":[{"namespace":"fixture","name":"review_graph","latest":"1.0.0","description":"Code review"}],"has_more":page == "1"}))
+        }
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let _registry =
+        crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
+    let (node, did, tools) = pack_tool("registry-search", test_plugins()).await;
+    let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
+    let first: Value = serde_json::from_str(
+        &tool
+            .call(json!({"argv":["pack","search"],"options":{"query":"code review"}}).to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        first["items"][0]["inspect"],
+        json!({"argv":["pack","get","fixture/review_graph"]})
+    );
+    let next: Value =
+        serde_json::from_str(&tool.call(first["next_call"].to_string()).await.unwrap()).unwrap();
+    assert_eq!(next["page"], 2);
+    assert!(next["next_call"].is_null());
+    for options in [
+        json!({"page":0}),
+        json!({"page":"abc"}),
+        json!({"registry":"http://untrusted"}),
+    ] {
+        assert!(tool
+            .call(json!({"argv":["pack","search"],"options":options}).to_string())
+            .await
+            .is_err());
+    }
+    let access = crate::config_client::ConfigAccess::Local(node);
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn pack_get_inspects_document_packs_without_granting_install() {
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_node, _did, tools) = pack_tool("inspect-documents-pack", plugins).await;
+    let result: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["installable"], false);
+    assert!(result["supported_operations"].is_null());
+    let error = config_call(
+        &tools,
+        &["pack", "preview", "install", "fixture/documents_fixture"],
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("supports graph packs only"));
+}
+
+#[tokio::test]
+#[ignore = "uses the public pack registry; installs into a disposable node, never runs the graph"]
+async fn published_review_pack_preserves_installation_when_upgrade_needs_authority() {
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_path_buf(),
+    )));
+    let (node, did, tools) = pack_tool("published-review-pack", plugins).await;
+    let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
+    for (verb, version) in [("install", "1.6.0"), ("update", "1.7.0")] {
+        let package = format!("gents/code_review@{version}");
+        let inspected: Value = serde_json::from_str(
+            &config_call(&tools, &["pack", "get", &package])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let slots = inspected["manifest"]["inference_slots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|slot| format!("{}=setup:inference", slot["name"].as_str().unwrap()))
+            .collect::<Vec<_>>();
+        let options = json!({"inference-slot":slots});
+        let preview: Value = serde_json::from_str(
+            &tool
+                .call(
+                    json!({"argv":["pack","preview",verb,&package],"options":options}).to_string(),
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["ready"], verb == "install", "{preview}");
+        if verb == "update" {
+            assert!(preview["apply_with"].is_null());
+            assert!(preview["installation_blockers"]
+                .to_string()
+                .contains("increased resource limits"));
+        }
+        let mut options = options;
+        options["digest"] = preview["artifact_digest"].clone();
+        let applied = tool
+            .call(json!({"argv":["pack",verb,&package],"options":options}).to_string())
+            .await;
+        if verb == "update" {
+            assert!(applied
+                .unwrap_err()
+                .to_string()
+                .contains("--grant-authority"));
+        } else {
+            applied.unwrap();
+        }
+        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let installed = crate::pack::read_installed_pack(&access, &did, "gents/code_review")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(installed.version, "1.6.0");
+    }
+    config_call(&tools, &["pack", "remove", "gents/code_review"])
+        .await
+        .unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node);
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "gents/code_review")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let owner = crate::graphql::escape_graphql_string(&did);
+    let rows = access
+        .execute(&format!(
+            "{{GraphRun(filter: {{owner_did: {{_eq: \"{owner}\"}}}}) {{run_id}}}}"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rows["data"]["GraphRun"], json!([]));
 }

@@ -1525,6 +1525,34 @@ impl ConfigCommandTool {
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
         match verb {
+            "search" => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                anyhow::ensure!(
+                    parsed.switches.is_empty() && parsed.positionals.len() <= 1,
+                    "pack search takes an optional query and options.page; see [\"help\",\"pack\"]"
+                );
+                for name in parsed.options.keys() {
+                    anyhow::ensure!(
+                        matches!(name.as_str(), "query" | "page"),
+                        "unknown pack search option {name:?}; use options.query and options.page"
+                    );
+                }
+                let option_query = parsed.one("query")?;
+                anyhow::ensure!(
+                    option_query.is_none() || parsed.positionals.is_empty(),
+                    "supply the search query in argv or options.query, not both"
+                );
+                let query = option_query
+                    .or_else(|| parsed.positionals.first().map(String::as_str))
+                    .unwrap_or("");
+                let page = parsed
+                    .one("page")?
+                    .unwrap_or("1")
+                    .parse::<u32>()
+                    .context("pack search options.page must be a positive integer")?;
+                anyhow::ensure!(page > 0, "pack search options.page starts at 1");
+                installer.search(query, page).await
+            }
             "list" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
                 parsed.reject_mutation_flags()?;
