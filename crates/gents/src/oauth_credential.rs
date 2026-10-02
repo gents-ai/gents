@@ -1147,6 +1147,24 @@ pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> Str
     }
 }
 
+/// The product name of `provider`'s sign-ins, else `provider` itself.
+pub fn provider_name(provider: &str) -> &str {
+    sign_in_product(provider).map_or(provider, |product| product.name)
+}
+
+/// Why a profile on `provider` has nowhere to move, and how to add an account.
+pub fn no_switch_candidate_note(provider: &str, model: &str) -> String {
+    match sign_in_product(provider) {
+        Some(product) => format!(
+            "no other {} account offers {model}; add one with `gents {} --label <label>`",
+            product.name, product.login_command
+        ),
+        None => format!(
+            "no other {provider} account offers {model}; add a backend with `gents config backend set`"
+        ),
+    }
+}
+
 /// The providers whose sign-ins are accounts: the ones a backend reads.
 const ACCOUNT_PROVIDERS: [&str; 3] = [
     crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,

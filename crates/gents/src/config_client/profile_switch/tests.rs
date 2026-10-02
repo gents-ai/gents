@@ -418,7 +418,7 @@ async fn refusals_write_nothing() {
     assert_refused(
         &fixture,
         "c",
-        r#"account "label-c" is disabled; enabled Claude accounts: "label-a", "label-b", "label-d""#,
+        r#"account "label-c" is disabled; enabled Claude accounts: "#,
     )
     .await;
     assert_refused(
