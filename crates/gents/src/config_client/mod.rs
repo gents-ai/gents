@@ -65,6 +65,7 @@ pub use desired_state::{
 };
 pub(crate) use desired_state::{
     collection_is_installed, read_desired_state_document_in_txn, validate_desired_state_plan,
+    OutcomeSourceSchemaError,
 };
 pub use inference_backend::{load_inference_backend_in_txn, write_inference_backend_document};
 pub use inference_profile::write_inference_profile_document;

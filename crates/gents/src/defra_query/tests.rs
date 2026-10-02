@@ -540,6 +540,27 @@ async fn unknown_collection_reports_does_not_exist() {
     let msg = err.to_string();
     assert!(msg.contains("NoSuchCollection"), "{msg}");
     assert!(msg.contains("does not exist"), "{msg}");
+    for collection in ["NoSuchCollection", "surface-name"] {
+        let error = Tool::call(
+            &tool,
+            QueryParams {
+                argv: vec!["fields".into()],
+                collection: Some(collection.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        let result: Value = serde_json::from_str(&error.to_string()).unwrap();
+        assert_eq!(
+            result["recovery"],
+            json!({"tool":"schema","args":{"argv":["collection","list"]}})
+        );
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("config datastore get"));
+    }
 }
 
 /// Mixing "*" with concrete fields is rejected with a pointer at discovery.

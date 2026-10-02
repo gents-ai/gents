@@ -1881,6 +1881,9 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     .err()
     .expect("a collection without handoff_id can never carry an outcome");
     let diagnostic = format!("{refused:#}");
+    let schema = refused.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
+    assert_eq!(schema.collection, "PlainPing");
+    assert!(schema.missing_handoff);
     assert!(
         diagnostic.contains("Trigger on-ping delivers PlainPing to Task handle")
             && diagnostic.contains("has no handoff_id field"),
@@ -1893,6 +1896,9 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     .await
     .err()
     .expect("a non-String handoff_id is not a handoff identity");
+    let schema = mistyped.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
+    assert_eq!(schema.collection, "NumberedPing");
+    assert!(!schema.missing_handoff);
     assert!(
         format!("{mistyped:#}").contains("NumberedPing.handoff_id is Int, not String"),
         "{mistyped:#}"

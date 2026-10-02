@@ -8,6 +8,12 @@ use super::{
 };
 use crate::config_client::ConfigRead;
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(super) struct CollectionDiscoveryError(String);
+
+pub(super) const COLLECTION_GUIDANCE: &str = "collection names a GraphQL type, not a datastore surface or tool. Discover names with schema collection list; inspect a surface with config datastore get SURFACE_ID";
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueryParams {
@@ -134,11 +140,11 @@ pub async fn execute_command(
     );
     let command = argv[0];
     query_help(Some(command))?;
-    let collection = args
-        .collection
-        .as_deref()
-        .context("collection is required; discover collections through schema collection list")?;
-    super::render::validate_identifier(collection)?;
+    let collection = args.collection.as_deref().ok_or_else(|| {
+        CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
+    })?;
+    super::render::validate_identifier(collection)
+        .map_err(|error| CollectionDiscoveryError(format!("{error}; {COLLECTION_GUIDANCE}")))?;
     scope.ensure_allowed(collection)?;
     let allowed: &[&str] = match command {
         "fields" => &[],
@@ -165,7 +171,7 @@ pub async fn execute_command(
         .execute_read(&introspection_query(collection)?)
         .await?;
     let schema = parse_collection_schema(schema_response.get("data"))
-        .with_context(|| super::unknown_collection_message(collection))?;
+        .ok_or_else(|| CollectionDiscoveryError(super::unknown_collection_message(collection)))?;
     if command == "fields" {
         return Ok(discovery_payload(collection, &schema));
     }

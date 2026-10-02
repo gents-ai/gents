@@ -485,6 +485,14 @@ async fn validate_trigger_document_fields(
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct OutcomeSourceSchemaError {
+    pub collection: String,
+    pub missing_handoff: bool,
+    message: String,
+}
+
 /// A `FireOutcome` is itself a handoff document: its `source_handoff_id` is
 /// copied from the delivered document's `handoff_id`, and fire admission
 /// refuses an opted-in delivery whose document has none. A Trigger that
@@ -519,16 +527,23 @@ async fn validate_outcome_source_fields(
         let Some(fields) = declared_fields(txn, &collection, introspected).await? else {
             continue;
         };
-        match fields.get("handoff_id") {
-            Some(declared) if declared.named_type() == "String" => {}
-            Some(declared) => anyhow::bail!(
-                "Trigger {trigger_id} delivers {collection} to Task {task_id}, which sets emit_outcome, but {collection}.handoff_id is {}, not String; a FireOutcome copies the delivered document's handoff_id",
+        let declared = fields.get("handoff_id");
+        let message = match declared {
+            Some(declared) if declared.named_type() == "String" => continue,
+            Some(declared) => format!(
+                "Trigger {trigger_id} delivers {collection} to Task {task_id}, which sets emit_outcome, but {collection}.handoff_id is {}, not String; a FireOutcome copies the delivered document's handoff_id. Inspect the collection with schema before changing its field type; preserve existing data",
                 declared.type_name
             ),
-            None => anyhow::bail!(
+            None => format!(
                 "Trigger {trigger_id} delivers {collection} to Task {task_id}, which sets emit_outcome, but {collection} has no handoff_id field; a FireOutcome copies the delivered document's handoff_id, so every fire would be refused. Use the schema tool to add handoff_id: String (collection update), then update the write tool to populate it. Existing rows need meaningful values before delivery. Preserve Tasks, Triggers and sources; deleting them cannot repair the schema"
             ),
+        };
+        return Err(OutcomeSourceSchemaError {
+            collection,
+            missing_handoff: declared.is_none(),
+            message,
         }
+        .into());
     }
     Ok(())
 }

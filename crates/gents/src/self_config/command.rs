@@ -134,21 +134,27 @@ impl ConfigCommandParams {
                 ),
             }
         }
-        for (name, value) in self.options {
-            let verb = argv.iter().skip(1).find(|word| word.as_str() != "preview");
-            let composition = argv.first().is_some_and(|r| r == "behavior")
-                && verb.is_some_and(|v| matches!(v.as_str(), "create" | "clone"));
-            if !composition
-                && matches!(verb.map(String::as_str), Some("create" | "update" | "edit"))
-            {
-                if let Some(target) = argv.first().and_then(|r| crud::resource_target(r)) {
-                    let backend_option = target == SelfConfigTarget::InferenceBackend
-                        && verb.is_some_and(|v| v == "create")
-                        && matches!(name.as_str(), "endpoint" | "name");
-                    anyhow::ensure!(backend_option || !target.is_writable(&name),
-                        "{name:?} is a {} field: put it in set.{name}, not options; field names keep their underscores", target.collection_name());
-                }
+        let verb = argv.iter().skip(1).find(|word| word.as_str() != "preview");
+        let composition = argv.first().is_some_and(|r| r == "behavior")
+            && verb.is_some_and(|v| matches!(v.as_str(), "create" | "clone"));
+        if !composition && matches!(verb.map(String::as_str), Some("create" | "update" | "edit")) {
+            if let Some(target) = argv.first().and_then(|r| crud::resource_target(r)) {
+                let misplaced: Vec<_> = self
+                    .options
+                    .keys()
+                    .filter(|name| {
+                        let backend_option = target == SelfConfigTarget::InferenceBackend
+                            && verb.is_some_and(|v| v == "create")
+                            && matches!(name.as_str(), "endpoint" | "name");
+                        !backend_option && target.is_writable(name)
+                    })
+                    .collect();
+                anyhow::ensure!(misplaced.is_empty(),
+                    "{} fields belong in set, not options: {}. Move all listed fields together; preserve values and keep command selectors such as behavior in options",
+                    target.collection_name(), misplaced.iter().map(|name| format!("set.{name}")).collect::<Vec<_>>().join(", "));
             }
+        }
+        for (name, value) in self.options {
             anyhow::ensure!(
                 name.bytes().next().is_some_and(|c| c.is_ascii_lowercase())
                     && name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
@@ -540,6 +546,15 @@ impl ConfigCommandTool {
         );
         if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
             return (message, json!({"next_call":hint.next_call}));
+        }
+        if let Some(schema) = error.downcast_ref::<crate::config_client::OutcomeSourceSchemaError>()
+        {
+            let next = if schema.missing_handoff {
+                json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
+            } else {
+                json!({"argv":["collection","get",schema.collection]})
+            };
+            return (message, json!({"tool":"schema","next_call":next}));
         }
         if let Some(missing) = error.downcast_ref::<super::ops::MissingConfigDocument>() {
             if let Some((resource, _)) = HELP_INDEX
@@ -2854,6 +2869,40 @@ mod tests {
                 .into_argv()
                 .is_err());
         }
+    }
+
+    #[test]
+    fn misplaced_document_fields_are_reported_together() {
+        let mut input = json!({
+            "argv":["subagent-target","create"],"target_id":"helper",
+            "options":{"behavior":"engineer","behavior_id":"analyst","name":"Analyst","description":"Analyze records"}
+        });
+        let error = serde_json::from_value::<ConfigCommandParams>(input.clone())
+            .unwrap()
+            .into_argv()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("set.behavior_id, set.description, set.name"),
+            "{error}"
+        );
+        input["set"] = json!({});
+        for field in ["behavior_id", "description", "name"] {
+            input["set"][field] = input["options"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field)
+                .unwrap();
+        }
+        assert!(serde_json::from_value::<ConfigCommandParams>(input)
+            .unwrap()
+            .into_argv()
+            .is_ok());
+        let backend = json!({"argv":["backend","create"],"target_id":"local","options":{"endpoint":"http://localhost:8000/v1","name":"Local"}});
+        assert!(serde_json::from_value::<ConfigCommandParams>(backend)
+            .unwrap()
+            .into_argv()
+            .is_ok());
     }
 
     #[test]

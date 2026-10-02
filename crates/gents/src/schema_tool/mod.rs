@@ -273,14 +273,13 @@ impl SchemaTool {
             ["collection", "create"] => {
                 let plan =
                     crate::config_client::preview_schema_install(&access, text("sdl")?).await?;
-                serde_json::to_value(
-                    crate::config_client::apply_schema_install(
-                        &access,
-                        text("sdl")?,
-                        &plan.artifact_digest,
-                    )
-                    .await?,
-                )?
+                let installed = crate::config_client::apply_schema_install(
+                    &access,
+                    text("sdl")?,
+                    &plan.artifact_digest,
+                )
+                .await?;
+                json!({"collections":installed.collection_contracts.keys().collect::<Vec<_>>()})
             }
             ["collection", "update"] => {
                 let mut patch = option("patch")?

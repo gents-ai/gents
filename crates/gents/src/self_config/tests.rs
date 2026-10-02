@@ -2435,6 +2435,68 @@ pub(super) async fn call_config_tool(
 /// Errors a model hit in the configurator skill-workflow eval name the call
 /// that can proceed, not only what failed.
 #[tokio::test]
+async fn outcome_schema_error_returns_an_executable_schema_recovery() {
+    use crate::llm::tool::Tool;
+    let node = build_persona_node().await;
+    let identity = persona_identity("schema-recovery");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    access
+        .add_schema("type Delivery { body: String }")
+        .await
+        .unwrap();
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner,
+        Some(identity),
+        &config(&["automation"]),
+        test_plugins(),
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    for call in [
+        json!({"argv":["event-source","create","deliveries"],"set":{"source_collection":"Delivery","event_kind":"created"}}),
+        json!({"argv":["task","create","handle"],"set":{"prompt_template":"Handle {{ doc.body }}","emit_outcome":true}}),
+    ] {
+        tool.call(call.to_string()).await.unwrap();
+    }
+    let trigger = json!({"argv":["trigger","create","on-delivery"],"set":{"task_id":"handle","source":{"kind":"event","event_source_id":"deliveries"}}});
+    let error = tool.call(trigger.to_string()).await.unwrap_err();
+    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+        panic!("{error}")
+    };
+    let failure: Value = serde_json::from_str(&error.to_string()).unwrap();
+    assert_eq!(failure["recovery"]["tool"], "schema");
+    assert_eq!(
+        failure["recovery"]["next_call"]["argv"],
+        json!(["collection", "preview", "update", "Delivery"])
+    );
+    let schema = crate::schema_tool::SchemaTool::new(node.clone());
+    let preview: Value = serde_json::from_str(
+        &Tool::call(
+            &schema,
+            serde_json::from_value(failure["recovery"]["next_call"].clone()).unwrap(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    Tool::call(
+        &schema,
+        serde_json::from_value(preview["next_call"]["args"].clone()).unwrap(),
+    )
+    .await
+    .unwrap();
+    tool.call(trigger.to_string()).await.unwrap();
+    let rows = access.execute("{ Trigger { trigger_id } }").await.unwrap();
+    assert_eq!(rows["data"]["Trigger"].as_array().unwrap().len(), 1);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn config_errors_name_the_next_call() {
     let node = build_persona_node().await;
     let identity = persona_identity("next-call");

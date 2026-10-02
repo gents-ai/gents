@@ -176,11 +176,15 @@ async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
     let node = node().await;
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::Local(node.clone());
-    apply(
+    let installed = apply(
         &tool,
         json!({"argv":["collection","create"],"options":{"sdl":"type WorkItem { title: String }"}}),
     )
     .await;
+    assert_eq!(
+        installed,
+        json!({"committed":true,"result":{"collections":["WorkItem"]}})
+    );
     ConfigAccess::write_local(
         &node,
         "schema_test.seed",
