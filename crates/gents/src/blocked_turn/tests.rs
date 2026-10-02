@@ -235,6 +235,29 @@ fn compaction_call_names_the_compaction_profile() {
 }
 
 #[test]
+fn call_kind_picks_the_profile_when_both_share_the_backend() {
+    let references = references(documents(B, B));
+    let stopped = |call_kind| {
+        let call = call(B, call_kind, anthropic_rejected());
+        blocked(
+            &references,
+            &accounts(),
+            &failed_request("limit"),
+            Some(&call),
+        )
+        .expect("blocked")
+    };
+    let compaction = stopped("compaction");
+    assert_eq!(compaction.profile.as_deref(), Some("summ"));
+    assert_eq!(compaction.behaviors_on_profile, ["x"]);
+    assert_eq!(
+        compaction.switch_command.as_deref(),
+        Some("gents config profile set-account summ <account>")
+    );
+    assert_eq!(stopped("inference").profile.as_deref(), Some("main"));
+}
+
+#[test]
 fn behaviors_on_profile_counts_direct_and_compaction_users() {
     let mut documents = documents(B, A);
     documents.extend(behavior("z", "summ", Some("main")));
