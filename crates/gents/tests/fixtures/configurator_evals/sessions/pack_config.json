@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-sessions",
-      "comparability_version": 4,
+      "comparability_version": 5,
       "title": "Engineer session investigation",
       "subject": {
         "kind": "behavior",
@@ -18,7 +18,7 @@
         "./cases/filtered_discovery.json",
         "./cases/transcript_evidence.json",
         "./cases/archive_evidence.json",
-        "./cases/foreign_session_refusal.json"
+        "./cases/cross_agent_visible.json"
       ]
     }
   ]

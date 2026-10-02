@@ -61,14 +61,14 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "did:key:z6MkiForeignSessionOwner",
-          "requester_did": "did:key:z6MkiForeignSessionOwner",
-          "session_id": "launch-review",
+          "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "session_id": "partner-review",
           "behavior_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
-            "text": "Protected foreign work",
+            "text": "Partner release review",
             "source": "user"
           },
           "tags": [
@@ -81,7 +81,7 @@
   "stages": [
     {
       "stage_id": "investigate",
-      "prompt": "How many of my closed sessions have the release tag? Give the exact total using sessions; exclude other principals.",
+      "prompt": "How many closed sessions visible to me have the release tag? Give the exact total using sessions, including readable sessions from other agents.",
       "deadline_secs": 300,
       "checks": [
         {
@@ -90,15 +90,11 @@
             "expect": [
               {
                 "field": "count",
-                "equals": 2
+                "equals": 3
               },
               {
-                "field": "scope.agent_did",
-                "matches": "^did:key:"
-              },
-              {
-                "field": "scope.requester_did",
-                "matches": "^did:key:"
+                "field": "scope.visibility",
+                "equals": "acp"
               }
             ]
           },

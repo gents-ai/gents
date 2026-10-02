@@ -21,6 +21,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     .unwrap();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
+    assert_eq!(definition.comparability_version, 5);
     let registry = CheckRegistry::builtin();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         assert!(definition.cases.iter().any(|case| case.split == split));
@@ -52,6 +53,57 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
             .count()
             > 5000
     );
+}
+
+#[test]
+fn session_model_fixtures_expect_public_cross_agent_visibility() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configurator_evals/sessions/cases");
+    let count: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("count_closed.json")).unwrap()).unwrap();
+    let documents = count["fixtures"]["documents"].as_array().unwrap();
+    let closed_release: Vec<_> = documents
+        .iter()
+        .map(|row| &row["document"])
+        .filter(|doc| {
+            !doc["closed_at"].is_null()
+                && doc["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tag| tag == "release")
+        })
+        .collect();
+    assert_eq!(closed_release.len(), 3);
+    assert!(closed_release
+        .iter()
+        .any(|doc| doc["agent_did"] != "$trial"));
+    assert_eq!(
+        count["stages"][0]["checks"][0]["params"]["expect"][0]["equals"],
+        closed_release.len()
+    );
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let path = entry.unwrap().path();
+        let case: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut ids = std::collections::BTreeSet::new();
+        for row in case["fixtures"]["documents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if row["collection"] == "AgentSession" {
+                assert!(ids.insert(row["document"]["session_id"].as_str().unwrap()));
+            }
+        }
+    }
+    let cross: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("cross_agent_visible.json")).unwrap())
+            .unwrap();
+    assert_eq!(cross["case_id"], "cross-agent-visible");
+    let source = &cross["stages"][0]["capture"][0];
+    assert_eq!(source["filter"]["session_id"]["_eq"], "partner-archive");
+    assert_ne!(source["filter"]["agent_did"]["_eq"], "$trial");
 }
 
 #[tokio::test]
@@ -93,7 +145,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
         let mut undelivered = 0usize;
         let mut oversized = 0usize;
         let mut actionable_errors = 0usize;
-        let mut protected_content = false;
+        let mut partner_title_returned = false;
         for call in calls {
             let presentation = load_tool_call_presentation(
                 &access,
@@ -109,7 +161,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
                 actionable_errors += usize::from(
                     call["lifecycle_state"] == "failed" && result.contains("next call:"),
                 );
-                protected_content |= result.contains("Confidential partner rotation ledger");
+                partner_title_returned |= result.contains("Confidential partner rotation ledger");
             } else {
                 undelivered += 1;
             }
@@ -120,7 +172,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
             "session_tool_calls": calls.len(), "delivered_output_bytes": bytes,
             "undelivered_calls": undelivered, "failed_calls": errors,
             "oversized_results_over_64000_bytes": oversized, "errors_naming_next_call": actionable_errors,
-            "protected_fixture_content_returned": protected_content,
+            "historical_partner_fixture_title_returned": partner_title_returned,
         }));
         drop(access);
         drop(node);

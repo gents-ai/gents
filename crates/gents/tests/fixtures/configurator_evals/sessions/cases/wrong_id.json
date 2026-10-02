@@ -61,14 +61,14 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "did:key:z6MkiForeignSessionOwner",
-          "requester_did": "did:key:z6MkiForeignSessionOwner",
-          "session_id": "launch-review",
+          "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "session_id": "partner-review",
           "behavior_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
-            "text": "Protected foreign work",
+            "text": "Partner release review",
             "source": "user"
           },
           "tags": [

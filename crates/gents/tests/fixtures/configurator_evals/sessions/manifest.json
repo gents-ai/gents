@@ -19,7 +19,7 @@
     "cases/filtered_discovery.json",
     "cases/transcript_evidence.json",
     "cases/archive_evidence.json",
-    "cases/foreign_session_refusal.json"
+    "cases/cross_agent_visible.json"
   ],
   "config": "pack_config.json"
 }
