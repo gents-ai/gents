@@ -889,3 +889,26 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
     assert!(!metadata.has_older);
     assert!(metadata.has_newer);
 }
+
+#[test]
+fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
+    let mut full = empty_timeline_snapshot();
+    full.timeline_items = vec![
+        assistant_item("latest", 2),
+        RenderedTimelineItem::PendingUserTurn {
+            item_key: "pending-current".into(),
+            request_id: "current".into(),
+            content: "current input".into(),
+            selected_skill_ids: vec![],
+            lifecycle_state: Some("interrupted".into()),
+            created_at: None,
+        },
+        tool_group(1),
+    ];
+    let mut local = full.clone();
+    apply_session_timeline_page(&mut local, None, Some(1)).unwrap();
+    assert_eq!(timeline_keys(&local), ["latest", "pending-current"]);
+    let page = timeline_page(2, true, false);
+    apply_session_timeline_page_with_query(&mut full, None, Some(1), Some(&page)).unwrap();
+    assert_eq!(timeline_keys(&full), ["latest", "pending-current"]);
+}

@@ -83,6 +83,19 @@ pub fn apply_session_timeline_page_with_query(
         let mut pending_anchors = HashMap::new();
         let mut next_sequence = None;
         for item in candidates.iter().rev() {
+            if let crate::types::RenderedTimelineItem::ToolGroup {
+                message_sequence, ..
+            } = item
+            {
+                if !snapshot.messages.iter().any(|message| {
+                    message.sequence == *message_sequence
+                        && message.has_tool_calls
+                        && !message.has_tool_results
+                        && !message.runtime_control
+                }) {
+                    continue;
+                }
+            }
             match rendered_timeline_durable_sequence(item) {
                 Some(Some(sequence)) => next_sequence = Some(sequence),
                 None if matches!(
