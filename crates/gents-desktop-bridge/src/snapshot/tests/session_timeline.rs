@@ -875,6 +875,9 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
         assistant_item("anchor", 1),
         assistant_item("latest", 2),
     ];
+    let mut before_anchor = full.clone();
+    apply_session_timeline_page(&mut before_anchor, Some("anchor"), Some(1)).unwrap();
+    assert!(before_anchor.timeline_items.is_empty());
     let mut tip = full.clone();
     apply_session_timeline_page(&mut tip, None, Some(1)).unwrap();
     assert_eq!(timeline_keys(&tip), ["latest"]);
