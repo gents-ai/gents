@@ -1,7 +1,8 @@
+mod approvals;
 mod streaming;
 
 use gents::config_client::GraphqlEndpoint;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -55,6 +56,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         {
             OutputFormat::Text => {
                 let envelope = submit_chat_turn_with_goal(
+                    &home_dir,
                     &graphql,
                     &agent_did,
                     &session_id,
@@ -104,9 +106,9 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
 
     let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
 
-    let stdin = io::stdin();
     let mut pending_goal = goal;
-    let mut lines = stdin.lock().lines();
+    // Not a held lock: a plugin approval question reads the terminal mid-turn.
+    let mut lines = io::stdin().lines();
     let mut stdout = io::stdout();
     loop {
         write!(stdout, "{prompt_label}> ")?;
@@ -124,6 +126,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         }
 
         submit_chat_turn_with_goal(
+            &home_dir,
             &graphql,
             &agent_did,
             &session_id,
@@ -169,7 +172,9 @@ struct GoalBackedSubmission<'a> {
     token_budget: Option<i64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit_chat_turn_with_goal(
+    home_dir: &Path,
     graphql: &GraphqlEndpoint,
     agent_did: &str,
     session_id: &str,
@@ -213,6 +218,7 @@ async fn submit_chat_turn_with_goal(
         timeout_secs,
         poll_secs,
         verbose,
+        Some(home_dir),
     )
     .await
 }

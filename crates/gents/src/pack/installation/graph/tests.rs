@@ -49,7 +49,7 @@ async fn count(access: &ConfigAccess, collection: &str, field: &str, owner: &str
 #[tokio::test]
 async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
     let (node, access, options) = fixture().await;
-    let receipt = install_test_graph_package(&access, OWNER, "code_review", &options)
+    let receipt = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -71,7 +71,7 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
         .unwrap();
     let rows = response["data"]["PackInstallation"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["coordinate"], "gents/code_review");
+    assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
     let documents = rows[0]["documents"].as_array().unwrap();
     assert!(documents
         .iter()
@@ -92,7 +92,7 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
     assert!(count(&access, "EventSource", "agent_did", OWNER).await > 0);
     assert!(count(&access, "Task", "agent_did", OWNER).await > 0);
 
-    let report = remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    let report = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert!(
@@ -121,7 +121,7 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
 
     // A second remove finds no record.
     assert!(
-        remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+        remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
             .await
             .is_err()
     );
@@ -130,7 +130,7 @@ async fn a_graph_install_is_recorded_and_remove_leaves_no_graph_documents() {
 #[tokio::test]
 async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
     let (node, access, options) = fixture().await;
-    let receipt = install_test_graph_package(&access, OWNER, "code_review", &options)
+    let receipt = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -154,11 +154,12 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
             "repository_path": "/tmp/repo", "base_ref": "base-sha", "head_ref": "head-sha",
             "lens_count": "4", "lens_min": "4", "lens_max": "4", "focus": "durability"
         }),
+        crate::graph_pipeline::EntryInputOrigin::Operator,
     )
     .await
     .unwrap();
 
-    let error = remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     let message = format!("{error:#}");
@@ -189,7 +190,7 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
         .await
         .unwrap();
 
-    let report = remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    let report = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .expect("a terminal run no longer blocks removal");
     assert!(
@@ -206,7 +207,7 @@ async fn a_non_terminal_graph_run_refuses_removal_and_names_it() {
 #[tokio::test]
 async fn remove_deletes_retired_revisions_too() {
     let (node, access, options) = fixture().await;
-    let first = install_test_graph_package(&access, OWNER, "code_review", &options)
+    let first = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -221,7 +222,7 @@ async fn remove_deletes_retired_revisions_too() {
     .unwrap();
 
     // A metadata-only successor: a new revision, superseding the first.
-    let mut successor = load_test_graph_package("code_review", &options);
+    let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     let second = crate::graph_package::install_loaded_graph_package(
         &access,
@@ -250,7 +251,7 @@ async fn remove_deletes_retired_revisions_too() {
 
     assert_eq!(count(&access, "GraphRevision", "owner_did", OWNER).await, 2);
 
-    remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert_eq!(
@@ -270,7 +271,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     // in the review: `required_by=false` recording every graph as created
     // let removing a dependent delete a graph the operator already had).
     let (node, access, options) = fixture().await;
-    let first = install_test_graph_package(&access, OWNER, "code_review", &options)
+    let first = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -315,7 +316,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
     // install landing on top of the untracked graph) must find and adopt
     // what is already there rather than materializing a new revision.
     let second =
-        install_test_graph_package_explicit(&access, OWNER, "code_review", &options, false)
+        install_test_graph_package_explicit(&access, OWNER, "review_graph", &options, false)
             .await
             .unwrap();
     assert_eq!(second.revision_digest, first.revision_digest);
@@ -351,7 +352,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
         "an untracked GraphRevision this install did not create must be adopted: {documents:?}"
     );
 
-    remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert_eq!(
@@ -369,7 +370,7 @@ async fn an_untracked_graph_is_adopted_on_reinstall_and_survives_removal() {
 #[tokio::test]
 async fn removal_reports_an_exact_truncated_count_past_the_retained_run_limit() {
     let (node, access, options) = fixture().await;
-    let receipt = install_test_graph_package(&access, OWNER, "code_review", &options)
+    let receipt = install_test_graph_package(&access, OWNER, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -405,7 +406,7 @@ async fn removal_reports_an_exact_truncated_count_past_the_retained_run_limit() 
             .unwrap();
     }
 
-    let report = remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    let report = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
 

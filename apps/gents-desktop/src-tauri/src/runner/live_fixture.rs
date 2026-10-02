@@ -653,6 +653,7 @@ mod tests {
                 content: format!("/{skill_id}\n{task}"),
                 caused_by_source_doc_id: None,
                 answer: None,
+                cwd: None,
             },
         )
         .await?;

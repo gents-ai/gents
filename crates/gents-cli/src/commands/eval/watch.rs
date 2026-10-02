@@ -565,6 +565,7 @@ mod tests {
             output_tokens: Some(41_234),
             reported_input_tokens: None,
             reported_output_tokens: None,
+            session_contexts: None,
             tool_calls: 149,
             failed_tool_calls: 6,
             tools: [

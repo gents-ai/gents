@@ -38,7 +38,13 @@ async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, 
     crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
     let mut grants = config(categories);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
     (node, owner, tools)
 }
 
@@ -257,8 +263,15 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         owner.clone(),
         Some(identity.clone()),
         &unguarded,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
     );
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
     for surface in ["engineer-mailbox", "worker-surface"] {
         ok(
             &setup_tools,
@@ -509,8 +522,13 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     let mut grants = config(&["persona", "tools", "profile", "automation"]);
     grants.behavior_id = "setup".into();
     grants.preview = true;
-    let tools =
-        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
 
     // Pages are plain text of skill size; nothing from the index repeats.
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
@@ -1321,8 +1339,13 @@ async fn saved_config_audit_is_principal_scoped_and_does_not_require_preview() {
     for (categories, allowed) in [(&["persona"][..], true), (&["tools"][..], false)] {
         let mut grants = config(categories);
         grants.preview = false;
-        let tools =
-            build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+        let tools = build_self_config_tools(
+            node.clone(),
+            owner.clone(),
+            Some(identity.clone()),
+            &grants,
+            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+        );
         assert_eq!(
             call(&tools, json!({"argv":["validate"]})).await.is_ok(),
             allowed
@@ -1495,5 +1518,73 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
     assert!(
         error["error"].as_str().unwrap().contains("Trigger"),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
+    let (node, _owner, tools) = setup("saved-schema-audit", &["persona", "tools"]).await;
+    node.add_schema("type AuditRecord { message: String }")
+        .await
+        .unwrap();
+    let entries = json!([
+        {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true},{"name":"correlation","fill":"correlation"}]},
+        {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message","missing_projection"],"filter_fields":[{"name":"missing_filter"}]}
+    ]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","create","audit"],"set":{"entries":entries}}),
+    )
+    .await;
+    // Unselected declarations may precede schema installation.
+    assert_eq!(
+        ok(&tools, json!({"argv":["validate"]})).await["valid"],
+        true
+    );
+    ok(&tools, json!({"argv":["tools","update","beh-test:tools"],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
+    let before = ok(&tools, json!({"argv":["datastore","get","audit"]})).await;
+    let invalid = ok(&tools, json!({"argv":["validate"]})).await;
+    assert_eq!(invalid["valid"], false, "{invalid}");
+    assert_eq!(invalid["committed"], false);
+    let errors = invalid["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{invalid}");
+    assert!(errors[0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("field `correlation` is absent from `AuditRecord`"));
+    assert!(errors[1]["error"]
+        .as_str()
+        .unwrap()
+        .contains("missing_projection"));
+    assert_eq!(errors[0]["tool_name"], "write_audit_record");
+    ok(&tools, errors[0]["inspect_with"].clone()).await;
+    assert_eq!(
+        before,
+        ok(&tools, json!({"argv":["datastore","get","audit"]})).await
+    );
+    let corrected = json!([
+        {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true}]},
+        {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message"],"filter_fields":[{"name":"missing_filter"}]}
+    ]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","update","audit"],"set":{"entries":corrected}}),
+    )
+    .await;
+    let invalid = ok(&tools, json!({"argv":["validate"]})).await;
+    assert!(invalid["errors"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("missing_filter"));
+    let mut corrected = corrected;
+    corrected[1]["filter_fields"] = json!([{"name":"message"}]);
+    ok(
+        &tools,
+        json!({"argv":["datastore","update","audit"],"set":{"entries":corrected}}),
+    )
+    .await;
+    assert_eq!(
+        ok(&tools, json!({"argv":["validate"]})).await["valid"],
+        true
     );
 }

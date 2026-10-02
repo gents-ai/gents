@@ -1,8 +1,0 @@
-type WebResearchDraft {
-  run_id: String @index(unique: true) @immutable
-  title: String
-  thesis: String
-  outline: String
-  synthesis: String
-  unresolved_questions: String
-}

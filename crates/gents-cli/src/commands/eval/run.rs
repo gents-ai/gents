@@ -141,8 +141,8 @@ pub(super) async fn run_request(
     let mut cells = Vec::with_capacity(args.cells.len());
     let mut packs = Vec::with_capacity(args.cells.len());
     for cell in &args.cells {
-        let pack = resolve_subject_pack(&ctx.home_dir, &cell.pack, args.registry.as_deref(), false)
-            .await?;
+        let pack =
+            resolve_subject_pack(&ctx.home_dir, &cell.pack, args.registry.as_deref()).await?;
         let behavior_id = match &cell.behavior {
             Some(behavior) => behavior.clone(),
             None => pack.default_behavior()?,

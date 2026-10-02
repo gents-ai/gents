@@ -253,7 +253,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "validate" => Page {
             what: "audit saved configuration for your authenticated principal; read-only (behavior catalog grant).",
             commands: &["validate"],
-            notes: "Uses the same canonical fields, references and publication checks as writes. Reports document counts and errors; fix them with resource update/create, then validate again. References to remote principals are not locally verified. This does not test credentials, running helpers, application-schema readiness or whether the setup meets the user's goal. Inspect selections with behavior get; exercise tools to test runtime behavior.",
+            notes: "Uses the same canonical fields, references and publication checks as writes. Also checks selected datastore tools against current collection schemas. Read each affected object, correct it with resource update, and validate again; create only missing objects. Preserve unrelated fields and entries. References to remote principals are not locally verified. This does not test credentials, running helpers or whether the setup meets the user's goal. Inspect selections with behavior get; exercise tools to test runtime behavior.",
             next: "fix reported errors before reporting completion; state what remains untested.",
         },
         "skill" => Page {
@@ -370,7 +370,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
             ],
-            notes: "Bind every declared inference slot to an existing profile. Bundled names resolve locally; NAMESPACE/NAME resolves through the operator's registry. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
+            notes: "Bind every declared inference slot to an existing profile. A pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. A plugin the pack ships installs only when it asks for no authority. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
             next: "run the installed graph with the graph tools.",
         },
         _ => return None,

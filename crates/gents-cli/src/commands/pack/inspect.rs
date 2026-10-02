@@ -6,20 +6,29 @@ use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
+/// The owner a `--config` preview is bound to. Never written anywhere.
+const SHOW_CONFIG_OWNER: &str = "did:key:zPackShowPlaceholder";
+
 /// `gents pack show`: the manifest, the pack digest and every file with its
-/// size and sha256, for any pack `install` accepts.
+/// size and sha256, for any pack `install` accepts; with `--config`, instead
+/// prints `{config, scenario}` as an install would load them, at their
+/// declared `${VAR:-default}` defaults (the environment is never read).
 pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
+    if args.config {
+        return show_config(&pack);
+    }
     let manifest = pack.manifest();
     let dependency_origins = manifest
         .metadata
         .dependencies
         .iter()
         .map(|dependency| {
+            let (_, name) = super::split_namespace(dependency);
             Ok(json!({
                 "pack": dependency,
-                "origin_tag": gents::pack::pack_origin_tag(dependency)?,
+                "origin_tag": gents::pack::pack_origin_tag(name)?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -43,6 +52,41 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
         "digest": pack.digest(),
         "files": files,
     }))
+}
+
+/// `gents pack show --config`'s `{config, scenario}`: the pack's canonical
+/// configuration, loaded exactly like an install would (for a placeholder
+/// owner, since nothing is written), and its `experiment.json`, interpolated
+/// at defaults, or `null` when the pack declares no scenario. The
+/// environment is never read: a missing default is refused so the preview
+/// never differs from the pack's own declared defaults.
+fn show_config(pack: &super::PackSource) -> Result<()> {
+    let manifest = pack.manifest();
+    let config = gents::pack::load_pack_config(
+        manifest,
+        &gents::pack::PackInstallOptions {
+            agent_did: SHOW_CONFIG_OWNER.into(),
+        },
+        &|path| pack.asset(path).map(Vec::from),
+        &|_| None,
+    )?;
+    let scenario = gents::pack::declared_paths(manifest)
+        .iter()
+        .any(|path| path == "experiment.json")
+        .then(|| -> Result<serde_json::Value> {
+            let raw = std::str::from_utf8(pack.asset("experiment.json")?)
+                .context("experiment.json is not UTF-8")?;
+            let expanded = crate::desired_state::interpolate::interpolate_with(raw, &|_| None)
+                .map_err(|missing| {
+                    anyhow::anyhow!(
+                        "experiment.json references environment variable(s) with no default: {}",
+                        missing.join(", ")
+                    )
+                })?;
+            serde_json::from_str(&expanded).context("parsing experiment.json")
+        })
+        .transpose()?;
+    crate::print_json(&json!({ "config": config, "scenario": scenario }))
 }
 
 /// `gents pack verify`: checks a `.pack` file, or a pack in the home's
@@ -140,36 +184,48 @@ mod tests {
 
     #[tokio::test]
     async fn a_pack_and_its_edited_copy_differ_by_exactly_the_edit() {
-        let bundled = gents::pack::resolve_pack("lsp_rust").unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let original =
+            super::super::test_support::fixture_pack_source("documents_fixture", home.path());
         let dir = tempfile::tempdir().unwrap();
-        for path in gents::pack::declared_paths(&bundled.manifest) {
+        for path in gents::pack::declared_paths(original.manifest()) {
             let target = dir.path().join(&path);
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            std::fs::write(&target, bundled.asset(&path).unwrap()).unwrap();
+            std::fs::write(&target, original.asset(&path).unwrap()).unwrap();
         }
-        let prompt = dir.path().join("tasks/lsp_hover_task/prompt.md");
+        let prompt = dir.path().join("tasks/fixture_worker_task/prompt.md");
         std::fs::write(&prompt, "a different prompt").unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let edited = super::super::local::open(
-            &super::super::local::LocalName::Path(dir.path()),
-            home.path(),
-        )
-        .unwrap();
+        let edited = super::super::test_support::local_pack_source(dir.path(), home.path());
 
-        let report = pack_diff(
-            &super::super::PackSource::Bundled(bundled),
-            &super::super::PackSource::Stored(edited),
-        )
-        .unwrap();
+        let report = pack_diff(&original, &edited).unwrap();
         assert_eq!(
             report["files"]["changed"],
-            json!(["tasks/lsp_hover_task/prompt.md"])
+            json!(["tasks/fixture_worker_task/prompt.md"])
         );
         assert_eq!(report["files"]["added"], json!([]));
         assert_eq!(
             report["documents"]["changed"],
-            json!(["Task/lsp-hover-task"])
+            json!(["Task/fixture-worker-task"])
         );
         assert_eq!(report["documents"]["removed"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn show_config_prints_the_loaded_configuration_and_scenario() {
+        let home = tempfile::tempdir().unwrap();
+        let fixture_dir = super::super::test_support::fixture_dir("documents_fixture");
+        let report = crate::request_helpers::capture_report(show(PackShowArgs {
+            package: fixture_dir.to_str().unwrap().to_owned(),
+            home: Some(home.path().to_path_buf()),
+            registry: Some("http://127.0.0.1:1".to_owned()),
+            config: true,
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            report["config"]["agent_behaviors"][0]["behavior_id"],
+            "fixture-worker"
+        );
+        assert_eq!(report["scenario"]["seed"]["collection"], "FixtureJob");
     }
 }

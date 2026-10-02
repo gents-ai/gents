@@ -198,6 +198,56 @@ pub struct EntryBinding {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub input_contract: Option<String>,
     pub to: PortRef,
+    /// JSON Schema for the operator-facing input this entry accepts. Absent
+    /// means the entry takes an unvalidated JSON object, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(type = "unknown", optional = nullable))]
+    pub input_schema: Option<serde_json::Value>,
+    /// Host-computed facts and a pack plugin that shape the operator input
+    /// into this entry's actual seed before a run starts. Absent means the
+    /// admitted operator input is the entry input directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub prepare: Option<EntryPrepare>,
+}
+
+/// Host facts collected before a prepare plugin runs, and the plugin that
+/// turns them plus the admitted operator input into this entry's seed and
+/// any evidence documents.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct EntryPrepare {
+    /// Collected in order before the plugin runs.
+    pub host: Vec<HostInput>,
+    /// This pack's plugin by name; qualified to `ns/name` when the pack is
+    /// loaded.
+    pub plugin: String,
+    /// `sha256:<hex>` of the artifact that runs; pinned when the pack loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub digest: Option<String>,
+    /// Collections the plugin's returned documents may be created in.
+    pub writes: Vec<String>,
+}
+
+/// One host-computed fact a prepare step hands to the plugin.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum HostInput {
+    /// The Git diff between two admitted operator input fields.
+    GitDiff {
+        repository_field: String,
+        base_field: String,
+        head_field: String,
+        unified_context_lines: u32,
+        rename_similarity_percent: u8,
+    },
+    /// A read-only workspace over the `GitDiff` head; requires an earlier
+    /// `GitDiff` in the same `host` list.
+    ReadOnlyWorkspace,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -309,6 +359,10 @@ pub enum DiagnosticCode {
     FanOutLimitExceeded,
     PlatformLimitExceeded,
     UnpinnedPlugin,
+    ReadOnlyWorkspaceRequiresGitDiff,
+    InvalidPrepareWrites,
+    InvalidPrepareLimits,
+    InvalidInputSchema,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +414,10 @@ pub struct PlannedEntry {
     pub to: PortRef,
     pub target: StageTarget,
     pub correlation_field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<EntryPrepare>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -121,6 +121,11 @@ pub(crate) enum Command {
     Status(StatusArgs),
     #[command(about = "Run a read-only structured query against a DefraDB collection")]
     Query(QueryArgs),
+    #[command(about = "Create documents as the home principal")]
+    Document {
+        #[command(subcommand)]
+        command: DocumentCommand,
+    },
     #[command(
         about = "Inspect backgrounded tool calls",
         after_help = BACKGROUND_AFTER_HELP
@@ -309,7 +314,7 @@ pub(crate) struct GraphScopeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackShowArgs {
-    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
+    #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
     #[arg(long, help = "Home whose pack store holds local packs")]
     pub(crate) home: Option<PathBuf>,
@@ -318,6 +323,17 @@ pub(crate) struct PackShowArgs {
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Print {config, scenario} as an install would load them, instead of the manifest and files"
+    )]
+    pub(crate) config: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackListArgs {
+    #[arg(long, help = "Home whose pack store to list")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 /// What `gents pack new` and `init` start a pack from.
@@ -488,7 +504,7 @@ pub(crate) struct PackFmtArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackDiffArgs {
-    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
+    #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) a: String,
     #[arg(help = "The pack to compare it with, named the same ways")]
     pub(crate) b: String,
@@ -574,9 +590,10 @@ pub(crate) struct PackVerifyArgs {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum PackCommand {
-    /// List all packs bundled in this binary.
-    List,
-    /// Inspect a pack: its manifest, digest and every file.
+    /// List the packs in the home's store.
+    List(PackListArgs),
+    /// Inspect a pack: its manifest, digest and every file, or (with
+    /// `--config`) its loaded configuration and scenario.
     Show(PackShowArgs),
     /// Check a .pack file or a stored pack against its digest.
     Verify(PackVerifyArgs),
@@ -631,7 +648,8 @@ pub(crate) enum PackCommand {
     Owner(PackOwnerArgs),
     /// Publish a built `.pack` to the pack registry.
     Publish(PackPublishArgs),
-    /// Download a pack's `.pack` from the registry without installing it.
+    /// Download a pack without installing it, or admit it into the home's
+    /// pack store with `--store`.
     Fetch(PackFetchArgs),
 }
 
@@ -647,12 +665,23 @@ pub(crate) enum PackScenarioCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct PackFetchArgs {
-    #[arg(help = "Pack to download, as `name` or `namespace/name`")]
+    #[arg(
+        help = "Pack to download, as `name` or `namespace/name`; with --store, also a directory or .pack file"
+    )]
     pub(crate) package: String,
     #[arg(long, help = "Version to download; defaults to the latest published")]
     pub(crate) version: Option<String>,
     #[arg(
         long,
+        conflicts_with = "out",
+        help = "Admit the pack into the home's pack store and name index, instead of writing a file"
+    )]
+    pub(crate) store: bool,
+    #[arg(long, help = "Home whose pack store --store fills")]
+    pub(crate) home: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        conflicts_with = "store",
         help = "Where to write the .pack; defaults to <namespace>.<name>-<version>.pack here"
     )]
     pub(crate) out: Option<std::path::PathBuf>,
@@ -881,7 +910,7 @@ pub(crate) struct PackPruneArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
-    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
+    #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
     #[arg(
         long,
@@ -914,7 +943,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) force_rebind_concrete_did: bool,
     #[arg(
         long,
-        help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used when the pack is not found locally or already installed. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[command(flatten)]
@@ -968,35 +997,22 @@ pub(crate) struct PackRemoveArgs {
 #[derive(clap::Args)]
 pub(crate) struct GraphRunArgs {
     pub(crate) package: String,
-    #[arg(long, default_value = ".")]
-    pub(crate) repo: PathBuf,
-    #[arg(long, default_value = "origin/main")]
-    pub(crate) base: String,
-    #[arg(long, default_value = "HEAD")]
-    pub(crate) head: String,
-    #[arg(long)]
-    pub(crate) focus: Option<String>,
-    #[arg(long, help = "Research question (required by web_deep_research)")]
-    pub(crate) question: Option<String>,
-    #[arg(
-        long = "research-scope",
-        default_value = "Answer the question directly; include material context, counterevidence, and uncertainty."
-    )]
-    pub(crate) research_scope: String,
     #[arg(
         long,
-        default_value = "Prefer current sources and record publication dates; retain older primary sources when historically necessary."
+        help = "The entry to start; required when the installed plan has more than one"
     )]
-    pub(crate) freshness: String,
-    #[arg(long, default_value = "A technically literate reader")]
-    pub(crate) audience: String,
+    pub(crate) entry: Option<String>,
     #[arg(
         long,
-        default_value = "A concise Markdown report with claim-local links, counterevidence, a source ledger, and explicit limitations."
+        help = "The entry's operator input, as a JSON object or @FILE naming one; default {}"
     )]
-    pub(crate) output_requirements: String,
-    #[arg(long, default_value_t = 4)]
-    pub(crate) investigator_count: u8,
+    pub(crate) input: Option<String>,
+    #[arg(
+        long = "field",
+        value_name = "NAME=VALUE",
+        help = "Set one string field on the input, overriding --input; repeatable"
+    )]
+    pub(crate) field: Vec<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) watch: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -1043,7 +1059,7 @@ pub(crate) struct GraphToggleArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackRunArgs {
-    #[arg(help = "Pack directory, or a name resolved under packs/")]
+    #[arg(help = "Pack directory, or a name resolved as gents pack install resolves one")]
     pub(crate) pack: String,
     #[arg(long, help = "Reuse this home instead of a fresh one per run")]
     pub(crate) home: Option<PathBuf>,
@@ -1059,11 +1075,29 @@ pub(crate) struct PackRunArgs {
         help = "Keep the generated home after the run (for debugging)"
     )]
     pub(crate) keep_home: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Allow a prepare-step plugin that declares standing authority (bind_dir alone needs none)"
+    )]
+    pub(crate) grant_authority: bool,
+    #[arg(
+        long = "with-pack",
+        value_name = "DIR_OR_PACK",
+        action = clap::ArgAction::Append,
+        help = "Admit a directory or .pack file into the run's home store first, so a graph dependency resolves from it offline; repeatable"
+    )]
+    pub(crate) with_pack: Vec<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used to resolve the pack and its graph dependencies. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct PackInitArgs {
-    #[arg(help = "Pack directory, or a name resolved under packs/")]
+    #[arg(help = "Pack directory, or a pack name resolved as `gents pack install` resolves one")]
     pub(crate) pack: String,
     #[arg(long, help = "Home directory to initialize")]
     pub(crate) home: PathBuf,
@@ -1077,7 +1111,7 @@ pub(crate) struct PackInitArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackSeedArgs {
-    #[arg(help = "Pack directory, or a name resolved under packs/")]
+    #[arg(help = "Pack directory, or a pack name resolved as `gents pack install` resolves one")]
     pub(crate) pack: String,
     #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
     pub(crate) prompt: Option<String>,
@@ -1103,6 +1137,50 @@ pub(crate) enum PluginCommand {
     Remove(PluginRemoveArgs),
     /// Run an installed plugin once and print what it returned.
     Run(PluginRunArgs),
+    /// Point an installed plugin's optional model slot at an inference profile.
+    Bind(PluginBindArgs),
+    /// Leave an installed plugin's model slot unbound again.
+    Unbind(PluginUnbindArgs),
+    /// Choose the folders plugins may read or write when an agent or a graph names a path.
+    /// The session's working folder is readable without asking (never `/` or your home); add folders or single files beyond it here.
+    Dirs {
+        #[command(subcommand)]
+        command: PluginDirsCommand,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PluginDirsCommand {
+    /// Show the folders you allowed.
+    List(PluginDirsListArgs),
+    /// Allow a folder or one file, read-only unless --access read_write is given.
+    Add(PluginDirsAddArgs),
+    /// Stop allowing a folder or file.
+    Remove(PluginDirsRemoveArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginDirsListArgs {
+    #[arg(long, help = "Home to read the list from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginDirsAddArgs {
+    #[arg(help = "Folder or file to allow")]
+    pub(crate) path: PathBuf,
+    #[arg(long, default_value = "read", help = "read or read_write")]
+    pub(crate) access: gents::pack::BindAccess,
+    #[arg(long, help = "Home to write the list to; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginDirsRemoveArgs {
+    #[arg(help = "Folder or file to stop allowing")]
+    pub(crate) path: PathBuf,
+    #[arg(long, help = "Home to write the list to; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -1187,6 +1265,33 @@ pub(crate) struct PluginRunArgs {
     )]
     pub(crate) input: Option<String>,
     #[arg(long, help = "Home to run the plugin from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Bind DIR read-only for this call; only a plugin that declares bind_dir may use it"
+    )]
+    pub(crate) bind_dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginBindArgs {
+    #[arg(help = "Installed plugin, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(help = "Existing inference profile (see `gents profile list`) the plugin calls through")]
+    pub(crate) profile: String,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginUnbindArgs {
+    #[arg(help = "Installed plugin, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(
+        long,
+        help = "Home the plugin is installed under; defaults to ~/.gents"
+    )]
     pub(crate) home: Option<PathBuf>,
 }
 
@@ -1961,6 +2066,33 @@ pub(crate) struct QueryArgs {
         help = "Restrict the query to these collections (repeatable); omit for all"
     )]
     pub(crate) allow_collections: Vec<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DocumentCommand {
+    #[command(
+        about = "Create one document in a collection and print its document id",
+        long_about = "Create one document in a collection and print its document id.\n\nThis is an operator command: it refuses protected eval/optimization and canonical configuration collections. Writes to the home runtime are signed as the home principal; an unrelated explicit endpoint uses anonymous access with a warning. The mutation input schema is validated before writing."
+    )]
+    Create(DocumentCreateArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DocumentCreateArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the live runtime")]
+    pub(crate) graphql: Option<String>,
+    #[arg(
+        value_name = "COLLECTION",
+        help = "Collection (GraphQL type), e.g. Goal"
+    )]
+    pub(crate) collection: String,
+    #[arg(
+        long,
+        help = r#"Document fields as a JSON object, e.g. '{"goal_id":"g1","status":"active"}'"#
+    )]
+    pub(crate) json: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -4055,6 +4187,11 @@ pub(crate) struct EvalGcArgs {
 pub(crate) struct EvalChecksArgs {
     #[arg(long)]
     pub(crate) json: bool,
+    /// Instead of the catalog, check one eval case (a JSON file, or `-` for
+    /// stdin) against it: prints `{"violations": [...]}` and exits non-zero
+    /// when any check is unknown or its params are refused.
+    #[arg(long, value_name = "FILE|-", conflicts_with = "json")]
+    pub(crate) validate_case: Option<String>,
 }
 
 /// `--policy defaults` or a path to a `PolicyV2` JSON document.
@@ -4171,7 +4308,7 @@ pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,
     /// `<id>=<pack>[:<behavior>]`, once per cell. `<pack>` is a pack name,
     /// resolved as `gents pack install` resolves one, or a pack directory
-    /// written as a path (`./subject`, `/packs/subject`).
+    /// written as a path (`./subject`, `/work/subject`).
     #[arg(long = "cell", value_parser = parse_cell, required = true)]
     pub(crate) cells: Vec<CellArg>,
     /// `<cell>=<inference_profile_id>`; a cell without one uses the home's
@@ -4196,9 +4333,8 @@ pub(crate) struct EvalRunArgs {
     pub(crate) run_id: Option<String>,
     #[arg(long, default_value_t = 1)]
     pub(crate) max_infra_retries: u32,
-    /// The pack registry to fall back to for a pack not compiled in. As with
-    /// `gents pack install`, a registry download is cached under the default
-    /// home, not `--home` (inherited behavior).
+    /// The pack registry to fall back to for a pack the home's store does not
+    /// hold; a download is stored in the home for the next run.
     #[arg(long)]
     pub(crate) registry: Option<String>,
     #[arg(long)]
@@ -4208,16 +4344,21 @@ pub(crate) struct EvalRunArgs {
 }
 
 /// `gents eval init`'s exit statuses.
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id <the author's behavior>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {
     /// A pack name, resolved as `gents pack install` resolves one, or a pack
-    /// directory written as a path (`./subject`, `/packs/subject`).
+    /// directory written as a path (`./subject`, `/work/subject`).
     pub(crate) subject: String,
     /// The behavior to draft cases for; implied when the pack has one.
     #[arg(long)]
     pub(crate) behavior: Option<String>,
+    /// The pack that authors the draft, resolved like `gents pack install`
+    /// (or a directory path); it declares one inference slot with one
+    /// behavior.
+    #[arg(long, default_value = "gents/eval_author")]
+    pub(crate) author: String,
     /// Where the definition pack is written; refused when it exists, unless
     /// --force.
     #[arg(long)]
@@ -4247,7 +4388,8 @@ pub(crate) struct EvalInitArgs {
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
-    /// The pack registry to fall back to for a subject not compiled in.
+    /// The pack registry to fall back to for a subject or author the home's
+    /// store does not hold.
     #[arg(long)]
     pub(crate) registry: Option<String>,
     #[command(flatten)]
@@ -4304,7 +4446,7 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
 pub(crate) enum ProposerArg {
     /// A script of proposals, one per round.
     Scripted(PathBuf),
-    /// A behavior of a built-in pack asked once per round; without a
+    /// A behavior of a pack asked once per round; without a
     /// behavior, the pack's only inference-slot behavior.
     Behavior {
         pack: String,
@@ -4397,8 +4539,9 @@ pub(crate) struct OptimizationRunArgs {
     /// `scripted:<file>`: a JSON array of `{"text", "rationale"}`, one per
     /// round; a file holding fewer than `--rounds` is refused before the job
     /// is frozen. `behavior:<pack>[:<behavior>]`: a behavior of a pack
-    /// (`prompt_proposer` is built in), installed into the home and asked
-    /// once per round on the served home.
+    /// (`<pack>` resolves like `gents pack install`, e.g. `prompt_proposer`
+    /// or `gents/prompt_proposer@1.0.0`, or is a directory path), installed
+    /// into the home and asked once per round on the served home.
     #[arg(long, value_parser = parse_proposer)]
     pub(crate) proposer: Option<ProposerArg>,
     /// The inference profile the proposer behavior runs on; the home's
@@ -4419,7 +4562,8 @@ pub(crate) struct OptimizationRunArgs {
     /// The structural gate's cap on a proposed text, in bytes.
     #[arg(long, default_value_t = crate::commands::optimization::DEFAULT_MAX_TEXT_BYTES)]
     pub(crate) max_text_bytes: usize,
-    /// The pack registry to fall back to for a pack not compiled in.
+    /// The pack registry to fall back to for a pack the home's store does not
+    /// hold.
     #[arg(long)]
     pub(crate) registry: Option<String>,
     #[arg(long)]

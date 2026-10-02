@@ -21,7 +21,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::cli_process::{path_arg, run_cli_json};
-use super::secscan;
 use super::server::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::desired_state::interpolate::interpolate_with;
@@ -32,6 +31,10 @@ use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
+
+mod prepare;
+
+use prepare::ScenarioPrepareStep;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +50,7 @@ struct ScenarioManifest {
     #[serde(default = "default_timeout")]
     await_timeout_secs: u64,
     #[serde(default)]
-    scan: Option<PackScan>,
+    prepare: Vec<ScenarioPrepareStep>,
     /// Environment required by canonical dependency configs, keyed by pack.
     /// Values are expanded with the scenario's normal environment interpolation.
     #[serde(default)]
@@ -55,6 +58,12 @@ struct ScenarioManifest {
     /// Resolved from the distribution manifest, never authored a second time.
     #[serde(skip)]
     graph_dependencies: Vec<String>,
+    /// The pack's own declared plugins, resolved from the distribution
+    /// manifest so `prepare` steps validate against what the pack actually
+    /// ships (name, `bind_dir`) without re-declaring plugins in
+    /// `experiment.json`.
+    #[serde(skip)]
+    plugins: Vec<gents::pack::PackPlugin>,
     /// The canonical configuration is loaded once and owns all task, context,
     /// tool, trigger, and event-source references used by scenario validation.
     #[serde(skip)]
@@ -63,48 +72,6 @@ struct ScenarioManifest {
 
 fn default_timeout() -> u64 {
     240
-}
-
-#[derive(Debug, Deserialize)]
-struct PackScan {
-    root: String,
-    #[serde(default = "default_scan_payload_chars")]
-    max_payload_chars: String, // string for ${VAR:-default} interpolation parity
-}
-
-fn default_scan_payload_chars() -> String {
-    "49152".to_string()
-}
-
-/// Renders a scan's counters as `seed.fields` entries so the manifest can
-/// interpolate them into the seeded document without any special-casing in
-/// `seed_mutation`. `slug_counts` keeps the pre-sorted (count desc, then
-/// slug) order `format_payload` produced.
-fn scan_seed_fields(output: &secscan::ScanOutput) -> BTreeMap<String, String> {
-    let mut fields = BTreeMap::new();
-    fields.insert("candidates".to_string(), output.payload.clone());
-    fields.insert(
-        "candidate_total".to_string(),
-        output.candidate_total.to_string(),
-    );
-    fields.insert(
-        "candidate_files".to_string(),
-        output.candidate_files.to_string(),
-    );
-    fields.insert(
-        "slug_counts".to_string(),
-        output
-            .slug_counts
-            .iter()
-            .map(|(slug, count)| format!("{slug}={count}"))
-            .collect::<Vec<_>>()
-            .join(" "),
-    );
-    fields.insert(
-        "overflow_count".to_string(),
-        output.overflow_count.to_string(),
-    );
-    fields
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,10 +325,13 @@ fn read_distribution_manifest(root: &Path) -> Result<gents::pack::PackManifest> 
     .with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Resolve an explicitly selected source directory or a bundled pack name.
-/// The returned file is a shared cache lease and must live for the operation.
-fn resolve_scenario_dir(
+/// Resolve an explicitly selected source directory, or a pack spec resolved
+/// the way `gents pack install` resolves one (local, installed, the home's
+/// store, then the registry). The returned file is a shared cache lease and
+/// must live for the operation.
+async fn resolve_scenario_dir(
     target: &str,
+    registry: Option<&str>,
 ) -> Result<(
     PathBuf,
     Option<gents::file_lock::FileLock>,
@@ -373,19 +343,26 @@ fn resolve_scenario_dir(
         let distribution = read_distribution_manifest(&direct)?;
         return Ok((direct, None, distribution));
     }
-    if gents::pack::is_valid_pack_name(target) {
-        let under_packs = PathBuf::from("packs").join(target);
-        if under_packs.join("experiment.json").is_file() {
-            let distribution = read_distribution_manifest(&under_packs)?;
-            return Ok((under_packs, None, distribution));
-        }
-    }
-    let (bundled, lease, distribution) = crate::commands::pack::materialize_named_pack(target)?;
+    let home = crate::home_state::resolve_home_dir(None);
+    let pack = super::resolve_pack_source(target, registry, &home).await?;
     anyhow::ensure!(
-        bundled.join("experiment.json").is_file(),
+        gents::pack::declared_paths(pack.manifest())
+            .iter()
+            .any(|path| path == "experiment.json"),
         "pack {target} has no scenario; use graph run for installed graphs"
     );
-    Ok((bundled, Some(lease), distribution))
+    let (root, lease) = super::materialize_cached_pack(&home, &pack)?;
+    Ok((root, Some(lease), pack.manifest().clone()))
+}
+
+/// `gents pack check`'s scenario validation: `experiment.json` loads and
+/// validates at its declared defaults (environment not read), the same
+/// loader `gents pack scenario run` uses, so a pack that fails this fails
+/// the same way a scenario run against it would.
+pub(super) fn validate_scenario_defaults(dir: &Path) -> Result<()> {
+    let distribution = read_distribution_manifest(dir)?;
+    load_manifest_with(dir, &distribution, &|_| None)?;
+    Ok(())
 }
 
 fn load_manifest(
@@ -417,6 +394,7 @@ fn load_manifest_with(
         "scenario name must match the distribution manifest"
     );
     manifest.graph_dependencies = distribution.metadata.dependencies.clone();
+    manifest.plugins = distribution.metadata.plugins.clone();
     manifest.config = Some(load_pack_config_with(pack, lookup)?);
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
     validate_prompt_tool_contracts(pack, &manifest)
@@ -907,46 +885,81 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
             manifest.init.tool_package
         );
     }
+    prepare::validate_prepare_steps(manifest)?;
     Ok(())
 }
 
-async fn install_bundled_graph_dependencies(
-    bin: &Path,
-    home: &Path,
-    graphql: &GraphqlEndpoint,
-    agent_did: &str,
-    inference_profile_id: &str,
+/// What [`install_graph_dependencies`] needs beyond the packages themselves,
+/// grouped so the function stays under the argument-count lint: the spawned
+/// home, the running node it installs into, and the identity it installs as.
+struct GraphDependencyInstall<'a> {
+    bin: &'a Path,
+    home: &'a Path,
+    registry: Option<&'a str>,
+    graphql: &'a GraphqlEndpoint,
+    agent_did: &'a str,
+    inference_profile_id: &'a str,
+}
+
+/// Installs every graph dependency the scenario's distribution manifest
+/// declares, resolving each the way `gents pack install` resolves one (a
+/// `--with-pack` pre-store lets this run entirely offline).
+async fn install_graph_dependencies(
+    ctx: &GraphDependencyInstall<'_>,
     packages: &[String],
     environments: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<()> {
     for package in packages {
-        tracing::info!(%package, "installing bundled graph dependency");
+        tracing::info!(%package, "installing graph dependency");
         let mut args = vec![
             "pack".to_owned(),
             "install".to_owned(),
             package.clone(),
             "--home".to_owned(),
-            path_arg(home),
+            path_arg(ctx.home),
             "--graphql".to_owned(),
-            graphql.url().to_owned(),
+            ctx.graphql.url().to_owned(),
             "--agent-did".to_owned(),
-            agent_did.to_owned(),
+            ctx.agent_did.to_owned(),
             "--output".to_owned(),
             "json".to_owned(),
         ];
-        let graph_pack = gents::pack::resolve_pack(package)?;
-        for slot in &graph_pack.manifest.metadata.inference_slots {
+        if let Some(registry) = ctx.registry {
+            args.push("--registry".to_owned());
+            args.push(registry.to_owned());
+        }
+        let graph_pack = super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
+        for slot in &graph_pack.manifest().metadata.inference_slots {
             args.push("--inference-slot".to_owned());
-            args.push(format!("{}={inference_profile_id}", slot.name));
+            args.push(format!("{}={}", slot.name, ctx.inference_profile_id));
         }
         super::cli_process::run_cli_json_with_env(
-            bin,
+            ctx.bin,
             &args,
             environments.get(package).cloned().unwrap_or_default(),
         )
         .await
-        .with_context(|| format!("installing bundled graph dependency {package}"))?;
-        tracing::info!(%package, "installed bundled graph dependency");
+        .with_context(|| format!("installing graph dependency {package}"))?;
+        tracing::info!(%package, "installed graph dependency");
+    }
+    Ok(())
+}
+
+/// Admits every `--with-pack` directory or `.pack` file into `home`'s store
+/// before any dependency resolves, so `gents pack scenario run --with-pack`
+/// can install an offline graph dependency without a registry.
+fn pre_store_with_packs(home: &Path, with_pack: &[PathBuf]) -> Result<()> {
+    let store = gents::pack_store::PackStore::new(home);
+    for path in with_pack {
+        if path.is_dir() {
+            let (bytes, header) = gents::pack_archive::pack_dir(path)
+                .with_context(|| format!("packing {}", path.display()))?;
+            store.import(bytes.as_slice(), Some(&header.digest))?;
+        } else {
+            store
+                .import_file(path, None)
+                .with_context(|| format!("storing {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -1132,25 +1145,17 @@ fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> 
     for key in seed.fields.keys() {
         gents::graphql::validate_graphql_name(key)?;
     }
-    let mut fields = vec![
-        format!(
-            "{}: \"{}\"",
-            seed.job_id_field,
-            escape_graphql_string(job_id)
-        ),
-        format!(
-            "{}: \"{}\"",
-            seed.prompt_field,
-            escape_graphql_string(prompt)
-        ),
-    ];
-    for (key, value) in &seed.fields {
-        fields.push(format!("{key}: \"{}\"", escape_graphql_string(value)));
-    }
+    let mut fields: serde_json::Map<String, serde_json::Value> = seed
+        .fields
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    fields.insert(seed.job_id_field.clone(), job_id.into());
+    fields.insert(seed.prompt_field.clone(), prompt.into());
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::Value::Object(fields))?;
     Ok(format!(
-        "mutation {{ create_{}(input: {{ {} }}) {{ _docID }} }}",
-        seed.collection,
-        fields.join(", ")
+        "mutation {{ create_{}(input: {input}) {{ _docID }} }}",
+        seed.collection
     ))
 }
 
@@ -3100,9 +3105,31 @@ fn resolve_manifest_tool_root(pack: &Path, manifest: &ScenarioManifest) -> Resul
     }
 }
 
+/// The ceiling a `prepare` step's `bind_dir` must stay inside: `init.tool_root`
+/// when the manifest declares one, independent of whether `init.tool_package`
+/// itself needs a root (a minimal or none tool package can still bound a
+/// prepare plugin's own bind_dir). `None` only when the manifest declares no
+/// `tool_root` at all, in which case a prepare step binds with no ceiling.
+fn resolve_prepare_within(pack: &Path, manifest: &ScenarioManifest) -> Result<Option<PathBuf>> {
+    let declared = manifest
+        .init
+        .tool_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match declared {
+        Some(_) => Ok(Some(resolve_pack_tool_root(
+            pack,
+            manifest.init.tool_root.as_deref(),
+            &manifest.init.tool_root_markers,
+        )?)),
+        None => Ok(None),
+    }
+}
+
 pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
-    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack, None).await?;
     let manifest = load_manifest(&pack, &distribution)?;
     tracing::info!(pack = %manifest.name, description = %manifest.description, "initializing pack scenario");
     let home = args.home;
@@ -3133,7 +3160,7 @@ pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
 }
 
 pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
-    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack, None).await?;
     let manifest = load_manifest(&pack, &distribution)?;
 
     let port = args.http_port;
@@ -3214,7 +3241,8 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
 
 pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
-    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let (pack, _cache_lease, distribution) =
+        resolve_scenario_dir(&args.pack, args.registry.as_deref()).await?;
     let mut manifest = load_manifest(&pack, &distribution)?;
     let observed_collections = trigger_source_collections(&manifest, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
@@ -3241,6 +3269,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     }
     std::fs::create_dir_all(&home)
         .with_context(|| format!("creating pack home {}", home.display()))?;
+    pre_store_with_packs(&home, &args.with_pack)?;
 
     println!("pack     {} ({})", manifest.name, pack.display());
     println!("job_id   {job_id}");
@@ -3316,12 +3345,15 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         )
         .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
-        install_bundled_graph_dependencies(
-            &bin,
-            &home,
-            &graphql,
-            &agent_did,
-            &inference_profile_id,
+        install_graph_dependencies(
+            &GraphDependencyInstall {
+                bin: &bin,
+                home: &home,
+                registry: args.registry.as_deref(),
+                graphql: &graphql,
+                agent_did: &agent_did,
+                inference_profile_id: &inference_profile_id,
+            },
             &manifest.graph_dependencies,
             &manifest.graph_dependency_environment,
         )
@@ -3340,21 +3372,16 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             println!("observing {collection}");
         }
 
-        if let Some(scan) = &manifest.scan {
-            let scan_root_path = std::path::Path::new(&scan.root);
-            let max_chars: usize = scan
-                .max_payload_chars
-                .parse()
-                .context("scan.max_payload_chars")?;
-            println!("scanning {} …", scan.root);
-            let files = secscan::scan_root(scan_root_path)?;
-            let output = secscan::format_payload(&files, max_chars);
-            println!(
-                "scanned  {} candidate files, {} candidates ({} overflow)",
-                output.candidate_files, output.candidate_total, output.overflow_count
-            );
-            manifest.seed.fields.extend(scan_seed_fields(&output));
-        }
+        let prepare_within = resolve_prepare_within(&pack, &manifest)?;
+        let prepared_fields = prepare::run_prepare_steps(
+            pack.clone(),
+            distribution.clone(),
+            manifest.prepare.clone(),
+            prepare_within,
+            args.grant_authority,
+        )
+        .await?;
+        manifest.seed.fields.extend(prepared_fields);
 
         let mutation = seed_mutation(&manifest.seed, &job_id, &prompt)?;
         ConfigAccess::Graphql(graphql.clone())
@@ -3709,12 +3736,12 @@ mod tests {
 
     #[test]
     fn source_pack_paths_require_normalized_snake_case_directories() {
-        for path in ["pipeline", "packs/pipeline", "/tmp/my_pack"] {
+        for path in ["pipeline", "packs/subject_pack", "/tmp/my_pack"] {
             validate_source_pack_path(Path::new(path)).unwrap();
         }
         for path in [
             "packs/../pipeline",
-            "./packs/pipeline",
+            "./packs/subject_pack",
             "packs/CodeReview",
             "packs/code-review",
         ] {
@@ -3752,9 +3779,50 @@ mod tests {
         load_manifest_with(pack, &distribution, &|_| None)
     }
 
+    /// Regression: a prepare step's `bind_dir` ceiling must honor a declared
+    /// `init.tool_root` even under a tool package (like the default
+    /// `minimal`) that needs no root of its own; `resolve_manifest_tool_root`
+    /// answers a different question (what the running agent's own tools get)
+    /// and must stay `None` here.
+    #[test]
+    fn resolve_prepare_within_uses_tool_root_independent_of_the_tool_package() {
+        let pack = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
+            "name": "t",
+            "init": {
+                "inference_url": "http://x", "model_name": "m",
+                "tool_root": root.path().to_str().unwrap()
+            },
+            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            resolve_manifest_tool_root(pack.path(), &manifest).unwrap(),
+            None
+        );
+        let within = resolve_prepare_within(pack.path(), &manifest)
+            .unwrap()
+            .expect(
+                "a declared tool_root must bound prepare steps under a minimal tool package too",
+            );
+        assert_eq!(within, root.path().canonicalize().unwrap());
+
+        let unset: ScenarioManifest = serde_json::from_value(serde_json::json!({
+            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []}
+        }))
+        .unwrap();
+        assert_eq!(resolve_prepare_within(pack.path(), &unset).unwrap(), None);
+    }
+
     #[test]
     fn scenario_staging_explicitly_binds_the_initialized_profile() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
         let staged = stage_scenario_pack(
             &pack,
@@ -3775,17 +3843,17 @@ mod tests {
             .agent_behaviors
             .iter()
             .all(|behavior| behavior.inference_profile_id == "default-profile"));
-        assert!(config
-            .agent_behaviors
-            .iter()
-            .all(|behavior| behavior.tags.contains(&"gents:pack:pipeline".to_owned())));
+        assert!(config.agent_behaviors.iter().all(|behavior| behavior
+            .tags
+            .contains(&"gents:pack:documents_fixture".to_owned())));
         assert!(config.inference_profiles.is_empty());
         assert!(config.inference_backends.is_empty());
     }
 
     #[test]
     fn scenario_staging_retains_an_authored_default_behavior() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
         let authored_pack = tempfile::tempdir().unwrap();
         for asset in &distribution.metadata.assets {
@@ -3796,7 +3864,7 @@ mod tests {
         let config_path = authored_pack.path().join("pack_config.json");
         let mut config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-        config["agent_principal"]["default_behavior_id"] = json!("exp-stage1");
+        config["agent_principal"]["default_behavior_id"] = json!("fixture-worker");
         std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
         let staged = stage_scenario_pack(
@@ -3815,13 +3883,14 @@ mod tests {
                 .agent_principal
                 .default_behavior_id
                 .as_deref(),
-            Some("exp-stage1"),
+            Some("fixture-worker"),
         );
     }
 
     #[tokio::test]
-    async fn security_scan_staging_installs_its_declared_schemas() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/security_scan");
+    async fn documents_fixture_staging_installs_its_declared_schemas() {
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
         let schema_assets = distribution
             .metadata
@@ -3883,7 +3952,8 @@ mod tests {
 
     #[test]
     fn scenario_rejects_duplicate_dependency_configuration() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/grok_tui_port");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../gents/tests/fixtures/packs/documents_fixture");
         let mut experiment = read_pack_json_defaults(&pack.join("experiment.json")).unwrap();
         experiment["bundled_graph_packages"] = json!(["code_review"]);
         let error = serde_json::from_value::<ScenarioManifest>(experiment).unwrap_err();
@@ -4075,9 +4145,10 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
-            scan: None,
+            prepare: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
+            plugins: Vec::new(),
             config: None,
         };
 
@@ -4087,203 +4158,10 @@ mod tests {
             .contains("source_edges requires expect.signed_provenance=true"));
     }
 
-    fn canonical_document(
-        manifest: &ScenarioManifest,
-        collection: &str,
-        id_field: &str,
-        id: &str,
-    ) -> Value {
-        let config =
-            serde_json::to_value(manifest.config.as_ref().expect("canonical config loaded"))
-                .expect("canonical config serializes");
-        config[collection]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|row| row[id_field].as_str() == Some(id))
-            .unwrap_or_else(|| panic!("missing {collection} document {id}"))
-            .clone()
-    }
-
-    #[test]
-    fn defending_code_pack_is_typed_static_and_closes_both_fan_outs() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/defending_code");
-        let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
-        let config = manifest.config.as_ref().unwrap();
-        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 14);
-        assert_eq!(manifest.expect.result_documents.len(), 17);
-        assert_eq!(manifest.init.tool_package, "write");
-        assert_eq!(config.agent_behaviors.len(), 16);
-        assert_eq!(config.tasks.len(), 16);
-        assert_eq!(config.triggers.len(), 16);
-
-        for (trigger_id, source_collection) in [
-            ("defend-scan", "DefenseReviewArea"),
-            ("defend-verifier", "DefenseVerificationAssignment"),
-            ("defend-contract-review", "DefenseRootCauseCluster"),
-        ] {
-            let trigger = config
-                .triggers
-                .iter()
-                .find(|trigger| trigger.trigger_id == trigger_id)
-                .unwrap();
-            let gents::document_config::TriggerSource::Event { event_source_id } = &trigger.source
-            else {
-                panic!("{trigger_id} must use an event source")
-            };
-            let source = config
-                .event_sources
-                .iter()
-                .find(|source| source.event_source_id == *event_source_id)
-                .unwrap();
-            assert_eq!(source.source_collection, source_collection);
-            assert_eq!(source.correlation_field.as_deref(), Some("run_id"));
-            assert!(
-                manifest
-                    .expect
-                    .trigger_request_count_sources
-                    .contains_key(trigger_id),
-                "{trigger_id} must declare its fan-out count source"
-            );
-        }
-
-        for trigger_id in ["defend-patch-review", "defend-patch-security-review"] {
-            let trigger = canonical_document(&manifest, "triggers", "trigger_id", trigger_id);
-            let source_id = trigger["source"]["event_source_id"].as_str().unwrap();
-            let source =
-                canonical_document(&manifest, "event_sources", "event_source_id", source_id);
-            assert_eq!(
-                source["filter"],
-                "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
-            );
-        }
-
-        let skip_surface = canonical_document(
-            &manifest,
-            "datastore_tool_surfaces",
-            "surface_id",
-            "defend-patch-skip-writes",
-        );
-        let collections = skip_surface["entries"]["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|entry| entry["collection"].as_str())
-            .collect::<BTreeSet<_>>();
-        for collection in [
-            "DefensePatchCandidate",
-            "DefensePatchValidation",
-            "DefensePatchReview",
-            "DefensePatchSecurityReview",
-        ] {
-            assert!(collections.contains(collection));
-        }
-    }
-
-    #[test]
-    fn repo_maintenance_pack_preserves_categories_and_worktree_sized_packages() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/repo_maintenance");
-        let manifest = load_manifest_defaults(&pack).expect("repo-maintenance pack should load");
-        let config = manifest.config.as_ref().unwrap();
-        assert_eq!(manifest.expect.prompt_tool_contracts.len(), 6);
-        assert_eq!(manifest.expect.result_documents.len(), 6);
-        assert!(manifest
-            .default_prompt
-            .contains("one shared branch and worktree"));
-        assert_eq!(
-            manifest.seed.fields.get("area_count").map(String::as_str),
-            Some("auto")
-        );
-        assert_eq!(
-            manifest
-                .seed
-                .fields
-                .get("history_depth")
-                .map(String::as_str),
-            Some("250")
-        );
-        assert_eq!(config.tasks.len(), 8);
-        assert!(config
-            .triggers
-            .iter()
-            .any(|trigger| trigger.trigger_id == "maintenance-execute-skip"));
-
-        let triage_surface = canonical_document(
-            &manifest,
-            "datastore_tool_surfaces",
-            "surface_id",
-            "maintenance-triage-writes",
-        );
-        assert!(triage_surface
-            .to_string()
-            .contains("MaintenanceWorkPackage"));
-        let publish_prompt =
-            std::fs::read_to_string(pack.join("tasks/maintenance_publish_task/prompt.md")).unwrap();
-        assert!(publish_prompt.contains("one normal, non-draft PR"));
-        assert!(publish_prompt.contains("Bound this at two full review rounds"));
-        assert!(!publish_prompt.contains("make worktree BRANCH="));
-    }
-
-    #[test]
-    fn workspace_packs_bind_callbacks_and_forbid_prompt_worktrees() {
-        let catalog_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
-        for (pack_name, binding_id, source_collection, worker_prompt) in [
-            (
-                "defending_code",
-                "defense-patch-workspace",
-                "DefensePatchAssignment",
-                "tasks/defend_patch_task/prompt.md",
-            ),
-            (
-                "repo_maintenance",
-                "maintenance-execute-workspace",
-                "MaintenanceReport",
-                "tasks/maintenance_execute_task/prompt.md",
-            ),
-            (
-                "grok_tui_port",
-                "port-implement-workspace",
-                "PortWorkUnit",
-                "tasks/port_implement_task/prompt.md",
-            ),
-        ] {
-            let pack = catalog_root.join(pack_name);
-            let manifest = load_manifest_defaults(&pack)
-                .unwrap_or_else(|error| panic!("{pack_name}: {error:#}"));
-            let binding =
-                canonical_document(&manifest, "callback_bindings", "binding_id", binding_id);
-            let source = canonical_document(
-                &manifest,
-                "event_sources",
-                "event_source_id",
-                binding["event_source_id"].as_str().unwrap(),
-            );
-            assert_eq!(source["source_collection"], source_collection);
-            let prompt = std::fs::read_to_string(pack.join(worker_prompt)).unwrap();
-            assert!(!prompt.contains("make worktree BRANCH="));
-            assert!(
-                prompt.contains("Do not run `git commit`")
-                    || prompt.contains("Do not run git commit")
-            );
-        }
-
-        let grok = catalog_root.join("grok_tui_port");
-        let experiment = read_pack_json_defaults(&grok.join("experiment.json")).unwrap();
-        assert!(experiment.get("bundled_graph_bindings").is_none());
-        assert_eq!(
-            experiment["graph_dependency_environment"]["code_review"]["GENTS_REVIEW_MODEL"],
-            "GLM-5.3-Flash-NVFP4"
-        );
-        let grok_config = load_manifest_defaults(&grok).unwrap().config.unwrap();
-        assert!(grok_config
-            .inference_profiles
-            .iter()
-            .all(|profile| profile.profile_id != "grok-port-code-review-profile"));
-    }
-
     #[test]
     fn every_checked_in_scenario_loads() {
-        let catalog_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+        let catalog_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
         let mut packs = std::fs::read_dir(&catalog_root)
             .expect("read pack directory")
             .map(|entry| entry.expect("read pack entry").path())
@@ -4295,29 +4173,6 @@ mod tests {
             load_manifest_defaults(&pack)
                 .unwrap_or_else(|error| panic!("{} should load: {error:#}", pack.display()));
         }
-    }
-
-    #[test]
-    fn omitted_tool_package_keeps_the_minimal_ceiling() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
-        let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
-        assert_eq!(manifest.init.tool_package, "minimal");
-        assert!(manifest.init.tool_root.is_none());
-    }
-
-    #[test]
-    fn pipeline_stage_declares_controller_owned_goal_with_least_privilege_tools() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
-        let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
-        let task = canonical_document(&manifest, "tasks", "task_id", "exp-stage1-task");
-        assert!(task["goal_objective_template"]
-            .as_str()
-            .is_some_and(|value| !value.trim().is_empty()));
-        assert!(task["goal_token_budget"].is_null());
-
-        let tools = canonical_document(&manifest, "tools", "tools_id", "exp-tools-stage1");
-        assert_eq!(tools["built_ins"]["enable_goal_tools"], true);
-        assert!(tools["built_ins"].get("enable_goal_creation").is_none());
     }
 
     #[test]
@@ -4544,52 +4399,6 @@ mod tests {
     }
 
     #[test]
-    fn lsp_rust_pack_declares_readonly_ceiling_and_tool_calls() {
-        let pack =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/lsp_rust");
-        let manifest = load_manifest_defaults(&pack).expect("packs/lsp_rust experiment.json");
-        assert_eq!(manifest.init.tool_package, "readonly");
-        assert!(manifest
-            .init
-            .tool_root
-            .as_deref()
-            .is_some_and(|root| !root.is_empty()));
-        assert_eq!(
-            manifest.init.tool_root_env_var.as_deref(),
-            Some("GENTS_LSP_WORKSPACE")
-        );
-        assert!(manifest
-            .expect
-            .tool_calls
-            .iter()
-            .any(|call| call.tool_name == "lsp" && call.action.as_deref() == Some("hover")));
-        assert!(manifest
-            .expect
-            .tool_calls
-            .iter()
-            .any(|call| call.result_contains.iter().any(|n| n == "FileToolMode")));
-        for (file, symbol, result_needle) in [
-            ("crates/gents-loop/src/tool_policy.rs", "meet", "Disabled"),
-            (
-                "crates/gents/src/toolset/lsp/auth.rs",
-                "lsp_advertised",
-                "FileToolMode",
-            ),
-        ] {
-            assert!(manifest.expect.tool_calls.iter().any(|call| {
-                call.tool_name == "lsp"
-                    && call.action.as_deref() == Some("hover")
-                    && call.file.as_deref() == Some(file)
-                    && call.symbol.as_deref() == Some(symbol)
-                    && call
-                        .result_contains
-                        .iter()
-                        .any(|needle| needle == result_needle)
-            }));
-        }
-    }
-
-    #[test]
     fn pack_tool_root_requires_declared_markers() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -4648,9 +4457,10 @@ mod tests {
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
-            scan: None,
+            prepare: Vec::new(),
             graph_dependency_environment: BTreeMap::new(),
             graph_dependencies: Vec::new(),
+            plugins: Vec::new(),
             config: None,
         };
         let error = validate_manifest(&manifest).expect_err("readonly needs tool_root");
@@ -4727,49 +4537,6 @@ mod tests {
             "result": "pub fn lsp_advertised(lsp: bool, file: FileToolMode) -> bool"
         });
         assert!(!tool_call_matches(&failed_lifecycle, &expected));
-    }
-
-    #[test]
-    fn manifest_parses_optional_scan_section() {
-        let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
-            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-            "seed": {"collection": "ScanJob", "job_id_field": "run_id", "prompt_field": "focus"},
-            "expect": {"trigger_ids": []},
-            "scan": {"root": ".", "max_payload_chars": "1024"}
-        }))
-        .expect("manifest with scan");
-        let scan = manifest.scan.expect("scan section");
-        assert_eq!(scan.root, ".");
-        assert_eq!(scan.max_payload_chars, "1024");
-
-        let bare: ScenarioManifest = serde_json::from_value(serde_json::json!({
-            "name": "t", "init": {"inference_url": "http://x", "model_name": "m"},
-            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
-            "expect": {"trigger_ids": []}
-        }))
-        .expect("manifest without scan");
-        assert!(bare.scan.is_none());
-    }
-
-    #[test]
-    fn scan_seed_fields_render_all_counters() {
-        let output = secscan::ScanOutput {
-            payload: "files: 1  candidates: 2\nsrc/a.rs\n  [precise] graphql-injection L3: x"
-                .to_string(),
-            candidate_total: 2,
-            candidate_files: 1,
-            slug_counts: vec![("graphql-injection".to_string(), 2)],
-            overflow_count: 0,
-        };
-        let fields = scan_seed_fields(&output);
-        assert_eq!(fields.get("candidate_total").map(String::as_str), Some("2"));
-        assert_eq!(fields.get("candidate_files").map(String::as_str), Some("1"));
-        assert_eq!(fields.get("overflow_count").map(String::as_str), Some("0"));
-        assert_eq!(
-            fields.get("slug_counts").map(String::as_str),
-            Some("graphql-injection=2")
-        );
-        assert!(fields.get("candidates").unwrap().contains("src/a.rs"));
     }
 
     /// Regression for audit finding `seed-mutation-unvalidated-identifiers`:

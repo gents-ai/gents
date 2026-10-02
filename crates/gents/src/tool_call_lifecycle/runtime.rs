@@ -53,7 +53,6 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) workspace_authority: Option<WorkspaceAuthority>,
     pub(crate) workspace_artifact: Option<crate::workspace::ArtifactGrant>,
     pub(crate) session_id: Option<String>,
-    pub(crate) live_output: Option<LiveToolOutputWriter>,
     pub(crate) background: bool,
     pub(crate) correlation: Option<String>,
     pub(crate) source_fields: std::collections::BTreeMap<String, String>,
@@ -119,7 +118,6 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             .as_ref()
             .and_then(|overlay| overlay.workspace_artifact.clone()),
         session_id: scope.session_id,
-        live_output: scope.live_output,
         background: scope.background,
         correlation: scope.correlation,
         source_fields: scope.source_fields,

@@ -9,13 +9,37 @@ fn wat(src: &str) -> Vec<u8> {
 /// `crate::pack::PLUGIN_ARTIFACT_PREFIX`'s own convention.
 const PLUGIN_ARTIFACT: &str = "plugins/plugin.afb";
 
+/// A guest that ignores stdin and writes exactly `json` to stdout: the
+/// prepare plugin fixture for tests that only need a deterministic
+/// result, not a real transformation of the host facts.
+pub(crate) fn constant_output_wat(json: &[u8]) -> String {
+    let mut escaped = String::with_capacity(json.len() * 4);
+    for byte in json {
+        escaped.push_str(&format!("\\{byte:02x}"));
+    }
+    let len = json.len();
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+(func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "{escaped}")
+  (func (export "_start")
+(i32.store (i32.const 8192) (i32.const 0))
+(i32.store (i32.const 8196) (i32.const {len}))
+(call $fd_write (i32.const 1) (i32.const 8192) (i32.const 1) (i32.const 8200))
+drop))
+"#
+    )
+}
+
 /// Builds a real Afterburner `.afb` around a compiled Wasm module,
 /// mirroring the minimal manifest `afterburner::afb_run`'s own tests use
 /// (`minimal_manifest` in its `tests.rs`) so `PluginRunner` sees exactly
 /// the shape `run_afb_bytes` dispatches through `run_wasm`: a
 /// `precompiled/wasm32-wasip1/main.wasm` member and a `[runtime]
 /// target = "wasm32-wasip1"`.
-fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
+pub(crate) fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
     use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
     use afterburner_afb::pack::Builder;
 
@@ -44,8 +68,8 @@ fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
         pip: Default::default(),
         gem: Default::default(),
         signature: None,
-        metadata: toml::Table::new(),
-        extra: toml::Table::new(),
+        metadata: Default::default(),
+        extra: Default::default(),
     };
     let (bytes, _digest) = Builder::new(manifest, Manifold::sealed())
         .precompiled("precompiled/wasm32-wasip1/main.wasm", wat(wat_source))
@@ -343,8 +367,8 @@ fn a_slow_plugin_is_stopped_by_its_wall_clock_budget() {
 
     let budget = PluginBudget {
         fuel: Some(5_000_000_000),
-        memory_bytes: PluginBudget::default().memory_bytes,
         wall_clock: std::time::Duration::from_millis(30),
+        ..PluginBudget::default()
     };
     let outcome = runner
         .call(&serde_json::json!({}), &budget)
@@ -489,8 +513,8 @@ fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<
         pip: Default::default(),
         gem: Default::default(),
         signature: None,
-        metadata: toml::Table::new(),
-        extra: toml::Table::new(),
+        metadata: Default::default(),
+        extra: Default::default(),
     };
     let (bytes, _digest) = Builder::new(manifest, Manifold::sealed())
         .source(entry, body.to_vec())
@@ -511,6 +535,9 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
         instructions: None,
+        bind_dir: None,
+        limits: None,
+        model_slot: None,
     }
 }
 
@@ -574,6 +601,203 @@ fn a_default_budget_is_raised_to_what_the_artifact_needs_to_start() {
     );
 }
 
+#[test]
+fn for_plugin_raises_the_default_to_declared_limits() {
+    let wasi = source_only_afb("rs_plugin", "rust", "source/main.rs", b"fn main() {}");
+    let wasi = afterburner_afb::Afb::from_bytes(&wasi).expect("readable .afb");
+
+    let mut plugin = plugin_named("rs_plugin", "rust");
+    plugin.limits = Some(crate::pack::PluginLimits {
+        memory_mib: Some(512),
+        wall_clock_secs: Some(120),
+        max_output_mib: Some(4),
+    });
+    let budget = PluginBudget::for_plugin(&wasi, &plugin);
+    assert_eq!(budget.memory_bytes, 512 * 1024 * 1024);
+    assert_eq!(budget.wall_clock, std::time::Duration::from_secs(120));
+    assert_eq!(budget.max_output_bytes, 4 * 1024 * 1024);
+
+    // A plugin that declares nothing gets exactly `for_artifact`'s answer.
+    let no_limits = plugin_named("rs_plugin", "rust");
+    assert_eq!(
+        PluginBudget::for_plugin(&wasi, &no_limits).memory_bytes,
+        PluginBudget::for_artifact(&wasi).memory_bytes
+    );
+}
+
+/// The literal prefix of the JSON this guest writes: `{"filler":"`. Kept as
+/// bytes (not a WAT text literal) because embedding an unescaped `"` inside
+/// a WAT string would terminate it early; every byte is written with its
+/// own `i32.store8` instead.
+const LARGE_OUTPUT_PREFIX: &[u8] = b"{\"filler\":\"";
+const LARGE_OUTPUT_SUFFIX: &[u8] = b"\"}";
+
+/// WAT for a guest that writes exactly `total_len` bytes of one valid JSON
+/// value to stdout: `{"filler":"aaa...a"}`, the `a`s filled in bulk with
+/// `memory.fill` rather than a giant literal in the module source. Used to
+/// prove `limits.max_output_mib` actually changes what a real call accepts,
+/// not just the arithmetic in [`PluginBudget::for_plugin`].
+fn large_json_output_wat(total_len: usize) -> String {
+    let envelope_len = LARGE_OUTPUT_PREFIX.len() + LARGE_OUTPUT_SUFFIX.len();
+    assert!(total_len > envelope_len, "need room for the JSON envelope");
+    let filler_len = total_len - envelope_len;
+    let suffix_offset = total_len - LARGE_OUTPUT_SUFFIX.len();
+    let iovec_offset = total_len;
+    let nwritten_offset = iovec_offset + 8;
+    let pages = (nwritten_offset + 4).div_ceil(65536);
+
+    let mut stores = String::new();
+    for (offset, byte) in LARGE_OUTPUT_PREFIX.iter().enumerate() {
+        stores.push_str(&format!(
+            "    (i32.store8 (i32.const {offset}) (i32.const {byte}))\n"
+        ));
+    }
+    for (index, byte) in LARGE_OUTPUT_SUFFIX.iter().enumerate() {
+        stores.push_str(&format!(
+            "    (i32.store8 (i32.const {}) (i32.const {byte}))\n",
+            suffix_offset + index
+        ));
+    }
+
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") {pages})
+  (func (export "_start")
+{stores}    (memory.fill (i32.const {prefix_len}) (i32.const 0x61) (i32.const {filler_len}))
+    (i32.store (i32.const {iovec_offset}) (i32.const 0))
+    (i32.store (i32.const {iovec_len_offset}) (i32.const {total_len}))
+    (call $fd_write (i32.const 1) (i32.const {iovec_offset}) (i32.const 1) (i32.const {nwritten_offset}))
+    drop))
+"#,
+        prefix_len = LARGE_OUTPUT_PREFIX.len(),
+        iovec_len_offset = iovec_offset + 4,
+    )
+}
+
+/// The real bound end to end: a guest that actually writes past the default
+/// 1 MiB output cap is `BadOutput` under the default budget, and succeeds
+/// once `limits.max_output_mib` raises it - proving the declared limit
+/// changes what a real call accepts, not only what [`PluginBudget::for_plugin`]
+/// computes on paper.
+#[test]
+fn a_call_over_the_default_output_cap_succeeds_once_the_declared_limit_covers_it() {
+    const TOTAL_LEN: usize = 1_500_000; // > default 1 MiB, <= a declared 2 MiB limit
+    let wat_source = large_json_output_wat(TOTAL_LEN);
+    let (mut plugin, afb) = build_plugin_pack("large_output_pack", &wat_source, None);
+    plugin.limits = Some(crate::pack::PluginLimits {
+        memory_mib: None,
+        wall_clock_secs: None,
+        max_output_mib: Some(2),
+    });
+    let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
+
+    let under_default = runner
+        .call(&serde_json::json!({}), &PluginBudget::default())
+        .expect("the guest itself runs to completion");
+    assert_eq!(
+        under_default.verdict,
+        PluginVerdict::BadOutput,
+        "a {TOTAL_LEN}-byte result must be refused under the default 1 MiB cap: {:?}",
+        under_default.diagnostics
+    );
+
+    let afb_parsed = afterburner_afb::Afb::from_bytes(&afb).expect("readable .afb");
+    let raised_budget = PluginBudget::for_plugin(&afb_parsed, &plugin);
+    let raised = runner
+        .call(&serde_json::json!({}), &raised_budget)
+        .expect("the guest itself runs to completion");
+    assert_eq!(
+        raised.verdict,
+        PluginVerdict::Success,
+        "{:?}",
+        raised.diagnostics
+    );
+    assert_eq!(
+        raised
+            .output
+            .get("filler")
+            .and_then(serde_json::Value::as_str)
+            .map(str::len),
+        Some(TOTAL_LEN - LARGE_OUTPUT_PREFIX.len() - LARGE_OUTPUT_SUFFIX.len())
+    );
+}
+
+/// WAT for a guest that writes one 64 KiB chunk to stdout in a loop until it
+/// overflows [`super::STDOUT_CAPTURE_PIPE_BYTES`], the real fixed capture
+/// pipe every compiled plugin's stdout runs through regardless of what its
+/// own budget declares. `chunks * 65536` must exceed the pipe; the write
+/// that crosses it traps.
+fn overflow_stdout_capture_pipe_wat(chunks: u32) -> String {
+    const CHUNK_BYTES: u32 = 65536;
+    let iovec_ptr = CHUNK_BYTES;
+    let iovec_len_ptr = iovec_ptr + 4;
+    let nwritten_ptr = iovec_len_ptr + 4;
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 2)
+  (func (export "_start")
+    (local $i i32)
+    (i32.store (i32.const {iovec_ptr}) (i32.const 0))
+    (i32.store (i32.const {iovec_len_ptr}) (i32.const {CHUNK_BYTES}))
+    (local.set $i (i32.const 0))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (i32.const {chunks})))
+        (call $fd_write (i32.const 1) (i32.const {iovec_ptr}) (i32.const 1) (i32.const {nwritten_ptr}))
+        drop
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    ))
+"#
+    )
+}
+
+/// The blocker this test pins: a guest that fills the host's fixed 4 MiB
+/// stdout capture pipe before it finishes traps inside `wasmtime-wasi`'s
+/// preview1 shim (`wasm trap: wasm unreachable instruction executed`), not
+/// because it wrote anything invalid. Before this was classified, that trap
+/// surfaced as an opaque hard `Err`, indistinguishable from a genuine guest
+/// crash, and never reached `describe_prepare_plugin_failure`'s "narrow
+/// base..head" message. It must come back as `BadOutput` instead.
+#[test]
+fn a_trap_that_fills_the_stdout_capture_pipe_is_bad_output_not_a_hard_error() {
+    // 4 MiB / 64 KiB = 64 whole chunks fit exactly; the 65th overflows.
+    let wat_source = overflow_stdout_capture_pipe_wat(65);
+    let (plugin, afb) = build_plugin_pack("overflow_pack", &wat_source, None);
+    let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
+
+    let outcome = runner
+        .call(&serde_json::json!({}), &PluginBudget::default())
+        .expect("an output-capacity trap is reclassified, not a hard error");
+    assert_eq!(
+        outcome.verdict,
+        PluginVerdict::BadOutput,
+        "{:?}",
+        outcome.diagnostics
+    );
+}
+
+/// A guest that traps having written almost nothing (a genuine crash, not
+/// an output-capacity problem) must stay a hard `Err`: reclassifying every
+/// trap as `BadOutput` would hide a real bug behind an output-size message.
+#[test]
+fn a_trap_with_little_captured_output_stays_a_hard_error() {
+    let wat_source = r#"(module
+  (func (export "_start") unreachable))
+"#;
+    let (plugin, afb) = build_plugin_pack("crash_pack", wat_source, None);
+    let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
+
+    let err = runner
+        .call(&serde_json::json!({}), &PluginBudget::default())
+        .expect_err("a guest that never wrote stdout is a genuine crash, not BadOutput");
+    assert!(err.to_string().contains("trapped"), "{err}");
+}
+
 /// The same gate, the other way round: Python is admitted, because its
 /// dispatch path really does enforce every axis a call asks for.
 ///
@@ -603,6 +827,9 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         input_schema: serde_json::json!({"type": "object"}),
         manifold: None,
         instructions: None,
+        bind_dir: None,
+        limits: None,
+        model_slot: None,
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
@@ -765,4 +992,144 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     assert!(crate::pack::tool_instructions("lint", &[0xff, 0xfe]).is_err());
     let oversized = vec![b'a'; crate::pack::MAX_TOOL_INSTRUCTIONS_BYTES + 1];
     assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
+}
+
+mod call_bound;
+pub(crate) use call_bound::{create_file_wat, open_and_copy_wat};
+
+#[test]
+fn plugin_requests_select_native_nan_arithmetic() {
+    let request = plugin_run_request(Vec::new(), Manifold::sealed(), &PluginBudget::default());
+    assert_eq!(request.nan_mode, NanMode::Native);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn masked_trap_startup_uses_the_plugin_request_engine() {
+    let startup = start_wasm_trap_handler_with_signals_blocked()
+        .unwrap()
+        .unwrap();
+    let request = plugin_run_request(Vec::new(), Manifold::sealed(), &PluginBudget::default());
+    let selected = afterburner::wasi::embedder_vm::shared_epoch_vm_with(request.nan_mode).unwrap();
+    assert!(std::ptr::eq(startup, selected));
+}
+
+#[test]
+fn generated_plugin_resource_cases_bind_budget_and_consent() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    for case in cases["consent"].as_array().unwrap() {
+        let requested = case["requested"].as_u64().unwrap() as u32;
+        let previous = case["previous"].as_u64().unwrap() as u32;
+        let consent = case["consent"].as_bool().unwrap();
+        for axis in 0..3 {
+            let mut requested_limits = crate::pack::PluginLimits::default();
+            let mut previous_limits = crate::pack::PluginLimits::default();
+            match axis {
+                0 => {
+                    requested_limits.memory_mib = Some(requested);
+                    previous_limits.memory_mib = Some(previous);
+                }
+                1 => {
+                    requested_limits.wall_clock_secs = Some(requested);
+                    previous_limits.wall_clock_secs = Some(previous);
+                }
+                _ => {
+                    requested_limits.max_output_mib = Some(requested);
+                    previous_limits.max_output_mib = Some(previous);
+                }
+            }
+            assert_eq!(
+                authority::limits_consented(
+                    Some(&requested_limits),
+                    Some(&previous_limits),
+                    consent
+                ),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+    for case in cases["budgets"].as_array().unwrap() {
+        let baseline = case["baseline"].as_u64().unwrap();
+        let requested = case["requested"].as_u64().unwrap() as u32;
+        let ceiling = case["ceiling"].as_u64().unwrap();
+        let expected = case["expected"].as_u64().unwrap();
+        let mut budget = PluginBudget::default();
+        let mut limits = crate::pack::PluginLimits::default();
+        match ceiling {
+            4096 => {
+                budget.memory_bytes = baseline * 1024 * 1024;
+                limits.memory_mib = Some(requested);
+            }
+            900 => {
+                budget.wall_clock = std::time::Duration::from_secs(baseline);
+                limits.wall_clock_secs = Some(requested);
+            }
+            4 => {
+                budget.max_output_bytes = baseline as usize * 1024 * 1024;
+                limits.max_output_mib = Some(requested);
+            }
+            _ => panic!("unknown resource case: {case}"),
+        }
+        let effective = budget.with_declared_limits(&limits);
+        let actual = match ceiling {
+            4096 => effective.memory_bytes / (1024 * 1024),
+            900 => effective.wall_clock.as_secs(),
+            _ => effective.max_output_bytes as u64 / (1024 * 1024),
+        };
+        assert_eq!(actual, expected, "{case}");
+    }
+}
+
+fn path_open_probe(path: &str, create: bool) -> String {
+    let flags = if create { 1 } else { 0 };
+    let rights = if create { 64 } else { 2 };
+    format!(
+        r#"(module
+      (import "wasi_snapshot_preview1" "path_open" (func $open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 32) "{path}")
+      (data (i32.const 128) "true ")
+      (data (i32.const 144) "false")
+      (func (export "_start") (local $denied i32)
+        (local.set $denied (call $open (i32.const 3) (i32.const 1) (i32.const 32) (i32.const {length}) (i32.const {flags}) (i64.const {rights}) (i64.const 0) (i32.const 0) (i32.const 200)))
+        (i32.store (i32.const 256) (select (i32.const 128) (i32.const 144) (local.get $denied)))
+        (i32.store (i32.const 260) (i32.const 5))
+        (drop (call $write (i32.const 1) (i32.const 256) (i32.const 1) (i32.const 264)))))"#,
+        length = path.len()
+    )
+}
+
+#[test]
+#[cfg(unix)]
+fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
+    let root = tempfile::tempdir().unwrap();
+    let inside = root.path().join("inside");
+    std::fs::create_dir(&inside).unwrap();
+    std::fs::write(inside.join("safe.txt"), b"safe").unwrap();
+    std::fs::write(root.path().join("outside.txt"), b"private").unwrap();
+    std::os::unix::fs::symlink(root.path().join("outside.txt"), inside.join("escape.txt")).unwrap();
+    let bound = BoundDir::new(&inside, None).unwrap();
+    for (path, create, denied) in [
+        ("safe.txt", false, false),
+        ("created.txt", true, true),
+        ("escape.txt", false, true),
+    ] {
+        let (mut plugin, afb) =
+            build_plugin_pack("containment", &path_open_probe(path, create), None);
+        plugin.bind_dir = Some(crate::pack::PluginDirBinding {
+            input_field: "root".into(),
+            description: "test root".into(),
+            access: crate::pack::BindAccess::Read,
+            original_field: None,
+        });
+        let runner = PluginRunner::compile(&afb, &plugin).unwrap();
+        let result = runner
+            .call_bound(&serde_json::json!({}), &PluginBudget::default(), &bound)
+            .unwrap();
+        assert_eq!(result.verdict, PluginVerdict::Success, "{path}: {result:?}");
+        assert_eq!(result.output, serde_json::json!(denied), "{path}");
+    }
+    assert!(!inside.join("created.txt").exists());
 }

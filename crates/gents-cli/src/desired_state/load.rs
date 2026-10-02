@@ -80,6 +80,11 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
             value.context("sidecar contents missing")
         },
     )?;
+    let mut config = config;
+    // A pack's own plugin nodes are pinned to the artifact it ships.
+    if let Some(manifest) = pack_manifest(root)? {
+        gents::pack::pin_pack_plugins(&manifest, &|path| read_pack_asset(root, path), &mut config)?;
+    }
     let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
     // Offline validation checks canonical shape, duplicate IDs and owner scope.
     // Existence closure belongs to the transaction over retained + authored docs.
@@ -90,6 +95,32 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
             .map(|doc| (doc.collection, doc.add.clone())),
     )?;
     Ok(config)
+}
+
+/// The `manifest.json` of the pack `root` holds, or `None` for a plain
+/// configuration folder.
+fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>> {
+    let path = root.join("manifest.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    serde_json::from_value(read_json(&path)?)
+        .map(Some)
+        .with_context(|| format!("invalid pack manifest {}", path.display()))
+}
+
+/// An asset of the pack at `root`, refused when it is not a plain relative path inside it.
+fn read_pack_asset(root: &Path, relative: &str) -> Result<Vec<u8>> {
+    let relative = PathBuf::from(relative);
+    anyhow::ensure!(
+        relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_))),
+        "pack asset path {} is not a plain relative path",
+        relative.display()
+    );
+    let path = root.join(&relative);
+    fs::read(&path).with_context(|| format!("reading {}", path.display()))
 }
 
 fn read_json(path: &Path) -> Result<Value> {

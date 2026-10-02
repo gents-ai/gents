@@ -98,6 +98,23 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
             digest: identity("1").digest,
         }]
     );
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        Some(InstalledPack {
+            coordinate: "acme/demo".into(),
+            version: "1".into(),
+            digest: identity("1").digest,
+        })
+    );
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/missing")
+            .await
+            .unwrap(),
+        None,
+        "an uninstalled coordinate resolves to nothing, not an error"
+    );
     let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
@@ -117,6 +134,13 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         .await
         .unwrap();
     assert_eq!(record["data"]["PackInstallation"], json!([]));
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None,
+        "removal leaves no installed record behind"
+    );
     assert!(
         remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
             .await
@@ -290,6 +314,76 @@ async fn list_installed_packs_fails_loudly_on_a_malformed_record() {
     );
 }
 
+/// Same as above, for `read_installed_pack`'s single-coordinate lookup.
+#[tokio::test]
+async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let doc_id = installation_doc_id(&access).await;
+    corrupt_installation_field(&access, &doc_id, "digest", Value::Null).await;
+
+    let error = read_installed_pack(&access, OWNER, "acme/demo")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("malformed digest field"),
+        "{error:#}"
+    );
+}
+
+/// A DefraDB unique index is a single-node guarantee, not a distributed one
+/// (see [`crate::goal::delete_goals_for_session`]'s doc comment): a
+/// replicated home can still end up with two `PackInstallation` records for
+/// the same owner and coordinate. `read_installed_pack`'s `limit: 2` plus
+/// `ensure!` exists for exactly that state, so this pins it by registering
+/// the schema with its unique index dropped and creating the duplicate
+/// directly, the same way `register_config_schemas_dropping_unique_indexes`
+/// does for desired-state collections.
+#[tokio::test]
+async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
+        r#"@index(fields: ["agent_did", "coordinate"], unique: true)"#,
+        "",
+    );
+    node.add_schema(&schema).await.unwrap();
+    let access = ConfigAccess::Local(node);
+
+    for digest_seed in ["1", "2"] {
+        let input = json!({
+            "agent_did": OWNER,
+            "coordinate": "acme/duplicated",
+            "version": "1",
+            "digest": format!("sha256:{}", digest_seed.repeat(64)),
+        });
+        access
+            .write(
+                "test.duplicate_installation",
+                &format!(
+                    "mutation {{ create_{RECORD}(input: {}) {{ _docID }} }}",
+                    gents_protocol::graphql::graphql_input_literal(&input).unwrap()
+                ),
+            )
+            .await
+            .unwrap();
+    }
+
+    let error = read_installed_pack(&access, OWNER, "acme/duplicated")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("has more than one installation record"),
+        "{error:#}"
+    );
+}
+
 // --- Dependency bookkeeping (design C) ---------------------------------
 
 async fn dependency_fixture() -> (
@@ -341,7 +435,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     let receipt = crate::test_support::install_test_graph_package_explicit(
         &access,
         OWNER,
-        "code_review",
+        "review_graph",
         &options,
         false,
     )
@@ -352,7 +446,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["gents/code_review".into()]),
+        &demo_identity(vec!["fixture/review_graph".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -360,7 +454,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
     .unwrap();
 
     // Removing the dependency directly is refused, naming the dependent.
-    let error = remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
@@ -370,7 +464,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         .await
         .unwrap();
     assert_eq!(report.dependencies.len(), 1);
-    assert_eq!(report.dependencies[0].pack, "gents/code_review");
+    assert_eq!(report.dependencies[0].pack, "fixture/review_graph");
     assert!(report.dependencies[0]
         .documents
         .removed
@@ -388,7 +482,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
 async fn an_explicit_dependency_survives_its_dependent() {
     let (_node, access, options) = dependency_fixture().await;
     let receipt =
-        crate::test_support::install_test_graph_package(&access, OWNER, "code_review", &options)
+        crate::test_support::install_test_graph_package(&access, OWNER, "review_graph", &options)
             .await
             .unwrap();
     activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
@@ -396,7 +490,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["gents/code_review".into()]),
+        &demo_identity(vec!["fixture/review_graph".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -417,11 +511,11 @@ async fn an_explicit_dependency_survives_its_dependent() {
         .unwrap();
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["coordinate"], "gents/code_review");
+    assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
     assert_eq!(rows[0]["required_by"], Value::Null);
 
     // Still removable directly now that nothing requires it.
-    remove_pack(&access, OWNER, "gents/code_review", DriftPolicy::Refuse)
+    remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
         .await
         .unwrap();
 }
@@ -432,7 +526,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
     let receipt = crate::test_support::install_test_graph_package_explicit(
         &access,
         OWNER,
-        "code_review",
+        "review_graph",
         &options,
         false,
     )
@@ -443,7 +537,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["gents/code_review".into()]),
+        &demo_identity(vec!["fixture/review_graph".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -454,13 +548,13 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         .await
         .unwrap();
     let rows = after_first["data"]["PackInstallation"].as_array().unwrap();
-    let code_review = rows
+    let review_graph = rows
         .iter()
-        .find(|row| row["coordinate"] == "gents/code_review")
+        .find(|row| row["coordinate"] == "fixture/review_graph")
         .unwrap();
-    assert_eq!(code_review["required_by"], json!(["acme/demo"]));
+    assert_eq!(review_graph["required_by"], json!(["acme/demo"]));
 
-    // An upgrade of acme/demo that no longer depends on code_review.
+    // An upgrade of acme/demo that no longer depends on review_graph.
     super::super::install_pack_documents(
         &access,
         OWNER,
@@ -481,7 +575,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
     assert!(
         !rows
             .iter()
-            .any(|row| row["coordinate"] == "gents/code_review"),
+            .any(|row| row["coordinate"] == "fixture/review_graph"),
         "the dropped, non-explicit dependency is released outright (its own graph \
          documents removed), the same as `gents pack remove` releases a dependency \
          whose last dependent is removed; a dangling required_by is not enough: {rows:?}"
@@ -494,7 +588,7 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     let receipt = crate::test_support::install_test_graph_package_explicit(
         &access,
         OWNER,
-        "code_review",
+        "review_graph",
         &options,
         false,
     )
@@ -509,7 +603,7 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["gents/code_review".into()]),
+        &demo_identity(vec!["fixture/review_graph".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -528,7 +622,7 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert!(
         rows.iter()
-            .any(|row| row["coordinate"] == "gents/code_review"),
+            .any(|row| row["coordinate"] == "fixture/review_graph"),
         "a legacy record with no explicit field must never be auto-released: {rows:?}"
     );
 }

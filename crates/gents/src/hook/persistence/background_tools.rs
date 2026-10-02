@@ -261,7 +261,9 @@ impl DefraSessionHook {
         let executions = self.background_executions.clone();
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
-        tokio::spawn(async move {
+        // A spawned task starts with no task-locals: carry the chat's
+        // interactivity so a plugin call in the background can still ask.
+        tokio::spawn(crate::plugin::approval::carry_interactive(async move {
             let execution = AssertUnwindSafe(crate::managed_exec::ownership::scope_process_recorder(
                 process_recorder,
                 crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
@@ -559,7 +561,7 @@ impl DefraSessionHook {
             // Dropping this guard after cleanup signals ordinary completion;
             // task panic or abort also releases ownership for recovery.
             drop(execution_reservation);
-        });
+        }));
 
         Ok(self.skip_tool_result(SPAWN_PROCESS_TOOL_NAME, receipt))
     }

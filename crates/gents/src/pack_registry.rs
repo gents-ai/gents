@@ -18,6 +18,24 @@ use crate::pack_store::PackStore;
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
+/// A registry failure a caller needs to react to, not just report: distinct
+/// from a generic transport error so [`crate::pack_resolve::offline_pack_error`]
+/// can classify it with [`anyhow::Error::chain`] and `downcast_ref`, rather
+/// than pattern-matching on message text this module is free to reword.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError {
+    #[error(
+        "could not reach the registry at {url}; check the network, or choose another registry with --registry"
+    )]
+    Unreachable {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("the registry has nothing at {url}")]
+    NotFound { url: String },
+}
+
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
     name.split_once('/')
         .unwrap_or((crate::pack_archive::DEFAULT_NAMESPACE, name))
@@ -50,11 +68,11 @@ impl RegistryClient {
         }
     }
 
-    fn unreachable(&self) -> String {
-        format!(
-            "could not reach the registry at {}; check the network, or choose another registry with --registry",
-            self.base_url
-        )
+    fn unreachable(&self, source: reqwest::Error) -> RegistryError {
+        RegistryError::Unreachable {
+            url: self.base_url.clone(),
+            source,
+        }
     }
 
     /// `{base_url}/api/v1/<segments>`, one canonical builder for every
@@ -104,7 +122,10 @@ impl RegistryClient {
     async fn json_or_error(response: reqwest::Response, url: &str) -> Result<Value> {
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!("the registry has nothing at {url}");
+            return Err(RegistryError::NotFound {
+                url: url.to_owned(),
+            }
+            .into());
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -123,7 +144,7 @@ impl RegistryClient {
             .get(url.clone())
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str()).await
     }
 
@@ -144,7 +165,7 @@ impl RegistryClient {
             .query(&[("q", query), ("page", &page.to_string())])
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str()).await
     }
 
@@ -171,7 +192,7 @@ impl RegistryClient {
             .get(url.clone())
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         let status = response.status();
         anyhow::ensure!(
             status.is_success(),
@@ -213,7 +234,7 @@ impl RegistryClient {
             .json(&serde_json::json!({"username": username, "password": password}))
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str())
             .await?
             .get("token")
@@ -232,7 +253,7 @@ impl RegistryClient {
             .bearer_auth(token)
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str()).await
     }
 
@@ -254,7 +275,7 @@ impl RegistryClient {
             .json(&serde_json::json!({ "username": username }))
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str()).await
     }
 
@@ -276,7 +297,7 @@ impl RegistryClient {
             .bearer_auth(token)
             .send()
             .await
-            .with_context(|| self.unreachable())?;
+            .map_err(|source| self.unreachable(source))?;
         Self::json_or_error(response, url.as_str()).await
     }
 
@@ -298,7 +319,7 @@ impl RegistryClient {
 #[derive(Debug)]
 pub struct RegistryPack {
     pub archive: PackArchive,
-    /// Canonical digest over declared pack assets, shared with bundled packs.
+    /// Canonical digest over declared pack assets, shared with every pack loader.
     pub digest: String,
     /// Registry artifact digest over the exact compressed archive bytes.
     pub artifact_digest: String,
@@ -434,7 +455,24 @@ pub async fn fetch_pack(
         (Some(store), Some(index)) if index.is_file() => {
             let digest = std::fs::read_to_string(index)
                 .with_context(|| format!("reading {}", index.display()))?;
-            Some(store.open(digest.trim())?)
+            let digest = digest.trim();
+            if store.contains(digest)? {
+                let archive = store.open(digest)?;
+                // A by-download hit never goes through `import_accepting`,
+                // which is where `PackStore::index` is normally called: index
+                // it here too, so a pack already in the store from an
+                // earlier fetch becomes resolvable by name without another
+                // network round trip.
+                store.index(archive.header())?;
+                Some(archive)
+            } else {
+                // The digest this entry named was released from the store
+                // since it was cached (`gents pack remove`, then a reinstall
+                // of the same version): treat it as a miss so the download
+                // below refreshes the mapping instead of failing on a digest
+                // that is simply gone.
+                None
+            }
         }
         _ => None,
     };
@@ -479,6 +517,17 @@ pub async fn fetch_pack(
             let archive = store.open(&stored.header.digest)?;
             let dir = index.parent().context("download index has no parent")?;
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            // `stage_and_persist` will not overwrite an existing file; drop a
+            // stale entry first (one pointing at a since-released digest) so
+            // the fresh mapping actually lands instead of silently keeping
+            // the old one.
+            if let Err(error) = std::fs::remove_file(index) {
+                anyhow::ensure!(
+                    error.kind() == std::io::ErrorKind::NotFound,
+                    "removing the stale download index at {}: {error}",
+                    index.display()
+                );
+            }
             stage_and_persist(dir, index, stored.header.digest.as_bytes())?;
             archive
         }
@@ -618,6 +667,181 @@ pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal fake registry serving exactly one namespace/name/version,
+    /// for [`fetch_pack`] tests: `package` and `version` answer with just
+    /// enough to resolve, and `download` streams `bytes` back verbatim.
+    async fn serve_one_pack(
+        namespace: &str,
+        name: &str,
+        version: &str,
+        bytes: Vec<u8>,
+        artifact_digest: String,
+    ) -> String {
+        let package_path = format!("/api/v1/packs/{namespace}/{name}");
+        let version_path = format!("/api/v1/packs/{namespace}/{name}/{version}");
+        let download_path = format!("{version_path}/download");
+        let latest = version.to_owned();
+        let app = axum::Router::new()
+            .route(
+                &package_path,
+                axum::routing::get(move || {
+                    let latest = latest.clone();
+                    async move { axum::Json(serde_json::json!({ "latest": latest })) }
+                }),
+            )
+            .route(
+                &version_path,
+                axum::routing::get(move || {
+                    let digest = artifact_digest.clone();
+                    async move { axum::Json(serde_json::json!({ "digest": digest })) }
+                }),
+            )
+            .route(
+                &download_path,
+                axum::routing::get(move || {
+                    let bytes = bytes.clone();
+                    async move { bytes }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// A by-download cache hit skips [`PackStore::import_accepting`], the
+    /// usual place a header is indexed by name; it must index the pack
+    /// itself, or a pack already in the store from an earlier fetch stays
+    /// unresolvable by name forever (D1's store-first, zero-network promise
+    /// broken on exactly the packs it exists to speed up).
+    #[tokio::test]
+    async fn a_by_download_cache_hit_fills_in_a_missing_name_index_entry() {
+        let (bytes, header) =
+            crate::pack_store::test_pack_named("registry_cache_hit_fixture", "1.0.0");
+        let artifact_digest = {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        let registry_url = serve_one_pack(
+            "gents",
+            "registry_cache_hit_fixture",
+            "1.0.0",
+            bytes,
+            artifact_digest,
+        )
+        .await;
+        let client = RegistryClient::new(registry_url);
+        let home = tempfile::tempdir().unwrap();
+
+        fetch_pack(
+            &client,
+            Some(home.path()),
+            "gents",
+            "registry_cache_hit_fixture",
+            None,
+        )
+        .await
+        .expect("the first, uncached fetch");
+        let store = PackStore::new(home.path());
+        assert_eq!(
+            store
+                .lookup("gents", "registry_cache_hit_fixture", None)
+                .unwrap()
+                .map(|found| found.digest),
+            Some(header.digest.clone()),
+            "the uncached fetch indexes the pack through `import_accepting`"
+        );
+
+        // Simulate a pack the store already held before it ever had a name
+        // index entry: the by-download cache stays untouched, but the name
+        // index has nothing for it.
+        let index_entry = home
+            .path()
+            .join(crate::home::PACKS_DIR_NAME)
+            .join("store")
+            .join("by-name")
+            .join("gents")
+            .join("registry_cache_hit_fixture")
+            .join("1.0.0");
+        std::fs::remove_file(&index_entry).unwrap();
+        assert_eq!(
+            store
+                .lookup("gents", "registry_cache_hit_fixture", None)
+                .unwrap(),
+            None
+        );
+
+        fetch_pack(
+            &client,
+            Some(home.path()),
+            "gents",
+            "registry_cache_hit_fixture",
+            None,
+        )
+        .await
+        .expect("a by-download cache hit");
+        assert_eq!(
+            store
+                .lookup("gents", "registry_cache_hit_fixture", None)
+                .unwrap()
+                .map(|found| found.digest),
+            Some(header.digest),
+            "the cache-hit fetch backfills the name index"
+        );
+    }
+
+    /// After `gents pack remove` releases a digest, its `by-download` entry
+    /// still names it. The next `fetch_pack` of the same version must not
+    /// fail with "is not in the store"; it must treat the stale entry as a
+    /// miss and download again.
+    #[tokio::test]
+    async fn a_stale_by_download_entry_after_release_is_treated_as_a_miss() {
+        let (bytes, header) = crate::pack_store::test_pack_named("registry_stale_fixture", "1.0.0");
+        let artifact_digest = {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        let registry_url = serve_one_pack(
+            "gents",
+            "registry_stale_fixture",
+            "1.0.0",
+            bytes,
+            artifact_digest,
+        )
+        .await;
+        let client = RegistryClient::new(registry_url);
+        let home = tempfile::tempdir().unwrap();
+
+        fetch_pack(
+            &client,
+            Some(home.path()),
+            "gents",
+            "registry_stale_fixture",
+            None,
+        )
+        .await
+        .expect("the first fetch");
+        let store = PackStore::new(home.path());
+        assert!(store.contains(&header.digest).unwrap());
+
+        store.release(&header.digest).unwrap();
+        assert!(!store.contains(&header.digest).unwrap());
+
+        let fetched = fetch_pack(
+            &client,
+            Some(home.path()),
+            "gents",
+            "registry_stale_fixture",
+            None,
+        )
+        .await
+        .expect("a stale by-download entry must not fail the fetch");
+        assert_eq!(fetched.digest, header.digest);
+        assert!(store.contains(&header.digest).unwrap());
+    }
 
     #[tokio::test]
     async fn an_unreachable_registry_says_what_to_do_in_gents_terms() {

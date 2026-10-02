@@ -1,0 +1,24 @@
+{
+  "name": "documents_fixture",
+  "description": "Job -> fixture-worker, over the fixture's read-only workspace.",
+  "init": {
+    "inference_url": "${GENTS_FIXTURE_ENDPOINT:-http://127.0.0.1:8080/v1}",
+    "model_name": "${GENTS_FIXTURE_MODEL:-fixture-model}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "FixtureJob",
+    "job_id_field": "job_id",
+    "prompt_field": "prompt",
+    "fields": {
+      "status": "ready"
+    }
+  },
+  "default_prompt": "Describe the fixture workspace in one sentence.",
+  "expect": {
+    "trigger_ids": ["fixture-worker"],
+    "collection_counts": {}
+  },
+  "await_timeout_secs": 60
+}

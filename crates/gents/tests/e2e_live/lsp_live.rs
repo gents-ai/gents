@@ -8,7 +8,9 @@
 //!
 //! ```bash
 //! rust-analyzer --version
-//! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --test e2e_live \
+//! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 \
+//!   GENTS_LSP_RUST_PACK_DIR=<packs checkout>/packs/gents/lsp_rust \
+//!   cargo test -p gents --test e2e_live \
 //!   lsp_live_model_uses_rust_analyzer \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
@@ -55,21 +57,31 @@ fn repo_root() -> PathBuf {
         .expect("repo root")
 }
 
+/// `lsp_rust` no longer ships inside this repository; point this at a
+/// checkout of gents-ai/packs's `packs/gents/lsp_rust`.
 fn pack_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/lsp_rust")
+    PathBuf::from(
+        std::env::var("GENTS_LSP_RUST_PACK_DIR").unwrap_or_else(|_| {
+            panic!(
+                "GENTS_LSP_RUST_PACK_DIR must name a checkout of the lsp_rust pack \
+             (gents-ai/packs, packs/gents/lsp_rust)"
+            )
+        }),
+    )
 }
 
 fn pack_json_string(relative: &str, field: &str) -> String {
-    let raw = std::fs::read_to_string(pack_dir().join(relative)).unwrap_or_else(|err| {
-        panic!("read packs/lsp_rust/{relative}: {err}");
+    let path = pack_dir().join(relative);
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!("read {}: {err}", path.display());
     });
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
-        panic!("parse packs/lsp_rust/{relative}: {err}");
+        panic!("parse {}: {err}", path.display());
     });
     value
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("packs/lsp_rust/{relative} missing string {field}"))
+        .unwrap_or_else(|| panic!("{} missing string {field}", path.display()))
         .to_string()
 }
 
@@ -79,11 +91,12 @@ fn pack_default_prompt() -> String {
 
 fn pack_lsp_config() -> String {
     let relative = "pack_config.json";
-    let raw = std::fs::read_to_string(pack_dir().join(relative)).unwrap_or_else(|err| {
-        panic!("read packs/lsp_rust/{relative}: {err}");
+    let path = pack_dir().join(relative);
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!("read {}: {err}", path.display());
     });
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
-        panic!("parse packs/lsp_rust/{relative}: {err}");
+        panic!("parse {}: {err}", path.display());
     });
     value["tools"]
         .as_array()
@@ -93,7 +106,7 @@ fn pack_lsp_config() -> String {
                 .find(|tools| tools["tools_id"] == "lsp-readonly")
         })
         .and_then(|tools| tools["integrations"]["lsp"]["config"].as_str())
-        .unwrap_or_else(|| panic!("packs/lsp_rust/{relative} missing lsp-readonly Tools config"))
+        .unwrap_or_else(|| panic!("{} missing lsp-readonly Tools config", path.display()))
         .to_owned()
 }
 

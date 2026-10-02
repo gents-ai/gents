@@ -3,7 +3,7 @@
 //! A local pack is admitted exactly like a downloaded one: a `.pack` file is
 //! verified into the home's [`PackStore`] and opened from there, and a
 //! directory is packed with the same writer `gents pack build` uses first. A
-//! bare name is never a path, so `mailbox` always means the bundled or
+//! bare name is never a path, so `mailbox` always means the stored or
 //! registry pack even when a `mailbox/` directory sits in the working
 //! directory; a local directory is named `./mailbox`.
 
@@ -85,34 +85,22 @@ mod tests {
         }
     }
 
-    fn mailbox_dir() -> tempfile::TempDir {
-        let pack = gents::pack::resolve_pack("mailbox").unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        for path in gents::pack::declared_paths(&pack.manifest) {
-            let target = dir.path().join(&path);
-            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            std::fs::write(&target, pack.asset(&path).unwrap()).unwrap();
-        }
-        dir
-    }
-
     #[test]
     fn a_directory_a_pack_file_and_its_digest_open_as_the_same_pack() {
-        let bundled = gents::pack::resolve_pack("mailbox").unwrap();
+        let fixture = super::super::test_support::fixture_dir("assets_fixture");
         let home = tempfile::tempdir().unwrap();
-        let dir = mailbox_dir();
+        let (fixture_bytes, fixture_header) = gents::pack_archive::pack_dir(&fixture).unwrap();
 
-        let from_dir = open(&LocalName::Path(dir.path()), home.path()).unwrap();
-        assert_eq!(from_dir.digest(), bundled.digest);
+        let from_dir = open(&LocalName::Path(&fixture), home.path()).unwrap();
+        assert_eq!(from_dir.digest(), fixture_header.digest);
 
-        let file = home.path().join("mailbox.pack");
-        let (bytes, _) = gents::pack_archive::pack_dir(dir.path()).unwrap();
-        std::fs::write(&file, bytes).unwrap();
+        let file = home.path().join("assets_fixture.pack");
+        std::fs::write(&file, fixture_bytes).unwrap();
         let from_file = open(&LocalName::Path(&file), home.path()).unwrap();
-        assert_eq!(from_file.digest(), bundled.digest);
+        assert_eq!(from_file.digest(), fixture_header.digest);
 
-        let from_digest = open(&LocalName::Digest(&bundled.digest), home.path()).unwrap();
-        assert_eq!(from_digest.digest(), bundled.digest);
+        let from_digest = open(&LocalName::Digest(&fixture_header.digest), home.path()).unwrap();
+        assert_eq!(from_digest.digest(), fixture_header.digest);
     }
 
     #[test]

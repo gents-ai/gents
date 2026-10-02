@@ -27,8 +27,8 @@ use crate::pack::{is_distributable_asset_path, PackManifest, PackPlugin};
 
 pub mod format;
 pub use format::{
-    digest_hex, pack_dir, read_pack, write_pack, Bounds, PackHeader, VerifiedPack, EXTENSION,
-    FORMAT, FORMAT_VERSION, HEADER_ENTRY, MEDIA_TYPE,
+    digest_hex, pack_dir, peek_header, read_pack, write_pack, Bounds, PackHeader, VerifiedPack,
+    EXTENSION, FORMAT, FORMAT_VERSION, HEADER_ENTRY, MEDIA_TYPE,
 };
 
 /// The namespace a pack is published under when its manifest names none.
@@ -52,7 +52,7 @@ pub const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Hard cap on the number of tar entries. A pack bundles a manifest, docs,
 /// schemas and plugin artifacts, not an operator's whole workspace; the
-/// largest bundled pack today carries 139. Four figures is headroom, not a
+/// largest official pack today carries 139. Four figures is headroom, not a
 /// design target, and it bounds the cost of the entry-count check itself.
 pub const MAX_ENTRIES: usize = 4096;
 

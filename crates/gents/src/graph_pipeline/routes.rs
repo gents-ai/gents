@@ -151,6 +151,8 @@ mod tests {
                 collection: "ReviewJob".to_owned(),
                 schema: "review".to_owned(),
                 input_contract: None,
+                input_schema: None,
+                prepare: None,
                 to: PortRef {
                     node_id: "recon".to_owned(),
                     port: "in".to_owned(),

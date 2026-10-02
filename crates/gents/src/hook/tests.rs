@@ -420,7 +420,6 @@ fn session_state_for_test() -> SessionState {
         sequence: 0,
         transcript_turn: TranscriptTurnState::Idle,
         persisted_tool_result_keys: std::collections::HashSet::new(),
-        persisted_tool_result_message_sequences: std::collections::HashMap::new(),
         tool_result_identities: std::collections::HashMap::new(),
     }
 }

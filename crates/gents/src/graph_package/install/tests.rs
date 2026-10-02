@@ -1,5 +1,7 @@
 use super::*;
-use crate::graph_pipeline::{activate_graph_revision, start_graph_run};
+use crate::graph_pipeline::{
+    activate_graph_revision, start_graph_run, EntryInputOrigin, EntryPrepare,
+};
 use crate::test_support::{install_test_graph_package, load_test_graph_package};
 use defra_node::EmbeddedNode;
 use serde_json::json;
@@ -28,13 +30,32 @@ async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindi
     (node, access, options)
 }
 
+#[tokio::test]
+async fn prepare_package_refuses_a_write_collection_the_package_does_not_declare() {
+    let (_node, access, options) = fixture().await;
+    let mut package = load_test_graph_package("review_graph", &options);
+    package.config.graph_intents[0].entries[0].prepare = Some(EntryPrepare {
+        host: vec![],
+        plugin: "review-evidence".to_owned(),
+        digest: Some(format!("sha256:{}", "0".repeat(64))),
+        writes: vec!["NotDeclaredCollection".to_owned()],
+    });
+    let error = prepare_loaded_graph_package_install(&access, &package, &options)
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("NotDeclaredCollection"), "{message}");
+    assert!(message.contains("review"), "{message}");
+}
+
 #[test]
 fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() {
     let options = GraphPackageInstallBindings {
         agent_did: "did:key:owner".into(),
         inference_slots: BTreeMap::new(),
     };
-    let mut package = load_test_graph_package("code_review", &options);
+    let mut package = load_test_graph_package("review_graph", &options);
     assert_eq!(
         selected_intent(&package.config.graph_intents, None)
             .unwrap()
@@ -60,7 +81,7 @@ fn explicit_graph_selection_preserves_authored_identity_and_rejects_ambiguity() 
 async fn missing_or_foreign_owner_does_not_register_package_schema() {
     let (node, access, options) = fixture().await;
     assert!(
-        install_test_graph_package(&access, "did:key:foreign", "code_review", &options)
+        install_test_graph_package(&access, "did:key:foreign", "review_graph", &options)
             .await
             .is_err()
     );
@@ -69,7 +90,7 @@ async fn missing_or_foreign_owner_does_not_register_package_schema() {
         inference_slots: options.inference_slots.clone(),
     };
     assert!(
-        install_test_graph_package(&access, &missing.agent_did, "code_review", &missing)
+        install_test_graph_package(&access, &missing.agent_did, "review_graph", &missing)
             .await
             .is_err()
     );
@@ -88,7 +109,7 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+    let error = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
         .await
         .unwrap_err();
     assert!(
@@ -116,7 +137,7 @@ async fn invalid_retained_reference_fails_before_any_package_schema_write() {
 #[tokio::test]
 async fn existing_package_schema_must_match_types_indexes_and_immutability() {
     let (node, access, options) = fixture().await;
-    let package = load_test_graph_package("code_review", &options);
+    let package = load_test_graph_package("review_graph", &options);
     let expected = package.asset_text("schemas/review_job.graphql").unwrap();
     let incompatible = expected.replace(
         "run_id: String @index(unique: true) @immutable",
@@ -124,7 +145,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
     );
     assert_ne!(incompatible, expected);
     node.add_schema(&incompatible).await.unwrap();
-    let error = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+    let error = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
         .await
         .unwrap_err();
     assert!(
@@ -135,7 +156,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
 }
 
 #[tokio::test]
-async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
+async fn graph_fixture_install_is_idempotent_shared_home_safe_and_runnable() {
     let (node, access, options) = fixture().await;
     let metadata = node
         .execute(
@@ -155,25 +176,25 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         .await;
     assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
     let expected_documents = DesiredStateApplyPlan::from_pack_config(
-        &load_test_graph_package("code_review", &options).config,
+        &load_test_graph_package("review_graph", &options).config,
     )
     .unwrap()
     .documents()
     .iter()
     .filter(|document| document.collection != Collection::AgentPrincipal)
     .count();
-    let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+    let first = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
         .await
         .unwrap();
     let user_tag = node
         .execute(
             r#"mutation { update_AgentBehavior(filter: {
         agent_did: {_eq: "did:key:package-owner"}, behavior_id: {_eq: "review-recon"}
-    }, input: {tags: ["gents:pack:code_review", "user-label"]}) {_docID} }"#,
+    }, input: {tags: ["gents:pack:review_graph", "user-label"]}) {_docID} }"#,
         )
         .await;
     assert!(!user_tag.has_errors(), "{:?}", user_tag.errors);
-    let second = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+    let second = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
         .await
         .unwrap();
     assert_eq!(first, second);
@@ -238,7 +259,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         assert!(behavior["tags"]
             .as_array()
             .unwrap()
-            .contains(&json!("gents:pack:code_review")));
+            .contains(&json!("gents:pack:review_graph")));
     }
     let review_recon = data["AgentBehavior"]
         .as_array()
@@ -272,7 +293,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             assert!(document["tags"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("gents:pack:code_review")));
+                .contains(&json!("gents:pack:review_graph")));
         }
     }
     assert_eq!(data["InferenceProfile"].as_array().unwrap().len(), 3);
@@ -334,7 +355,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     .unwrap();
     assert_eq!(
         first,
-        install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+        install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
             .await
             .unwrap()
     );
@@ -349,12 +370,13 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
             "repository_path":"/tmp/repo", "base_ref":"base-sha", "head_ref":"head-sha",
             "lens_count":"4", "lens_min":"4", "lens_max":"4", "focus":"durability"
         }),
+        EntryInputOrigin::Operator,
     )
     .await
     .unwrap();
     assert_eq!(run.revision_digest, first.revision_digest);
     // A metadata-only successor still pins the active predecessor exactly.
-    let mut successor = load_test_graph_package("code_review", &options);
+    let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
     let prepared = prepare_package(&access, &successor, &options, None)
@@ -383,7 +405,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         .await
         .unwrap();
     crate::test_support::install_test_behavior(&node, &foreign.agent_did, "package").await;
-    let other = install_test_graph_package(&access, &foreign.agent_did, "code_review", &foreign)
+    let other = install_test_graph_package(&access, &foreign.agent_did, "review_graph", &foreign)
         .await
         .unwrap();
     assert_eq!(other.graph_id, first.graph_id);
@@ -399,7 +421,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
     .await
     .unwrap();
     for (owner, receipt) in [(&options.agent_did, &first), (&foreign.agent_did, &other)] {
-        let selected = load_installed_package_plan(&access, "code_review", owner)
+        let selected = load_installed_package_plan(&access, "review_graph", owner)
             .await
             .unwrap()
             .unwrap();
@@ -407,7 +429,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
         assert_eq!(selected.graph_id, receipt.graph_id);
     }
     assert!(
-        load_installed_package_plan(&access, "code_review", "did:key:absent")
+        load_installed_package_plan(&access, "review_graph", "did:key:absent")
             .await
             .unwrap()
             .is_none()
@@ -423,7 +445,7 @@ async fn code_review_install_is_idempotent_shared_home_safe_and_runnable() {
 #[tokio::test]
 async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     let (node, access, options) = fixture().await;
-    let first = install_test_graph_package(&access, &options.agent_did, "code_review", &options)
+    let first = install_test_graph_package(&access, &options.agent_did, "review_graph", &options)
         .await
         .unwrap();
     activate_graph_revision(
@@ -438,7 +460,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
     .unwrap();
 
     // Prepare a successor install: it observes `first` as the active revision.
-    let mut successor = load_test_graph_package("code_review", &options);
+    let mut successor = load_test_graph_package("review_graph", &options);
     successor.manifest.version.push_str("-successor");
     successor.package_digest = digest_bytes(b"successor distribution");
     let prepared = prepare_package(&access, &successor, &options, None)
@@ -451,7 +473,7 @@ async fn a_revision_activated_after_prepare_but_before_commit_is_refused() {
 
     // Edit the document between the check and the install: another install
     // activates a different revision of the same graph.
-    let mut concurrent = load_test_graph_package("code_review", &options);
+    let mut concurrent = load_test_graph_package("review_graph", &options);
     concurrent.manifest.version.push_str("-concurrent");
     concurrent.package_digest = digest_bytes(b"concurrent distribution");
     let concurrent_receipt = install_loaded_graph_package(

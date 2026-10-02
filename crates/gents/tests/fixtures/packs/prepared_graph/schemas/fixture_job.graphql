@@ -1,0 +1,7 @@
+type FixtureJob {
+  run_id: String @index(unique: true) @immutable
+  repository_path: String
+  head_ref: String
+  evidence_id: String @immutable
+  summary: String
+}

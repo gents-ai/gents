@@ -12,6 +12,10 @@ use serde_json::{json, Value};
 
 use crate::support::test_db;
 
+fn test_plugins() -> Arc<gents::plugin::executor::PluginExecutor> {
+    Arc::new(gents::plugin::executor::PluginExecutor::default())
+}
+
 const AGENT_DID: &str = "did:key:zSelfConfigE2E";
 const BEHAVIOR_ID: &str = "self-config-behavior";
 const CONTEXT_ID: &str = "self-config-context";
@@ -155,6 +159,7 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
         AGENT_DID.into(),
         None,
         &tool_config(&["behavior", "profile"], false, false),
+        test_plugins(),
     );
     call_tool(
         &tools,
@@ -203,6 +208,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
         AGENT_DID.into(),
         None,
         &tool_config(&["tools"], true, false),
+        test_plugins(),
     );
     call_tool(
         &tools,
@@ -233,6 +239,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
         AGENT_DID.into(),
         None,
         &tool_config(&["tools"], false, false),
+        test_plugins(),
     );
     call_tool(
         &tools,
@@ -257,7 +264,13 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         bash_mode: BashMode::Unrestricted,
         root: None,
     };
-    let tools = build_self_config_tools(db.node.clone(), AGENT_DID.into(), None, &config);
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.into(),
+        None,
+        &config,
+        test_plugins(),
+    );
     let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
     let config: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(config["behavior"]["behavior_id"], BEHAVIOR_ID);
@@ -306,6 +319,7 @@ async fn typed_patch_values_reject_injection_and_protected_auth_without_writes()
         AGENT_DID.into(),
         None,
         &tool_config(&["backend"], false, false),
+        test_plugins(),
     );
     let before = read(&db.node, Collection::InferenceBackend, BACKEND_ID).await;
     for patch in [
@@ -346,6 +360,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         AGENT_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
+        test_plugins(),
     );
     for filter in [
         json!(
@@ -399,6 +414,7 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
         AGENT_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
+        test_plugins(),
     );
     for (kind, id, patch) in [
         (
@@ -468,6 +484,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         AGENT_DID.into(),
         None,
         &tool_config(&["behavior", "tools", "automation"], false, false),
+        test_plugins(),
     );
     call_tool(&tools,"configure_automation",json!({"kind":"schedule","id":"cadence","patch":{"cadence":{"kind":"interval","interval_secs":60}}})).await.unwrap();
     call_tool(&tools,"configure_automation",json!({"kind":"trigger","id":"foreign-trigger","patch":{"task_id":"victim-task","source":{"kind":"schedule","schedule_id":"cadence"}}})).await.expect_err("foreign task cannot be bound by logical ID");
@@ -541,6 +558,7 @@ async fn writes_require_an_acp_addressable_agent_identity() {
         "not-a-did".into(),
         None,
         &tool_config(&["behavior"], false, false),
+        test_plugins(),
     );
     let error = call_tool(
         &tools,

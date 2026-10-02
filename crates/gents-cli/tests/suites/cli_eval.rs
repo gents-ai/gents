@@ -22,11 +22,7 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
     }
 
     run_init_json(&home_dir, &[])?;
-    let packs = run_cli_json(&home_dir, &["pack", "list"])?;
-    let pack = packs["packs"][0]["name"]
-        .as_str()
-        .context("a bundled pack name")?
-        .to_owned();
+    let pack = "mailbox";
     let cell = format!("baseline={pack}:monitor");
     let output = std::process::Command::new(cli_bin())
         .env("HOME", &home_dir)

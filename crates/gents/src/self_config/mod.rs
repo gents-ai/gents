@@ -1436,13 +1436,16 @@ async fn persona_mutate(
     ordered! {"status": status, "recovery": recovery, "request": row}.pretty()
 }
 
-/// Install bundled or registry graph packs through the canonical resolver,
-/// package publication, and activation owners. The running principal is always
-/// the install owner; callers cannot select another DID, filesystem
-/// distribution, registry endpoint, or control-plane endpoint.
+/// Install graph packs from the home's pack store or the registry through the
+/// canonical resolver, package publication, and activation owners. The running
+/// principal is always the install owner; callers cannot select another DID,
+/// filesystem distribution, registry endpoint, or control-plane endpoint.
 struct PackInstaller {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
+    /// The runtime's gents home, which holds the pack store and the plugin
+    /// store; `None` resolves from the registry in memory and installs no plugins.
+    home: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -1453,37 +1456,55 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-enum ConfigPackDistribution {
-    Bundled(crate::pack::ResolvedPack),
-    Registry(crate::pack_registry::RegistryPack),
-}
+/// What [`crate::plugin::install::snapshot_pack_plugin_records`] observed, to restore on failure.
+type PluginRollback = Vec<(
+    String,
+    String,
+    Option<crate::plugin::store::InstalledPlugin>,
+)>;
+
+/// A resolved pack and where it came from.
+struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {
     fn manifest(&self) -> &crate::pack::PackManifest {
-        match self {
-            Self::Bundled(pack) => &pack.manifest,
-            Self::Registry(pack) => pack.archive.manifest(),
-        }
+        self.0.archive.manifest()
     }
 
     fn digest(&self) -> &str {
-        match self {
-            Self::Bundled(pack) => &pack.digest,
-            Self::Registry(pack) => &pack.digest,
-        }
+        self.0.archive.digest()
     }
 
     fn source(&self) -> &'static str {
-        match self {
-            Self::Bundled(_) => "bundled",
-            Self::Registry(_) => "registry",
+        match self.0.from {
+            crate::pack_resolve::ResolvedFrom::Installed => "installed",
+            crate::pack_resolve::ResolvedFrom::Store => "store",
+            crate::pack_resolve::ResolvedFrom::Registry { .. } => "registry",
+        }
+    }
+
+    /// The exact `namespace/name@version` this distribution resolved to, so
+    /// applying a preview resolves the same pack again (from the store the
+    /// preview filled) rather than whatever is newest by then. `requested`
+    /// stands when the version is not one a store index can hold.
+    fn pinned_spec(&self, requested: &str) -> String {
+        let manifest = self.manifest();
+        if crate::pack_store::is_valid_index_version(&manifest.version) {
+            format!(
+                "{}/{}@{}",
+                manifest.metadata.namespace, manifest.name, manifest.version
+            )
+        } else {
+            requested.to_owned()
         }
     }
 
     fn registry_artifact_digest(&self) -> Option<&str> {
-        match self {
-            Self::Bundled(_) => None,
-            Self::Registry(pack) => Some(&pack.artifact_digest),
+        match &self.0.from {
+            crate::pack_resolve::ResolvedFrom::Registry {
+                artifact_digest, ..
+            } => Some(artifact_digest),
+            _ => None,
         }
     }
 
@@ -1492,22 +1513,11 @@ impl ConfigPackDistribution {
         options: &crate::pack::PackInstallOptions,
         environment: &dyn Fn(&str) -> Option<String>,
     ) -> anyhow::Result<crate::graph_package::LoadedGraphPackage> {
-        match self {
-            Self::Bundled(pack) => {
-                crate::graph_package::load_resolved_graph_package_with_environment(
-                    pack,
-                    options,
-                    environment,
-                )
-            }
-            Self::Registry(pack) => {
-                crate::graph_package::load_archive_graph_package_with_environment(
-                    &pack.archive,
-                    options,
-                    environment,
-                )
-            }
-        }
+        crate::graph_package::load_archive_graph_package_with_environment(
+            &self.0.archive,
+            options,
+            environment,
+        )
     }
 }
 
@@ -1515,13 +1525,7 @@ impl PackInstaller {
     fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
         let coordinate = args.package.trim();
         anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
-        let (namespace, package_name) = crate::pack_registry::split_pack_coordinate(coordinate);
-        anyhow::ensure!(
-            !namespace.contains('/')
-                && crate::pack::is_valid_pack_name(namespace)
-                && crate::pack::is_valid_pack_name(package_name),
-            "invalid pack coordinate {coordinate:?}; namespace and pack name use snake_case"
-        );
+        crate::pack_resolve::parse_pack_spec(coordinate)?;
         anyhow::ensure!(
             args.variables.len() <= 32,
             "pack variables exceed the 32-entry limit"
@@ -1549,25 +1553,53 @@ impl PackInstaller {
         Ok(())
     }
 
-    async fn resolve(&self, args: &PackInstallParams) -> anyhow::Result<ConfigPackDistribution> {
+    /// Resolves the pack named by `args`: an installed record whose archive
+    /// the home's store still holds, then the store, then the registry. An
+    /// `update` asks the registry for the newest version first, so it never
+    /// resolves back to the version it is meant to replace.
+    async fn resolve(
+        &self,
+        operation: &str,
+        args: &PackInstallParams,
+    ) -> anyhow::Result<ConfigPackDistribution> {
         self.validate(args)?;
         let coordinate = args.package.trim();
-        let distribution = match crate::pack::resolve_pack(coordinate) {
-            Ok(pack) => ConfigPackDistribution::Bundled(pack),
-            Err(bundled_error) => {
-                let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
-                let base_url = crate::pack_registry::resolve_registry_url(None);
-                let client = crate::pack_registry::RegistryClient::new(base_url.clone());
-                let pack = crate::pack_registry::fetch_pack(&client, None, namespace, name, None)
-                    .await
-                    .map_err(|registry_error| {
-                        anyhow!(
-                            "{coordinate} is not compiled into this runtime ({bundled_error}) and registry resolution at {base_url} failed: {registry_error}"
-                        )
-                    })?;
-                ConfigPackDistribution::Registry(pack)
+        let registry_url = crate::pack_registry::resolve_registry_url(None);
+        let spec = match crate::pack_resolve::parse_pack_spec(coordinate)? {
+            parsed if operation == "update" && parsed.version.is_none() => {
+                let client = crate::pack_registry::RegistryClient::new(registry_url.clone());
+                let latest = crate::pack_registry::resolve_pack_coordinate(
+                    &client,
+                    parsed.namespace,
+                    parsed.name,
+                    None,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "the newest version of {coordinate} could not be looked up on the registry at {registry_url}"
+                    )
+                })?;
+                format!("{}/{}@{}", parsed.namespace, parsed.name, latest.version)
             }
+            _ => coordinate.to_owned(),
         };
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let installed = crate::pack::installed_packs(
+            self.home.as_deref(),
+            Some((&access, self.core.agent_did())),
+        )
+        .await?;
+        let resolved = crate::pack_resolve::resolve_named(
+            &spec,
+            &crate::pack_resolve::ResolveOptions {
+                home: self.home.as_deref(),
+                registry_url,
+                installed: &installed,
+            },
+        )
+        .await?;
+        let distribution = ConfigPackDistribution(resolved);
         anyhow::ensure!(
             distribution.manifest().metadata.kind == crate::pack::PackKind::Graph,
             "pack {:?} is {:?}; the model-facing installer supports graph packs only",
@@ -1577,49 +1609,93 @@ impl PackInstaller {
         Ok(distribution)
     }
 
+    /// The active graph of the installed pack with `manifest`'s namespace and
+    /// name. The install record is keyed by `namespace/name`, so a pack of the
+    /// same name from another namespace is never reported as installed.
+    // vertexia: graphs are looked up by bare package name, so two namespaces
+    // installed at once with the same name fail loud as ambiguous.
     async fn installed(
         &self,
-        package: &str,
+        manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
-        crate::graph_package::load_installed_package_plan(&access, package, self.core.agent_did())
-            .await
+        let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+        if crate::pack::read_installed_pack(&access, self.core.agent_did(), &coordinate)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        crate::graph_package::load_installed_package_plan(
+            &access,
+            &manifest.name,
+            self.core.agent_did(),
+        )
+        .await
     }
 
+    /// One page of the packs the home's pack store holds, by `namespace/name`.
+    /// Bounded by `limit`; the store's name index is read whole (names only,
+    /// no archives), and only the page's manifests are opened.
+    // vertexia: the name index is listed whole, a cursor-seeked directory walk
+    // if a home ever holds thousands of pack names.
     async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {
         anyhow::ensure!(
             (1..=50).contains(&limit),
             "--limit must be between 1 and 50"
         );
-        let mut catalog = crate::pack::pack_catalog()?;
-        catalog.sort_by(|left, right| left.name.cmp(&right.name));
-        let total = catalog.len();
-        let mut selected = catalog
+        let store = self.home.as_deref().map(crate::pack_store::PackStore::new);
+        let names = match &store {
+            Some(store) => store.names()?,
+            None => Vec::new(),
+        };
+        let total = names.len();
+        let mut selected = names
             .into_iter()
-            .filter(|manifest| cursor.is_none_or(|cursor| manifest.name.as_str() > cursor))
+            .filter(|(coordinate, _)| cursor.is_none_or(|cursor| coordinate.as_str() > cursor))
             .take(limit + 1)
             .collect::<Vec<_>>();
         let truncated = selected.len() > limit;
         selected.truncate(limit);
         let next_cursor = truncated
-            .then(|| selected.last().map(|manifest| manifest.name.clone()))
+            .then(|| selected.last().map(|(coordinate, _)| coordinate.clone()))
             .flatten();
         let mut items = Vec::with_capacity(selected.len());
-        for manifest in selected {
-            let distribution = crate::pack::resolve_pack(&manifest.name)?;
-            let installed = if manifest.metadata.kind == crate::pack::PackKind::Graph {
-                self.installed(&manifest.name).await?
+        for (coordinate, versions) in selected {
+            let (Some(store), Some(preferred)) = (&store, versions.first()) else {
+                continue;
+            };
+            let archive = match store.open(&preferred.digest) {
+                Ok(archive) => archive,
+                Err(error) => {
+                    tracing::warn!(pack = %coordinate, %error, "a stored pack archive could not be opened");
+                    items.push(json!({
+                        "name": coordinate,
+                        "version": preferred.version,
+                        "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
+                        "artifact_digest": preferred.digest,
+                        "installable": false,
+                        "error": format!("the stored archive could not be opened: {error:#}"),
+                    }));
+                    continue;
+                }
+            };
+            let manifest = archive.manifest();
+            let installable = manifest.metadata.kind == crate::pack::PackKind::Graph;
+            let installed = if installable {
+                self.installed(manifest).await?
             } else {
                 None
             };
             items.push(json!({
-                "name": manifest.name,
-                "version": manifest.version,
+                "name": coordinate,
+                "version": preferred.version,
+                "versions": versions.iter().map(|stored| stored.version.as_str()).collect::<Vec<_>>(),
                 "description": manifest.description,
                 "kind": manifest.metadata.kind,
-                "artifact_digest": distribution.digest,
+                "artifact_digest": preferred.digest,
                 "inference_slots": manifest.metadata.inference_slots,
-                "installable": manifest.metadata.kind == crate::pack::PackKind::Graph,
+                "installable": installable,
                 "installed": installed.as_ref().map(|plan| json!({
                     "graph_id": plan.graph_id,
                     "revision_digest": plan.digest,
@@ -1627,7 +1703,7 @@ impl PackInstaller {
             }));
         }
         Ok(serde_json::to_string_pretty(&json!({
-            "source": "bundled",
+            "source": "store",
             "page": {
                 "limit": limit,
                 "total": total,
@@ -1636,7 +1712,7 @@ impl PackInstaller {
                 "next_cursor": next_cursor,
             },
             "items": items,
-            "registry_lookup": "Use pack get NAMESPACE/NAME for exact registry discovery; list is the bounded bundled catalog.",
+            "registry_lookup": "Use pack get NAMESPACE/NAME for registry discovery; list shows only the packs this home's store already holds.",
         }))?)
     }
 
@@ -1647,8 +1723,7 @@ impl PackInstaller {
             inference_slots: BTreeMap::new(),
             expected_digest: None,
         };
-        self.validate(&args)?;
-        let distribution = self.resolve(&args).await?;
+        let distribution = self.resolve("get", &args).await?;
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
@@ -1659,7 +1734,7 @@ impl PackInstaller {
         .await?;
         let installable = distribution.manifest().metadata.kind == crate::pack::PackKind::Graph;
         let installed = if installable {
-            self.installed(&distribution.manifest().name).await?
+            self.installed(distribution.manifest()).await?
         } else {
             None
         };
@@ -1679,7 +1754,8 @@ impl PackInstaller {
     /// everything it lists: its `GraphDefinition`, every revision it
     /// produced and their derived triggers, and the package's own
     /// documents. Refused while any of its graphs has a run that has not
-    /// reached a terminal status. This tool has no filesystem home, so it
+    /// reached a terminal status. The package is named by coordinate alone,
+    /// so removing never resolves it (no store or registry lookup). It
     /// releases no plugin bytes or archive; use `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
@@ -1689,12 +1765,14 @@ impl PackInstaller {
             expected_digest: None,
         };
         self.validate(&args)?;
-        let distribution = self.resolve(&args).await?;
-        let coordinate = format!(
-            "{}/{}",
-            distribution.manifest().metadata.namespace,
-            distribution.manifest().name
+        let spec = crate::pack_resolve::parse_pack_spec(package.trim())?;
+        anyhow::ensure!(
+            spec.version.is_none(),
+            "pack remove takes a coordinate without a version; remove {}/{}",
+            spec.namespace,
+            spec.name
         );
+        let coordinate = format!("{}/{}", spec.namespace, spec.name);
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
@@ -1711,8 +1789,45 @@ impl PackInstaller {
         .pretty()
     }
 
+    /// Installs the plugins `distribution` ships into the home's plugin store,
+    /// sealed: a plugin that asks for authority is refused, because granting
+    /// it is the operator's call. Returns the records to restore if the
+    /// graph install that follows fails, and the plugins now installed.
+    fn install_plugins(
+        &self,
+        distribution: &ConfigPackDistribution,
+        package_digest: &str,
+    ) -> anyhow::Result<(PluginRollback, Vec<crate::plugin::store::InstalledPlugin>)> {
+        let manifest = distribution.manifest();
+        if manifest.metadata.plugins.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let home = self.home.as_deref().with_context(|| {
+            format!(
+                "pack {:?} ships plugins, which install into the node's plugin home, and this runtime has none; install it with `gents pack install`",
+                manifest.name
+            )
+        })?;
+        let rollback = crate::plugin::install::snapshot_pack_plugin_records(home, manifest);
+        let installed = crate::plugin::install::install_pack_plugins(
+            home,
+            manifest,
+            package_digest,
+            |path| distribution.0.archive.asset(path),
+            false,
+        )
+        .with_context(|| {
+            format!(
+                "pack {:?} ships a plugin this installer cannot authorize; install it with `gents pack install --grant-authority`",
+                manifest.name
+            )
+        })
+        .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
+        Ok((rollback, installed))
+    }
+
     async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
-        let distribution = self.resolve(&args).await?;
+        let distribution = self.resolve(operation, &args).await?;
         if let Some(expected) = args.expected_digest.as_deref() {
             anyhow::ensure!(
                 expected == distribution.digest(),
@@ -1720,7 +1835,7 @@ impl PackInstaller {
                 distribution.digest()
             );
         }
-        let installed = self.installed(&distribution.manifest().name).await?;
+        let installed = self.installed(distribution.manifest()).await?;
         anyhow::ensure!(
             operation != "update" || installed.is_some(),
             "pack {:?} is not installed; preview install instead",
@@ -1737,7 +1852,7 @@ impl PackInstaller {
         let missing_slots = inspected
             .slots
             .iter()
-            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .filter(|slot| !slot.optional && !args.inference_slots.contains_key(&slot.name))
             .map(|slot| slot.name.clone())
             .collect::<Vec<_>>();
         if !missing_slots.is_empty() {
@@ -1808,7 +1923,7 @@ impl PackInstaller {
             },
             "installed": installed,
             "apply_with": {
-                "argv_prefix": ["pack", operation, args.package, "--digest", distribution.digest()],
+                "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
                 "repeat_inference_slots": inference.bindings,
                 "repeat_variables": args.variables,
             },
@@ -1816,7 +1931,7 @@ impl PackInstaller {
     }
 
     async fn apply(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
-        let distribution = self.resolve(&args).await?;
+        let distribution = self.resolve(operation, &args).await?;
         let expected = args.expected_digest.as_deref().context(
             "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
         )?;
@@ -1825,7 +1940,7 @@ impl PackInstaller {
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
             distribution.digest()
         );
-        let previous = self.installed(&distribution.manifest().name).await?;
+        let previous = self.installed(distribution.manifest()).await?;
         anyhow::ensure!(
             operation != "update" || previous.is_some(),
             "pack {:?} is not installed; use pack install",
@@ -1837,7 +1952,7 @@ impl PackInstaller {
             .metadata
             .inference_slots
             .iter()
-            .filter(|slot| !args.inference_slots.contains_key(&slot.name))
+            .filter(|slot| !slot.optional && !args.inference_slots.contains_key(&slot.name))
             .map(|slot| slot.name.as_str())
             .collect::<Vec<_>>();
         anyhow::ensure!(
@@ -1868,18 +1983,50 @@ impl PackInstaller {
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
         let plugins = package.manifest.metadata.plugins.clone();
-        let receipt = crate::graph_package::install_loaded_graph_package(
+        let (plugin_rollback, installed_plugins) =
+            self.install_plugins(&distribution, &package.package_digest)?;
+        if let Some(home) = self.home.as_deref() {
+            crate::plugin::install::bind_plugin_slots(
+                home,
+                distribution.manifest(),
+                self.core.agent_did(),
+                &bindings.inference_slots,
+            )
+            .inspect_err(|_| {
+                crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback)
+            })?;
+        }
+        let record = crate::graph_package::GraphInstallRecord {
+            plugins: installed_plugins
+                .iter()
+                .map(|plugin| crate::pack::InstalledPackPlugin {
+                    name: plugin.name.clone(),
+                    digest: plugin.digest.clone(),
+                })
+                .collect(),
+            explicit: operation == "install",
+        };
+        // A failure past this point must not leave the plugins installed
+        // above orphaned: undo them along with the graph install that never
+        // landed.
+        let receipt = match crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.agent_did(),
             &package,
             &bindings,
             None,
-            &crate::graph_package::GraphInstallRecord {
-                plugins: Vec::new(),
-                explicit: operation == "install",
-            },
+            &record,
         )
-        .await?;
+        .await
+        {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                if let Some(home) = self.home.as_deref() {
+                    crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback);
+                }
+                return Err(error);
+            }
+        };
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.agent_did(),
@@ -1889,7 +2036,7 @@ impl PackInstaller {
         )
         .await?;
         let effective = self
-            .installed(&receipt.package_name)
+            .installed(distribution.manifest())
             .await?
             .context("installed package is not discoverable after activation")?;
         anyhow::ensure!(
@@ -2011,31 +2158,12 @@ pub struct RunGraphParams {
     pub entry: Option<String>,
     #[serde(default)]
     pub input: Option<Value>,
-    #[serde(default)]
-    pub repository: Option<String>,
-    #[serde(default)]
-    pub base: Option<String>,
-    #[serde(default)]
-    pub head: Option<String>,
-    #[serde(default)]
-    pub focus: Option<String>,
-    #[serde(default)]
-    pub question: Option<String>,
-    #[serde(default)]
-    pub research_scope: Option<String>,
-    #[serde(default)]
-    pub freshness: Option<String>,
-    #[serde(default)]
-    pub audience: Option<String>,
-    #[serde(default)]
-    pub output_requirements: Option<String>,
-    #[serde(default)]
-    pub investigator_count: Option<u8>,
 }
 
 pub struct RunGraphTool {
     core: SelfConfigCore,
     node: Arc<EmbeddedNode>,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
 impl Tool for RunGraphTool {
@@ -2047,7 +2175,7 @@ impl Tool for RunGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Start an installed graph on this managed node as the current principal. For code_review, supply package, repository, base, and head; the node validates the repository against the process root, captures immutable Git evidence, and provisions the workspace. For web_deep_research, supply package and question. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
+            description: "Start an installed graph on this managed node as the current principal. Supply package (and, if the package has more than one entry, entry) plus input matching that entry's advertised input_schema for a package run; list_graphs returns each entry's input_schema. For another graph, supply the exact graph_id, revision_digest, entry, and input returned by list_graphs. Returns a durable run receipt and observed initial state.".to_owned(),
             parameters: json!({
                 "type":"object",
                 "properties":{
@@ -2055,17 +2183,7 @@ impl Tool for RunGraphTool {
                     "graph_id":{"type":"string"},
                     "revision_digest":{"type":"string"},
                     "entry":{"type":"string"},
-                    "input":{"type":"object"},
-                    "repository":{"type":"string","description":"Absolute repository path for code_review; must be under the published process ceiling."},
-                    "base":{"type":"string","description":"Git base revision for code_review."},
-                    "head":{"type":"string","description":"Git head revision for code_review."},
-                    "focus":{"type":"string"},
-                    "question":{"type":"string"},
-                    "research_scope":{"type":"string"},
-                    "freshness":{"type":"string"},
-                    "audience":{"type":"string"},
-                    "output_requirements":{"type":"string"},
-                    "investigator_count":{"type":"integer","minimum":2,"maximum":8}
+                    "input":{"type":"object"}
                 },
                 "additionalProperties":false
             }),
@@ -2074,14 +2192,10 @@ impl Tool for RunGraphTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let access = graph_access(&self.node);
-        let (graph_id, digest, entry, input) = if let Some(package) = args.package.as_deref() {
-            if args.graph_id.is_some()
-                || args.revision_digest.is_some()
-                || args.entry.is_some()
-                || args.input.is_some()
-            {
+        let (graph_id, digest, prepared) = if let Some(package) = args.package.as_deref() {
+            if args.graph_id.is_some() || args.revision_digest.is_some() {
                 return Err(anyhow!(
-                    "package runs must not include generic graph_id/revision_digest/entry/input selectors"
+                    "package runs must not include generic graph_id/revision_digest selectors"
                 )
                 .into());
             }
@@ -2099,97 +2213,82 @@ impl Tool for RunGraphTool {
             let attribution = plan
                 .package
                 .as_ref()
-                .context("active graph revision has no bundled package attribution")?;
+                .context("active graph revision has no package attribution")?;
             if attribution.name != package {
                 return Err(anyhow!(
                     "active graph package attribution changed; call list_graphs again"
                 )
                 .into());
             }
-            let prepared = match package {
-                "code_review" => {
-                    let effective = self
-                        .core
-                        .read_effective_config(&BTreeSet::new(), false, false)
-                        .await?;
-                    let effective_file_mode = effective
-                        .pointer("/runtime_effective/effective/file_mode")
-                        .and_then(Value::as_str)
-                        .map(crate::tool_surface::FileToolMode::parse)
-                        .transpose()?
-                        .unwrap_or_default();
-                    if effective_file_mode == crate::tool_surface::FileToolMode::Off {
-                        return Err(anyhow!(
-                            "code_review requires effective read authority on the current behavior"
-                        )
-                        .into());
-                    }
-                    let effective_root = effective
-                        .pointer("/runtime_effective/effective/root")
-                        .and_then(Value::as_str)
-                        .context("code_review requires an explicit effective managed root")?;
-                    crate::graph_package::prepare_code_review_run(
-                        &access,
-                        self.core.agent_did(),
-                        std::path::Path::new(
-                            args.repository
-                                .as_deref()
-                                .context("code_review requires repository")?,
-                        ),
-                        args.base.as_deref().context("code_review requires base")?,
-                        args.head.as_deref().context("code_review requires head")?,
-                        args.focus.clone(),
-                        Some(std::path::Path::new(effective_root)),
+            // The same selection `prepare_entry_run` makes below, so the
+            // ceiling decision can never disagree with which entry actually
+            // runs (a mismatch here would let a model-invoked run reach a
+            // `git_diff` host step with no ceiling at all).
+            let selected_entry =
+                crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
+            let requires_git_diff_ceiling = selected_entry
+                .and_then(|entry| entry.prepare.as_ref())
+                .is_some_and(|prepare| {
+                    prepare.host.iter().any(|step| {
+                        matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. })
+                    })
+                });
+            let host_root = if requires_git_diff_ceiling {
+                let effective = self
+                    .core
+                    .read_effective_config(&BTreeSet::new(), false, false)
+                    .await?;
+                let effective_file_mode = effective
+                    .pointer("/runtime_effective/effective/file_mode")
+                    .and_then(Value::as_str)
+                    .map(crate::tool_surface::FileToolMode::parse)
+                    .transpose()?
+                    .unwrap_or_default();
+                if effective_file_mode == crate::tool_surface::FileToolMode::Off {
+                    return Err(anyhow!(
+                        "this graph's prepare step requires effective read authority on the current behavior"
                     )
-                    .await?
+                    .into());
                 }
-                "web_deep_research" => {
-                    let count = args.investigator_count.unwrap_or(4);
-                    if !(2..=8).contains(&count) {
-                        return Err(anyhow!(
-                            "investigator_count must be between 2 and 8"
-                        )
-                        .into());
-                    }
-                    let question = args
-                        .question
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|question| !question.is_empty())
-                        .context("web_deep_research requires question")?;
-                    crate::graph_package::PreparedGraphRun {
-                        entry_name: "research".to_owned(),
-                        input: json!({
-                            "question": question,
-                            "scope": args.research_scope.unwrap_or_default(),
-                            "freshness": args.freshness.unwrap_or_default(),
-                            "audience": args.audience.unwrap_or_default(),
-                            "output_requirements": args.output_requirements.unwrap_or_default(),
-                            "investigator_count": count.to_string(),
-                        }),
-                    }
-                }
-                other => {
-                    return Err(anyhow!("bundled graph {other:?} has no node-bound entry adapter; use exact graph_id/revision_digest/entry/input from list_graphs").into())
-                }
+                let effective_root = effective
+                    .pointer("/runtime_effective/effective/root")
+                    .and_then(Value::as_str)
+                    .context(
+                        "this graph's prepare step requires an explicit effective managed root",
+                    )?;
+                Some(std::path::PathBuf::from(effective_root))
+            } else {
+                None
             };
-            (
-                plan.graph_id,
-                plan.digest,
-                prepared.entry_name,
-                prepared.input,
+            let prepared = crate::graph_package::prepare_entry_run(
+                &access,
+                self.core.agent_did(),
+                crate::graph_package::EntryRunRequest {
+                    plan: &plan,
+                    entry: args.entry.as_deref(),
+                    input: args.input.unwrap_or_else(|| json!({})),
+                    host_root: host_root.as_deref(),
+                    plugins: &self.plugins,
+                },
             )
+            .await?;
+            (plan.graph_id, plan.digest, prepared)
         } else {
             (
                 args.graph_id
                     .context("run_graph requires package or graph_id")?,
                 args.revision_digest
                     .context("generic graph run requires revision_digest from list_graphs")?,
-                args.entry
-                    .context("generic graph run requires entry from list_graphs")?,
-                args.input.context(
-                    "generic graph run requires input matching the advertised entry contract",
-                )?,
+                crate::graph_package::PreparedEntryRun {
+                    entry_name: args
+                        .entry
+                        .context("generic graph run requires entry from list_graphs")?,
+                    input: args.input.context(
+                        "generic graph run requires input matching the advertised entry contract",
+                    )?,
+                    origin: crate::graph_pipeline::EntryInputOrigin::Operator,
+                    documents: 0,
+                },
             )
         };
         let receipt = crate::graph_pipeline::start_graph_run_with_access(
@@ -2197,8 +2296,9 @@ impl Tool for RunGraphTool {
             self.core.agent_did(),
             &graph_id,
             Some(&digest),
-            &entry,
-            input,
+            &prepared.entry_name,
+            prepared.input,
+            prepared.origin,
         )
         .await?;
         let observed = crate::graph_pipeline::load_graph_run_view_with_access(
@@ -2330,6 +2430,7 @@ pub fn build_self_config_tools(
     agent_did: String,
     identity: Option<Arc<dyn AgentIdentity>>,
     config: &SelfConfigToolConfig,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled && !config.enable_graph_tools {
         return Vec::new();
@@ -2363,6 +2464,7 @@ pub fn build_self_config_tools(
         tools.push(Box::new(RunGraphTool {
             core: core.clone(),
             node: node.clone(),
+            plugins: plugins.clone(),
         }));
         tools.push(Box::new(GetGraphRunTool {
             core: core.clone(),
@@ -2391,6 +2493,7 @@ pub fn build_self_config_tools(
         allow_pack_install: config.enable_pack_install,
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
+        plugins,
     }));
     tools
 }

@@ -44,7 +44,6 @@ pub(crate) struct OutputObligationGate {
 
 #[derive(Debug, Deserialize)]
 struct CompletedWriteRow {
-    tool_name: String,
     args: String,
 }
 
@@ -226,7 +225,6 @@ impl OutputObligationGate {
                 .entry(row.tool_name.clone())
                 .or_default()
                 .push(CompletedWriteRow {
-                    tool_name: row.tool_name,
                     args: call.args.clone(),
                 });
         }
