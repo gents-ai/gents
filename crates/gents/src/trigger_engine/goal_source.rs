@@ -16,6 +16,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::blocked_turn::last_failed_call_in_txn;
+use crate::config_client::ConfigAccess;
 use crate::goal::publish_claimed_continuation;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_goal_continuation,
@@ -736,27 +738,13 @@ impl GoalSource {
     }
 
     async fn request_usage_limit_failure(&self, request_id: &str) -> Result<Option<String>> {
-        let request_id = escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{
-                InferenceCall(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
-                    order: [{{ attempt: DESC }}],
-                    limit: 1
-                ) {{ failure_reason }}
-            }}"#
-        );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query goal usage-limit failure")
-                .await?;
-        let reason = response
-            .data
+        let call = ConfigAccess::transact_local(&self.node, None, "goal.last_failed_call", |txn| {
+            Box::pin(last_failed_call_in_txn(txn, request_id))
+        })
+        .await?;
+        let reason = call
             .as_ref()
-            .and_then(|data| data.get("InferenceCall"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("failure_reason"))
-            .and_then(|value| value.as_str())
+            .and_then(|call| call.failure_reason.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty());
         Ok(reason.and_then(|reason| {
