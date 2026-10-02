@@ -75,7 +75,6 @@ minijinja.workspace = true
 opentelemetry.workspace = true
 p2p.workspace = true
 query.workspace = true
-schema.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
