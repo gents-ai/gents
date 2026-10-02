@@ -2088,6 +2088,7 @@ pub async fn set_goal_from_access(
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
+    _auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     access
         .transact("goal.set_from_access", move |txn| {
@@ -3007,6 +3008,55 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.auto_resume_at_reset, Some(true));
+    }
+
+    async fn auto_resume_access() -> crate::ConfigAccess {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::ConfigAccess::Local(node)
+    }
+
+    #[tokio::test]
+    async fn auto_resume_operator_setter_stores_it() {
+        let access = auto_resume_access().await;
+        let owner = "did:key:z6MkTestOwner";
+        let created =
+            set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
+                .await
+                .unwrap();
+        assert_eq!(created.auto_resume_at_reset, Some(true));
+        let off = set_goal_from_access(&access, owner, "s", None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert_eq!(off.auto_resume_at_reset, Some(false));
+    }
+
+    #[tokio::test]
+    async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
+        let access = auto_resume_access().await;
+        let crate::ConfigAccess::Local(node) = &access else {
+            unreachable!()
+        };
+        let owner = "did:key:z6MkTestOwner";
+        set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
+            .await
+            .unwrap();
+        let kept = set_goal_from_access(
+            &access,
+            owner,
+            "s",
+            None,
+            Some(GoalStatus::Paused),
+            Some(Some(10)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(kept.auto_resume_at_reset, Some(true));
+        let unchanged = set_goal(node, owner, "s", Some("ship more"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.auto_resume_at_reset, Some(true));
     }
 }
 

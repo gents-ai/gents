@@ -57,6 +57,14 @@ async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
         .ensure_supported("goal set", &[OutputFormat::Json])?;
     let (access, agent_did) = access_and_did(&args.scope).await?;
+    print_json(&goal_set_value(&access, &agent_did, &args).await?)
+}
+
+async fn goal_set_value(
+    access: &ConfigAccess,
+    agent_did: &str,
+    args: &GoalSetArgs,
+) -> Result<serde_json::Value> {
     let status = args.status.map(GoalStatus::from);
     let budget = if args.clear_token_budget {
         Some(None)
@@ -64,15 +72,16 @@ async fn goal_set(args: GoalSetArgs) -> Result<()> {
         args.token_budget.map(Some)
     };
     let goal = set_goal_from_access(
-        &access,
-        &agent_did,
+        access,
+        agent_did,
         &args.scope.session,
         args.objective.as_deref(),
         status,
         budget,
+        args.auto_resume,
     )
     .await?;
-    print_json(&serde_json::to_value(GoalSnapshot::from_document(
+    Ok(serde_json::to_value(GoalSnapshot::from_document(
         &goal,
         Utc::now(),
     ))?)
@@ -291,9 +300,17 @@ mod tests {
             ("session-limited", GoalStatus::UsageLimited),
             ("session-active", GoalStatus::Active),
         ] {
-            set_goal_from_access(&access, DID, session, Some("ship it"), Some(status), None)
-                .await
-                .unwrap();
+            set_goal_from_access(
+                &access,
+                DID,
+                session,
+                Some("ship it"),
+                Some(status),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
         }
         let at = (Utc::now() + chrono::Duration::seconds(1)).to_rfc3339();
         let failure = "provider usage limit reached (resets at 2030-01-01T00:00:00Z): The usage limit has been reached";
@@ -349,6 +366,40 @@ mod tests {
         for secret in ["SECRET", "IDENTITY"] {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
+    }
+
+    #[tokio::test]
+    async fn goal_show_reports_the_operator_auto_resume_opt_in() {
+        use crate::cli::args::{Cli, Command};
+        use clap::Parser;
+        let access = seeded().await;
+        let shown = goal_show_value(&access, DID, "session-active", Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(shown["auto_resume_at_reset"], false);
+        let Command::Goal {
+            command: GoalCommand::Set(args),
+        } = Cli::try_parse_from([
+            "gents",
+            "goal",
+            "set",
+            "--session",
+            "session-active",
+            "--auto-resume",
+            "on",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected goal set");
+        };
+        // `goal set` prints the model-facing snapshot, which never carries the opt-in.
+        let set = goal_set_value(&access, DID, &args).await.unwrap();
+        assert_eq!(set.get("auto_resume_at_reset"), None, "{set}");
+        let shown = goal_show_value(&access, DID, "session-active", Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(shown["auto_resume_at_reset"], true);
     }
 
     #[tokio::test]
