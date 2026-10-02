@@ -58,6 +58,60 @@ fn file_key(temp: &tempfile::TempDir) -> (StoreEncryption, StoreKey, PathBuf) {
     (record, key, key_file)
 }
 
+#[tokio::test]
+async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
+    use crate::config_client::ConfigAccess;
+    use crate::graphql::escape_graphql_string;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let (_, key, _) = file_key(&temp);
+    let data = temp.path().join("data");
+    let node = Arc::new(
+        persistent_builder(&data, &key)
+            .unwrap()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let access = ConfigAccess::Local(node.clone());
+    access
+        .add_schema("type BudgetDocument { payload: String }")
+        .await
+        .unwrap();
+    let payload = "large durable transcript ".repeat(44_000);
+    access
+        .write(
+            "test.storage_budget",
+            &format!(
+                "mutation {{ create_BudgetDocument(input: {{ payload: \"{}\" }}) {{ _docID }} }}",
+                escape_graphql_string(&payload),
+            ),
+        )
+        .await
+        .unwrap();
+    drop(access);
+    node.shutdown().await;
+    drop(node);
+
+    let reopened = Arc::new(
+        persistent_builder(&data, &key)
+            .unwrap()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let result = ConfigAccess::Local(reopened.clone())
+        .execute("{ BudgetDocument { payload } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        result["data"]["BudgetDocument"][0]["payload"].as_str(),
+        Some(payload.as_str())
+    );
+    reopened.shutdown().await;
+}
+
 /// The written credential's tokens reach disk only as ciphertext, while the
 /// same writes to an unencrypted store leave them readable, so the scan
 /// proves the encryption rather than the storage format.
