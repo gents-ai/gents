@@ -1,6 +1,45 @@
 use crate::tool::ToolDefinition;
 use crate::ToolChoice;
 
+/// Whether the provider's raw response carries an OpenAI Responses cache-token
+/// observation. Rig's `Usage` turns a missing `input_tokens_details` into zero,
+/// so admission must consult the raw response before persisting the nullable
+/// InferenceCall column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CachedInputTokensObservation {
+    /// The raw response is not a Responses API payload; retain Rig's behavior.
+    NotAvailable,
+    /// Responses usage was present but had no cached-token detail.
+    Unreported,
+    /// The provider explicitly supplied a cached-token count, including zero.
+    Reported(u64),
+}
+
+/// Read cached-token presence from a serializable raw provider response.
+///
+/// The Responses final streaming item and non-streaming raw response both carry
+/// `usage.output_tokens_details`; this identifies the Responses usage shape
+/// without changing other providers' existing accounting behavior.
+pub fn cached_input_tokens_observation<T: serde::Serialize>(
+    raw_response: &T,
+) -> CachedInputTokensObservation {
+    let Ok(value) = serde_json::to_value(raw_response) else {
+        return CachedInputTokensObservation::NotAvailable;
+    };
+    let Some(usage) = value.get("usage").and_then(serde_json::Value::as_object) else {
+        return CachedInputTokensObservation::NotAvailable;
+    };
+    if !usage.contains_key("output_tokens_details") {
+        return CachedInputTokensObservation::NotAvailable;
+    }
+    usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .map(CachedInputTokensObservation::Reported)
+        .unwrap_or(CachedInputTokensObservation::Unreported)
+}
+
 pub fn to_rig_tool_definition(def: &ToolDefinition) -> rig::completion::ToolDefinition {
     rig::completion::ToolDefinition {
         name: def.name.clone(),
@@ -484,6 +523,74 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn responses_cache_observation_preserves_absent_zero_and_positive_details() {
+        type Response =
+            rig::providers::openai::responses_api::streaming::StreamingCompletionResponse;
+        let deserialize = |json| serde_json::from_value::<Response>(json).unwrap();
+        let base = json!({
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 120
+            }
+        });
+        let missing = deserialize(base.clone());
+        assert_eq!(
+            cached_input_tokens_observation(&missing),
+            CachedInputTokensObservation::Unreported
+        );
+
+        let zero = deserialize(json!({
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 20,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 120
+            }
+        }));
+        assert_eq!(
+            cached_input_tokens_observation(&zero),
+            CachedInputTokensObservation::Reported(0)
+        );
+
+        let positive = deserialize(json!({
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": {"cached_tokens": 64},
+                "output_tokens": 20,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 120
+            }
+        }));
+        assert_eq!(
+            cached_input_tokens_observation(&positive),
+            CachedInputTokensObservation::Reported(64)
+        );
+
+        #[derive(serde::Serialize)]
+        struct OtherProvider {
+            usage: UsageShape,
+        }
+        #[derive(serde::Serialize)]
+        struct UsageShape {
+            input_tokens: u64,
+            cached_input_tokens: u64,
+        }
+        assert_eq!(
+            cached_input_tokens_observation(&OtherProvider {
+                usage: UsageShape {
+                    input_tokens: 100,
+                    cached_input_tokens: 7,
+                },
+            }),
+            CachedInputTokensObservation::NotAvailable
+        );
+    }
 
     fn max_turns_stream_failure(max_turns: usize) -> rig::agent::StreamingError {
         rig::agent::StreamingError::Prompt(Box::new(rig::completion::PromptError::MaxTurnsError {

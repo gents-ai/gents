@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_loop::rig_compat::CachedInputTokensObservation;
 use rig::completion::{CompletionError, Usage};
 
 use super::controller::InferenceCallRecord;
@@ -129,6 +130,7 @@ pub(super) async fn persist_existing_call_terminal(
     call_state: &str,
     failure_reason: Option<&str>,
     usage: Option<Usage>,
+    cache_observation: CachedInputTokensObservation,
 ) -> Result<()> {
     // Proofs/InferenceCall/Persistence.lean: only an existing legal source
     // may install the first terminal outcome; later observations are usage only.
@@ -140,7 +142,8 @@ pub(super) async fn persist_existing_call_terminal(
     let call_id = escape_graphql_string(&call.call_id);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
-    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
+    let (prompt_tokens, completion_tokens, cached_input_tokens) =
+        usage_fields(usage, cache_observation);
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
@@ -210,7 +213,8 @@ fn add_call_mutation(
     let started_at = optional_graphql_string("started_at", started_at);
     let ended_at = optional_graphql_string("ended_at", ended_at);
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
-    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
+    let (prompt_tokens, completion_tokens, cached_input_tokens) =
+        usage_fields(usage, CachedInputTokensObservation::NotAvailable);
     format!(
         r#"mutation {{
             add_InferenceCall(input: {{
@@ -268,13 +272,25 @@ fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn usage_fields(usage: Option<Usage>) -> (String, String, String) {
+fn usage_fields(
+    usage: Option<Usage>,
+    cache_observation: CachedInputTokensObservation,
+) -> (String, String, String) {
     match usage {
-        Some(usage) => (
-            format!("prompt_tokens: {},", usage.input_tokens),
-            format!("completion_tokens: {},", usage.output_tokens),
-            format!("cached_input_tokens: {},", usage.cached_input_tokens),
-        ),
+        Some(usage) => {
+            let cached_input_tokens = match cache_observation {
+                CachedInputTokensObservation::NotAvailable => Some(usage.cached_input_tokens),
+                CachedInputTokensObservation::Unreported => None,
+                CachedInputTokensObservation::Reported(tokens) => Some(tokens),
+            };
+            (
+                format!("prompt_tokens: {},", usage.input_tokens),
+                format!("completion_tokens: {},", usage.output_tokens),
+                cached_input_tokens
+                    .map(|tokens| format!("cached_input_tokens: {tokens},"))
+                    .unwrap_or_default(),
+            )
+        }
         None => (String::new(), String::new(), String::new()),
     }
 }
@@ -349,16 +365,46 @@ mod tests {
 
     #[test]
     fn usage_columns_preserve_provider_components_verbatim() {
-        let fields = usage_fields(Some(Usage {
-            input_tokens: 100,
-            output_tokens: 50,
-            total_tokens: 200,
-            cached_input_tokens: 40,
-            cache_creation_input_tokens: 10,
-        }));
+        let fields = usage_fields(
+            Some(Usage {
+                input_tokens: 100,
+                output_tokens: 50,
+                total_tokens: 200,
+                cached_input_tokens: 40,
+                cache_creation_input_tokens: 10,
+            }),
+            CachedInputTokensObservation::NotAvailable,
+        );
 
         assert_eq!(fields.0, "prompt_tokens: 100,");
         assert_eq!(fields.1, "completion_tokens: 50,");
         assert_eq!(fields.2, "cached_input_tokens: 40,");
+    }
+
+    #[test]
+    fn cached_input_tokens_distinguish_missing_zero_and_positive_responses_usage() {
+        let usage = Some(Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 150,
+            cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        });
+        assert_eq!(
+            usage_fields(usage, CachedInputTokensObservation::Unreported).2,
+            ""
+        );
+        assert_eq!(
+            usage_fields(usage, CachedInputTokensObservation::Reported(0)).2,
+            "cached_input_tokens: 0,"
+        );
+        assert_eq!(
+            usage_fields(usage, CachedInputTokensObservation::Reported(32)).2,
+            "cached_input_tokens: 32,"
+        );
+        assert_eq!(
+            usage_fields(usage, CachedInputTokensObservation::NotAvailable).2,
+            "cached_input_tokens: 0,"
+        );
     }
 }

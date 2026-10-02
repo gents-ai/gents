@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
+use gents_loop::rig_compat::CachedInputTokensObservation;
 use rig::completion::{CompletionError, Usage};
 use tokio_util::sync::CancellationToken;
 
@@ -26,6 +27,7 @@ struct PermitTerminal {
     call_state: &'static str,
     failure_reason: Option<String>,
     usage: Option<Usage>,
+    cached_input_tokens: CachedInputTokensObservation,
 }
 
 impl AdmissionPermit {
@@ -69,14 +71,25 @@ impl AdmissionPermit {
         self.provider_activity = activity;
     }
 
+    #[cfg(test)]
     pub(crate) async fn finish_success(
         &mut self,
         usage: Option<Usage>,
+    ) -> Result<(), CompletionError> {
+        self.finish_success_with_cache(usage, CachedInputTokensObservation::NotAvailable)
+            .await
+    }
+
+    pub(crate) async fn finish_success_with_cache(
+        &mut self,
+        usage: Option<Usage>,
+        cached_input_tokens: CachedInputTokensObservation,
     ) -> Result<(), CompletionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "completed",
             failure_reason: None,
             usage,
+            cached_input_tokens,
         });
         self.finish().await
     }
@@ -86,6 +99,7 @@ impl AdmissionPermit {
             call_state: "failed",
             failure_reason: Some(recorded_failure_reason(reason)),
             usage: None,
+            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
         });
         self.finish().await
     }
@@ -104,6 +118,7 @@ impl AdmissionPermit {
             call_state: "cancelled",
             failure_reason: Some("Cancelled".to_string()),
             usage: None,
+            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
         });
     }
 
@@ -115,13 +130,15 @@ impl AdmissionPermit {
             call_state: "completed",
             failure_reason: None,
             usage: None,
+            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
         });
-        if let Err(error) = persist_existing_call_terminal(
+        if let Err(error) = super::persistence::persist_existing_call_terminal(
             self.node.clone(),
             &self.call,
             terminal.call_state,
             terminal.failure_reason.as_deref(),
             terminal.usage,
+            terminal.cached_input_tokens,
         )
         .await
         {
@@ -143,12 +160,17 @@ impl AdmissionPermit {
 }
 
 impl StreamGuardLifecycle for AdmissionPermit {
-    fn mark_stream_success(&mut self, usage: Option<Usage>) {
+    fn mark_stream_success(
+        &mut self,
+        usage: Option<Usage>,
+        cached_input_tokens: CachedInputTokensObservation,
+    ) {
         if self.terminal.is_none() {
             self.terminal = Some(PermitTerminal {
                 call_state: "completed",
                 failure_reason: None,
                 usage,
+                cached_input_tokens,
             });
         }
     }
@@ -202,18 +224,21 @@ impl Drop for AdmissionPermit {
                     call_state: "cancelled",
                     failure_reason: Some("Cancelled".to_string()),
                     usage: None,
+                    cached_input_tokens: CachedInputTokensObservation::NotAvailable,
                 }
             } else if let Some(reason) = terminal_failure_reason {
                 PermitTerminal {
                     call_state: "failed",
                     failure_reason: Some(reason),
                     usage: None,
+                    cached_input_tokens: CachedInputTokensObservation::NotAvailable,
                 }
             } else {
                 PermitTerminal {
                     call_state: "failed",
                     failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
                     usage: None,
+                    cached_input_tokens: CachedInputTokensObservation::NotAvailable,
                 }
             }
         });
@@ -225,12 +250,13 @@ impl Drop for AdmissionPermit {
         // provider's terminal item. Drop remains the abort/cancellation repair
         // path and must never block a Tokio runtime thread.
         spawn_persistence(async move {
-            if let Err(error) = persist_existing_call_terminal(
+            if let Err(error) = super::persistence::persist_existing_call_terminal(
                 node,
                 &call,
                 terminal.call_state,
                 terminal.failure_reason.as_deref(),
                 terminal.usage,
+                terminal.cached_input_tokens,
             )
             .await
             {

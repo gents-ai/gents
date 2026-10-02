@@ -232,10 +232,15 @@ struct SignalledPermitFinalizer {
 }
 
 impl super::super::stream_guard::StreamGuardLifecycle for SignalledPermitFinalizer {
-    fn mark_stream_success(&mut self, usage: Option<rig::completion::Usage>) {
+    fn mark_stream_success(
+        &mut self,
+        usage: Option<rig::completion::Usage>,
+        cached_input_tokens: gents_loop::rig_compat::CachedInputTokensObservation,
+    ) {
         super::super::stream_guard::StreamGuardLifecycle::mark_stream_success(
             &mut self.permit,
             usage,
+            cached_input_tokens,
         );
     }
 
@@ -405,6 +410,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         "completed",
         None,
         Some(usage),
+        gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
     )
     .await
     .unwrap();
@@ -436,6 +442,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         "completed",
         None,
         Some(usage),
+        gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
     )
     .await
     .unwrap();
