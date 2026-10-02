@@ -445,7 +445,14 @@ impl TrialExecutor for EmbeddedExecutor {
                 messages: evidence.messages,
                 tool_calls: evidence.tool_calls,
                 inference_calls: evidence.inference_calls,
-                captures: run_captures(&home.node, &at.trial_agent_did, &workspace, captures).await,
+                captures: run_captures(
+                    &home.node,
+                    &at.trial_agent_did,
+                    &at.session_id,
+                    &workspace,
+                    captures,
+                )
+                .await,
             });
         }
         let usage = home_usage(&home.node).await;
@@ -957,6 +964,7 @@ async fn run_stage(
         captures: run_captures(
             &home.node,
             &locator.trial_agent_did,
+            &locator.session_id,
             workspace,
             &stage.captures,
         )
@@ -1622,6 +1630,7 @@ async fn fired_request(node: &EmbeddedNode, doc_id: &str) -> Result<Option<Strin
 async fn run_captures(
     node: &Arc<EmbeddedNode>,
     trial_did: &str,
+    session_id: &str,
     workspace: &Path,
     captures: &[Capture],
 ) -> BTreeMap<String, CaptureResult> {
@@ -1658,7 +1667,15 @@ async fn run_captures(
                 collection,
                 filter,
                 fields,
-            } => match capture_documents(node, collection, filter, fields, trial_did).await {
+            } => match capture_documents(
+                node,
+                collection,
+                &bind_capture_session(filter, session_id),
+                fields,
+                trial_did,
+            )
+            .await
+            {
                 Ok(rows) => {
                     results.insert(name.clone(), CaptureResult::Documents { rows });
                 }
@@ -1676,6 +1693,27 @@ async fn run_captures(
         }
     }
     results
+}
+
+/// `$session` in document captures denotes the durable trial session, not any
+/// other session owned by the same principal. It is bound before GraphQL escaping.
+fn bind_capture_session(value: &Value, session_id: &str) -> Value {
+    match value {
+        Value::String(text) if text == "$session" => Value::String(session_id.into()),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| bind_capture_session(v, session_id))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, v)| (key.clone(), bind_capture_session(v, session_id)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 async fn capture_documents(
@@ -2050,6 +2088,7 @@ mod tests {
         let captures = run_captures(
             &node,
             "did:test",
+            "session-test",
             workspace.path(),
             &[
                 Capture::Schema {
@@ -2129,6 +2168,49 @@ mod tests {
         assert_eq!(normal.len(), 1);
         assert_eq!(normal[0]["request_id"], "normal");
         home.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
+        access
+            .add_schema("type CaptureHeader { session_id: String sequence: Int }")
+            .await
+            .unwrap();
+        let session_id = "trial\"session";
+        for session in [session_id, "background-session"] {
+            access.write("eval.test.capture_session", &format!(
+                "mutation {{ create_CaptureHeader(input: {{session_id: \"{}\", sequence: 1}}) {{ _docID }} }}",
+                escape_graphql_string(session)
+            )).await.unwrap();
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let captures = run_captures(
+            &node,
+            "did:test",
+            session_id,
+            workspace.path(),
+            &[Capture::Documents {
+                name: "source_headers".into(),
+                collection: "CaptureHeader".into(),
+                filter: json!({"session_id": {"_eq": "$session"}, "sequence": {"_eq": 1}}),
+                fields: vec!["session_id".into(), "sequence".into()],
+            }],
+        )
+        .await;
+        let CaptureResult::Documents { rows } = &captures["source_headers"] else {
+            panic!("document capture")
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["session_id"], session_id);
+        assert_eq!(rows[0]["sequence"], 1);
+        assert!(rows[0]["_docID"].as_str().is_some());
+        assert_eq!(
+            bind_capture_session(&json!("literal $session text"), session_id),
+            json!("literal $session text")
+        );
+        node.shutdown().await;
     }
 
     #[test]

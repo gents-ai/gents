@@ -88,6 +88,9 @@
             },
             "sequence": {
               "_eq": 1
+            },
+            "session_id": {
+              "_eq": "$session"
             }
           },
           "fields": [

@@ -189,3 +189,21 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     )?;
     Ok(())
 }
+
+#[test]
+fn transcript_citation_capture_is_scoped_to_the_trial_session() {
+    let case: serde_json::Value = serde_json::from_str(include_str!(
+        "../fixtures/configurator_evals/sessions/cases/transcript_evidence.json"
+    ))
+    .unwrap();
+    let captures: Vec<_> = case["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|stage| stage["capture"].as_array().into_iter().flatten())
+        .filter(|capture| capture["name"] == "source_headers")
+        .collect();
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0]["filter"]["session_id"]["_eq"], "$session");
+    assert_eq!(captures[0]["filter"]["sequence"]["_eq"], 1);
+}
