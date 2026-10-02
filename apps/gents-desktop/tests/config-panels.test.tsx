@@ -18,6 +18,7 @@ import {
   ProfilesPanel,
   newProfileDocument,
 } from "../src/ui/screens/agent/ProfilesPanel";
+import { ProfileSheet } from "../src/ui/screens/agent/ProfileSheet";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
@@ -1094,6 +1095,26 @@ describe("configuration panels", () => {
           expect(
             newProfileDocument(rowsDeployment, "claude", personalOff).backend_id,
           ).toBe("claude-work");
+        });
+
+        it("a new profile sheet drafts from the accounts loaded before it opens", async () => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(personalOff);
+          const sheet = (open: boolean) => (
+            <ProfileSheet
+              shell={shell}
+              deployment={rowsDeployment}
+              open={open}
+              onClose={vi.fn()}
+            />
+          );
+          const view = render(sheet(false));
+          await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalled());
+          await act(async () => {});
+          view.rerender(sheet(true));
+          expect(
+            await screen.findByRole("combobox", { name: "Backend" }),
+          ).toHaveTextContent(/^Work/);
         });
 
         it("new profile preselects the provider's first account in resolver order", () => {
