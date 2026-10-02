@@ -36,16 +36,48 @@ pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Resu
 
 pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) -> Result<()> {
     let (access, agent_did) = target(args.home.as_deref(), args.graphql.as_deref()).await?;
-    crate::print_json(
-        &set_account(
-            &access,
-            &agent_did,
-            &args.profile,
-            &args.account,
-            args.provider.as_deref(),
-        )
-        .await?,
-    )
+    let slots = bound_slots(
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+        &agent_did,
+        &args.profile,
+    )?;
+    let output = match args.account.as_deref() {
+        None => list_candidates(&access, &agent_did, &args.profile, &slots).await?,
+        Some(account) => {
+            set_account(
+                &access,
+                &agent_did,
+                &args.profile,
+                account,
+                args.provider.as_deref(),
+                args.with_compaction,
+                &slots,
+            )
+            .await?
+        }
+    };
+    crate::print_json(&output)
+}
+
+/// The plugins whose model slot is bound to `profile_id` on this host.
+fn bound_slots(
+    _home: Option<&std::path::Path>,
+    _graphql: Option<&str>,
+    _agent_did: &str,
+    _profile_id: &str,
+) -> Result<Vec<String>> {
+    Ok(Vec::new())
+}
+
+/// Where `profile_id` can move, who uses it and what a move costs.
+async fn list_candidates(
+    _access: &ConfigAccess,
+    _agent_did: &str,
+    _profile_id: &str,
+    _plugin_slots: &[String],
+) -> Result<Value> {
+    Ok(Value::Null)
 }
 
 /// Write the profile `contents` holds. `account` (narrowed by `provider`), or
@@ -100,6 +132,8 @@ async fn set_account(
     profile_id: &str,
     account: &str,
     provider: Option<&str>,
+    _with_compaction: bool,
+    _plugin_slots: &[String],
 ) -> Result<Value> {
     let snapshot = snapshot(access, agent_did).await?;
     let mut profile = snapshot
@@ -689,9 +723,17 @@ mod tests {
     async fn set_account_moves_only_the_backend() {
         let (access, b_backend, _) = seeded().await;
         let before = stored(&access, "p-original").await.unwrap();
-        let output = set_account(&access, DID, "p-original", "label-b", Some(CLAUDE))
-            .await
-            .unwrap();
+        let output = set_account(
+            &access,
+            DID,
+            "p-original",
+            "label-b",
+            Some(CLAUDE),
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(
             output["account"],
             json!({"label": "label-b", "state": "enabled"})
@@ -704,16 +746,232 @@ mod tests {
                 ..before.clone()
             }
         );
-        let error = set_account(&access, DID, "p-original", "label-c", Some(CLAUDE))
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = set_account(
+            &access,
+            DID,
+            "p-original",
+            "label-c",
+            Some(CLAUDE),
+            false,
+            &[],
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("disabled"), "{error}");
-        let error = set_account(&access, DID, "p-original", "label-unknown", None)
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = set_account(
+            &access,
+            DID,
+            "p-original",
+            "label-unknown",
+            None,
+            false,
+            &[],
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("no account"), "{error}");
         assert_eq!(stored(&access, "p-original").await.unwrap(), after);
+    }
+    /// Behaviors `x` and `y` on `p-original`, `x` compacting with `summ` on
+    /// the same account.
+    async fn with_behaviors(access: &ConfigAccess) {
+        write_profile(access, "summ", "claude").await;
+        let documents = [
+            (
+                gents::Collection::Compaction,
+                json!({"agent_did": DID, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
+            ),
+            (
+                gents::Collection::AgentContext,
+                json!({"agent_did": DID, "context_id": "context-x", "compaction_id": "compaction-x"}),
+            ),
+            (
+                gents::Collection::AgentBehavior,
+                json!({"agent_did": DID, "behavior_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+            ),
+            (
+                gents::Collection::AgentBehavior,
+                json!({"agent_did": DID, "behavior_id": "y", "inference_profile_id": "p-original"}),
+            ),
+        ]
+        .into_iter()
+        .map(|(collection, value)| gents::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+        let plan = gents::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        access
+            .transact("test.profile.behaviors", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::config_client::apply_desired_state_plan(txn, plan)
+                        .await
+                        .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_account_without_an_account_lists_the_candidates() {
+        let (access, b_backend, _) = seeded().await;
+        with_behaviors(&access).await;
+        let output = list_candidates(&access, DID, "p-original", &[])
+            .await
+            .unwrap();
+        assert_eq!(output["profile"], json!("p-original"));
+        assert_eq!(
+            output["account"],
+            json!({"label": "Claude", "state": "enabled"})
+        );
+        assert_eq!(output["behaviors"], json!(["x", "y"]));
+        assert_eq!(output["companions"], json!(["summ"]));
+        assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
+        let candidates: Vec<_> = output["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate["label"].as_str().unwrap(),
+                    candidate["backend_id"].as_str().unwrap(),
+                    candidate["models"].as_str().unwrap(),
+                    candidate["usage"]["note"].as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            candidates,
+            [(
+                "label-b",
+                b_backend.as_str(),
+                "not read yet",
+                Some("unknown")
+            )],
+            "label-c is disabled, Gone is not on this node, OpenAI is another provider"
+        );
+        assert_redacted(&output.to_string());
+    }
+
+    #[tokio::test]
+    async fn set_account_moves_the_profile_through_the_switch() {
+        let (access, b_backend, _) = seeded().await;
+        with_behaviors(&access).await;
+        let output = set_account(&access, DID, "p-original", "label-b", None, false, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            output["headline"],
+            json!("Move profile p-original to label-b (used by 2 behaviors)")
+        );
+        assert_eq!(output["behaviors"], json!(["x", "y"]));
+        assert_eq!(output["cost"], json!(gents::config_client::SWITCH_COST));
+        assert_eq!(output["companions_offered"], json!(["summ"]));
+        assert_eq!(output["companions_moved"], json!([]));
+        assert_eq!(stored(&access, "summ").await.unwrap().backend_id, "claude");
+
+        let (access, b_backend_2, _) = seeded().await;
+        with_behaviors(&access).await;
+        let output = set_account(&access, DID, "p-original", "label-b", None, true, &[])
+            .await
+            .unwrap();
+        assert_eq!(output["companions_moved"], json!(["summ"]));
+        assert_eq!(output["companions_offered"], json!([]));
+        assert_eq!(
+            stored(&access, "summ").await.unwrap().backend_id,
+            b_backend_2
+        );
+        assert_eq!(b_backend, b_backend_2);
+        assert_redacted(&output.to_string());
+    }
+
+    #[tokio::test]
+    async fn set_account_refuses_another_providers_account() {
+        let (access, _, _) = seeded().await;
+        let mut grok = claude_sign_in("g");
+        grok.provider = "xai-oauth".into();
+        grok.credential_id = format!("xai-oauth:{DID}:acct-g");
+        grok.account_ref = Some("acct-g".into());
+        grok.label = Some("label-g".into());
+        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+            .await
+            .unwrap();
+        gents::config_client::write_inference_backend_document(
+            &access,
+            &serde_json::from_value(backend(
+                "xai-oauth-acct-g",
+                "label-g",
+                "XaiGrokOAuth",
+                json!({"kind": "principal_oauth", "account_ref": "acct-g"}),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let before = stored_profiles(&access).await;
+        let error = set_account(&access, DID, "p-original", "label-g", None, false, &[])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("belongs to another provider"), "{error}");
+        assert_eq!(stored_profiles(&access).await, before, "nothing written");
+    }
+
+    #[tokio::test]
+    async fn set_account_moves_an_api_key_profile_and_counts_its_plugin_slots() {
+        let (access, _, _) = seeded().await;
+        gents::config_client::write_inference_backend_document(
+            &access,
+            &serde_json::from_value(backend(
+                "openai-2",
+                "OpenAI 2",
+                "OpenAiCompatible",
+                json!({"kind": "api_key", "key": "key-SECRET"}),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let record: gents::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+            "namespace": "team", "name": "ocr", "version": "1.0.0",
+            "digest": format!("sha256:{}", "0".repeat(64)), "language": "rust",
+            "declaration": {
+                "name": "ocr", "description": "reads pages", "artifact": "plugins/ocr.afb",
+                "language": "rust", "input_schema": {"type": "object"},
+                "model_slot": "remote_ocr",
+            },
+            "model_binding": {"agent_did": DID, "profile_id": "p-api"},
+        }))
+        .unwrap();
+        gents::plugin::store::write_record(home.path(), &record).unwrap();
+
+        let slots = bound_slots(Some(home.path()), None, DID, "p-api").unwrap();
+        assert_eq!(slots, ["team/ocr"]);
+        assert!(
+            bound_slots(Some(home.path()), Some("http://127.0.0.1:1"), DID, "p-api")
+                .unwrap()
+                .is_empty(),
+            "bindings are read on the local host only"
+        );
+        let output = set_account(&access, DID, "p-api", "OpenAI 2", None, false, &slots)
+            .await
+            .unwrap();
+        assert_eq!(output["backend_id"], json!("openai-2"));
+        assert_eq!(
+            output["headline"],
+            json!("Move profile p-api to OpenAI 2 (used by 1 plugin slot)")
+        );
+        assert_eq!(output["plugin_slots"], json!(["team/ocr"]));
+        assert_eq!(
+            stored(&access, "p-api").await.unwrap().backend_id,
+            "openai-2"
+        );
+        assert_redacted(&output.to_string());
     }
 }
