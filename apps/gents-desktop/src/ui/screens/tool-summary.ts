@@ -8,6 +8,7 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { shortPath } from "./tool-runs";
+import type { ToolStepStatus } from "@gents/ui/conversation";
 
 /* `cd <somewhere> && real-command …` is how a shell tool is usually
    called, and the cd is scaffolding: a real export had it leading 1,037 of
@@ -140,3 +141,90 @@ export function toolSummary(t: RenderedToolCallView): {
       return { kind: "", primary: t.toolName, secondary: compact(p.summary) };
   }
 }
+
+/* What a diff line is, in the words the runtime uses. The bridge writes
+   "add" and "del" (crates/gents-desktop-bridge/src/snapshot/
+   tool_presentation.rs, `diff_lines`), while the scenarios here were
+   written as "added" and "removed" — so a test for 'added' alone sent
+   every real line down the removed branch and a whole diff read as a
+   deletion. Anything else is context, which is neither. */
+export const diffKind = (kind: string): "added" | "removed" | "context" => {
+  const k = kind.toLowerCase();
+  if (k.startsWith("add") || k === "+") return "added";
+  if (k.startsWith("del") || k.startsWith("rem") || k === "-") return "removed";
+  return "context";
+};
+
+/* how big the change is, the way an editor says it: +18 −2 */
+export function diffTally(diff: { kind: string; text?: string }[]) {
+  let added = 0;
+  let removed = 0;
+  for (const line of diff) {
+    const kind = diffKind(line.kind);
+    if (kind === "added") added += 1;
+    else if (kind === "removed") removed += 1;
+  }
+  if (!added && !removed) return null;
+  return [added ? `+${added}` : null, removed ? `\u2212${removed}` : null]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/* Reasoning a provider will not hand over.
+
+   `ReasoningContent` has four shapes — Text, Summary, Encrypted, Redacted
+   — and the runtime renders the last two as fixed placeholders rather than
+   leak ciphertext: crates/gents-protocol/src/transcript.rs writes
+   "[encrypted reasoning]" and "[redacted reasoning]". That is the right
+   call upstream, but a transcript that offers it behind a disclosure
+   promises something to read and delivers an apology.
+
+   Matching the wording is sniffing a presentation detail: it is a constant
+   in that crate today, and if it changes we silently start showing it
+   again. The honest fix is a typed signal on the timeline item, which is
+   filed with the other contract gaps in BACKGROUND-WORK.md. */
+const WITHHELD = /^\s*\[(encrypted|redacted) reasoning\]\s*$/;
+
+/* what of a turn's reasoning is actually readable */
+export function readableReasoning(reasoning: string | null | undefined): string | null {
+  if (!reasoning) return null;
+  const kept = reasoning
+    .split("\n")
+    .filter((line) => !WITHHELD.test(line))
+    .join("\n")
+    .trim();
+  return kept || null;
+}
+
+/* whether a turn had reasoning that the provider would not hand over: the
+   fact is worth a quiet line, where the text itself is not */
+export function reasoningWithheld(reasoning: string | null | undefined): boolean {
+  if (!reasoning) return false;
+  return reasoning.split("\n").some((line) => WITHHELD.test(line));
+}
+
+/* Every ending used to arrive as 'done', so a command that exited 1 was
+   drawn exactly like one that exited 0 — same glyph, same muted ink, the
+   exit code only inside the opened body. The outcome belongs on the row:
+   a failure is the row a person is looking for, and a refusal is not a
+   failure but the policy declining, which is why it reads as stopped.
+
+   statusKind alone does not carry it. It is the call's lifecycle, and a
+   command that exits non-zero still completes its lifecycle — the
+   runtime puts that judgement on the presentation instead:
+
+     failed = tool_status_is_error(tool) || meta.ok == false || timed_out
+           || status == "exit_nonzero" || exit_code != 0
+
+   (crates/.../tool_presentation.rs). So `completed` + `failed: true` is
+   the ordinary shape of a test that did not pass, and reading only the
+   lifecycle would mark nothing on the transcripts this is for. */
+export const stepStatus = (tool: RenderedToolCallView): ToolStepStatus => {
+  if (tool.denial) return "stopped";
+  const kind = tool.statusKind;
+  if (kind === "running") return "running";
+  if (kind === "error") return "failed";
+  /* the runtime's own call, for the case the lifecycle calls complete */
+  if (tool.presentation.kind === "command" && tool.presentation.failed) return "failed";
+  return kind === "success" ? "done" : "pending";
+};

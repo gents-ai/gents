@@ -56,6 +56,12 @@ function isNearTip(viewport: HTMLElement) {
  * lands loses that intent: the new height itself can make a previously pinned
  * viewport appear disengaged. The ref records intent on scroll and the layout
  * effect consumes that prior observation when content grows.
+ *
+ * The content signal has to enumerate what can grow, and any scroll event,
+ * reader's or browser's, can change the mode. A reconcile from a
+ * ResizeObserver on the content box, with intent read only from the reader,
+ * removes both limits while keeping this signature; the transcript's
+ * activity groups and folds hold their place through `anchor` until then.
  */
 export function useFollowTail(
   ownerRef: RefObject<HTMLDivElement | null>,
