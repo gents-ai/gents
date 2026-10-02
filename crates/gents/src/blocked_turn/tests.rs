@@ -130,8 +130,7 @@ fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall
         call_kind: Some(call_kind.into()),
         failure_reason: Some(failure_reason),
         queued_at: Some(at.clone()),
-        started_at: Some(at.clone()),
-        ended_at: Some(at),
+        started_at: Some(at),
     }
 }
 

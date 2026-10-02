@@ -1655,8 +1655,27 @@ pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) 
 }
 
 /// The state an [`account_failure`] sentence in `text` names, if any.
-pub fn account_failure_state(_text: &str) -> Option<&'static str> {
-    None
+pub fn account_failure_state(text: &str) -> Option<&'static str> {
+    const STATES: [&str; 5] = [
+        "signed out (expired or revoked)",
+        "not entitled",
+        "unusable",
+        "disabled",
+        "removed from this node",
+    ];
+    [
+        CHATGPT_OAUTH_PRODUCT,
+        XAI_OAUTH_PRODUCT,
+        crate::claude_oauth::CLAUDE_OAUTH_PRODUCT,
+    ]
+    .iter()
+    .any(|product| text.contains(&format!("{} account \"", product.name)))
+    .then(|| {
+        STATES
+            .into_iter()
+            .find(|state| text.contains(&format!("\" is {state}.")))
+    })
+    .flatten()
 }
 
 pub struct DbCredentialBearer {
