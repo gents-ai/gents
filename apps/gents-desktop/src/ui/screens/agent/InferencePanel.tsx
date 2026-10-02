@@ -910,15 +910,10 @@ export function InferencePanel({
                 }
                 warning={dependentsWarning(deployment, "backend", b.backendId)}
               >
-                {/* another local server or a second key, yes; a second subscription, no:
-                    a principal_oauth backend has no account of its own, it uses the
-                    agent's one sign-in for that provider */}
-                {provider !== "anthropic" && provider !== "grok" && (
-                  <DropdownMenuItem onClick={() => setAdding(provider)}>
-                    Add another{" "}
-                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                  </DropdownMenuItem>
-                )}
+                <DropdownMenuItem onClick={() => setAdding(provider)}>
+                  Add another{" "}
+                  {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
+                </DropdownMenuItem>
               </RowMenu>
             ),
           })),
