@@ -9,6 +9,16 @@ pub(super) fn page(path: &[String]) -> Result<&'static str> {
     if let Ok(page) = lookup(path) {
         return Ok(page);
     }
+    for start in 1..path.len() {
+        if lookup(&path[start..]).is_ok() {
+            let mut next = vec!["help".to_owned()];
+            next.extend_from_slice(&path[start..]);
+            bail!(
+                "this topic lives at argv:{}",
+                serde_json::to_string(&next)?
+            );
+        }
+    }
     for depth in (1..path.len()).rev() {
         if lookup(&path[..depth]).is_ok() {
             let mut next = vec!["help".to_owned()];
@@ -38,7 +48,7 @@ fn lookup(path: &[String]) -> Result<&'static str> {
         ["collection", "list"] => Ok("collection list: no ID or options. Returns collection names; inspect one with collection get NAME."),
         ["collection", "get"] => Ok("collection get NAME: returns DefraDB field types, version and metadata. NAME may instead use target_id. No options."),
         ["collection", "create"] => Ok(r#"collection preview create: options.sdl is GraphQL SDL; collection names come from it, so omit target_id. Example: {"argv":["collection","preview","create"],"options":{"sdl":"type WorkItem { handoff_id: String, title: String }"}}. Inspect the effect, then use next_call to create with options.digest. Scalars include String, Int, Float, Boolean and DateTime. An existing matching definition is a no-op; use collection update to change one."#),
-        ["collection", "update"] => Ok(r#"collection preview update NAME: options.patch is an RFC 6902 array using DefraDB's field names and /COLLECTION/... paths. Example: {"argv":["collection","preview","update","WorkItem"],"options":{"patch":[{"op":"add","path":"/WorkItem/Fields/-","value":{"Name":"handoff_id","Kind":"String"}}]}}. Inspect get before using field indexes, then review the preview and use next_call. DefraDB validates changes and may create a new version. A nullable field addition needs no lens; old rows have no supplied value. Update writers separately through config; never fabricate historical values."#),
+        ["collection", "update"] => Ok(r#"collection preview update NAME: options.patch is an RFC 6902 array using DefraDB's field names and /COLLECTION/... paths. Example: {"argv":["collection","preview","update","WorkItem"],"options":{"patch":[{"op":"add","path":"/WorkItem/Fields/-","value":{"Name":"handoff_id","Kind":"String"}}]}}. For scalar Kind names, use SDL spelling: Boolean, not Bool. Read help fields types. Inspect get before using field indexes, then review the preview and use next_call. DefraDB validates changes and may create a new version. A nullable field addition needs no lens; old rows have no supplied value. Update writers separately through config; never fabricate historical values."#),
         ["collection", "materialize"] => Ok("collection preview materialize NAME: no options. Review the preview and use next_call to advance cached documents through registered migrations to the active version. This creates no document commits and synthesizes no business values."),
         ["version"] => Ok("version inspects published collection definitions. list discovers exact VersionIDs; get inspects one; activate makes one active. Use version VERB --help for inputs."),
         ["version", "list"] => Ok("version list [NAME]: optionally filter by collection name, either after list or in target_id. Includes active and inactive definitions and exact VersionIDs. No options."),

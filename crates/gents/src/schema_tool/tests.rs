@@ -91,6 +91,22 @@ fn concept_help_examples_use_supported_native_sdl() {
 }
 
 #[test]
+fn misplaced_concept_help_points_to_an_executable_topic() {
+    for path in [
+        vec!["collections", "fields"],
+        vec!["collection", "fields", "types"],
+        vec!["collections", "relationships"],
+        vec!["collections", "indexes", "fulltext"],
+    ] {
+        let words: Vec<_> = path.iter().map(|word| (*word).to_owned()).collect();
+        let error = help::page(&words).unwrap_err().to_string();
+        let argv: Vec<String> = serde_json::from_str(error.split("argv:").nth(1).unwrap()).unwrap();
+        assert_eq!(&argv[1..], &words[1..]);
+        assert!(help::page(&argv[1..]).is_ok());
+    }
+}
+
+#[test]
 fn unknown_concept_help_returns_nearest_available_parent() {
     let path = ["indexes", "vector", "unknown"].map(str::to_owned);
     let error = help::page(&path).unwrap_err().to_string();
