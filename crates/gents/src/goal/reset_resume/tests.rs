@@ -79,6 +79,20 @@ impl Reset {
         .await;
     }
 
+    /// Move `profile` alone to account B.
+    async fn move_to_b(&self, profile: &str) {
+        crate::config_client::switch_profile_account(
+            &self.accounts.access,
+            self.f.identity.did(),
+            profile,
+            &self.accounts.b,
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
+    }
+
     async fn goal(&self) -> GoalDocument {
         load_canonical_goal(&self.f.node, self.f.identity.did(), SESSION)
             .await
@@ -156,10 +170,19 @@ async fn a_held_row_waits_for_the_latest_reset() {
 #[tokio::test]
 async fn resumes_after_a_compaction_limit() {
     let reset = Reset::new("compaction", Some(T)).await;
+    // The compaction profile served the call; the inference profile may move.
+    reset.move_to_b(PROFILE).await;
     assert!(reset.resume(T - 1).await.is_none());
     let receipt = reset.resume(T).await.expect("resumed at the reset");
     assert!(receipt.created);
     assert_eq!(reset.f.children().await, [receipt.request_id]);
+}
+
+#[tokio::test]
+async fn waits_after_the_compaction_profile_moved() {
+    let reset = Reset::new("compaction", Some(T)).await;
+    reset.move_to_b("summ").await;
+    reset.waits().await;
 }
 
 #[tokio::test]
@@ -177,17 +200,7 @@ async fn waits_without_a_reported_reset() {
 #[tokio::test]
 async fn waits_after_the_profile_moved() {
     let reset = Reset::new("inference", Some(T)).await;
-    let accounts = &reset.accounts;
-    crate::config_client::switch_profile_account(
-        &accounts.access,
-        reset.f.identity.did(),
-        PROFILE,
-        &accounts.b,
-        false,
-        &[],
-    )
-    .await
-    .unwrap();
+    reset.move_to_b(PROFILE).await;
     reset.waits().await;
 }
 
