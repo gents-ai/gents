@@ -8,7 +8,7 @@ use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
-const HELP: &str = "Read your canonical sessions in your requester scope. Actions: list, count, search, get, transcript. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; no requester override is available.";
+const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across agents and requesters.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
@@ -87,13 +87,8 @@ fn scope(agent: &str, requester: Option<&str>) -> String {
     )
 }
 
-fn filter_query(
-    filter: &SessionFilter,
-    agent: &str,
-    requester: Option<&str>,
-    cursor: Option<&Cursor>,
-) -> Result<String> {
-    let mut parts = vec![format!("{{ {} }}", scope(agent, requester))];
+fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<String> {
+    let mut parts = Vec::new();
     if let Some(behavior) = &filter.behavior_id {
         parts.push(format!("{{ behavior_id: {{_eq: {}}} }}", quoted(behavior)));
     }
@@ -121,7 +116,11 @@ fn filter_query(
         };
         parts.push(format!("{{_or: [{{created_at: {{_lt: {time}}}}}, {{created_at: {{_eq: {time}}}, session_id: {{{id_operator}: {id}}}}}]}}", time=quoted(&cursor.created_at), id=quoted(&cursor.session_id)));
     }
-    Ok(format!("{{_and: [{}]}}", parts.join(",")))
+    Ok(if parts.is_empty() {
+        "{}".into()
+    } else {
+        format!("{{_and: [{}]}}", parts.join(","))
+    })
 }
 
 fn matches_text(row: &Value, needle: Option<&str>) -> bool {
@@ -161,7 +160,7 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
 }
 
 fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
-    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"behavior_id":row["behavior_id"],"tags":row["tags"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["agent_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
+    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"behavior_id":row["behavior_id"],"tags":row["tags"],"agent_did":row["agent_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["agent_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
 pub(super) struct AnswerFirst<'a>(pub &'a Value);
@@ -294,8 +293,7 @@ async fn execute(
             .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
         let session = rows(
             txn.execute(&format!(
-                "{{AgentSession(filter: {{{}, session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
-                scope(agent, requester),
+                "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
                 quoted(id)
             ))
             .await?,
@@ -303,8 +301,12 @@ async fn execute(
         )?;
         anyhow::ensure!(
             session.len() == 1,
-            "session is unavailable in your scope; next call: sessions {{\"action\":\"list\"}}"
+            "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
         );
+        let agent = session[0]["agent_did"]
+            .as_str()
+            .context("session agent DID missing")?;
+        let requester = session[0]["requester_did"].as_str();
         if action == "get" {
             let details = if args.details {
                 let value = txn
@@ -355,7 +357,7 @@ async fn execute(
         .map(serde_json::from_str::<Cursor>)
         .transpose()
         .context("invalid cursor; next call: sessions {\"action\":\"list\"}")?;
-    let condition = filter_query(&filter, agent, requester, cursor.as_ref())?;
+    let condition = filter_query(&filter, cursor.as_ref())?;
     if action == "count" && filter.text.is_none() {
         let result = txn
             .execute(&format!(
@@ -365,7 +367,9 @@ async fn execute(
         let count = result["data"]["total"]
             .as_u64()
             .context("sessions exact aggregate count missing")?;
-        return Ok(json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester}}));
+        return Ok(
+            json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester,"visibility":"acp"}}),
+        );
     }
     let needle = if action == "search" {
         Some(
@@ -384,7 +388,7 @@ async fn execute(
     let mut last_selected = None;
     let mut last_hit = None;
     loop {
-        let condition = filter_query(&filter, agent, requester, scan_cursor.as_ref())?;
+        let condition = filter_query(&filter, scan_cursor.as_ref())?;
         let page = rows(txn.execute(&format!("{{AgentSession(filter: {condition}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: 100) {{{FIELDS}}}}}")).await?, "AgentSession")?;
         if page.is_empty() {
             break;
@@ -451,7 +455,7 @@ async fn execute(
         }
     }
     Ok(if action == "count" {
-        json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester}})
+        json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester,"visibility":"acp"}})
     } else if action == "search" {
         json!({"hits":hits,"next_cursor":null,"search_kind":"literal_scan"})
     } else {
@@ -537,8 +541,8 @@ async fn transcript(
 
 async fn search_session(
     txn: &ConfigApplyTxn<'_>,
-    agent: &str,
-    requester: Option<&str>,
+    _agent: &str,
+    _requester: Option<&str>,
     session: &Value,
     needle: &str,
     resume_sequence: Option<i64>,
@@ -547,6 +551,10 @@ async fn search_session(
     let id = session["session_id"]
         .as_str()
         .context("session ID missing")?;
+    let agent = session["agent_did"]
+        .as_str()
+        .context("session agent DID missing")?;
+    let requester = session["requester_did"].as_str();
     let mut hits = Vec::new();
     if resume_sequence.is_none() && matches_text(session, Some(needle)) {
         hits.push((-1, json!({"session_id":id,"session_doc_id":session["_docID"],"title":session["title"]["text"],"source":"metadata"})));
@@ -618,6 +626,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_reads_cross_agent_documents_only_when_acp_allows_the_caller() {
+        let identities = tempfile::tempdir().unwrap();
+        let owner = pin_fixed_signing_identity(identities.path());
+        let reader =
+            KeyIdentity::load_or_create(identities.path().join("reader.key"), None).unwrap();
+        let denied =
+            KeyIdentity::load_or_create(identities.path().join("denied.key"), None).unwrap();
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let policy = node
+            .add_dac_policy(
+                owner.did(),
+                r#"
+name: Sessions reader test
+resources:
+  - name: sessions
+    relations:
+      - name: reader
+    permissions:
+      - name: read
+        expr: reader
+      - name: update
+      - name: delete
+"#,
+            )
+            .await
+            .unwrap();
+        ConfigAccess::Local(node.clone())
+            .add_schema(&crate::schema::AGENT_SESSION_SCHEMA.replace(
+                "type AgentSession ",
+                &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
+            ))
+            .await
+            .unwrap();
+        let owner_did = owner.did().to_owned();
+        let doc = ConfigAccess::transact_local(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
+            let did = owner_did.clone();
+            Box::pin(async move {
+                let value = txn.execute(&format!("mutation {{create_AgentSession(input: {{agent_did: {}, requester_did: \"different-requester\", session_id: \"shared\", behavior_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
+                Ok(value["data"]["create_AgentSession"][0]["_docID"].as_str().unwrap().to_owned())
+            })
+        }).await.unwrap();
+        node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())
+            .await
+            .unwrap();
+        let allowed_tool = SessionHistoryTool::new(node.clone(), reader.did());
+        assert_eq!(
+            call(&allowed_tool, json!({"action":"count"})).await["count"],
+            1
+        );
+        let found = call(&allowed_tool, json!({"action":"get","session_id":"shared"})).await;
+        assert_eq!(found["session"]["agent_did"], owner.did());
+        assert_eq!(found["session"]["requester_did"], "different-requester");
+        let denied_tool = SessionHistoryTool::new(node.clone(), denied.did());
+        assert_eq!(
+            call(&denied_tool, json!({"action":"count"})).await["count"],
+            0
+        );
+        assert!(
+            call(&denied_tool, json!({"action":"list"})).await["sessions"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let error = Tool::call(
+            &denied_tool,
+            serde_json::from_value(json!({"action":"get","session_id":"shared"})).unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("unavailable or ambiguous under ACP"));
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
         let identities = tempfile::tempdir().unwrap();
         let owner = pin_fixed_signing_identity(identities.path());
@@ -632,7 +716,7 @@ mod tests {
             &node,
             foreign.did(),
             None,
-            "atlas-a",
+            "foreign-session",
             "Foreign private",
             true,
         )
@@ -657,11 +741,12 @@ mod tests {
             .unwrap();
         }
         let tool = SessionHistoryTool::new(node.clone(), owner.did());
-        let filter = json!({"status":"closed","tag":"release"});
+        let filter = json!({"status":"closed","tag":"release","text":"atlas"});
         assert_eq!(
             call(&tool, json!({"action":"count","filter":filter})).await["count"],
             2
         );
+        assert_eq!(call(&tool, json!({"action":"count"})).await["count"], 5);
         let first = call(&tool, json!({"action":"list","filter":filter,"limit":1})).await;
         assert_eq!(first["sessions"][0]["session_id"], "atlas-b");
         let second = call(
@@ -682,15 +767,14 @@ mod tests {
         .await
         .unwrap_err();
         assert!(recovery.to_string().contains("next call: sessions"));
-        let wrong_requester = Tool::call(
+        let cross_requester = call(&tool, json!({"action":"get","session_id":"restricted"})).await;
+        assert_eq!(cross_requester["session"]["requester_did"], foreign.did());
+        let cross_agent = call(
             &tool,
-            serde_json::from_value(json!({"action":"get","session_id":"restricted"})).unwrap(),
+            json!({"action":"get","session_id":"foreign-session"}),
         )
-        .await
-        .unwrap_err();
-        assert!(wrong_requester
-            .to_string()
-            .contains("unavailable in your scope"));
+        .await;
+        assert_eq!(cross_agent["session"]["agent_did"], foreign.did());
         node.shutdown().await;
     }
 

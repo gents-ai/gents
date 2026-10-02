@@ -548,7 +548,7 @@ impl Tool for SessionHistoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Discover, count and search your persisted sessions; inspect canonical transcript evidence. Use help for available actions and help topic for action syntax.".into(),
+            description: "Discover, count and search sessions readable through DefraDB ACP; inspect canonical transcript evidence. Use help for available actions and help topic for action syntax.".into(),
             parameters: json!({
                 "type":"object", "additionalProperties":false,
                 "properties": {
