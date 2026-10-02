@@ -1383,23 +1383,16 @@ fn usage_view_plan_and_read_state_carry_over() {
 }
 
 #[test]
-fn usage_view_claude_endpoint_windows_are_not_verified() {
+fn usage_view_claude_endpoint_windows_show_as_read() {
     let kind = crate::BackendProviderKind::ClaudeCliSubscription;
     let now = view_now();
-    let mut endpoint = window("5h", 0.4, now);
+    let mut endpoint = window("7d", 72.0, now);
     endpoint.source = UsageSource::Endpoint;
-    let view = usage_view(Some(&stored_with(vec![endpoint.clone()])), kind, now);
-    assert!(view.windows.is_empty(), "{view:?}");
-    assert_eq!(view.note, Some("not verified"));
-
-    let header = window("7d", 30.0, now);
-    let view = usage_view(Some(&stored_with(vec![endpoint, header])), kind, now);
-    let labels: Vec<_> = view
-        .windows
-        .iter()
-        .map(|shown| shown.label.as_str())
-        .collect();
-    assert_eq!(labels, ["7d"]);
+    let view = usage_view(Some(&stored_with(vec![endpoint])), kind, now);
+    assert_eq!(view.windows.len(), 1, "{view:?}");
+    assert_eq!(view.windows[0].label, "7d");
+    assert_eq!(view.windows[0].used_pct, 72.0);
+    assert_eq!(view.windows[0].source, UsageSource::Endpoint);
     assert_eq!(view.note, None);
 }
 

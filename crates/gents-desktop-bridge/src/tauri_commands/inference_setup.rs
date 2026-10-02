@@ -2483,8 +2483,11 @@ mod provider_account_tests {
         assert_eq!(work.read.as_deref(), Some("skipped_until_refresh"));
 
         let original = view("claude");
-        assert!(original.windows.is_empty(), "{original:?}");
-        assert_eq!(original.note.as_deref(), Some("not verified"));
+        assert_eq!(original.windows.len(), 1, "{original:?}");
+        assert_eq!(original.windows[0].label, "7d");
+        assert_eq!(original.windows[0].used_pct, 20.0);
+        assert_eq!(original.windows[0].source, "endpoint");
+        assert_eq!(original.note, None);
         assert_eq!(original.read, None);
 
         let key = view("openrouter");
