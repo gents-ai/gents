@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop: opening a session from a mailbox item keeps the reply it armed;
+  the route no longer re-selects a session the shell already holds. The
+  design kit is pinned to gents-design `c211d60`.
+
 - Plugins can declare bounded resource limits and read a directory explicitly
   bound for one call. Increased installed resource limits require
   `--grant-authority`; unchanged or reduced approved limits survive reinstall.
