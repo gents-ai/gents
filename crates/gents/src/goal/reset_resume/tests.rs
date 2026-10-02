@@ -118,7 +118,10 @@ async fn resumes_once_at_the_reset() {
     assert!(receipt.created);
     assert_eq!(receipt.goal_status, GoalStatus::Active);
     assert_eq!(reset.f.goal_status().await, "active");
-    assert_eq!(reset.f.children().await, [receipt.request_id.clone()]);
+    assert_eq!(
+        reset.f.children().await,
+        std::slice::from_ref(&receipt.request_id)
+    );
     assert!(reset.resume_with(&goal, T + 1).await.is_none());
     assert_eq!(reset.f.children().await, [receipt.request_id]);
 }

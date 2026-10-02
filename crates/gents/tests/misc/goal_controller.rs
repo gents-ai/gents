@@ -2508,23 +2508,38 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
         "test-model",
     )
     .await;
-    create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        did,
+    // Resume authenticates its predecessor, so the request is signed.
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "usage-limited-request",
+        did,
+        did,
+        crate::support::AGENT_NAME,
         SESSION,
-        "failed",
+        "limited work",
+        "interactive",
         "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+        .await
+        .expect("sign request");
+    let response = db
+        .node
+        .execute(&request.graphql_mutation().expect("request mutation"))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed request: {:?}",
+        response.errors
+    );
     let response = db
         .node
         .execute(&format!(
             r#"mutation {{
+                update_AgentRequest(filter: {{ request_id: {{ _eq: "usage-limited-request" }} }}, input: {{
+                    lifecycle_state: "failed"
+                }}) {{ _docID }}
                 add_InferenceCall(input: {{
                     call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
                     backend_id: "reset-backend", behavior_id: "{agent}", agent_did: "{did}",
