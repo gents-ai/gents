@@ -1130,6 +1130,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
             &requests,
             fixture.scope(),
             &fixture.boundary,
+            None,
         )
         .await
         .unwrap();
@@ -1145,6 +1146,27 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
             resolution
         );
     }
+
+    let candidate = fixture.candidates().await.unwrap().remove(0);
+    let tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let selected = super::output::load_canonical_assistant_candidates_with(
+        &fixture.node,
+        &requests,
+        fixture.scope(),
+        &fixture.boundary,
+        Some(std::slice::from_ref(&tag)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(selected.len(), 2, "selection preserves physical twins");
+    assert_ne!(selected[0].header_doc_id, selected[1].header_doc_id);
 }
 
 #[async_trait::async_trait]
@@ -1180,6 +1202,7 @@ async fn load_with_fault(
     scope: CanonicalReplayScope<'_>,
     boundary: &SourceBoundary,
     fault: Option<RequestFault>,
+    selected_tags: Option<&[ReplayTag]>,
 ) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
     let requests = FaultingRequests {
         node: &fixture.node,
@@ -1191,6 +1214,7 @@ async fn load_with_fault(
         &requests,
         scope,
         boundary,
+        selected_tags,
     )
     .await
 }
@@ -1251,23 +1275,80 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         request_commit_cid: &current_commit_cid,
         ..fixture.scope()
     };
-    let verified = load_with_fault(&fixture, scope, &boundary, None)
+    let verified = load_with_fault(&fixture, scope, &boundary, None, None)
         .await
         .unwrap();
     assert_eq!(verified.len(), 1);
     assert_eq!(verified[0].request_doc_id, fixture.request_doc_id);
     assert!(verified[0].has_capture(), "the healthy turn replays");
 
+    let candidate = &verified[0];
+    let selected_tag = ReplayTag {
+        request_doc_id: candidate.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let OutputSource::ProviderTurn {
+        scope: tag_scope,
+        turn_index,
+        attempt,
+    } = &selected_tag.source
+    else {
+        unreachable!("selected replay tags are provider-owned")
+    };
+    let unselected_tag = ReplayTag {
+        request_doc_id: selected_tag.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: tag_scope.clone(),
+            turn_index: *turn_index,
+            attempt: *attempt + 1,
+        },
+    };
     assert!(
-        load_with_fault(&fixture, scope, &boundary, Some(RequestFault::Missing))
-            .await
-            .unwrap()
-            .is_empty(),
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::RowsReadFails),
+            Some(std::slice::from_ref(&unselected_tag)),
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "an unselected historical request needs no physical witness"
+    );
+    assert!(
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::RowsReadFails),
+            Some(std::slice::from_ref(&selected_tag)),
+        )
+        .await
+        .is_err(),
+        "selected evidence still validates its physical request"
+    );
+
+    assert!(
+        load_with_fault(
+            &fixture,
+            scope,
+            &boundary,
+            Some(RequestFault::Missing),
+            None
+        )
+        .await
+        .unwrap()
+        .is_empty(),
         "a verifiably missing request drops only its turn"
     );
 
     for fault in [RequestFault::RowsReadFails, RequestFault::CommitsReadFails] {
-        let error = load_with_fault(&fixture, scope, &boundary, Some(fault))
+        let error = load_with_fault(&fixture, scope, &boundary, Some(fault), None)
             .await
             .err()
             .unwrap_or_else(|| panic!("{fault:?} must fail the lookup"));

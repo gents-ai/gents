@@ -806,7 +806,7 @@ pub(crate) async fn load_canonical_assistant_candidates(
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    load_canonical_assistant_candidates_with(node, node, scope, boundary).await
+    load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
 /// Physical-request reads for replay. A failed store read is an error, never
@@ -842,6 +842,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::provider_context_reduction::SourceBoundary,
+    selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
         validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
@@ -940,6 +941,28 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             .request_doc_id
             .as_deref()
             .context("canonical provider header has no physical request")?;
+        // The bounded header and its physical coordinate are already proven;
+        // unrequested candidates need no request witness or capture decode.
+        if let Some(tags) = selected_tags {
+            let selected = tags.iter().any(|tag| {
+                if tag.request_doc_id != request_doc_id {
+                    return false;
+                }
+                matches!(
+                    &tag.source,
+                    OutputSource::ProviderTurn {
+                        scope: tag_scope,
+                        turn_index,
+                        attempt,
+                    } if tag_scope == &coordinate.scope
+                        && *turn_index == coordinate.turn_index
+                        && *attempt == coordinate.attempt
+                )
+            });
+            if !selected {
+                continue;
+            }
+        }
         let request_scope = (
             request_doc_id.to_owned(),
             origin_header.agent_did.clone(),
@@ -1108,7 +1131,8 @@ pub(crate) async fn resolve_canonical_replay_tags(
             "canonical replay tag is not a provider source"
         );
     }
-    let candidates = load_canonical_assistant_candidates(node, scope, boundary).await?;
+    let candidates =
+        load_canonical_assistant_candidates_with(node, node, scope, boundary, Some(tags)).await?;
     tags.iter()
         .map(|tag| {
             let OutputSource::ProviderTurn {
