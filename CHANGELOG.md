@@ -281,6 +281,16 @@ source consistency checks, not a separate runtime compatibility version.
   instead of an API key, and `account/rateLimits/read` reports only fresh
   credits, only a ChatGPT session's plan, and answers empty when usage
   cannot be read.
+- A turn stopped by a usage limit, or by a disabled, removed or signed-out
+  account, carries a structured blocked value (#2121): the reason, the
+  account's label and provider, the profile and the behaviors that use it,
+  the reset time when the provider reported one, and the command that moves
+  the profile. `gents request show` and `gents goal show` print it (JSON
+  `blocked`); "reset not reported" when there is no reset. A limit hit by a
+  compaction call names the compaction profile's account. The failure text is
+  unchanged. A Goal now reads the call that ended its request, so an earlier
+  failed retry no longer hides a later usage limit. A recorded reset no
+  longer moves when read later.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
