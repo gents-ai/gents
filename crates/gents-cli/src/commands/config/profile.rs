@@ -63,7 +63,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
 /// The plugins whose model slot is bound to `profile_id` on this host.
 /// Bindings live in the local home, as `gents plugin bind` writes them, so
 /// none are read over `--graphql`.
-fn bound_slots(
+pub(crate) fn bound_slots(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
     agent_did: &str,
@@ -154,19 +154,7 @@ async fn set_account(
     with_compaction: bool,
     plugin_slots: &[String],
 ) -> Result<Value> {
-    let snapshot = snapshot(access, agent_did).await?;
-    let backend_id = match snapshot.pick(account, provider) {
-        Ok(summary) => account_backend(&snapshot, summary)?,
-        Err(error) => snapshot
-            .backends
-            .iter()
-            .find(|backend| {
-                backend_account(backend, &snapshot.accounts).is_none()
-                    && (backend.backend_id == account || backend.name == account)
-            })
-            .map(|backend| backend.backend_id.clone())
-            .ok_or(error)?,
-    };
+    let backend_id = backend_for_account(access, agent_did, account, provider).await?;
     let receipt = gents::config_client::switch_profile_account(
         access,
         agent_did,
@@ -182,12 +170,24 @@ async fn set_account(
 /// The backend `account` names: a sign-in account's backend, else an
 /// API-key backend by id or name.
 pub(crate) async fn backend_for_account(
-    _access: &ConfigAccess,
-    _agent_did: &str,
-    _account: &str,
-    _provider: Option<&str>,
+    access: &ConfigAccess,
+    agent_did: &str,
+    account: &str,
+    provider: Option<&str>,
 ) -> Result<String> {
-    Ok(String::new())
+    let snapshot = snapshot(access, agent_did).await?;
+    match snapshot.pick(account, provider) {
+        Ok(summary) => account_backend(&snapshot, summary),
+        Err(error) => snapshot
+            .backends
+            .iter()
+            .find(|backend| {
+                backend_account(backend, &snapshot.accounts).is_none()
+                    && (backend.backend_id == account || backend.name == account)
+            })
+            .map(|backend| backend.backend_id.clone())
+            .ok_or(error),
+    }
 }
 
 /// The one backend that runs on `account`.

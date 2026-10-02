@@ -8,7 +8,8 @@ use gents::goal::{
 use gents::graphql::escape_graphql_string;
 
 use crate::cli::args::{
-    GoalCommand, GoalResumeArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs, GoalStatusArg,
+    GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
+    GoalStatusArg,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_agent_did, resolve_config_access};
@@ -18,7 +19,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
         GoalCommand::Show(args) => goal_show(args).await,
         GoalCommand::Set(args) => goal_set(args).await,
         GoalCommand::ResumeRequest(args) => goal_resume(args).await,
-        GoalCommand::ResumeOn(_) => anyhow::bail!("not implemented"),
+        GoalCommand::ResumeOn(args) => goal_resume_on(args).await,
         GoalCommand::Clear(args) => goal_clear(args).await,
     }
 }
@@ -89,6 +90,36 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
         &agent_did,
         &args.scope.session,
         &args.from,
+    )
+    .await?;
+    print_json(&serde_json::to_value(receipt)?)
+}
+
+async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
+    args.output
+        .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
+    let (access, agent_did) = access_and_did(&args.scope).await?;
+    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &agent_did)?;
+    let identity = gents::identity::RegisteredIdentity::from_registered_did(&agent_did, None)?;
+    let backend_id = crate::commands::config::profile::backend_for_account(
+        &access,
+        &agent_did,
+        &args.account,
+        args.provider.as_deref(),
+    )
+    .await?;
+    let (home, graphql) = (args.scope.home.as_deref(), args.scope.graphql.as_deref());
+    let receipt = gents::goal::resume_goal_on_account(
+        &access,
+        &identity,
+        &agent_did,
+        &args.scope.session,
+        &args.from,
+        &backend_id,
+        args.with_compaction,
+        &|profile| {
+            crate::commands::config::profile::bound_slots(home, graphql, &agent_did, profile)
+        },
     )
     .await?;
     print_json(&serde_json::to_value(receipt)?)
