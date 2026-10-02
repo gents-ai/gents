@@ -85,11 +85,20 @@
       "deadline_secs": 300,
       "checks": [
         {
-          "check": "final_message_matches",
+          "check": "tool_result_matches",
           "params": {
-            "all": [
+            "expect": [
               {
-                "matches": "(?i)(?:\\b(?:2|two)\\b[^\\n]{0,24}\\b(?:sessions|closed|release)\\b|\\b(?:count|total|exactly|are|is)\\b[^\\n]{0,24}\\b(?:2|two)\\b|^\\s*(?:2|two)\\s*$)"
+                "field": "count",
+                "equals": 2
+              },
+              {
+                "field": "scope.agent_did",
+                "matches": "^did:key:"
+              },
+              {
+                "field": "scope.requester_did",
+                "matches": "^did:key:"
               }
             ]
           },

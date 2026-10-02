@@ -11,6 +11,7 @@ pub mod crew_spec_match;
 pub mod final_message_matches;
 pub mod handoff_delivery;
 pub mod tool_calls_expected;
+pub mod tool_result_matches;
 
 use std::collections::BTreeMap;
 
@@ -88,6 +89,7 @@ impl CheckRegistry {
         registry.register(Box::new(FinalMessageMatches));
         registry.register(Box::new(HandoffDelivery));
         registry.register(Box::new(ToolCallsExpected));
+        registry.register(Box::new(tool_result_matches::ToolResultMatches));
         registry
     }
 
@@ -283,7 +285,8 @@ mod tests {
                 "crew_spec_match",
                 "final_message_matches",
                 "handoff_delivery",
-                "tool_calls_expected"
+                "tool_calls_expected",
+                "tool_result_matches"
             ]
         );
         let check = registry.get("captured_rows_count").expect("the seed check");

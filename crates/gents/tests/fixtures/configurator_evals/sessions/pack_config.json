@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-sessions",
-      "comparability_version": 2,
+      "comparability_version": 3,
       "title": "Engineer session investigation",
       "subject": {
         "kind": "behavior",
