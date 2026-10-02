@@ -1009,8 +1009,9 @@ pub(crate) struct ProviderAccountRemoveRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderUsageReadRequest {
     pub agent_did: String,
-    /// `false` when the panel opens (the reads the runtime allows on open),
-    /// `true` for an explicit Refresh.
+    /// `false` when the panel opens, `true` for an explicit Refresh. Both
+    /// skip accounts read in the last five minutes; only a failed Refresh is
+    /// an error.
     pub refresh: bool,
     /// Only this credential provider's accounts, e.g. `claude-subscription`.
     pub provider: Option<String>,
@@ -1173,7 +1174,7 @@ async fn backend_usage_views(
 /// Asks the hosted runtime to read usage (skipping accounts read in the last
 /// few minutes), signed with its own identity as `gents accounts list` signs
 /// it, then returns each backend's stored usage. A failed read on open still
-/// returns what is stored.
+/// returns what is stored; a failed Refresh is an error.
 #[tauri::command]
 pub(crate) async fn desktop_provider_usage_read(
     request: ProviderUsageReadRequest,

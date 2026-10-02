@@ -171,8 +171,9 @@ export function useAccounts(shell: Shell, agentDid: string) {
   return { accounts, reload: load };
 }
 
-/* usage, read when the panel opens (the reads the runtime allows then) and
-   on Refresh; nothing polls, and a snapshot change does not read again */
+/* usage, read when the panel opens and on Refresh (both skip accounts read
+   in the last five minutes); nothing polls, and a snapshot change does not
+   read again */
 function useProviderUsage(shell: Shell, agentDid: string) {
   const [usage, setUsage] = useState<BackendUsageView[]>([]);
   /* only the latest read draws: an older one, or another agent's, may land later */

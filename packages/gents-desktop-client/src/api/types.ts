@@ -286,8 +286,9 @@ export type DesktopApiAdapter = {
     agentDid: string,
     credentialId: string,
   ) => Promise<void>;
-  /** Asks the runtime to read usage (`refresh` false: the reads it allows
-   *  when the panel opens), then returns each backend's stored usage.
+  /** Asks the runtime to read usage (skipping accounts read in the last
+   *  five minutes), then returns each backend's stored usage. `refresh` is
+   *  true for an explicit Refresh, the only read whose failure rejects.
    *  `provider` is a credential kind. */
   readProviderUsage?: (
     agentDid: string,

@@ -2,8 +2,9 @@
 
 export type ProviderUsageReadRequest = { agentDid: string,
 /**
- * `false` when the panel opens (the reads the runtime allows on open),
- * `true` for an explicit Refresh.
+ * `false` when the panel opens, `true` for an explicit Refresh. Both
+ * skip accounts read in the last five minutes; only a failed Refresh is
+ * an error.
  */
 refresh: boolean,
 /**
