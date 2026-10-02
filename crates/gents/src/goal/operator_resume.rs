@@ -58,6 +58,30 @@ pub async fn resume_goal_request(
     }
 }
 
+/// A Goal resumed on another account: the move, `None` when the profile was
+/// already there, and the resume.
+#[derive(Debug, Clone, Serialize)]
+pub struct GoalResumeOnReceipt {
+    pub switch: Option<crate::config_client::SwitchReceipt>,
+    pub resume: GoalResumeReceipt,
+}
+
+/// Move the profile whose usage limit stopped `from_request_id` to
+/// `target_backend_id`, then resume the Goal from it.
+#[allow(clippy::too_many_arguments)]
+pub async fn resume_goal_on_account(
+    _access: &crate::ConfigAccess,
+    _identity: &dyn AgentIdentity,
+    _agent_did: &str,
+    _session_id: &str,
+    _from_request_id: &str,
+    _target_backend_id: &str,
+    _move_companions: bool,
+    _plugin_slots: &dyn Fn(&str) -> Result<Vec<String>>,
+) -> Result<GoalResumeOnReceipt> {
+    anyhow::bail!("not implemented")
+}
+
 async fn stage_resume(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn AgentIdentity,
@@ -226,3 +250,5 @@ async fn stage_resume(
 
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod tests;
