@@ -205,7 +205,7 @@ impl Fixture {
             .transact("test.switch.profiles", |txn| {
                 Box::pin(async move {
                     let mut records = BTreeMap::new();
-                    for id in ["p", "summ", "q", "k"] {
+                    for id in ["p", "summ", "q", "k", "m", "o"] {
                         if let Some((_, value)) = read_desired_state_record_in_txn(
                             txn,
                             Collection::InferenceProfile,
@@ -382,6 +382,11 @@ async fn next_turns_use_the_target_credentials() {
         let profile = &references.behavior_profiles(behavior_id)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
         let fields = backend.backend_fields();
+        assert_eq!(
+            fields.backend_id.as_deref(),
+            Some(fixture.backends["b"].as_str()),
+            "{behavior_id}"
+        );
         let mut behavior = PendingAgentBehavior::new(behavior_id)
             .build_with_identity_for_test(KeyIdentity::load_or_create(&key, None).unwrap());
         behavior.backend_id = fields.backend_id;
@@ -403,6 +408,92 @@ async fn next_turns_use_the_target_credentials() {
         .unwrap_or_else(|| panic!("{behavior_id} did not bind B"));
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-SECRET-b");
     }
+    assert!(
+        crate::oauth_credential::test_support::bound_bearer(
+            &fixture.credentials["a"].credential_id
+        )
+        .is_none(),
+        "no behavior bound A"
+    );
+}
+
+#[tokio::test]
+async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account() {
+    let fixture = Fixture::new(DID).await;
+    let (a, b) = (&fixture.backends["a"], &fixture.backends["b"]);
+    let did = fixture.did.as_str();
+    // `y` compacts with `o` on B; `z` runs on `m` on A and compacts with `p`.
+    fixture
+        .apply(vec![
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did": did, "profile_id": "m", "backend_id": a, "model_name": "model-x"}),
+            ),
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did": did, "profile_id": "o", "backend_id": b, "model_name": "model-x"}),
+            ),
+            (
+                Collection::Compaction,
+                json!({"agent_did": did, "compaction_id": "compaction-y", "inference_profile_id": "o"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did": did, "context_id": "context-y", "compaction_id": "compaction-y"}),
+            ),
+            (
+                Collection::AgentBehavior,
+                json!({"agent_did": did, "behavior_id": "y", "context_id": "context-y", "inference_profile_id": "p"}),
+            ),
+            (
+                Collection::Compaction,
+                json!({"agent_did": did, "compaction_id": "compaction-z", "inference_profile_id": "p"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did": did, "context_id": "context-z", "compaction_id": "compaction-z"}),
+            ),
+            (
+                Collection::AgentBehavior,
+                json!({"agent_did": did, "behavior_id": "z", "context_id": "context-z", "inference_profile_id": "m"}),
+            ),
+        ])
+        .await;
+
+    let plan = fixture.plan().await.unwrap();
+    assert_eq!(plan.behaviors, ["x", "y", "z"]);
+    assert_eq!(plan.companions, ["m", "summ"], "o is on another account");
+    let summ = switch_candidates(&fixture.access, did, "summ", &[], Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        summ.companions,
+        ["p"],
+        "the main profile of summ's behavior"
+    );
+
+    let receipt = fixture.switch("summ", "d", true).await.unwrap();
+    assert_eq!(receipt.companions_moved, ["p"]);
+    for (profile, on) in [("summ", "d"), ("p", "d"), ("m", "a"), ("o", "b")] {
+        assert_eq!(
+            fixture.backend_of(profile).await,
+            fixture.backends[on],
+            "{profile}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_account_without_the_model_is_not_listed() {
+    let fixture = Fixture::new(DID).await;
+    fixture.catalog("d", &["model-s"]).await;
+    let plan = fixture.plan().await.unwrap();
+    let labels: Vec<_> = plan
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect();
+    assert_eq!(labels, ["label-b"], "D does not offer model-x");
 }
 
 async fn assert_refused(fixture: &Fixture, to: &str, message: &str) {
