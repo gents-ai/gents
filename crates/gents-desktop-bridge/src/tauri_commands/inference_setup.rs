@@ -76,12 +76,28 @@ async fn require_reachable_configuration(
     })
 }
 
+/// Stores a sign-in; its label names the account only when the sign-in adds
+/// one, since a desktop label is typed for a new account and must never
+/// rename the stored account the browser happened to return.
 async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
 ) -> anyhow::Result<SignIn> {
+    let access = access?;
     let label = credential.label.clone();
-    gents::oauth_credential::store_sign_in(&access?, credential, label.as_deref()).await
+    let mut signed = gents::oauth_credential::store_sign_in(&access, credential, None).await?;
+    if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
+        let stored = &signed.credential;
+        gents::oauth_credential::set_account_label(
+            &access,
+            &stored.agent_did,
+            &stored.credential_id,
+            &label,
+        )
+        .await?;
+        signed.credential.label = Some(label);
+    }
+    Ok(signed)
 }
 
 /// The label a sign-in request names: trimmed, empty is none, and checked
