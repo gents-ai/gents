@@ -336,6 +336,30 @@ describe("add another account", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
+  it("closes after Retry save stores an added account", async () => {
+    const work = {
+      ...stored(KIND.anthropic),
+      credentialId: "credential-work",
+      label: "Work",
+    };
+    const { api, onDone } = addForm("anthropic", {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValue([stored(KIND.anthropic), { ...work, pendingSave: true }]),
+      retrySaveProviderAccount: vi
+        .fn()
+        .mockResolvedValue({ ...work, accountRef: "acct-2" }),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
+      AGENT,
+      "claude-subscription",
+    );
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
   it("refuses a label another account of the provider shows", async () => {
     const { api } = addForm("anthropic", { claudeLogin: signedIn("added") });
     const user = userEvent.setup();
