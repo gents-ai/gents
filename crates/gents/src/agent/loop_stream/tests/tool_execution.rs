@@ -1067,13 +1067,15 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
-    fn scan(value: &serde_json::Value) -> Option<&serde_json::Value> {
-        if value.get("indexName").is_some() {
+    fn scan<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a serde_json::Value> {
+        if value.get(field).is_some() {
             return Some(value);
         }
         match value {
-            serde_json::Value::Object(object) => object.values().find_map(scan),
-            serde_json::Value::Array(array) => array.iter().find_map(scan),
+            serde_json::Value::Object(object) => {
+                object.values().find_map(|value| scan(value, field))
+            }
+            serde_json::Value::Array(array) => array.iter().find_map(|value| scan(value, field)),
             _ => None,
         }
     }
@@ -1107,13 +1109,25 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         .unwrap();
         let query_elapsed = query_started.elapsed();
         let data = response.data.unwrap();
-        let request_scan = scan(&data).expect("request output must use an index scan");
+        let request_scan = scan(&data, "indexFetches")
+            .unwrap_or_else(|| panic!("request output must report index execution work: {data}"));
+        let plan = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!("query @explain {query}"),
+            "explain request output plan",
+        )
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+        let plan_scan = scan(&plan, "indexName")
+            .unwrap_or_else(|| panic!("request output must use an index scan: {plan}"));
         assert!(
-            request_scan["indexName"]
+            plan_scan["indexName"]
                 .as_str()
                 .unwrap()
                 .contains("request_doc_id"),
-            "{data}"
+            "{plan}"
         );
         work.push(
             request_scan["indexFetches"]
@@ -1136,13 +1150,14 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         .unwrap();
         let previous_elapsed = previous_started.elapsed();
         let previous_data = previous.data.unwrap();
-        let previous_scan = scan(&previous_data).unwrap();
+        let previous_scan = scan(&previous_data, "indexFetches").unwrap_or_else(|| {
+            panic!("previous output must report index execution work: {previous_data}")
+        });
         tracing::info!(
             noise,
             request_query_micros = query_elapsed.as_micros(),
             previous_query_micros = previous_elapsed.as_micros(),
-            previous_index = previous_scan["indexName"].as_str().unwrap(),
-            "background query plan comparison"
+            "background query execution comparison"
         );
         previous_work.push(previous_scan["indexFetches"].as_u64().unwrap());
         let started = std::time::Instant::now();
