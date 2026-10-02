@@ -469,7 +469,7 @@ describe("configuration panels", () => {
       ]);
       render(<InferencePanel shell={shell} deployment={claudeDeployment} />);
       expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
-      expect(screen.getAllByText(/· not signed in$/)).toHaveLength(1);
+      expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
       expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
     });
 
@@ -529,6 +529,113 @@ describe("configuration panels", () => {
       ).not.toBeInTheDocument();
       expect(screen.queryByText("original-identity")).not.toBeInTheDocument();
     });
+
+    describe("each account is its own row with its label and state, never expired", () => {
+      const row = (
+        backendId: string,
+        name: string,
+        providerKind: "ClaudeCliSubscription" | "XaiGrokOAuth" | "ChatGptCodex",
+        accountRef: string | null,
+      ) => ({ ...claudeBackend(backendId, accountRef), name, providerKind });
+      const keyed = (backendId: string, fields: object) => ({
+        ...deployment.inferenceBackends[0]!,
+        backendId,
+        name: backendId,
+        ...fields,
+      });
+      const rowsDeployment = {
+        ...deployment,
+        inferenceBackends: [
+          row("claude", "Claude", "ClaudeCliSubscription", null),
+          row("claude-work", "Work", "ClaudeCliSubscription", "acct-2"),
+          row("grok", "Grok", "XaiGrokOAuth", null),
+          row("grok-side", "Side", "XaiGrokOAuth", "g-2"),
+          row("chatgpt", "ChatGPT", "ChatGptCodex", null),
+          row("chatgpt-team", "Team", "ChatGptCodex", "c-2"),
+          keyed("openrouter", { providerKind: "OpenRouter", apiKeyConfigured: true }),
+          keyed("openrouter-env", {
+            providerKind: "OpenRouter",
+            apiKeyEnvVar: "OPENROUTER_API_KEY",
+          }),
+          keyed("local", {}),
+          keyed("local-2", {}),
+        ],
+      };
+      const account = (
+        provider: string,
+        accountRef: string | null,
+        label: string,
+        fields: object = {},
+      ) => ({
+        ...claudeAccount(
+          `private-credential-id-${label}`,
+          accountRef,
+          `${label}-identity`,
+        ),
+        provider,
+        label,
+        ...fields,
+      });
+      const accounts = [
+        account("claude-subscription", null, "Personal", {
+          accessTokenExpiresAt: "2001-01-01T00:00:00Z",
+        }),
+        account("claude-subscription", "acct-2", "Work"),
+        account("xai-oauth", null, "Grok"),
+        account("xai-oauth", "g-2", "Side", { enabled: false }),
+        account("chatgpt-codex", null, "Main"),
+        account("chatgpt-codex", "c-2", "Team"),
+      ];
+
+      it("draws each row's label and state", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        const claude = "Anthropic / Claude (subscription)";
+        const grok = "Grok (subscription)";
+        const chatgpt = "ChatGPT / Codex (subscription)";
+        for (const meta of [
+          `· ${claude} · Personal · signed in`,
+          `· ${claude} · signed in`,
+          `· ${grok} · signed in`,
+          `· ${grok} · disabled`,
+          `· ${chatgpt} · Main · signed in`,
+          `· ${chatgpt} · signed in`,
+          "· OpenRouter · key stored",
+          "· OpenRouter · key from OPENROUTER_API_KEY",
+        ])
+          expect(await screen.findByText(meta)).toBeVisible();
+        expect(screen.getAllByText("· OpenAI compatible · no key")).toHaveLength(2);
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("opens a lapsed token's row as connected, with its label", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(
+          <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
+        );
+        expect(await screen.findByText("Connected")).toBeVisible();
+        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.queryByText("Expired")).not.toBeInTheDocument();
+        expect(screen.queryByText("Expires")).not.toBeInTheDocument();
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("opens a disabled account's row with its identity and Reconnect", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(
+          <InferencePanel shell={shell} deployment={rowsDeployment} item="grok-side" />,
+        );
+        expect(await screen.findByText("Disabled")).toBeVisible();
+        expect(screen.getByText("Side-identity")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Reconnect" })).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Disconnect" }),
+        ).not.toBeInTheDocument();
+      });
+    });
   });
 
   it("does not treat a disabled subscription credential as signed in", async () => {
@@ -554,7 +661,7 @@ describe("configuration panels", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/not signed in/)).toBeVisible();
+    expect(await screen.findByText(/disabled/)).toBeVisible();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
