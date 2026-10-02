@@ -126,7 +126,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [dev-dependencies]
 acp.workspace = true
-storage.workspace = true
 futures = "0.3"
 gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
