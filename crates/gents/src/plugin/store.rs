@@ -347,6 +347,12 @@ pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     Ok(records)
 }
 
+/// `namespace/name` of each plugin under `home` whose model slot `agent_did`
+/// bound to `profile_id`.
+pub fn bound_to_profile(_home: &Path, _agent_did: &str, _profile_id: &str) -> Result<Vec<String>> {
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

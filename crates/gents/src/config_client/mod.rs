@@ -28,6 +28,7 @@ pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
 mod inference_profile;
+mod profile_switch;
 mod retry;
 mod schema_contract;
 mod schema_install;
@@ -74,6 +75,10 @@ pub use inference_backend::{
 };
 pub use inference_profile::{
     behavior_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
+};
+pub use profile_switch::{
+    switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
+    SWITCH_COST,
 };
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::SchemaFieldDelta;
