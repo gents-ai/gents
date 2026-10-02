@@ -510,7 +510,7 @@ pub(crate) async fn list_with_usage(
 }
 
 /// `<1m`, `45m`, `2h13m`, `5d3h`.
-fn short_duration(secs: i64) -> String {
+pub(crate) fn short_duration(secs: i64) -> String {
     // A row replicated from a host whose clock runs ahead has a negative age.
     let secs = secs.max(0);
     let (days, hours, minutes) = (secs / 86_400, secs % 86_400 / 3_600, secs % 3_600 / 60);

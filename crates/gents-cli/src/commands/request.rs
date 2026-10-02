@@ -307,6 +307,12 @@ async fn load_request_show_snapshot(
 
     let request_terminal = canonical_request.is_terminal();
     let request_agent_did = canonical_request.agent_did.unwrap_or_default();
+    let blocked = gents::blocked_turn::blocked_turn(&access, &request_agent_did, request_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            None
+        });
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
@@ -377,7 +383,7 @@ async fn load_request_show_snapshot(
         native_executors_available,
         native_executors,
         child_requests,
-        blocked: None,
+        blocked,
     })
 }
 
@@ -908,7 +914,7 @@ fn unsigned_field(row: &Value, field: &str) -> Option<u64> {
 
 fn render_request_show_text(
     snapshot: &RequestShowSnapshot,
-    _now: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let mut lines = Vec::new();
     let request = &snapshot.request;
@@ -932,6 +938,39 @@ fn render_request_show_text(
         "failure_reason",
         request.failure_reason.as_deref(),
     );
+    if let Some(blocked) = &snapshot.blocked {
+        use gents::blocked_turn::BlockedReason;
+        let mut line = format!(
+            "blocked: {}",
+            match blocked.reason {
+                BlockedReason::UsageLimit => "usage limit",
+                BlockedReason::AccountDisabled => "account disabled",
+                BlockedReason::AccountRemoved => "account removed",
+                BlockedReason::AccountSignedOut => "account signed out",
+            }
+        );
+        if let Some(account) = &blocked.account {
+            line.push_str(&format!(" on account {:?}", account.label));
+        }
+        if blocked.reason == BlockedReason::UsageLimit {
+            line.push_str(&match blocked.resets_at {
+                Some(at) => format!(
+                    ", resets at {} (in {})",
+                    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    super::accounts::short_duration((at - now).num_seconds())
+                ),
+                None => ", reset not reported".to_owned(),
+            });
+        }
+        lines.push(line);
+        if let (Some(profile), Some(switch)) = (&blocked.profile, &blocked.switch_command) {
+            let users = blocked.behaviors_on_profile.len();
+            let noun = if users == 1 { "behavior" } else { "behaviors" };
+            lines.push(format!(
+                "  profile {profile} (used by {users} {noun}); switch: {switch}"
+            ));
+        }
+    }
     push_option_line(
         &mut lines,
         "terminal_cause",

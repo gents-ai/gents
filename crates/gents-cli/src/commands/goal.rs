@@ -29,7 +29,8 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
     print_json(&goal_show_value(&access, &agent_did, &args.scope.session, Utc::now()).await?)
 }
 
-/// `goal show`'s JSON: the Goal's snapshot.
+/// `goal show`'s JSON: the Goal's snapshot and, when its latest request
+/// stopped where the operator can act, `blocked`.
 async fn goal_show_value(
     access: &ConfigAccess,
     agent_did: &str,
@@ -39,9 +40,15 @@ async fn goal_show_value(
     let goal = load_goal(access, agent_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
-    Ok(serde_json::to_value(GoalSnapshot::from_document(
-        &goal, now,
-    ))?)
+    let mut value = serde_json::to_value(GoalSnapshot::from_document(&goal, now))?;
+    let blocked = gents::blocked_turn::blocked_goal_turn(access, agent_did, session_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            None
+        });
+    value["blocked"] = serde_json::to_value(blocked)?;
+    Ok(value)
 }
 
 async fn goal_set(args: GoalSetArgs) -> Result<()> {
