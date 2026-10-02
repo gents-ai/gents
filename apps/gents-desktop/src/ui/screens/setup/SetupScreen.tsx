@@ -729,8 +729,12 @@ export function SetupScreen({
       setAuthUrl(null);
       const outcome = result.signIn;
       if (outcome.result === "refreshed") setSignInHint(outcome.hint);
-      /* an added account's backend was created with the account: nothing to save */
-      if (purpose === "add-backend" && outcome.accountRef !== null) {
+      /* an added account's backend was created with the account, and a refreshed
+         one already has its backend: nothing to save */
+      if (
+        purpose === "add-backend" &&
+        (outcome.accountRef !== null || outcome.result === "refreshed")
+      ) {
         if (outcome.result === "added") onDone(await api.fetchDesktopSnapshot());
         return;
       }
