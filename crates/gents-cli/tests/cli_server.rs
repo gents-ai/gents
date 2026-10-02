@@ -2401,7 +2401,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ],
     )?;
     assert_eq!(
-        request.get("count").and_then(Value::as_i64),
+        request.get("returned_count").and_then(Value::as_i64),
         Some(1),
         "{request}"
     );
@@ -2432,7 +2432,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ],
     )?;
     assert_eq!(
-        tool_calls.get("count").and_then(Value::as_i64),
+        tool_calls.get("returned_count").and_then(Value::as_i64),
         Some(1),
         "{tool_calls}"
     );
