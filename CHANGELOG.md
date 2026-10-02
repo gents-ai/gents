@@ -295,7 +295,8 @@ source consistency checks, not a separate runtime compatibility version.
   subscription as expired when its access token lapses, since the runtime
   renews it on use. The profile editor names subscription backends by provider
   and label, skips disabled and missing accounts, and a new profile starts on
-  the provider's earliest-connected enabled account.
+  the provider's earliest-connected enabled account. "Refresh models" reads the
+  row's own account.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
