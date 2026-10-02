@@ -166,6 +166,20 @@ fn persisted_reason_renders_usage_limits_and_drops_markers() {
 }
 
 #[test]
+fn recorded_relative_reset_is_stable() {
+    let text = format!(
+        r#"{RIG_429}{{"error":{{"type":"usage_limit_reached","resets_in_seconds":3600}}}}"#
+    );
+    let recorded = persisted_failure_reason(&text, now());
+    let Some(ProviderLimit::UsageExhausted(again)) =
+        classify_provider_limit(&recorded, now() + chrono::Duration::hours(1))
+    else {
+        panic!("recorded usage limit must reclassify: {recorded}");
+    };
+    assert_eq!(again.resets_at, Some(now() + chrono::Duration::hours(1)));
+}
+
+#[test]
 fn anthropic_per_minute_429_honors_retry_after() {
     let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization of 50,000 input tokens per minute."}}"#;
     let text = rejected(RIG_429, body, &[("retry-after", "17")]);
