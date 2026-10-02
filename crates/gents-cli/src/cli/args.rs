@@ -1946,8 +1946,10 @@ pub(crate) struct StatusArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct QueryArgs {
-    #[arg(value_parser=["find","fields","count","help"])]
+    #[arg(value_parser=["find","fields","count","explain","help"])]
     pub(crate) verb: Option<String>,
+    #[arg(long, value_parser=["simple","execute"], help="Explain mode: simple inspects; execute measures the bounded read")]
+    pub(crate) mode: Option<String>,
     #[arg(long, help = "Order as JSON, e.g. [{\"priority\":\"ASC\"}]")]
     pub(crate) order: Option<String>,
     #[arg(long, help = "Rows to skip, maximum 100000")]

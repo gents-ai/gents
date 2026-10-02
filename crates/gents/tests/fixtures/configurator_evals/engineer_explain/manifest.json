@@ -1,0 +1,20 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_explain",
+  "version": "0.1.0",
+  "description": "Native query plan evaluations",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "pack_config.json",
+    "cases/indexed-versus-scan.json",
+    "cases/empty-report-execution.json",
+    "cases/recover-and-refuse.json"
+  ],
+  "config": "pack_config.json"
+}
