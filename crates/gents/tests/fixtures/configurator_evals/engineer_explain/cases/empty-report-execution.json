@@ -118,7 +118,7 @@
               }
             ]
           },
-          "tier": "development",
+          "tier": "acceptance",
           "weight": 1
         },
         {
@@ -357,7 +357,7 @@
               }
             ]
           },
-          "tier": "development",
+          "tier": "acceptance",
           "weight": 1
         },
         {

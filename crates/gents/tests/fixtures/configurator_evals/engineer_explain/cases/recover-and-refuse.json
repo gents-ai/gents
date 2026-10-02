@@ -61,7 +61,7 @@
               }
             ]
           },
-          "tier": "development",
+          "tier": "acceptance",
           "weight": 1
         },
         {
