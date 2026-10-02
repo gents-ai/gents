@@ -74,7 +74,11 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
         ("search_fields", json!(["BM25"]), "available String field"),
         ("limit", json!(0), "search limit"),
         ("limit", json!(1001), "search limit"),
-        ("filter", json!({"missing":{"_eq":"x"}}), "unknown filter field"),
+        (
+            "filter",
+            json!({"missing":{"_eq":"x"}}),
+            "unknown filter field",
+        ),
         ("order", json!({"duty":"SIDEWAYS"}), "ASC or DESC"),
     ] {
         let mut args = base.clone();
