@@ -53,7 +53,6 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 pub(crate) mod bounded;
 mod command;
 mod native_filter;
-mod search;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
 pub(crate) use native_filter::validate_filter;
 pub(crate) mod query;
@@ -120,7 +119,7 @@ impl Tool for DefraQueryTool {
     type Args = QueryParams;
     type Output = String;
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Search ranks stored vectors; help search describes inputs. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
+        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
         let result = if let Some(actor) = &self.actor {

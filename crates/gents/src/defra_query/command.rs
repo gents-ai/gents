@@ -41,10 +41,9 @@ impl From<DefraQueryParams> for QueryParams {
 
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
-        None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks stored vectors. Configuration uses config; schema definitions use schema."),
+        None => Ok("query reads documents. argv: [fields], [find], [count], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for vector similarity. Relationship selections and fulltext/BM25 are not exposed here."),
-        Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],vector_field:\"dutyEmbedding\",vector:[0.2,0.8],limit:5}}. Supply a numeric vector from the same embedding model as the stored field; text is not embedded by this command. Returns _similarity (larger is nearer), ranked by the native field metric. Default limit 10, maximum 1000. Optional filter uses the same native operators as find. DefraDB validates vector dimensions and chooses index or scan. Configure stored embeddings/indexes through schema help embeddings."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Relationship selections, fulltext/BM25 and vector search are not exposed by this command family or bounded query tools; use the authenticated native GraphQL interface for those shapes."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
         _ => bail!("unknown query command; call query with {{\"argv\":[\"help\"]}}"),
@@ -130,7 +129,7 @@ pub async fn execute_command(
     }
     ensure!(
         argv.len() == 1,
-        "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
+        "use argv:[fields|find|count|explain]; call query with {{\"argv\":[\"help\"]}}"
     );
     let command = argv[0];
     query_help(Some(command))?;
@@ -144,14 +143,9 @@ pub async fn execute_command(
         "fields" => &[],
         "count" => &["filter"],
         "find" => &["fields", "filter", "limit", "offset", "order"],
-        "search" => &["fields", "filter", "limit", "vector_field", "vector"],
         "explain" => &["fields", "filter", "limit", "offset", "order", "mode"],
         _ => unreachable!(),
     };
-    ensure!(
-        command != "search" || !args.options.contains_key("text"),
-        "search requires a numeric vector from the stored field's embedding model; text embedding is not exposed by this query interface; call query with argv:[help,search]"
-    );
     for key in args.options.keys() {
         ensure!(
             allowed.contains(&key.as_str()),
@@ -199,8 +193,6 @@ pub async fn execute_command(
             .transpose()?;
         let arguments = filter.map(|f| format!("filter: {f}")).unwrap_or_default();
         format!("{{ COUNT({collection}: {{ {arguments} }}) }}")
-    } else if command == "search" {
-        super::search::build_search_query(&params, scope, &schema, &args.options)?
     } else {
         let offset = args
             .options
