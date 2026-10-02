@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop transcript: consecutive tool calls form one activity group that
+  is placed once and only grows at its end; live text is revealed at a
+  steady pace and held until its message arrives; a step opens only from
+  its caret, shows its outcome on the row, and an edit its +/− tally;
+  withheld reasoning is one line, not `[encrypted reasoning]`; a session
+  shows one loading line until it is here; an armed mailbox reply is
+  visible above the composer and can be put down.
+
 - Desktop: opening a session from a mailbox item keeps the reply it armed;
   the route no longer re-selects a session the shell already holds. The
   design kit is pinned to gents-design `c211d60`.

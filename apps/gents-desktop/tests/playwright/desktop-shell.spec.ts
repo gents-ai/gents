@@ -334,7 +334,15 @@ test.describe("kit shell", () => {
       .click();
     const transcript = page.getByTestId("transcript-panel");
     const removed = transcript.locator("[data-diff=removed]");
-    // Only the step's caret opens it; the row's text stays selectable.
+    // Consecutive calls sit in one activity group, folded to its header
+    // until opened; then only the step's caret opens the step, so the
+    // row's text stays selectable.
+    const groups = transcript
+      .locator("button[aria-expanded=false]")
+      .filter({ hasText: /edited|ran|read|used/i });
+    for (let opened = 0; opened < 4 && (await groups.count()); opened += 1) {
+      await groups.first().click();
+    }
     for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
       await transcript
         .locator("[data-slot=collapsible]")
