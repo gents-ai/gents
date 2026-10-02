@@ -214,6 +214,11 @@ pub struct InferenceDiscoveryRequest {
     /// Ephemeral connection input. It is consumed for this request and is
     /// never reflected into a response or desktop snapshot.
     pub api_key: Option<String>,
+    /// The account a subscription backend names; absent is the provider's
+    /// original account.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub account_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -371,7 +376,7 @@ pub async fn discover_inference_models_for_core(
         return Err(BridgeError::untyped("API key is required"));
     }
 
-    let credential = if let Some(provider) = spec.oauth_provider {
+    let (credential, oauth_auth) = if let Some(provider) = spec.oauth_provider {
         let core = core.ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
         let access = core.operator_access(request.agent_did.trim()).map_err(|error| {
             tracing::warn!(
@@ -385,12 +390,11 @@ pub async fn discover_inference_models_for_core(
                 "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
             )
         })?;
-        // Discovery sets up a backend with no account reference, which runs on the original account.
-        gents::oauth_credential::resolve_oauth_credential(
+        let (credential, auth) = discovery_account(
             &access,
             request.agent_did.trim(),
             provider,
-            gents::oauth_credential::AccountPick::Reference(None),
+            request.account_ref.as_deref(),
         )
         .await
         .map_err(|error| {
@@ -404,9 +408,10 @@ pub async fn discover_inference_models_for_core(
                 BridgeErrorCode::EndpointUnreachable,
                 "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
             )
-        })?
+        })?;
+        (credential, Some(auth))
     } else {
-        None
+        (None, None)
     };
     if spec.oauth_provider.is_some() && credential.is_none() {
         return Err(BridgeError::untyped(
@@ -430,7 +435,8 @@ pub async fn discover_inference_models_for_core(
     .await;
 
     if let (Ok(models), Some(core)) = (&discovered, core) {
-        publish_discovered_catalog(core, &request, &spec, api_key, models.clone()).await;
+        publish_discovered_catalog(core, &request, &spec, api_key, oauth_auth, models.clone())
+            .await;
     }
 
     let (reachable, models, failure, manual_entry_allowed) = match discovered {
@@ -493,18 +499,20 @@ async fn discovery_account(
     access: &gents::ConfigAccess,
     agent_did: &str,
     provider: &str,
-    _account_ref: Option<&str>,
+    account_ref: Option<&str>,
 ) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
     let credential = gents::oauth_credential::resolve_oauth_credential(
         access,
         agent_did,
         provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::oauth_credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok((
         credential,
-        gents::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+        gents::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: account_ref.map(str::to_owned),
+        },
     ))
 }
 
@@ -517,12 +525,13 @@ async fn publish_discovered_catalog(
     request: &InferenceDiscoveryRequest,
     spec: &gents::inference_setup::InferenceConnectionSpec,
     api_key: Option<&str>,
+    oauth_auth: Option<gents::document_config::BackendAuth>,
     models: Vec<gents::document_config::AdvertisedModel>,
 ) {
     use gents::document_config::BackendAuth;
     let agent_did = request.agent_did.trim();
-    let auth = match (spec.oauth_provider, api_key) {
-        (Some(_), _) => BackendAuth::PrincipalOAuth { account_ref: None },
+    let auth = match (oauth_auth, api_key) {
+        (Some(auth), _) => auth,
         (None, Some(key)) => BackendAuth::ApiKey {
             key: key.to_string(),
         },

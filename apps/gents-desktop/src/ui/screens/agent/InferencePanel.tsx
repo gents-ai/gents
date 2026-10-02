@@ -469,6 +469,7 @@ export function BackendEditor({
                       authMethod: connection.authMethod,
                       endpoint: d.draft.endpoint,
                       apiKey: null,
+                      accountRef: backend.accountRef ?? null,
                     });
                     if (!result.reachable)
                       throw new Error(result.failure?.message ?? "Discovery failed");
