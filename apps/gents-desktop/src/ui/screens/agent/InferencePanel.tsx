@@ -197,12 +197,6 @@ function AccountRows({
   /* signing in here would add a new account, never this one */
   const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const api = shell.api;
@@ -261,10 +255,8 @@ function AccountRows({
     <>
       <Row label="Account" description={sub.note}>
         <span className="flex items-center gap-2">
-          {account && (
-            <Badge variant={expired ? "destructive" : "secondary"}>
-              {expired ? "Expired" : "Connected"}
-            </Badge>
+          {stored && (
+            <Badge variant="secondary">{account ? "Connected" : "Disabled"}</Badge>
           )}
           {account && !confirmingDisconnect && (
             <Button
@@ -306,26 +298,21 @@ function AccountRows({
           ) : null}
           <Button
             size="sm"
-            variant={account || unsaved ? "outline" : "brand"}
+            variant={stored || unsaved ? "outline" : "brand"}
             disabled={busy}
             onClick={signIn}
           >
-            {busy ? "Signing in…" : account ? "Reconnect" : "Connect"}
+            {busy ? "Signing in…" : stored ? "Reconnect" : "Connect"}
           </Button>
         </span>
       </Row>
-      {account && (
+      {stored && (
         <>
           <FactRow label="Signed in as">
-            {account.accountId ?? "Account identity unavailable — reconnect to refresh"}
-            {account.planType ? ` · ${account.planType}` : ""}
+            {stored.accountId ?? "Account identity unavailable — reconnect to refresh"}
+            {stored.planType ? ` · ${stored.planType}` : ""}
           </FactRow>
-          <FactRow label="Expires">
-            {new Date(account.accessTokenExpiresAt).toLocaleString()} ·{" "}
-            {expired
-              ? "expired"
-              : `in ${Math.max(1, Math.ceil((Date.parse(account.accessTokenExpiresAt) - Date.now()) / 60000))} minutes`}
-          </FactRow>
+          <FactRow label="Label">{stored.label}</FactRow>
         </>
       )}
     </>
@@ -834,10 +821,15 @@ export function InferencePanel({
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const stored = sub && referencedAccount(accounts, sub.provider, b.accountRef);
+    /* the label only where the row's title does not already say it */
+    const label =
+      stored?.label && stored.label !== (b.name ?? b.backendId)
+        ? `${stored.label} · `
+        : "";
     const cred = sub
-      ? stored?.enabled
-        ? "signed in"
-        : b.accountRef && !stored
+      ? stored
+        ? `${label}${stored.enabled ? "signed in" : "disabled"}`
+        : b.accountRef
           ? "account not on this node"
           : "not signed in"
       : b.apiKeyConfigured
