@@ -334,10 +334,12 @@ test.describe("kit shell", () => {
       .click();
     const transcript = page.getByTestId("transcript-panel");
     const removed = transcript.locator("[data-diff=removed]");
+    // Only the step's caret opens it; the row's text stays selectable.
     for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
       await transcript
-        .locator("[data-slot=collapsible-trigger][aria-expanded=false]")
+        .locator("[data-slot=collapsible]")
         .filter({ hasText: /parser\.rs|edited|read|\$/ })
+        .getByRole("button", { name: "Show detail" })
         .first()
         .click();
     }
