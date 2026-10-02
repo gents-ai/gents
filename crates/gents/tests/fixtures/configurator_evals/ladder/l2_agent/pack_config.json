@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l2-agent",
-      "comparability_version": 7,
+      "comparability_version": 8,
       "title": "The Engineer: behavior + context + tool-grant configuration",
       "subject": {
         "kind": "behavior",
