@@ -175,21 +175,25 @@ export function useAccounts(shell: Shell, agentDid: string) {
    on Refresh; nothing polls, and a snapshot change does not read again */
 function useProviderUsage(shell: Shell, agentDid: string) {
   const [usage, setUsage] = useState<BackendUsageView[]>([]);
+  /* only the latest read draws: an older one, or another agent's, may land later */
+  const latest = useRef(0);
   useEffect(() => {
-    let live = true;
+    const read = ++latest.current;
+    setUsage([]);
     shell.api.readProviderUsage?.(agentDid, false, null).then(
       (views) => {
-        if (live) setUsage(views);
+        if (latest.current === read) setUsage(views);
       },
       () => undefined,
     );
     return () => {
-      live = false;
+      latest.current += 1;
     };
   }, [shell.api, agentDid]);
   const refresh = async (provider: string | null) => {
+    const read = ++latest.current;
     const views = await shell.api.readProviderUsage?.(agentDid, true, provider);
-    if (views) setUsage(views);
+    if (views && latest.current === read) setUsage(views);
   };
   return { usage, refresh };
 }
