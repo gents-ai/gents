@@ -9,6 +9,7 @@
 //! more of them would only burn the provider.
 pub mod embedded;
 pub mod executor;
+mod files;
 pub mod freeze;
 pub mod goal;
 pub mod grade;
