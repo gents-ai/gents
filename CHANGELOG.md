@@ -222,8 +222,8 @@ source consistency checks, not a separate runtime compatibility version.
   them "account not on this node". On the desktop, Reconnect to a different
   account adds it instead of replacing the one shown, and each backend row
   shows and disconnects the account it references (a backend with no account
-  reference: the provider's original account); add and manage extra accounts
-  from the CLI until the account cards land. After you remove a provider's
+  reference: the provider's original account); and the desktop adds and
+  manages them from each provider's rows (#2124). After you remove a provider's
   last account, the next sign-in becomes its original account again, and
   backends with no account reference use it, deliberately. Any sign-in that
   becomes a provider's original account (the first one on a node, or the first
@@ -281,6 +281,21 @@ source consistency checks, not a separate runtime compatibility version.
   instead of an API key, and `account/rateLimits/read` reports only fresh
   credits, only a ChatGPT session's plan, and answers empty when usage
   cannot be read.
+
+- The desktop draws every signed-in account as its own backend row (#2124):
+  its label, whether it is signed in, disabled or not on this node, and a
+  usage bar from the last stored observation. Opening the row shows each usage
+  window with its reset countdown, source and age, or "unknown", "not
+  reported", "no cap on this key" or "not verified", and a Refresh button;
+  opening the Providers page asks the runtime for the reads it allows on open,
+  and nothing polls. "Add another <Provider>" and "New backend" sign in a
+  further account for every provider, with an optional label, and say whether
+  the sign-in added an account or refreshed one already stored. The row menu
+  renames, disconnects and removes an account. A row no longer shows a
+  subscription as expired when its access token lapses, since the runtime
+  renews it on use. The profile editor names subscription backends by provider
+  and label, skips disabled and missing accounts, and a new profile starts on
+  the provider's earliest-connected enabled account.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
