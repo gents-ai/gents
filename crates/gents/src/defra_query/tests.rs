@@ -488,23 +488,28 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
 
 #[tokio::test]
 async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
-    const ALICE: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    const BOB: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+    let keys = tempfile::tempdir().unwrap();
+    let alice =
+        crate::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None).unwrap();
+    let bob =
+        crate::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None).unwrap();
+    let alice_did = crate::identity::AgentIdentity::did(&alice);
+    let bob_did = crate::identity::AgentIdentity::did(&bob);
     let node = Arc::new(
         crate::defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(ALICE.to_owned())
+            .with_node_identity_did(alice_did.to_owned())
             .build()
             .await
             .unwrap(),
     );
-    let policy = node.add_dac_policy(ALICE, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
     node.add_schema(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String }}",
         crate::graphql::escape_graphql_string(&policy)
     ))
     .await
     .unwrap();
-    for (did, label) in [(ALICE, "Alice-only"), (BOB, "Bob-only")] {
+    for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let mutation = format!(
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
             crate::graphql::escape_graphql_string(label)
@@ -519,8 +524,8 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         .unwrap();
     }
     for (did, label, hidden) in [
-        (ALICE, "Alice-only", "Bob-only"),
-        (BOB, "Bob-only", "Alice-only"),
+        (alice_did, "Alice-only", "Bob-only"),
+        (bob_did, "Bob-only", "Alice-only"),
     ] {
         let tool = DefraQueryTool::new(
             node.clone(),
