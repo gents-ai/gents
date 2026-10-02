@@ -35,7 +35,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/callback/scan.rs", 3),
     ("crates/gents/src/completion_factory.rs", 1),
     ("crates/gents/src/eth/submit.rs", 2),
-    ("crates/gents/src/goal/operator_resume/support.rs", 2),
     ("crates/gents/src/graph_pipeline/run.rs", 1),
     ("crates/gents/src/health_checker.rs", 1),
     ("crates/gents/src/hook/persistence/helpers.rs", 1),
