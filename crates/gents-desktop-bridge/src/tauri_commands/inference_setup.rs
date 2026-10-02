@@ -187,8 +187,18 @@ async fn retry_pending_credential(
     }
 }
 
-/// Tells the webview the agent's configuration changed.
-async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, _core: &ClientCore) {
+/// Refreshes the client store, then tells the webview the agent's
+/// configuration changed. A write through the runtime's operator GraphQL never
+/// reaches the desktop node, so the snapshot shows it only after a refresh. A
+/// failed refresh is logged and never fails a write that is already stored.
+async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore) {
+    if let Err(error) = core.refresh_store().await {
+        tracing::warn!(
+            target: LOG_TARGET,
+            error = %format!("{error:#}"),
+            "refreshing the client store after a configuration write failed"
+        );
+    }
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
