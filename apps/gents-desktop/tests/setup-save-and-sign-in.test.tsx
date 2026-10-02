@@ -360,6 +360,29 @@ describe("add another account", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
+  it("keeps Sign in offered after Retry save refreshes the original account", async () => {
+    const personal = stored(KIND.anthropic);
+    const { api, onDone } = addForm("anthropic", {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValue([personal, { ...personal, pendingSave: true }]),
+      retrySaveProviderAccount: vi.fn().mockResolvedValue(personal),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
+    expect(
+      await screen.findByText(
+        "This sign-in refreshed the account stored as Personal. No account was added.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Retry save" }),
+    ).not.toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
   it("refuses a label another account of the provider shows", async () => {
     const { api } = addForm("anthropic", { claudeLogin: signedIn("added") });
     const user = userEvent.setup();
