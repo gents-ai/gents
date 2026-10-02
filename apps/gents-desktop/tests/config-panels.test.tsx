@@ -1153,6 +1153,30 @@ describe("configuration panels", () => {
     expect(await screen.findByText(/disabled/)).toBeVisible();
   });
 
+  it("says off for a switched-off backend whose account is signed in", async () => {
+    const { api, shell } = harness();
+    api.listProviderAccounts.mockResolvedValue([
+      { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
+    ]);
+    render(
+      <InferencePanel
+        shell={shell}
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+              enabled: false,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(await screen.findByText(/· off$/)).toBeVisible();
+    expect(screen.queryByText(/signed in/)).not.toBeInTheDocument();
+  });
+
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
     const { api, shell } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
