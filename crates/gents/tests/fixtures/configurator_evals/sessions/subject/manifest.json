@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "engineer_sessions_subject",
   "version": "0.1.0",
-  "description": "The Engineer with the native session-history grant",
+  "description": "Engineer with the native sessions investigation grant",
   "authors": [
     "gents-ai contributors"
   ],
@@ -11,8 +11,18 @@
   ],
   "kind": "documents",
   "assets": [
-    "pack_config.json",
-    "agent_behaviors/engineer/system_prompt.md"
+    "README.md",
+    "agent_behaviors/engineer/system_prompt.md",
+    "pack_config.json"
   ],
-  "config": "pack_config.json"
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "engineer",
+      "description": "Runs the Engineer.",
+      "behaviors": [
+        "engineer"
+      ]
+    }
+  ]
 }

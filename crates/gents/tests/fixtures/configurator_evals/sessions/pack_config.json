@@ -12,13 +12,13 @@
         ]
       },
       "cases": [
-        "./cases/discover-old.json",
-        "./cases/count-closed.json",
-        "./cases/wrong-id.json",
-        "./cases/filtered-discovery.json",
-        "./cases/transcript-evidence.json",
-        "./cases/archive-evidence.json",
-        "./cases/foreign-session-refusal.json"
+        "./cases/discover_old.json",
+        "./cases/count_closed.json",
+        "./cases/wrong_id.json",
+        "./cases/filtered_discovery.json",
+        "./cases/transcript_evidence.json",
+        "./cases/archive_evidence.json",
+        "./cases/foreign_session_refusal.json"
       ]
     }
   ]
