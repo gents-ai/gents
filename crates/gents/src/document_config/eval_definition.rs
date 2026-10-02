@@ -153,6 +153,7 @@ pub struct EvalCheckRef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
 pub enum EvalCapture {
     /// Active native collection definitions, including fields and indexes.
     Schema {
