@@ -11,4 +11,4 @@ pendingSave: boolean,
  * Which of the provider's accounts this is; `None` is the original
  * account, which a backend without a reference runs on.
  */
-accountRef: string | null, };
+accountRef: string | null, label: string, };

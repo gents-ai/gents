@@ -807,7 +807,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             enabled: credential.enabled,
             pending_save: false,
             account_ref: credential.account_ref.clone(),
-            label: String::new(),
+            label: gents::oauth_credential::effective_account_label(credential),
         }
     }
 }
