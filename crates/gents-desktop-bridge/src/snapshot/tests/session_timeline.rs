@@ -840,6 +840,16 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             created_at: None,
         })
         .collect();
+    let mut local_snapshot = snapshot.clone();
+    apply_session_timeline_page(&mut local_snapshot, None, Some(40)).unwrap();
+    assert_eq!(local_snapshot.timeline_items.len(), 100);
+    assert!(!local_snapshot.timeline_page.as_ref().unwrap().has_older);
+    assert!(local_snapshot
+        .timeline_page
+        .as_ref()
+        .unwrap()
+        .oldest_item_key
+        .is_none());
     let page = timeline_page(0, true, false);
     apply_session_timeline_page_with_query(&mut snapshot, None, Some(40), Some(&page)).unwrap();
     assert_eq!(snapshot.timeline_items.len(), 100);
@@ -847,4 +857,32 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
     assert_eq!(metadata.page_items, 100);
     assert!(!metadata.has_older);
     assert!(metadata.oldest_item_key.is_none());
+}
+
+#[test]
+fn local_pending_history_pages_with_durable_anchor_cursor() {
+    let mut full = empty_timeline_snapshot();
+    let pending = RenderedTimelineItem::PendingUserTurn {
+        item_key: "pending-old".into(),
+        request_id: "old".into(),
+        content: "interrupted input".into(),
+        selected_skill_ids: vec![],
+        lifecycle_state: Some("interrupted".into()),
+        created_at: None,
+    };
+    full.timeline_items = vec![
+        pending,
+        assistant_item("anchor", 1),
+        assistant_item("latest", 2),
+    ];
+    let mut tip = full.clone();
+    apply_session_timeline_page(&mut tip, None, Some(1)).unwrap();
+    assert_eq!(timeline_keys(&tip), ["latest"]);
+    let cursor = tip.timeline_page.unwrap().oldest_item_key.unwrap();
+    apply_session_timeline_page(&mut full, Some(&cursor), Some(1)).unwrap();
+    assert_eq!(timeline_keys(&full), ["pending-old", "anchor"]);
+    let metadata = full.timeline_page.unwrap();
+    assert_eq!(metadata.oldest_item_key.as_deref(), Some("anchor"));
+    assert!(!metadata.has_older);
+    assert!(metadata.has_newer);
 }

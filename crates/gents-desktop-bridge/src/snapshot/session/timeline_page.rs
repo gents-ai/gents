@@ -56,10 +56,23 @@ pub fn apply_session_timeline_page_with_query(
         .unwrap_or(DEFAULT_SESSION_TIMELINE_PAGE_SIZE)
         .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
 
-    let (page, has_older, has_newer, oldest_item_key) = if let Some(query_page) = query_page {
+    let end = if query_page.is_some() {
+        total_items
+    } else {
+        match before_item_key {
+            Some(cursor) => snapshot
+                .timeline_items
+                .iter()
+                .position(|item| rendered_timeline_item_key(item) == cursor)
+                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
+            None => total_items,
+        }
+    };
+    let candidates = &snapshot.timeline_items[..end];
+    let (page, has_older, has_newer, oldest_item_key) = {
         let mut pending_anchors = HashMap::new();
         let mut next_sequence = None;
-        for item in snapshot.timeline_items.iter().rev() {
+        for item in candidates.iter().rev() {
             match rendered_timeline_durable_sequence(item) {
                 Some(Some(sequence)) => next_sequence = Some(sequence),
                 None if matches!(
@@ -83,7 +96,7 @@ pub fn apply_session_timeline_page_with_query(
         };
         let mut sequence_counts = BTreeMap::<i64, usize>::new();
         let mut non_durable_items = 0_usize;
-        for item in &snapshot.timeline_items {
+        for item in candidates {
             if matches!(
                 item,
                 crate::types::RenderedTimelineItem::PendingUserTurn { .. }
@@ -124,8 +137,7 @@ pub fn apply_session_timeline_page_with_query(
             remaining -= item_count;
         }
 
-        let page = snapshot
-            .timeline_items
+        let page = candidates
             .iter()
             .filter(|item| match page_sequence(item) {
                 Some(Some(sequence)) => selected_sequences.contains(&sequence),
@@ -145,9 +157,11 @@ pub fn apply_session_timeline_page_with_query(
             .map(rendered_timeline_item_key)
             .map(str::to_owned)
             .or_else(|| {
-                if query_page.source_exhausted && !has_unselected_sequences {
+                if query_page.is_none_or(|page| page.source_exhausted) && !has_unselected_sequences
+                {
                     return None;
                 }
+                let query_page = query_page?;
                 query_page
                     .store
                     .transcript_messages
@@ -165,47 +179,10 @@ pub fn apply_session_timeline_page_with_query(
             });
         (
             page,
-            has_unselected_sequences || !query_page.source_exhausted,
-            query_page.has_newer,
+            has_unselected_sequences || query_page.is_some_and(|page| !page.source_exhausted),
+            query_page.map_or(end < total_items, |page| page.has_newer),
             oldest_item_key,
         )
-    } else {
-        let end = match before_item_key {
-            Some(cursor) => snapshot
-                .timeline_items
-                .iter()
-                .position(|item| rendered_timeline_item_key(item) == cursor)
-                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
-            None => total_items,
-        };
-        let mut start = end.saturating_sub(limit);
-        if start > 0 {
-            if let Some(boundary_sequence) =
-                rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-            {
-                if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
-                    == Some(boundary_sequence)
-                {
-                    while start < end
-                        && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-                            == Some(boundary_sequence)
-                    {
-                        start += 1;
-                    }
-                    if start == end {
-                        return Err(format!(
-                            "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
-                        ));
-                    }
-                }
-            }
-        }
-        let page = snapshot.timeline_items[start..end].to_vec();
-        let oldest_item_key = page
-            .first()
-            .map(rendered_timeline_item_key)
-            .map(str::to_owned);
-        (page, start > 0, end < total_items, oldest_item_key)
     };
     let newest_item_key = page
         .last()
