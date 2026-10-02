@@ -86,13 +86,17 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
     let bundled = [
         (
             "MaintenanceReport",
-            include_str!("../../../../packs/repo_maintenance/schemas/maintenance_report.graphql"),
-            include_str!("../../../../packs/repo_maintenance/schemas/maintenance_report_owned_files.patch.json"),
+            include_str!("../fixtures/workspace_owned_schemas/maintenance_report.graphql"),
+            include_str!(
+                "../fixtures/workspace_owned_schemas/maintenance_report_owned_files.patch.json"
+            ),
         ),
         (
             "DefensePatchAssignment",
-            include_str!("../../../../packs/defending_code/schemas/defense_patch_assignment.graphql"),
-            include_str!("../../../../packs/defending_code/schemas/defense_patch_assignment_owned_files.patch.json"),
+            include_str!("../fixtures/workspace_owned_schemas/defense_patch_assignment.graphql"),
+            include_str!(
+                "../fixtures/workspace_owned_schemas/defense_patch_assignment_owned_files.patch.json"
+            ),
         ),
     ];
     for (collection, sdl, patch) in bundled {

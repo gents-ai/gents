@@ -1,0 +1,5 @@
+type FixtureJob {
+  job_id: String
+  prompt: String
+  status: String
+}

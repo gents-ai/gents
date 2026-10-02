@@ -370,7 +370,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
             ],
-            notes: "Bind every declared inference slot to an existing profile. Bundled names resolve locally; NAMESPACE/NAME resolves through the operator's registry. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
+            notes: "Bind every declared inference slot to an existing profile. A pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. A plugin the pack ships installs only when it asks for no authority. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
             next: "run the installed graph with the graph tools.",
         },
         _ => return None,

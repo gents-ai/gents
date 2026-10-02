@@ -405,6 +405,7 @@ pub(crate) struct SessionContinuationContext {
 }
 
 pub(crate) struct SessionRootCandidate {
+    #[cfg(test)]
     pub root_doc_id: String,
     pub session_id: String,
     pub owner: String,
@@ -416,7 +417,9 @@ pub(crate) struct SessionRootCandidate {
 
 pub(crate) struct SessionSelection {
     pub session_id: String,
+    #[cfg(test)]
     pub root_doc_id: String,
+    #[cfg(test)]
     pub firing_node: String,
 }
 
@@ -445,7 +448,9 @@ pub(crate) fn select_graph_session(
     }
     Some(SessionSelection {
         session_id: candidate.session_id.clone(),
+        #[cfg(test)]
         root_doc_id: candidate.root_doc_id.clone(),
+        #[cfg(test)]
         firing_node: context.firing_node.clone(),
     })
 }
@@ -541,6 +546,7 @@ pub(crate) async fn resolve_graph_session(
     let candidates = rows
         .iter()
         .map(|row| SessionRootCandidate {
+            #[cfg(test)]
             root_doc_id: row.doc_id.clone().unwrap_or_default(),
             session_id: row.session_id.clone().unwrap_or_default(),
             owner: row.agent_did.clone().unwrap_or_default(),

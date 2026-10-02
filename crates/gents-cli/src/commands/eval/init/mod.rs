@@ -13,7 +13,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result};
 use gents::eval::checks::CheckRegistry;
 
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
@@ -24,13 +24,14 @@ use self::validate::{assemble, validate, Assembled, Floors};
 use self::write::{case_table, commit, stage, Staged, Written};
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
+use crate::commands::pack::{resolve_pack_source, single_slot_behavior, PackSource};
 
 mod contract;
 pub(crate) mod dossier;
 pub(crate) mod draft;
 mod pilot;
 pub(crate) mod turn;
-mod validate;
+pub(super) mod validate;
 mod write;
 
 /// What one init settled before the interview: the subject, the catalog,
@@ -130,7 +131,7 @@ pub(crate) async fn interview(
                 let listed = format!("- {}", messages.join("\n- "));
                 writeln!(out, "the draft did not validate:\n{listed}")?;
                 if rounds == MAX_VALIDATION_ROUNDS {
-                    return Err(anyhow!(
+                    return Err(anyhow::anyhow!(
                         "the author's draft did not validate after {MAX_VALIDATION_ROUNDS} rounds; nothing was written; last messages:\n{listed}"
                     ));
                 }
@@ -301,13 +302,11 @@ pub(crate) async fn run(
         &ctx.home_dir,
         &args.subject,
         args.registry.as_deref(),
-        true,
     )
     .await?;
-    let subject_dir = subject
-        .directory()
-        .ok_or_else(|| anyhow!("subject {} resolved to no directory", args.subject))?
-        .to_path_buf();
+    let subject_dir = subject.directory().to_path_buf();
+    let author = resolve_pack_source(&args.author, args.registry.as_deref(), &ctx.home_dir).await?;
+    let (author_slot, author_behavior) = single_slot_behavior(author.manifest())?;
     // Before any turn: `--force` would otherwise replace the subject.
     write::refuse_subject_overlap(&args.out, &subject_dir)?;
     let dossier = dossier::render(&subject_dir, args.behavior.as_deref())?;
@@ -321,7 +320,7 @@ pub(crate) async fn run(
             &ctx.owner,
         ))
     });
-    install_pack_slot(&ctx.access, &ctx.owner, "eval_author", "author", &profile).await?;
+    install_pack_slot(&ctx.access, &ctx.owner, &author, &author_slot, &profile).await?;
 
     let init = InitContext {
         dossier,
@@ -341,7 +340,7 @@ pub(crate) async fn run(
     let mut turn = turn::LiveTurn {
         graphql: graphql.clone(),
         agent_did: ctx.owner.clone(),
-        behavior_id: turn::AUTHOR_BEHAVIOR.to_owned(),
+        behavior_id: author_behavior.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),
         timeout_secs: args.timeout_secs,
         poll_secs: args.poll_secs,
@@ -400,41 +399,31 @@ pub(crate) async fn run(
     writeln!(
         out,
         "session {id}: continue it with `gents chat --session-id {id} --behavior-id {}`",
-        turn::AUTHOR_BEHAVIOR,
+        author_behavior,
         id = turn.session_id()
     )?;
     result
 }
 
-/// Install the built-in pack `pack_name` into the home, its inference
-/// slot `slot` bound to `profile`, through the owner `gents pack install`
-/// uses. Re-applying the same documents changes nothing. Returns the
-/// owner's apply counts (documents written, per collection).
+/// Install `pack` into the home, its inference slot `slot` bound to
+/// `profile`, through the owner `gents pack install` uses. Re-applying the
+/// same documents changes nothing. Returns the owner's apply counts
+/// (documents written, per collection).
 pub(crate) async fn install_pack_slot(
     access: &gents::ConfigAccess,
     owner: &str,
-    pack_name: &str,
+    pack: &PackSource,
     slot: &str,
     profile: &str,
 ) -> Result<gents::config_client::DesiredStateApplyCounts> {
-    let pack = gents::pack::resolve_pack(pack_name)?;
-    let config = gents::pack::load_pack_config(
-        &pack.manifest,
-        &gents::pack::PackInstallOptions {
-            agent_did: owner.to_owned(),
-        },
-        &|path| pack.asset(path).map(Vec::from),
-        &|_name| None,
-    )
-    .with_context(|| format!("loading the {pack_name} pack"))?;
+    let manifest = pack.manifest();
+    let config = pack_config(pack, owner)?;
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
     let inference =
-        gents::pack::preview_pack_inference_bindings(access, &pack.manifest, owner, &requested)
-            .await?;
-    let bound =
-        gents::pack::bind_pack_install_config(&pack.manifest, &config, &inference.bindings)?;
+        gents::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await?;
+    let bound = gents::pack::bind_pack_install_config(manifest, &config, &inference.bindings)?;
     // Re-installing the pack replaces what an earlier run installed.
-    let identity = gents::pack::PackIdentity::new(&pack.manifest, &pack.digest, Vec::new());
+    let identity = gents::pack::PackIdentity::new(manifest, pack.digest(), Vec::new());
     gents::pack::install_pack_documents(
         access,
         owner,
@@ -444,7 +433,23 @@ pub(crate) async fn install_pack_slot(
     )
     .await
     .map(|report| report.applied)
-    .with_context(|| format!("installing the {pack_name} pack"))
+    .with_context(|| format!("installing the {} pack", manifest.name))
+}
+
+/// The documents [`install_pack_slot`] installs for `owner`, before binding.
+pub(crate) fn pack_config(
+    pack: &PackSource,
+    owner: &str,
+) -> Result<gents::document_config::PackConfig> {
+    gents::pack::load_pack_config(
+        pack.manifest(),
+        &gents::pack::PackInstallOptions {
+            agent_did: owner.to_owned(),
+        },
+        &|path| pack.asset(path).map(Vec::from),
+        &|_name| None,
+    )
+    .with_context(|| format!("loading the {} pack", pack.manifest().name))
 }
 
 #[cfg(test)]
@@ -670,17 +675,26 @@ mod tests {
         };
         let installed = || {
             read([
-                (gents::Collection::AgentBehavior, turn::AUTHOR_BEHAVIOR),
-                (gents::Collection::AgentContext, "eval-author-context"),
-                (gents::Collection::Tools, "eval-author-tools"),
+                (gents::Collection::AgentBehavior, "fixture-author"),
+                (gents::Collection::AgentContext, "fixture-author-context"),
+                (gents::Collection::Tools, "fixture-author-tools"),
             ])
         };
-        let first_counts = install_pack_slot(access, owner, "eval_author", "author", "local")
+        let author = crate::commands::pack::test_support::fixture_pack_source(
+            "slot_fixture",
+            &fixture.ctx.home_dir,
+        );
+        let (slot, behavior_id) = single_slot_behavior(author.manifest()).unwrap();
+        assert_eq!(
+            (slot.as_str(), behavior_id.as_str()),
+            ("author", "fixture-author")
+        );
+        let first_counts = install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
         assert_eq!(first_counts.get(gents::Collection::AgentBehavior), 1);
         let first = installed().await;
-        install_pack_slot(access, owner, "eval_author", "author", "local")
+        install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
         // Re-applying rewrites each document in place with what it holds:
@@ -689,25 +703,35 @@ mod tests {
         let behavior = &first[0].1;
         assert_eq!(behavior["inference_profile_id"], "local");
 
-        let error = install_pack_slot(access, owner, "eval_author", "author", "no-such-profile")
+        let error = install_pack_slot(access, owner, &author, &slot, "no-such-profile")
             .await
             .unwrap_err();
         assert!(
             format!("{error:#}").contains("no-such-profile"),
             "{error:#}"
         );
+    }
 
-        // The optimization proposer's pack installs through the same owner.
-        install_pack_slot(access, owner, "prompt_proposer", "proposer", "local")
-            .await
-            .unwrap();
-        let proposer = read([
-            (gents::Collection::AgentBehavior, "prompt-proposer"),
-            (gents::Collection::AgentContext, "prompt-proposer-context"),
-            (gents::Collection::Tools, "prompt-proposer-tools"),
-        ])
-        .await;
-        assert_eq!(proposer[0].1["inference_profile_id"], "local");
+    #[test]
+    fn an_author_pack_needs_exactly_one_slot_with_one_behavior() {
+        let home = tempfile::tempdir().unwrap();
+        let pack =
+            |name| crate::commands::pack::test_support::fixture_pack_source(name, home.path());
+        let mut manifest = pack("slot_fixture").manifest().clone();
+        manifest.metadata.inference_slots[0]
+            .behaviors
+            .push("second".to_owned());
+        let error = single_slot_behavior(&manifest).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "pack slot_fixture slot author declares 2 behaviors; expected exactly one"
+        );
+        manifest.metadata.inference_slots.clear();
+        let error = single_slot_behavior(&manifest).unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "pack slot_fixture declares 0 inference slots; expected exactly one"
+        );
     }
 
     #[tokio::test]
@@ -771,8 +795,11 @@ mod tests {
 
     /// The live smoke's subject: a pack whose schemas give the author
     /// collections to capture.
-    const SMOKE_SUBJECT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packs/pipeline");
-    const SMOKE_BEHAVIOR: &str = "exp-stage1";
+    const SMOKE_SUBJECT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../gents/tests/fixtures/packs/documents_fixture"
+    );
+    const SMOKE_BEHAVIOR: &str = "fixture-worker";
 
     #[test]
     fn the_live_smokes_subject_shows_collections_to_capture() {
@@ -782,7 +809,7 @@ mod tests {
     }
 
     /// A live smoke test: the author runs as a real request on a served
-    /// home, `gents eval init pipeline --behavior exp-stage1`-style, the
+    /// home, `gents eval init <subject> --behavior fixture-worker`-style, the
     /// operator answering every question with "draft". Needs `GENTS_EVAL_INIT_HOME`
     /// pointing at a home `gents server` already serves, with a backend the
     /// resolved profile can reach. It asserts only that a pack was written
@@ -807,7 +834,11 @@ mod tests {
         let profile = gents::default_inference_profile_id_for_behavior(
             &gents::default_behavior_id_for_agent(&owner),
         );
-        install_pack_slot(&access, &owner, "eval_author", "author", &profile)
+        let author = resolve_pack_source("gents/eval_author", None, &home_dir)
+            .await
+            .expect("gents/eval_author is in the home's store or the registry");
+        let (slot, author_behavior) = single_slot_behavior(author.manifest()).unwrap();
+        install_pack_slot(&access, &owner, &author, &slot, &profile)
             .await
             .unwrap();
 
@@ -820,7 +851,7 @@ mod tests {
             owner: owner.clone(),
             out: root.path().join("out"),
             force: false,
-            subject: "pipeline".into(),
+            subject: SMOKE_SUBJECT.into(),
             subject_dir,
             profile,
             scope: crate::cli::EvalScopeArgs {
@@ -831,7 +862,7 @@ mod tests {
         let mut turn = turn::LiveTurn {
             graphql,
             agent_did: owner,
-            behavior_id: turn::AUTHOR_BEHAVIOR.to_owned(),
+            behavior_id: author_behavior,
             session_id: uuid::Uuid::new_v4().to_string(),
             timeout_secs: 300,
             poll_secs: 1,

@@ -1,0 +1,31 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "fixture-author",
+      "display_name": "Fixture author",
+      "description": "A tool-less behavior bound to the author slot.",
+      "context_id": "fixture-author-context",
+      "inference_profile_id": "gents:inference-slot:author"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "fixture-author-context",
+      "display_name": "Fixture author",
+      "system_prompt": "./agent_behaviors/fixture_author/system_prompt.md",
+      "tools_id": "fixture-author-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "fixture-author-tools",
+      "display_name": "Fixture author: no tools",
+      "host": {
+        "bash": {
+          "mode": "Off"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "name": "dependent_fixture",
+  "version": "1.0.0",
+  "description": "A one-slot documents pack that depends on the review_graph fixture, for dependency-resolution tests.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/fixture_dependent/system_prompt.md",
+    "pack_config.json"
+  ],
+  "dependencies": [
+    "fixture/review_graph"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "worker",
+      "description": "The one slot this fixture declares.",
+      "behaviors": [
+        "fixture-dependent"
+      ]
+    }
+  ]
+}

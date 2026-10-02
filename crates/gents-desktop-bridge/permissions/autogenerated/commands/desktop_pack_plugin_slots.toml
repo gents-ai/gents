@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pack-plugin-slots"
+description = "Enables the desktop_pack_plugin_slots command without any pre-configured scope."
+commands.allow = ["desktop_pack_plugin_slots"]
+
+[[permission]]
+identifier = "deny-desktop-pack-plugin-slots"
+description = "Denies the desktop_pack_plugin_slots command without any pre-configured scope."
+commands.deny = ["desktop_pack_plugin_slots"]

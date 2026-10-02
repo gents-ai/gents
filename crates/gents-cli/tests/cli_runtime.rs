@@ -7,6 +7,8 @@ mod support;
 mod cli_chat;
 #[path = "suites/cli_diagnose.rs"]
 mod cli_diagnose;
+#[path = "suites/cli_document.rs"]
+mod cli_document;
 #[path = "suites/cli_goal.rs"]
 mod cli_goal;
 #[path = "suites/cli_init.rs"]

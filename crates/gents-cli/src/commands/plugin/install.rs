@@ -219,6 +219,7 @@ mod instruction_tests {
                 plugin: "team/echo".into(),
                 digest: None,
             },
+            None,
         )
         .unwrap();
         let definition = gents::llm::tool::ToolDyn::definition(&tool, String::new()).await;

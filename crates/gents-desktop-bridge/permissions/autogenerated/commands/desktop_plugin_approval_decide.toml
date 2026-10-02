@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-plugin-approval-decide"
+description = "Enables the desktop_plugin_approval_decide command without any pre-configured scope."
+commands.allow = ["desktop_plugin_approval_decide"]
+
+[[permission]]
+identifier = "deny-desktop-plugin-approval-decide"
+description = "Denies the desktop_plugin_approval_decide command without any pre-configured scope."
+commands.deny = ["desktop_plugin_approval_decide"]

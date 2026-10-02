@@ -1,0 +1,20 @@
+{
+  "manifest_version": 1,
+  "name": "assets_fixture",
+  "version": "1.0.0",
+  "description": "Assets-only fixture pack: a README plus two files, one nested. Modeled on the old mailbox pack for archive, store, remove and update tests.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "assets",
+  "assets": [
+    "README.md",
+    "guide.md",
+    "data/nested.json"
+  ],
+  "dependencies": []
+}

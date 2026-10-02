@@ -353,14 +353,17 @@ pub fn classify_request_outcome(
 }
 
 #[derive(Debug, Deserialize)]
-struct RequestPollRow {
+pub(crate) struct RequestPollRow {
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    pub(crate) lifecycle_state: Option<String>,
     #[serde(default)]
-    session_id: Option<String>,
+    pub(crate) session_id: Option<String>,
 }
 
-async fn poll_request(node: &EmbeddedNode, request_id: &str) -> Result<Option<RequestPollRow>> {
+pub(crate) async fn poll_request(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<RequestPollRow>> {
     let response =
         graphql_with_transaction_retry(node, &poll_query(request_id), "await terminal").await?;
     first_row(&response, "AgentRequest")

@@ -1496,8 +1496,8 @@ async fn rust_analyzer_starts_and_reports_ready() {
     {
         return;
     }
-    let src =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/lsp_rust/workspace");
+    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/lsp_rust_workspace");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated

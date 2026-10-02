@@ -647,37 +647,27 @@ mod tests {
             &fixture.ctx.home_dir,
             &fixture.pack_arg(),
             None,
-            false,
         )
         .await
         .unwrap();
-        assert_eq!(directory.directory(), Some(fixture.pack.as_path()));
+        assert_eq!(directory.directory(), fixture.pack.as_path());
         assert_eq!(directory.default_behavior().unwrap(), "monitor");
 
-        let bundled = gents::pack::pack_catalog().unwrap()[0].name.clone();
+        // A name the home's store holds resolves with no network call (the
+        // registry here is unroutable) into a materialized directory.
+        let _stored = crate::commands::pack::test_support::fixture_pack_source(
+            "documents_fixture",
+            &fixture.ctx.home_dir,
+        );
         let named = crate::commands::pack::resolve_subject_pack(
             &fixture.ctx.home_dir,
-            &bundled,
-            None,
-            false,
+            "fixture/documents_fixture",
+            Some("http://127.0.0.1:9"),
         )
         .await
         .unwrap();
-        assert!(
-            matches!(&named.source, gents::eval::runner::CellSource::InstalledPack { name } if *name == bundled),
-            "a compiled-in pack is handed to the runner by name"
-        );
-        let materialized = crate::commands::pack::resolve_subject_pack(
-            &fixture.ctx.home_dir,
-            &bundled,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        assert!(materialized
-            .directory()
-            .is_some_and(|dir| dir.join("manifest.json").is_file()));
+        assert!(named.directory().join("manifest.json").is_file());
+        assert_eq!(named.default_behavior().unwrap(), "fixture-worker");
     }
 }
 

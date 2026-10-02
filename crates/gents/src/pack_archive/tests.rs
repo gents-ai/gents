@@ -7,19 +7,25 @@ use super::format::{append_entry, write_pack_with};
 use super::*;
 use crate::pack::{declared_paths, validate_manifest};
 
-/// Writes one of this build's own bundled packs out as a directory, so the
-/// tests work on a real pack rather than a fixture that could drift from
-/// what a pack actually looks like.
-fn bundled_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let pack = crate::pack::resolve_pack(name).expect("a bundled pack");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path().join(name);
-    for path in declared_paths(&pack.manifest) {
-        let target = root.join(&path);
-        std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
-        std::fs::write(&target, pack.asset(&path).expect("asset")).expect("write");
-    }
-    (dir, root)
+/// Copies a fixture pack (`tests/fixtures/packs/<name>`) into a fresh temp
+/// directory, so a test that mutates its copy never touches the checked-in
+/// fixture, and reading it back does not race other tests over the same
+/// files. A plugin fixture's artifact is a generated stand-in.
+fn fixture_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    crate::test_support::fixture_pack_copy(name, &serde_json::json!({}))
+}
+
+fn fixture_manifest_dir(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packs")
+        .join(name)
+}
+
+fn fixture_manifest(name: &str) -> crate::pack::PackManifest {
+    serde_json::from_slice(
+        &std::fs::read(fixture_manifest_dir(name).join("manifest.json")).expect("manifest"),
+    )
+    .expect("parse manifest")
 }
 
 /// A raw `.pack` with exactly these entries, in this order, for building
@@ -61,40 +67,67 @@ fn rebuild(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
 
 #[test]
 fn a_packed_pack_reads_back_as_the_same_pack() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let packed = PackArchive::from_bytes(&bytes).expect("reading back");
 
-    let bundled = crate::pack::resolve_pack("mailbox").expect("a bundled pack");
-    assert_eq!(packed.manifest().name, bundled.manifest.name);
-    assert_eq!(packed.manifest().version, bundled.manifest.version);
-    for path in declared_paths(&bundled.manifest) {
+    let manifest = fixture_manifest("assets_fixture");
+    assert_eq!(packed.manifest().name, manifest.name);
+    assert_eq!(packed.manifest().version, manifest.version);
+    for path in declared_paths(&manifest) {
         assert_eq!(
             packed.asset(&path).expect("packed asset"),
-            bundled.asset(&path).expect("bundled asset"),
+            std::fs::read(root.join(&path)).expect("fixture asset"),
             "{path} differs"
         );
     }
 }
 
 #[test]
-fn every_bundled_pack_keeps_its_digest_through_a_pack_file() {
-    for name in crate::pack::BUNDLED_PACK_NAMES {
-        let (_guard, root) = bundled_pack_dir(name);
+fn every_fixture_pack_keeps_its_digest_through_a_pack_file() {
+    for name in crate::support::fixtures::fixture_pack_names() {
+        let (_guard, root) = fixture_pack_dir(&name);
+        let manifest = fixture_manifest(&name);
+        let mut assets = std::collections::BTreeMap::new();
+        for path in declared_paths(&manifest) {
+            assets.insert(
+                path.clone(),
+                std::fs::read(root.join(&path)).expect("asset"),
+            );
+        }
+        let expected = crate::pack::digest_declared_assets(&manifest, |path| {
+            Ok(assets.get(path).map(Vec::as_slice).expect("declared asset"))
+        })
+        .expect("digest");
         let (bytes, header) = pack_dir(&root).expect("packing");
-        let bundled = crate::pack::resolve_pack(name).expect("a bundled pack");
-        assert_eq!(header.digest, bundled.digest, "{name}");
+        assert_eq!(header.digest, expected, "{name}");
         assert_eq!(
             PackArchive::from_bytes(&bytes).expect("reading").digest(),
-            bundled.digest,
+            expected,
             "{name}"
         );
     }
 }
 
+/// [`digest_declared_assets`] and `pack_dir` share one implementation, so the
+/// test above compares a fixture's digest to itself and cannot catch a
+/// regression in the digest format both sides would make the same way. This
+/// pins one literal, independently-computed digest so a real change to the
+/// format (byte order, entry framing, path normalisation) fails loudly here
+/// even if the two call sites stay in lockstep.
+#[test]
+fn assets_fixture_digest_matches_a_pinned_golden_value() {
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
+    let (_, header) = pack_dir(&root).expect("packing");
+    assert_eq!(
+        header.digest,
+        "sha256:bbae56b63ca05445bc0cd5ea9fdbf3331d8dea6fbe181913e5fb3d69fd13c5f6"
+    );
+}
+
 #[test]
 fn packing_twice_gives_the_same_bytes() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (first, first_header) = pack_dir(&root).expect("first");
     let (second, second_header) = pack_dir(&root).expect("second");
     assert_eq!(
@@ -106,7 +139,7 @@ fn packing_twice_gives_the_same_bytes() {
 
 #[test]
 fn a_pack_is_a_tar_gz_any_archive_tool_can_read_with_its_header_first() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, header) = pack_dir(&root).expect("packing");
     let entries = entries_of(&bytes);
     assert_eq!(entries[0].0, HEADER_ENTRY);
@@ -114,17 +147,17 @@ fn a_pack_is_a_tar_gz_any_archive_tool_can_read_with_its_header_first() {
     assert_eq!(on_disk, header);
     assert_eq!(on_disk.format, FORMAT);
     assert_eq!(on_disk.format_version, FORMAT_VERSION);
-    assert_eq!(on_disk.coordinate, "gents/mailbox");
+    assert_eq!(on_disk.coordinate, "fixture/assets_fixture");
     let rest: Vec<&str> = entries[1..].iter().map(|(path, _)| path.as_str()).collect();
-    let bundled = crate::pack::resolve_pack("mailbox").unwrap();
+    let manifest = fixture_manifest("assets_fixture");
     assert_eq!(
         rest,
-        declared_paths(&bundled.manifest),
+        declared_paths(&manifest),
         "entries follow the digest order, so a reader hashes while streaming"
     );
     assert_eq!(
         header.file_name(),
-        format!("gents.mailbox-{}.pack", bundled.manifest.version)
+        format!("fixture.assets_fixture-{}.pack", manifest.version)
     );
 }
 
@@ -140,7 +173,7 @@ fn a_file_without_the_header_first_is_not_a_pack() {
 
 #[test]
 fn a_changed_asset_fails_the_digest_the_header_claims() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let mut entries = entries_of(&bytes);
     let asset = entries
@@ -158,7 +191,7 @@ fn a_changed_asset_fails_the_digest_the_header_claims() {
 
 #[test]
 fn a_header_that_misnames_the_pack_is_refused() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, header) = pack_dir(&root).expect("packing");
     let mut entries = entries_of(&bytes);
     let lie = PackHeader {
@@ -175,7 +208,7 @@ fn a_header_that_misnames_the_pack_is_refused() {
 
 #[test]
 fn a_newer_format_version_is_named_not_misread() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let mut entries = entries_of(&bytes);
     let mut header: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
@@ -190,7 +223,7 @@ fn a_newer_format_version_is_named_not_misread() {
 
 #[test]
 fn entries_out_of_digest_order_are_refused() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let mut entries = entries_of(&bytes);
     let n = entries.len();
@@ -201,7 +234,7 @@ fn entries_out_of_digest_order_are_refused() {
 
 #[test]
 fn a_member_the_manifest_does_not_declare_is_refused() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     std::fs::write(root.join("stowaway.md"), b"not declared").expect("write");
     let (bytes, _) = pack_dir(&root).expect("packing");
     assert!(
@@ -223,7 +256,7 @@ fn a_member_the_manifest_does_not_declare_is_refused() {
 
 #[test]
 fn a_missing_declared_asset_is_refused_when_the_pack_is_built() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).expect("manifest"))
             .expect("parse");
@@ -247,7 +280,7 @@ fn a_path_that_escapes_the_pack_is_refused() {
     header.as_old_mut().name[..name.len()].copy_from_slice(name);
     header.set_cksum();
 
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let entries = entries_of(&bytes);
     let mut builder = tar::Builder::new(Vec::new());
@@ -275,7 +308,7 @@ fn a_path_that_escapes_the_pack_is_refused() {
 
 #[test]
 fn every_bound_is_enforced_on_read_and_write() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, _) = pack_dir(&root).expect("packing");
     let bounds = Bounds::default();
     for (tight, expected) in [
@@ -334,7 +367,7 @@ fn every_bound_is_enforced_on_read_and_write() {
 
 #[test]
 fn writing_a_pack_out_reproduces_the_directory_it_came_from() {
-    let (_guard, root) = bundled_pack_dir("mailbox");
+    let (_guard, root) = fixture_pack_dir("assets_fixture");
     let (bytes, header) = pack_dir(&root).expect("packing");
     let packed = PackArchive::from_bytes(&bytes).expect("reading");
     let out = tempfile::tempdir().expect("tempdir");

@@ -38,7 +38,13 @@ async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, 
     crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
     let mut grants = config(categories);
     grants.preview = true;
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
     (node, owner, tools)
 }
 
@@ -257,8 +263,15 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         owner.clone(),
         Some(identity.clone()),
         &unguarded,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
     );
-    let tools = build_self_config_tools(node.clone(), owner.clone(), Some(identity), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
     for surface in ["engineer-mailbox", "worker-surface"] {
         ok(
             &setup_tools,
@@ -509,8 +522,13 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     let mut grants = config(&["persona", "tools", "profile", "automation"]);
     grants.behavior_id = "setup".into();
     grants.preview = true;
-    let tools =
-        build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity.clone()),
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+    );
 
     // Pages are plain text of skill size; nothing from the index repeats.
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
@@ -1321,8 +1339,13 @@ async fn saved_config_audit_is_principal_scoped_and_does_not_require_preview() {
     for (categories, allowed) in [(&["persona"][..], true), (&["tools"][..], false)] {
         let mut grants = config(categories);
         grants.preview = false;
-        let tools =
-            build_self_config_tools(node.clone(), owner.clone(), Some(identity.clone()), &grants);
+        let tools = build_self_config_tools(
+            node.clone(),
+            owner.clone(),
+            Some(identity.clone()),
+            &grants,
+            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
+        );
         assert_eq!(
             call(&tools, json!({"argv":["validate"]})).await.is_ok(),
             allowed

@@ -31,6 +31,7 @@ import { EventSourcesPanel } from "./EventSourcesPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { ToolServicesPanel } from "./ToolServicesPanel";
 import { TriggersPanel } from "./TriggersPanel";
+import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { PacksPanel } from "./PacksPanel";
 import { SECTIONS, type SectionId } from "./sections";
 
@@ -187,6 +188,7 @@ export function AgentScreen({
           {(section === "automations" || section === "triggers") && (
             <TriggersPanel shell={shell} deployment={deployment} item={item} />
           )}
+          {section === "folders" && <AllowedFoldersPanel />}
           {section === "packs" && <PacksPanel />}
         </div>
       </ScrollArea>

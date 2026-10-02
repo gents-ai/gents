@@ -5,6 +5,7 @@
 //! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;
+mod entry_input;
 mod live;
 mod routes;
 mod run;
@@ -16,6 +17,7 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
+pub use entry_input::{admit_operator_input, validate_input_schema};
 pub(crate) use live::{is_live_for, live_run_correlations};
 pub(crate) use routes::revision_artifact_ids;
 #[cfg(test)]
@@ -38,8 +40,8 @@ pub use runtime::{
     load_active_graph_plan_with_access, materialize_graph_revision,
     prospective_graph_artifact_identities, publish_graph_plan, revision_gate_decision,
     set_graph_enabled_with_access, start_graph_run, start_graph_run_with_access, ActivationReceipt,
-    GraphArtifactIdentityScope, GraphRunReceipt, GraphRunTerminalDecision, MaterializedRevision,
-    ProspectiveGraphArtifactIdentity, PublishedGraph, RevisionGateDecision,
+    EntryInputOrigin, GraphArtifactIdentityScope, GraphRunReceipt, GraphRunTerminalDecision,
+    MaterializedRevision, ProspectiveGraphArtifactIdentity, PublishedGraph, RevisionGateDecision,
 };
 pub(crate) use runtime::{
     fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,
@@ -52,11 +54,11 @@ pub use tools::{
 };
 pub use types::{
     BundledProvenance, CapabilityManifestEntry, DeliveryConcurrency, DeliveryMode, Diagnostic,
-    DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
-    GraphSessionSelection, GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode,
-    PlannedPackageArtifact, PlannedResult, PortCardinality, PortRef, PortSpec,
-    RequiredSchemaDigest, ResultCardinality, ResultContract, StageCapability, StageTarget,
-    WorkspaceAuthority, COMPILER_VERSION,
+    DiagnosticCode, EntryBinding, EntryPrepare, GraphEdge, GraphIntent, GraphLimits, GraphNode,
+    GraphPlan, GraphSessionSelection, GroupCount, HostInput, PackagePlan, PlannedEdge,
+    PlannedEntry, PlannedNode, PlannedPackageArtifact, PlannedResult, PortCardinality, PortRef,
+    PortSpec, RequiredSchemaDigest, ResultCardinality, ResultContract, StageCapability,
+    StageTarget, WorkspaceAuthority, COMPILER_VERSION,
 };
 
 #[cfg(test)]

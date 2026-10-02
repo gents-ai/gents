@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-plugin-approvals-pending"
+description = "Enables the desktop_plugin_approvals_pending command without any pre-configured scope."
+commands.allow = ["desktop_plugin_approvals_pending"]
+
+[[permission]]
+identifier = "deny-desktop-plugin-approvals-pending"
+description = "Denies the desktop_plugin_approvals_pending command without any pre-configured scope."
+commands.deny = ["desktop_plugin_approvals_pending"]

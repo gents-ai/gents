@@ -1,1 +1,0 @@
-Edit the bound isolated workspace to implement the ordered maintenance packages. The placement is already your file root, shell CWD, and LSP root. Do not create worktrees. Do not git commit or git add. The host seals the tree after you finish; the integrator applies the sealed diff.

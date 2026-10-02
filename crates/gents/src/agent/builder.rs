@@ -252,6 +252,7 @@ impl GentsBuilder {
         });
 
         let capture_node = node.clone();
+        let plugin_node = node.clone();
 
         Ok(Gents {
             node,
@@ -285,8 +286,11 @@ impl GentsBuilder {
             ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
-            plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(
+            plugins: Arc::new(crate::agent::plugin_executor(
                 self.plugin_home,
+                crate::plugin::model_calls::AccessModels(
+                    crate::config_client::ConfigAccess::Local(plugin_node),
+                ),
             )),
         })
     }

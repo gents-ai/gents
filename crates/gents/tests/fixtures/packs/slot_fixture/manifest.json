@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "slot_fixture",
+  "version": "1.0.0",
+  "description": "One inference slot, one tool-less behavior. Used by eval-author and proposer tests that need a minimal, real slot to install onto.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/fixture_author/system_prompt.md",
+    "pack_config.json"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "author",
+      "description": "The one slot this fixture declares.",
+      "behaviors": [
+        "fixture-author"
+      ]
+    }
+  ]
+}

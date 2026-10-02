@@ -52,7 +52,7 @@ impl Fixture {
         let installed = install_test_graph_package(
             &access,
             identity.did(),
-            "code_review",
+            "review_graph",
             &GraphPackageInstallBindings {
                 agent_did: identity.did().into(),
                 inference_slots: std::collections::BTreeMap::from([
@@ -109,6 +109,7 @@ impl Fixture {
             None,
             "review",
             input,
+            super::super::EntryInputOrigin::Operator,
         )
         .await
         .unwrap();
@@ -697,7 +698,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
 
     let fx = Fixture::new(true, false).await;
     let package = crate::test_support::load_test_graph_package(
-        "code_review",
+        "review_graph",
         &crate::graph_package::GraphPackageInstallBindings {
             agent_did: fx.identity.did().into(),
             inference_slots: std::collections::BTreeMap::from([

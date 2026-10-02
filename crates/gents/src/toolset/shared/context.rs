@@ -170,6 +170,12 @@ impl ToolContext {
     }
 
     fn ensure_allowed(&self, path: PathBuf) -> Result<PathBuf> {
+        if crate::plugin::allowed::is_protected(&path) {
+            bail!(
+                "{} holds the operator's plugin access settings; tools cannot use it",
+                path.display()
+            );
+        }
         let root = self.effective_root();
         if path.starts_with(&root) {
             Ok(path)

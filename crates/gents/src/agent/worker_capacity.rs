@@ -34,6 +34,7 @@ impl WorkerTicket {
 pub(crate) enum CapacityError {
     #[error("request worker capacity acquisition cancelled")]
     Cancelled,
+    #[cfg(test)]
     #[error("request worker capacity is full")]
     ActiveFull,
     #[error("request generation already has an active worker")]
@@ -51,6 +52,7 @@ struct RegisteredTicket {
 /// One slot generation's active worker capacity.
 pub(crate) struct WorkerCapacity {
     active: Arc<Semaphore>,
+    #[cfg(test)]
     active_limit: usize,
     registered: Mutex<HashMap<WorkerTicket, RegisteredTicket>>,
 }
@@ -119,11 +121,13 @@ impl WorkerCapacity {
     pub(crate) fn new(active_limit: usize) -> Arc<Self> {
         Arc::new(Self {
             active: Arc::new(Semaphore::new(active_limit)),
+            #[cfg(test)]
             active_limit,
             registered: Mutex::new(HashMap::new()),
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn active_limit(&self) -> usize {
         self.active_limit
     }
@@ -153,7 +157,8 @@ impl WorkerCapacity {
         })
     }
 
-    /// Nonblocking counterpart for admission probes and model conformance.
+    /// Nonblocking counterpart for model conformance.
+    #[cfg(test)]
     pub(crate) fn try_acquire_unbound(
         self: &Arc<Self>,
     ) -> Result<UnboundActiveGuard, CapacityError> {
