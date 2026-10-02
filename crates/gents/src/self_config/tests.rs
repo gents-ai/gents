@@ -6121,7 +6121,13 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     seed_account_view(&node, &owner).await;
     let mut tool_config = config(&["persona", "profile", "backend"]);
     tool_config.behavior_id = "alpha".into();
-    let tools = build_self_config_tools(node.clone(), owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -6188,7 +6194,7 @@ async fn config_backend_accounts_needs_the_backend_grant() {
     crate::test_support::install_test_behavior(&node, &owner, "alpha").await;
     let mut tool_config = config(&["persona", "profile"]);
     tool_config.behavior_id = "alpha".into();
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config);
+    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
