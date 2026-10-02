@@ -123,7 +123,7 @@ pub fn chatgpt_codex_client_version() -> String {
 // the advertised client version, so an old default silently hides newer model
 // families (#982). Keep this at a current codex CLI release;
 // GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
-const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.157.0";
+const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 /// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
@@ -788,16 +788,17 @@ mod tests {
     }
 
     #[test]
-    fn default_client_version_unlocks_gpt_6_catalog() {
+    fn default_client_version_supports_gpt_6_1_sol_catalog() {
         let parse = |version: &str| -> Vec<u32> {
             version
                 .split('.')
                 .map(|part| part.parse().unwrap())
                 .collect()
         };
-        assert_eq!(CHATGPT_CODEX_CLIENT_VERSION, "0.157.0");
-        // Upstream models.json: gpt-6-sol and gpt-6-luna require 0.155.0.
-        assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.155.0"));
+        assert_eq!(CHATGPT_CODEX_CLIENT_VERSION, "0.160.0");
+        // Codex rust-v0.160.0, a956835d020762cb2b570053af06f643a11c0ecc:
+        // models-manager/models.json gates gpt-6.1-sol at 0.153.0.
+        assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.153.0"));
     }
 
     #[test]
