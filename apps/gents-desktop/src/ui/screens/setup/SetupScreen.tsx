@@ -739,6 +739,7 @@ export function SetupScreen({
         (outcome.accountRef !== null || outcome.result === "refreshed")
       ) {
         if (outcome.result === "added") onDone(await api.fetchDesktopSnapshot());
+        else setSignInHint(outcome.hint ?? notAdded(outcome.label));
         return;
       }
       setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
