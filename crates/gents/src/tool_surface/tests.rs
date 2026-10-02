@@ -3050,3 +3050,27 @@ fn meta_only_behavior_does_not_grant_p2p_authority() {
     assert!(!config.static_policy().permits_p2p_mutation());
     assert!(config.static_policy().p2p_collections.is_deny_all());
 }
+
+#[test]
+fn effective_surface_fingerprint_preserves_p2p_mutation_and_collection_scope() {
+    let make = |mutations, collections| {
+        BehaviorToolConfig::from_selection(
+            "p2p",
+            ResolvedToolSelection {
+                enable_p2p_tool: true,
+                enable_p2p_mutations: mutations,
+                p2p_collections: collections,
+                ..Default::default()
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap()
+        .resolve_with_subagent_tools_for_mcp_presence(false, SubagentToolConfig::default())
+    };
+    let read = make(false, vec!["DeploymentNote".into()]);
+    let mutate = make(true, vec!["DeploymentNote".into()]);
+    let other = make(true, vec!["PrivateNote".into()]);
+    assert_ne!(format!("{read:?}"), format!("{mutate:?}"));
+    assert_ne!(format!("{mutate:?}"), format!("{other:?}"));
+}

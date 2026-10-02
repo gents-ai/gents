@@ -478,6 +478,9 @@ impl std::fmt::Debug for ToolSurface {
                 &self.enable_context_budget_tool,
             )
             .field("enable_schema_tool", &self.enable_schema_tool)
+            .field("enable_p2p_tool", &self.enable_p2p_tool)
+            .field("enable_p2p_mutations", &self.enable_p2p_mutations)
+            .field("p2p_collections", &self.p2p_collections)
             .field(
                 "enable_session_history_tool",
                 &self.enable_session_history_tool,

@@ -160,7 +160,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         });
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
         ConfigAccess::transact_local(&local.node, None, "eval.p2p.subject", |txn| {
-            Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
         .await?;
         let native_tool = P2pTool::new(
