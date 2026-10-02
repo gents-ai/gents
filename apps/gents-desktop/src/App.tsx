@@ -36,6 +36,9 @@ import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { Shortcuts } from "./ui/screens/Shortcuts";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { ShellProvider } from "./ui/app/ShellContext";
+import { setHomeDid } from "./ui/lib/nodes";
+import "./ui/screens/surfaces";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
 import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
 import { initTheme } from "./ui/theme";
@@ -82,6 +85,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     bridge,
     route.name === "session" ? route.sessionId : undefined,
   );
+  setHomeDid(shell.snapshot?.bootstrap.initAgentDid);
 
   useEffect(() => {
     initTheme();
@@ -218,40 +222,43 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     <>
       <TooltipProvider>
         <BehaviorColorsContext.Provider value={shell.behaviorColors}>
-          <AppShell
-            route={route}
-            agentName={agent}
-            agentDid={shell.selectedAgentDid}
-            deployment={shell.selectedDeployment}
-            root={shell.snapshot?.bootstrap.initToolRoot}
-            ceiling={shell.snapshot?.bootstrap.initToolCeiling}
-            online={Boolean(shell.snapshot?.client)}
-            mailboxCount={
-              shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
-                .length ?? 0
-            }
-            holds={
-              new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
-            }
-            syncHealth={shell.snapshot?.client?.syncHealth}
-            error={shell.error}
-            onDismissError={shell.clearError}
-            onReconnect={shell.reconnect}
-            onOpenDbExplorer={openDbExplorer}
-          >
-            {route.name === "sessions" && <SessionsScreen shell={shell} />}
-            {route.name === "session" && <SessionScreen shell={shell} />}
-            {route.name === "mailbox" && <MailboxScreen shell={shell} />}
-            {route.name === "agents" && <AgentsScreen shell={shell} />}
-            {route.name === "agent" && (
-              <AgentScreen
-                shell={shell}
-                agentDid={route.agentDid}
-                section={route.section}
-                item={route.item}
-              />
-            )}
-          </AppShell>
+          <ShellProvider value={shell}>
+            <AppShell
+              route={route}
+              agentName={agent}
+              agentDid={shell.selectedAgentDid}
+              deployment={shell.selectedDeployment}
+              root={shell.snapshot?.bootstrap.initToolRoot}
+              ceiling={shell.snapshot?.bootstrap.initToolCeiling}
+              online={Boolean(shell.snapshot?.client)}
+              mailboxCount={
+                shell.selectedDeployment?.mailboxItems.filter(
+                  (m) => m.status === "open",
+                ).length ?? 0
+              }
+              holds={
+                new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
+              }
+              syncHealth={shell.snapshot?.client?.syncHealth}
+              error={shell.error}
+              onDismissError={shell.clearError}
+              onReconnect={shell.reconnect}
+              onOpenDbExplorer={openDbExplorer}
+            >
+              {route.name === "sessions" && <SessionsScreen shell={shell} />}
+              {route.name === "session" && <SessionScreen shell={shell} />}
+              {route.name === "mailbox" && <MailboxScreen shell={shell} />}
+              {route.name === "agents" && <AgentsScreen shell={shell} />}
+              {route.name === "agent" && (
+                <AgentScreen
+                  shell={shell}
+                  agentDid={route.agentDid}
+                  section={route.section}
+                  item={route.item}
+                />
+              )}
+            </AppShell>
+          </ShellProvider>
           <Toaster />
           {shell.deployments.some((deployment) =>
             isLocalAgent(deployment, shell.snapshot?.bootstrap.initAgentDid),

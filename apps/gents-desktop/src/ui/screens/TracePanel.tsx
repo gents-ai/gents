@@ -15,6 +15,9 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { Shell } from "@/hooks/useShell";
+import { useShellContext } from "@/app/ShellContext";
+import { workspace } from "@/app/workspace";
+import type { SurfaceContext } from "@/app/surfaces";
 import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
 import { ToolBody, ToolSummary } from "./tool-views";
@@ -63,7 +66,29 @@ function Entry({
   );
 }
 
-export function TracePanel({ shell, onClose }: { shell: Shell; onClose: () => void }) {
+/* the trace as a registered surface: the shell from context, the close
+   through the workspace, so the dock and the phone sheet mount the same thing */
+export function TraceSurface(_: SurfaceContext) {
+  const shell = useShellContext();
+  return (
+    <TracePanel
+      shell={shell}
+      onClose={() => workspace.closeTab("trace")}
+      chrome={false}
+    />
+  );
+}
+
+export function TracePanel({
+  shell,
+  onClose,
+  chrome = true,
+}: {
+  shell: Shell;
+  onClose: () => void;
+  /** the card and its header; off when the dock draws them */
+  chrome?: boolean;
+}) {
   const session = shell.selectedSession;
   const tools =
     session?.timelineItems.flatMap((i) => (i.kind === "toolGroup" ? i.tools : [])) ??
@@ -75,23 +100,30 @@ export function TracePanel({ shell, onClose }: { shell: Shell; onClose: () => vo
   const effectiveOpen = openKey;
 
   return (
-    <aside className="flex h-full min-h-0 flex-col rounded-2xl border border-border/60 bg-raised">
-      <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
-        {/* the calls of a request, in order: not a setting, which is what
+    <aside
+      className={cn(
+        "flex h-full min-h-0 flex-col",
+        chrome && "rounded-2xl border border-border/60 bg-raised",
+      )}
+    >
+      {chrome && (
+        <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
+          {/* the calls of a request, in order: not a setting, which is what
             the sliders mean in the shell and in the config's profiles */}
-        <ListTree className="size-4 text-muted-foreground" />
-        <span className="font-heading text-sm font-medium text-heading">Trace</span>
-        {running && <Spinner className="ml-1 text-foreground" />}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="ml-auto"
-          aria-label="Close trace"
-          onClick={onClose}
-        >
-          <X />
-        </Button>
-      </div>
+          <ListTree className="size-4 text-muted-foreground" />
+          <span className="font-heading text-sm font-medium text-heading">Trace</span>
+          {running && <Spinner className="ml-1 text-foreground" />}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="ml-auto"
+            aria-label="Close trace"
+            onClick={onClose}
+          >
+            <X />
+          </Button>
+        </div>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-3 py-2">
           {tools.length === 0 && (
