@@ -282,6 +282,9 @@ impl WriteTool {
                 .await?["data"]
                 .clone()
         } else {
+            if let Some(filter) = filter.as_ref() {
+                crate::defra_query::validate_filter(txn, collection, filter).await?;
+            }
             let params = DefraQueryParams {
                 collection: collection.into(),
                 fields: vec!["_docID".into()],
