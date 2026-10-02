@@ -264,14 +264,14 @@ source consistency checks, not a separate runtime compatibility version.
   builds open the store unchanged and ignore the new collection.
 - `gents accounts list` shows each account's usage (#1525): the window, the
   percent used, the reset time with a countdown, where the number came from
-  and how old it is, or "unknown", "not reported", "no cap on this key" or
-  "not verified" when there is no number. `--output json` adds `usage` and
+  and how old it is, or "unknown", "not reported" or "no cap on this key"
+  when there is no number. `--output json` adds `usage` and
   `read` to every row. With a runtime running, listing asks it to read
   ChatGPT, Grok and OpenRouter usage, skipping disabled accounts and accounts
   read in the last five minutes; `--refresh` also reads Claude and needs a
   running runtime. The request is signed with the home identity and accepted
   only from the runtime's own operator, once. Claude windows read from its
-  usage endpoint are not shown until their scale is verified. The model's
+  usage endpoint show after `--refresh`. The model's
   config tool gains `backend accounts`, a read-only list of accounts and
   account-free backends with their state, the profiles that use them and
   their last stored usage; it shows no tokens, sign-in identities or ids,
@@ -286,7 +286,8 @@ source consistency checks, not a separate runtime compatibility version.
   its label, whether it is signed in, disabled or not on this node, and a
   usage bar from the last stored observation. Opening the row shows each usage
   window with its reset countdown, source and age, or "unknown", "not
-  reported", "no cap on this key" or "not verified", and a Refresh button;
+  reported" or "no cap on this key", and a Refresh button, after which
+  Claude's windows show;
   opening the Providers page asks the runtime for the reads it allows on open,
   and nothing polls. "Add another <Provider>" and "New backend" sign in a
   further account for every provider, with an optional label, and say whether

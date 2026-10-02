@@ -1011,8 +1011,8 @@ pub(crate) struct BackendUsageView {
     pub backend_id: String,
     pub windows: Vec<UsageWindowView>,
     pub plan: Option<String>,
-    /// Only when `windows` is empty: `unknown`, `not reported`, `no cap on
-    /// this key` or `not verified`.
+    /// Only when `windows` is empty: `unknown`, `not reported` or `no cap on
+    /// this key`.
     pub note: Option<String>,
     pub read_at: Option<String>,
     pub read_error: Option<String>,

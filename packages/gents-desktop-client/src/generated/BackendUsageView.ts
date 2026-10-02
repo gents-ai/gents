@@ -7,8 +7,8 @@ import type { UsageWindowView } from "./UsageWindowView.js";
  */
 export type BackendUsageView = { backendId: string, windows: Array<UsageWindowView>, plan: string | null,
 /**
- * Only when `windows` is empty: `unknown`, `not reported`, `no cap on
- * this key` or `not verified`.
+ * Only when `windows` is empty: `unknown`, `not reported` or `no cap on
+ * this key`.
  */
 note: string | null, readAt: string | null, readError: string | null,
 /**

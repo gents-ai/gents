@@ -880,7 +880,7 @@ describe("configuration panels", () => {
             note: "no cap on this key",
             read: "unavailable: throttled",
           }),
-          view_("claude", { note: "not verified", read: "skipped_until_refresh" }),
+          view_("claude", { note: "unknown", read: "skipped_until_refresh" }),
           view_("grok-side", { windows: [window("5h", 50)] }),
         ];
         const setup = (item?: string) => {
@@ -980,7 +980,7 @@ describe("configuration panels", () => {
           ["chatgpt", ["unknown"]],
           ["local", ["not reported"]],
           ["openrouter", ["no cap on this key", "Not read: throttled"]],
-          ["claude", ["not verified", "Refresh to read usage"]],
+          ["claude", ["unknown", "Refresh to read usage"]],
         ] as const)
           it(`says why ${item} has no number`, async () => {
             setup(item);
@@ -1000,7 +1000,7 @@ describe("configuration panels", () => {
 
         it("Refresh reads the row's provider and redraws from the result", async () => {
           const { api, user, view } = setup("claude");
-          await screen.findByText("not verified");
+          await screen.findByText("unknown");
           api.readProviderUsage.mockResolvedValueOnce([
             view_("claude", { windows: [window("5h", 12)] }),
           ]);

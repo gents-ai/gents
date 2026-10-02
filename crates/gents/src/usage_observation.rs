@@ -13,8 +13,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, UsageWindow, READ_SKIP_WINDOW,
-    REWRITE_AFTER,
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
@@ -144,14 +143,8 @@ pub fn usage_view(
     let empty = StoredUsage::default();
     let stored = stored.unwrap_or(&empty);
     let visible = account_usage::visible_windows(&stored.report, now);
-    // Claude's `/api/oauth/usage` scale is unverified live (percent or
-    // fraction); its windows stay hidden until a live check confirms it.
-    let unverified = |window: &UsageWindow| {
-        kind == Kind::ClaudeCliSubscription && window.source == UsageSource::Endpoint
-    };
     let windows: Vec<_> = visible
         .iter()
-        .filter(|(window, _)| !unverified(window))
         .map(|(window, freshness)| WindowView {
             label: window.label.clone(),
             window_minutes: window.window_minutes,
@@ -167,7 +160,6 @@ pub fn usage_view(
     let read_ok = stored.read_at.is_some() && stored.read_error.is_none();
     let note = match kind {
         _ if !windows.is_empty() => None,
-        _ if visible.iter().any(|(window, _)| unverified(window)) => Some("not verified"),
         Kind::OpenAiCompatible if stored.report.is_empty() && stored.read_at.is_none() => {
             Some("not reported")
         }
