@@ -2200,6 +2200,38 @@ mod provider_account_tests {
         assert_eq!(labels, ["Claude", "Work"]);
     }
 
+    #[tokio::test]
+    async fn an_added_account_whose_label_is_taken_is_saved_under_its_default_label() {
+        let node = serving_node().await;
+        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let agent = "did:key:zAgent";
+        let pending = PendingOAuthCredentials::default();
+        let labelled = |label: Option<&str>, account: &str| OAuthCredential {
+            label: label.map(str::to_string),
+            ..claude_sign_in(agent, Some(account), account, "SECRET")
+        };
+        for (label, account) in [(None, "acct-a"), (Some("Work"), "acct-b")] {
+            save_issued_credential(&pending, access(), pending.issue(labelled(label, account)))
+                .await
+                .expect("store the account");
+        }
+
+        let saved = save_issued_credential(
+            &pending,
+            access(),
+            pending.issue(labelled(Some("Work"), "acct-c")),
+        )
+        .await;
+        assert!(
+            saved.is_ok(),
+            "a stored account is never reported unsaved: {:?}",
+            saved.as_ref().err()
+        );
+        let view = SignInView::from(&saved.unwrap());
+        assert_eq!(view.result, "added");
+        assert_eq!(view.label, "Claude 2");
+    }
+
     #[test]
     fn a_sign_in_label_is_trimmed_and_checked_before_the_browser() {
         assert_eq!(
