@@ -230,6 +230,126 @@ pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
 }
 
+async fn enrich_native_outcome_provenance(
+    node: &EmbeddedNode,
+    collection: &str,
+    source: &mut serde_json::Value,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let (work_unit_id, invocation_id) = match collection {
+        "CallbackResult" => {
+            let source_owner = required_source_string(source, "owner_agent_did")?;
+            anyhow::ensure!(
+                source_owner == owner,
+                "CallbackResult owner does not match Task behavior"
+            );
+            (
+                required_source_string(source, "work_unit_id")?,
+                required_source_string(source, "invocation_id")?,
+            )
+        }
+        "WorkspaceReceipt" => {
+            let workspace_id = required_source_string(source, "workspace_id")?;
+            let expected_work_unit = required_source_string(source, "work_unit_id")?;
+            let workspace = crate::workspace::overlay::load_isolated_workspace_record(
+                node,
+                &workspace_id,
+                owner,
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("WorkspaceReceipt has no principal-scoped IsolatedWorkspace")
+            })?;
+            anyhow::ensure!(
+                workspace.workspace_id == workspace_id,
+                "workspace identity changed during lookup"
+            );
+            anyhow::ensure!(
+                workspace.owner_agent_did == owner,
+                "IsolatedWorkspace owner does not match Task behavior"
+            );
+            anyhow::ensure!(
+                workspace.work_unit_id.as_deref() == Some(expected_work_unit.as_str()),
+                "WorkspaceReceipt work_unit_id does not match IsolatedWorkspace"
+            );
+            (
+                expected_work_unit,
+                workspace.caused_by_invocation_id.ok_or_else(|| {
+                    anyhow::anyhow!("IsolatedWorkspace has no originating CallbackInvocation")
+                })?,
+            )
+        }
+        _ => anyhow::bail!("unsupported native provenance source {collection}"),
+    };
+
+    let invocation = crate::callback::load_invocation(node, &invocation_id, owner)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("native source has no principal-scoped CallbackInvocation")
+        })?;
+    anyhow::ensure!(
+        invocation.invocation_id == invocation_id && invocation.owner_agent_did == owner,
+        "CallbackInvocation identity changed during lookup"
+    );
+    let input = invocation
+        .input
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation input is not an object"))?;
+    anyhow::ensure!(
+        input
+            .get("work_unit_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(work_unit_id.as_str()),
+        "CallbackInvocation work_unit_id does not match native source"
+    );
+    let handoff_id = input
+        .get("handoff_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("CallbackInvocation has no authored handoff_id"))?;
+    let source = source
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("native event source is not an object"))?;
+    let mut route_fields = vec![(
+        "handoff_id",
+        serde_json::Value::String(handoff_id.to_owned()),
+    )];
+    if let Some(reply_session_id) = input
+        .get("reply_session_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        route_fields.push((
+            "reply_session_id",
+            serde_json::Value::String(reply_session_id.to_owned()),
+        ));
+    }
+    if let Some(attempt) = input.get("attempt").and_then(serde_json::Value::as_i64) {
+        route_fields.push(("attempt", serde_json::Value::Number(attempt.into())));
+    }
+    for (field, value) in route_fields {
+        if let Some(existing) = source.get(field) {
+            anyhow::ensure!(
+                existing == &value,
+                "native source {field} conflicts with CallbackInvocation input"
+            );
+        } else {
+            source.insert(field.to_owned(), value);
+        }
+    }
+    Ok(())
+}
+
+fn required_source_string(source: &serde_json::Value, field: &str) -> anyhow::Result<String> {
+    source
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("native event source has no {field}"))
+}
+
 impl SourceSchemaCache {
     pub(crate) async fn fields_for(
         &self,
@@ -1736,6 +1856,56 @@ impl EventSource {
                     continue;
                 }
             };
+            let mut doc_vars = doc_vars;
+            if trigger.task.emit_outcome
+                && trigger.fire_mode == crate::runtime_snapshot::EventTriggerFireMode::PerDocument
+                && matches!(
+                    trigger.source_collection.as_str(),
+                    "CallbackResult" | "WorkspaceReceipt"
+                )
+            {
+                let Some(owner) = snapshot
+                    .behavior(&trigger.task.behavior_id)
+                    .map(|behavior| behavior.agent_did())
+                else {
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "native outcome provenance".to_owned(),
+                    ));
+                    continue;
+                };
+                let Some(doc) = doc_vars.as_mut() else {
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "native outcome provenance".to_owned(),
+                    ));
+                    continue;
+                };
+                if let Err(error) = enrich_native_outcome_provenance(
+                    &self.node,
+                    &trigger.source_collection,
+                    doc,
+                    owner,
+                )
+                .await
+                {
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "native outcome provenance".to_owned(),
+                    ));
+                    tracing::warn!(
+                        trigger_id = %trigger.trigger_id,
+                        source_collection = %trigger.source_collection,
+                        %source_doc_id,
+                        %error,
+                        "event source could not resolve native outcome provenance; skipping fire",
+                    );
+                    continue;
+                }
+            }
 
             let correlation = match trigger.correlation_field.as_deref() {
                 None => None,

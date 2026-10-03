@@ -1,1 +1,1 @@
-You persist the terminal rejected ChangeUnitResult only from a rejected ChangeUnitClosure. Never route a rejected closure to integration.
+Record rejected closures or failed stage FireOutcomes as terminal ChangeUnitResult rows. Preserve source route and attempt provenance; never start integration or retry.

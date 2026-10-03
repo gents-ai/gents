@@ -2,7 +2,7 @@
   "jq": [
     {
       "name": "callback, receipt and closure sources are scoped to this pack and correlate by work unit",
-      "expr": "(.config.event_sources[] | select(.event_source_id == \"change-unit-workspace\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-write\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-review\") | .source_collection == \"WorkspaceReceipt\" and .workspace_authority == \"readOnly\" and .correlation_field == \"work_unit_id\" and (.filter | contains(\"writer\")) and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-record\") | .source_collection == \"WorkspaceReceipt\" and .correlation_field == \"work_unit_id\" and (.filter | contains(\"integrator\")) and (.filter | contains(\"change-unit:%\"))) and ([.config.event_sources[] | select(.event_source_id == \"change-unit-integrate\" or .event_source_id == \"change-unit-rejected\") | (.filter | contains(\"change-unit:%\"))] | all)"
+      "expr": "(.config.event_sources[] | select(.event_source_id == \"change-unit-workspace\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-write\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-review\") | .source_collection == \"WorkspaceReceipt\" and .workspace_authority == \"readOnly\" and .correlation_field == \"work_unit_id\" and (.filter | contains(\"writer\")) and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-record\") | .source_collection == \"FireOutcome\" and .correlation_field == \"source_handoff_id\" and (.filter | contains(\"completed\")) and (.filter | contains(\"change-unit-integrate\")) and (.filter | contains(\"change-unit:%\"))) and ([.config.event_sources[] | select(.event_source_id == \"change-unit-integrate\" or .event_source_id == \"change-unit-rejected\") | (.filter | contains(\"change-unit:%\"))] | all)"
     },
     {
       "name": "review cannot accept blocked work and compares native receipt paths",
@@ -18,7 +18,11 @@
     },
     {
       "name": "integration is acknowledgement-only and serialized",
-      "expr": "(.config.triggers[] | select(.trigger_id == \"change-unit-integrate\") | .concurrency == \"serial\") and (.assets[\"tasks/change_unit_integrate_task/prompt.md\"] | contains(\"host owns serial ApplyDiff integration\") and contains(\"Do not inspect or edit files\"))"
+      "expr": "(.config.triggers[] | select(.trigger_id == \"change-unit-integrate\") | .concurrency == \"queued_serial\") and (.assets[\"tasks/change_unit_integrate_task/prompt.md\"] | contains(\"host owns serial ApplyDiff integration\") and contains(\"Do not inspect or edit files\"))"
+    },
+    {
+      "name": "atomic stages expose outcomes without routing workers into supervisor sessions",
+      "expr": "([.config.tasks[] | select(.task_id == \"change-unit-writer-task\" or .task_id == \"change-unit-review-task\" or .task_id == \"change-unit-integrate-task\") | .emit_outcome == true and .goal_objective_template == null] | all) and ([.config.triggers[] | .session_id_template == null] | all) and ([.config.tasks[] | select(.task_id == \"change-unit-record-task\" or .task_id == \"change-unit-rejected-task\") | (.emit_outcome // false) == false] | all)"
     }
   ]
 }
