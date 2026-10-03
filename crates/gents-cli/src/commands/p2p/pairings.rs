@@ -489,13 +489,16 @@ mod tests {
 
     #[test]
     fn connected_health_matches_endpoint_ticket_transport_identity() {
-        let ticket = "endpointaaufad32zteymhve3tesos74wugzsvk5uamusj64gf5q2kscvu5gqbyaenuhi5dqom5c6l3von3tcljrfzzgk3dbpexg4mbonfzg62bonruw42zof4aqazdptrtirzadaeakyfakaoeoiaybacwdrmsqtl6qeaiaycuaeami4qbqcajga75zb7ldefgqqmjnx32tnuuzupbqgaibeyd7xeh5mmqu34ccxbdqiu4fucr4gay";
-        let peer_id = "28500f7accc9861ea4dcc9274bfcb50d99555da0194927dc317b0d2a42ad3a68";
+        let peer_id = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        let (peer, addrs) =
+            p2p::iroh::parse_public_peer_addr(&format!("127.0.0.1:9999/p2p/{peer_id}")).unwrap();
+        let endpoint = p2p::iroh::endpoint_addr_from_parts(&peer, &addrs).unwrap();
+        let ticket = p2p::iroh::endpoint_ticket_string(&endpoint);
         let desired = vec![desired_row(
             "directory-entry",
             "conversation",
             &[],
-            &[ticket],
+            &[ticket.as_str()],
         )];
         assert_eq!(desired[0].transport_peer_ids, [peer_id]);
         let connected = vec![ticket.to_string()];
