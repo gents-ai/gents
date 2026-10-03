@@ -332,7 +332,7 @@ impl RequestLifecycle {
                     anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
                         "execution begin requires a live claimed generation");
                     let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "claimed" }},
+                        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "claimed" }},
                             execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
                         input: {{ lifecycle_state: "processing" }}
                     ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry))).await?;
@@ -351,7 +351,7 @@ impl RequestLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{
+                    docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
@@ -429,7 +429,7 @@ impl RequestLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{
+                    docID: "{doc_id}", filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
@@ -513,7 +513,7 @@ impl RequestLifecycle {
         let request_mutation = format!(
             r#"mutation($terminal_output: JSON) {{
                 update_AgentRequest(
-                    filter: {{
+                    docID: "{request_doc_id}", filter: {{
                         _docID: {{ _eq: "{request_doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
@@ -692,7 +692,7 @@ impl RequestLifecycle {
             format!(
                 r#"mutation {{
                 update_AgentRequest(
-                    filter: {{
+                    docID: "{escaped_doc_id}", filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         purpose: {{ _eq: "{escaped_purpose}" }},
                         lifecycle_state: {{ _eq: "pending" }},

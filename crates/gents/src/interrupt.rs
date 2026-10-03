@@ -175,7 +175,7 @@ async fn interrupt_request_matching_in_txn(
     }
     let physical = escape_graphql_string(physical);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
+    let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{physical}", filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
     let updated = result["data"]["update_AgentRequest"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("interrupt mutation omitted affected rows"))?;
