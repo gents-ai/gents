@@ -1770,7 +1770,7 @@ impl PackInstaller {
         )
         .await?;
         let mut schemas = Vec::new();
-        for path in &distribution.manifest().schemas {
+        for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;
             schemas.push(crate::config_client::preview_schema_install(&access, sdl).await?);
         }

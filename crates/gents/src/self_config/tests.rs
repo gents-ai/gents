@@ -5323,7 +5323,14 @@ async fn pack_documents_install_and_release_graph_dependencies() {
 
 #[tokio::test]
 async fn pack_document_installation_uses_existing_lifecycle() {
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_fixture, directory) =
+        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
     let (node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
     let result: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
@@ -5408,6 +5415,11 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     )
     .unwrap();
     assert_eq!(installed["effective"]["digest"], digest);
+    assert!(
+        node.get_collection("FixtureJob").unwrap().is_some(),
+        "custom schema asset must be published"
+    );
+
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await

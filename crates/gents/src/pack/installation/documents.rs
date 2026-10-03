@@ -11,6 +11,26 @@ use crate::pack_archive::PackArchive;
 use super::super::{PackInferenceBindingPreview, PackInferenceBindings, PackInstallOptions};
 use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity};
 
+pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Result<Vec<&str>> {
+    let mut paths = std::collections::BTreeSet::new();
+    for path in manifest
+        .metadata
+        .assets
+        .iter()
+        .filter(|path| path.starts_with("schemas/"))
+    {
+        anyhow::ensure!(
+            !path.ends_with(".patch.json") && !path.ends_with(".json-patch"),
+            "document packs containing schema patches require the CLI installer"
+        );
+        if path.ends_with(".graphql") || path.ends_with(".gql") {
+            paths.insert(path.as_str());
+        }
+    }
+    paths.extend(manifest.schemas.iter().map(String::as_str));
+    Ok(paths.into_iter().collect())
+}
+
 pub struct PreparedDocumentPackInstall {
     pub config: PackConfig,
     pub inference: PackInferenceBindingPreview,
@@ -120,7 +140,7 @@ pub async fn install_prepared_document_pack(
         }
     }
     let mut schemas = Vec::new();
-    for path in &archive.manifest().schemas {
+    for path in document_pack_schema_paths(archive.manifest())? {
         let sdl = std::str::from_utf8(archive.asset(path)?)?;
         schemas.push((
             path,

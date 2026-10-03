@@ -36,7 +36,8 @@ use crate::Collection;
 mod dependencies;
 mod documents;
 pub use documents::{
-    install_prepared_document_pack, prepare_document_pack_install, PreparedDocumentPackInstall,
+    document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
+    PreparedDocumentPackInstall,
 };
 mod graph;
 
