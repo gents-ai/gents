@@ -171,6 +171,11 @@ split-debuginfo = "off"
 incremental = false
 
 [patch.crates-io]
+# Keep Iroh's shared transport types on the same source as the path-retry fix.
+iroh = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-base = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-dns = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
+iroh-relay = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
 # rig-core fork: upstream rig's OpenAI provider drops reasoning from vLLM-style
 # servers. The Responses streaming decoder only handles OpenAI's hosted
 # `response.reasoning_summary_text.delta`; vLLM streams the raw chain-of-thought
