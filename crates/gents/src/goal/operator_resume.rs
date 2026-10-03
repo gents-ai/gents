@@ -154,7 +154,7 @@ pub async fn resume_goal_on_account(
     Ok(GoalResumeOnReceipt { switch, resume })
 }
 
-async fn stage_resume(
+pub(super) async fn stage_resume(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn AgentIdentity,
     agent_did: &str,
@@ -323,6 +323,6 @@ async fn stage_resume(
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
-mod support;
+pub(super) mod support;
 #[cfg(test)]
 mod tests;

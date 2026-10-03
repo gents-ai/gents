@@ -386,6 +386,21 @@ pub(crate) async fn provider_default_account_ref(
     agent_did: &str,
     provider: &str,
 ) -> Result<Option<String>> {
+    Ok(
+        resolve_oauth_credential_in_txn(txn, agent_did, provider, AccountPick::ProviderDefault)
+            .await?
+            .and_then(|row| row.account_ref),
+    )
+}
+
+/// [`resolve_oauth_credential`] inside the caller's transaction, the picked
+/// row's token fields left blank.
+pub(crate) async fn resolve_oauth_credential_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+    pick: AccountPick<'_>,
+) -> Result<Option<OAuthCredential>> {
     let response = txn
         .execute(&enabled_oauth_credentials_query(
             agent_did,
@@ -397,10 +412,7 @@ pub(crate) async fn provider_default_account_ref(
         .into_iter()
         .map(pick_row_from_value)
         .collect::<Result<Vec<_>>>()?;
-    Ok(
-        pick_oauth_credential(&rows, agent_did, provider, AccountPick::ProviderDefault)
-            .and_then(|row| row.account_ref.clone()),
-    )
+    Ok(pick_oauth_credential(&rows, agent_did, provider, pick).cloned())
 }
 
 /// Decode a row read with [`OAUTH_PICK_FIELDS`] like

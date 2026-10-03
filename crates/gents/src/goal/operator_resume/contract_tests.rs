@@ -187,6 +187,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             None,
             Some(GoalStatus::parse(&case.target).unwrap()),
             None,
+            None,
         )
         .await;
         assert_eq!(

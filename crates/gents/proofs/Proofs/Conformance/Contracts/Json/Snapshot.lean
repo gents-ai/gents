@@ -57,6 +57,7 @@ import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
+import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
@@ -109,6 +110,8 @@ def snapshotJson : String :=
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
     ++ "\"goal_config_reactivation_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
+    ++ "\"goal_reset_resume_cases\":"
+      ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
     ++ "\"graph_pipeline_validation_cases\":"
       ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
     ++ "\"graph_pipeline_revision_gate_cases\":"

@@ -35,6 +35,7 @@ import Proofs.Goals
 import Proofs.GoalAutomation
 import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
+import Proofs.GoalAutomation.ResetResume
 import Proofs.GoalAutomation.RequestHead
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox

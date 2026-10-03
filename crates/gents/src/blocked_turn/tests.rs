@@ -572,6 +572,7 @@ async fn wrappers_read_the_stored_turn() {
         Some("ship it"),
         Some(crate::goal::GoalStatus::UsageLimited),
         None,
+        None,
     )
     .await
     .unwrap();

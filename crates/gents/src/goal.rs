@@ -12,6 +12,7 @@ mod claimed_publication;
 mod operator_resume;
 mod readiness_gate;
 mod request_head;
+mod reset_resume;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
@@ -29,6 +30,7 @@ pub(crate) use request_head::{
     assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
     latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
 };
+pub use reset_resume::resume_at_reset;
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -211,6 +213,7 @@ pub const GOAL_FIELDS: &str = r#"
     infrastructure_retry_count
     last_failure
     completion_evidence
+    auto_resume_at_reset
     created_at
     updated_at
 "#;
@@ -572,6 +575,8 @@ pub struct GoalDocument {
     pub last_failure: Option<String>,
     #[serde(default)]
     pub completion_evidence: Option<String>,
+    #[serde(default)]
+    pub auto_resume_at_reset: Option<bool>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -1148,6 +1153,7 @@ async fn stage_goal_and_claim(
             infrastructure_retry_count: Some(0),
             last_failure: None,
             completion_evidence: None,
+            auto_resume_at_reset: None,
             created_at: Some(now.to_string()),
             updated_at: Some(now.to_string()),
         },
@@ -2070,13 +2076,24 @@ pub async fn set_goal(
 ) -> Result<GoalDocument> {
     crate::config_client::ConfigAccess::transact_local(node, None, "goal.set", move |txn| {
         Box::pin(async move {
-            set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+            set_goal_in_txn(
+                txn,
+                agent_did,
+                session_id,
+                objective,
+                status,
+                token_budget,
+                None,
+            )
+            .await
         })
     })
     .await
 }
 
 /// Configure a goal through the same transactional policy for local and HTTP access.
+/// `auto_resume` is the operator's opt-in to resume at the reported reset; `None`
+/// keeps the stored value. The model's goal tools never reach this argument.
 pub async fn set_goal_from_access(
     access: &crate::ConfigAccess,
     agent_did: &str,
@@ -2084,11 +2101,21 @@ pub async fn set_goal_from_access(
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
+    auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     access
         .transact("goal.set_from_access", move |txn| {
             Box::pin(async move {
-                set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+                set_goal_in_txn(
+                    txn,
+                    agent_did,
+                    session_id,
+                    objective,
+                    status,
+                    token_budget,
+                    auto_resume,
+                )
+                .await
             })
         })
         .await
@@ -2209,6 +2236,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
             Some(objective),
             Some(GoalStatus::Active),
             Some(assignment.goal_token_budget),
+            None,
         )
         .await?;
     }
@@ -2289,6 +2317,7 @@ async fn set_goal_in_txn(
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
+    auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     let existing = load_canonical_goal_in_txn(txn, agent_did, session_id).await?;
     let objective = objective
@@ -2305,6 +2334,9 @@ async fn set_goal_in_txn(
     if budget.is_some_and(|value| value <= 0) {
         bail!("goal token budget must be positive");
     }
+    let auto_resume_field = auto_resume
+        .map(|on| format!("auto_resume_at_reset: {on},"))
+        .unwrap_or_default();
 
     let now = Utc::now();
     let now_string = now.to_rfc3339();
@@ -2347,6 +2379,7 @@ async fn set_goal_in_txn(
                         consecutive_blocked_audits: {blocked_audits},
                         wrapup_requested: {wrapup_requested},
                         wrapup_completed: {wrapup_completed},
+                        {auto_resume_field}
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}
@@ -2418,6 +2451,7 @@ async fn set_goal_in_txn(
                 wrapup_requested: {wrapup_requested},
                 wrapup_completed: {wrapup_completed},
                 infrastructure_retry_count: 0,
+                {auto_resume_field}
                 created_at: "{escaped_now}",
                 updated_at: "{escaped_now}"
             }}) {{ _docID }}
@@ -2979,6 +3013,79 @@ mod tests {
             "req-4",
         );
         assert_eq!((changed, accepted), (1, false));
+    }
+
+    #[tokio::test]
+    async fn auto_resume_field_round_trips_through_the_live_schema() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:key:z6MkTestOwner";
+        let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(goal.auto_resume_at_reset, None);
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ update_Goal(filter: {{_docID: {{_eq: "{}"}}}},
+                input: {{auto_resume_at_reset: true}}) {{_docID}} }}"#,
+                goal.doc_id
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let stored = load_canonical_goal(&node, owner, "session")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.auto_resume_at_reset, Some(true));
+    }
+
+    async fn auto_resume_access() -> crate::ConfigAccess {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::ConfigAccess::Local(node)
+    }
+
+    #[tokio::test]
+    async fn auto_resume_operator_setter_stores_it() {
+        let access = auto_resume_access().await;
+        let owner = "did:key:z6MkTestOwner";
+        let created =
+            set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
+                .await
+                .unwrap();
+        assert_eq!(created.auto_resume_at_reset, Some(true));
+        let off = set_goal_from_access(&access, owner, "s", None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert_eq!(off.auto_resume_at_reset, Some(false));
+    }
+
+    #[tokio::test]
+    async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
+        let access = auto_resume_access().await;
+        let crate::ConfigAccess::Local(node) = &access else {
+            unreachable!()
+        };
+        let owner = "did:key:z6MkTestOwner";
+        set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
+            .await
+            .unwrap();
+        let kept = set_goal_from_access(
+            &access,
+            owner,
+            "s",
+            None,
+            Some(GoalStatus::Paused),
+            Some(Some(10)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(kept.auto_resume_at_reset, Some(true));
+        let unchanged = set_goal(node, owner, "s", Some("ship more"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.auto_resume_at_reset, Some(true));
     }
 }
 

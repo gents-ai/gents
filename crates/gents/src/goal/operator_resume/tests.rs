@@ -1,16 +1,9 @@
 use super::support::*;
 use super::*;
-use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-use crate::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, write_inference_backend_document,
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
-use crate::oauth_credential::{preset_account_backend, store_sign_in};
+use crate::config_client::{read_desired_state_record_in_txn, ConfigAccess};
 use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;
-
-const PROFILE: &str = "contract-behavior:inference";
 
 /// A `usage_limited` Goal whose latest request (`PARENT`) failed on a limited
 /// call on Claude account A; the behavior's profile is on A, and B is
@@ -30,75 +23,21 @@ impl Limited {
             "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
         }))
         .await;
-        let did = f.identity.did().to_owned();
-        let access = ConfigAccess::Local(f.node.clone());
-        let preset =
-            preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
-        write_inference_backend_document(&access, &preset)
-            .await
-            .unwrap();
-        let mut backends = Vec::new();
-        for who in ["a", "b"] {
-            let credential = crate::claude_oauth::credential_from_login_tokens(
-                &did,
-                CLAUDE_OAUTH_PROVIDER,
-                &crate::claude_oauth::ClaudeLoginTokens {
-                    access_token: format!("access-SECRET-{who}"),
-                    refresh_token: format!("refresh-SECRET-{who}"),
-                    expires_in: Some(3600),
-                    scope: None,
-                    account_id: Some("IDENTITY".into()),
-                    organization_uuid: Some("org-1".into()),
-                    account_uuid: Some(format!("account-{who}")),
-                },
-                Utc::now() - chrono::Duration::hours(1),
-            );
-            let label = format!("label-{who}");
-            let stored = store_sign_in(&access, credential, Some(&label))
-                .await
-                .unwrap()
-                .credential;
-            backends.push(match stored.account_ref.as_deref() {
-                Some(account_ref) => format!("{CLAUDE_OAUTH_PROVIDER}-{account_ref}"),
-                None => CLAUDE_OAUTH_PROVIDER.to_owned(),
-            });
-        }
-        let (a, b) = (backends[0].clone(), backends[1].clone());
-        let profile = json!({"agent_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: Collection::InferenceProfile,
-            add: profile.clone(),
-            update: profile,
-        }])
-        .unwrap();
-        access
-            .transact("test.resume_on.profile", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
-        let failure = escape_graphql_string(call_failure);
-        let at = Utc::now().to_rfc3339();
-        execute(
-            &f.node,
-            &format!(
-                r#"mutation {{
-                    update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{
-                        lifecycle_state: "failed" failure_reason: "{failure}"
-                    }}) {{ _docID }}
-                    create_InferenceCall(input: {{
-                        call_id: "call-1" request_id: "{PARENT}" call_seq: 1
-                        backend_id: "{a}" behavior_id: "contract-behavior" agent_did: "{did}"
-                        call_kind: "inference" attempt: 1 call_state: "failed"
-                        failure_reason: "{failure}"
-                        queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
-                    }}) {{ _docID }}
-                }}"#
-            ),
+        let accounts = f.claude_accounts().await;
+        f.fail_with_call(
+            PARENT,
+            "inference",
+            &accounts.a,
+            call_failure,
+            &Utc::now().to_rfc3339(),
         )
         .await;
-        Self { f, access, a, b }
+        Self {
+            f,
+            access: accounts.access,
+            a: accounts.a,
+            b: accounts.b,
+        }
     }
 
     async fn resume_on(&self, target: &str) -> Result<GoalResumeOnReceipt> {
@@ -117,39 +56,7 @@ impl Limited {
 
     /// The behavior's context compacts with `summ`, also on A.
     async fn compacts_on_a(&self) {
-        let did = self.f.identity.did();
-        let documents = [
-            (
-                Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "summ", "backend_id": self.a, "model_name": "model-s"}),
-            ),
-            (
-                Collection::Compaction,
-                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
-            ),
-            (
-                Collection::AgentContext,
-                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
-            ),
-        ];
-        let plan = DesiredStateApplyPlan::new(
-            documents
-                .into_iter()
-                .map(|(collection, value)| DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                })
-                .collect(),
-        )
-        .unwrap();
-        self.access
-            .transact("test.resume_on.compaction", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
+        self.f.compacts_on(&self.access, &self.a).await;
     }
 
     async fn profile_backend(&self) -> String {
@@ -178,24 +85,11 @@ impl Limited {
     }
 
     async fn goal_status(&self) -> String {
-        load_canonical_goal(&self.f.node, self.f.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap()
-            .status
+        self.f.goal_status().await
     }
 
     async fn children(&self) -> Vec<String> {
-        request_rows(&self.f.node)
-            .await
-            .into_iter()
-            .filter(|row| {
-                row.retry_key
-                    .as_deref()
-                    .is_some_and(|key| key.starts_with("goal-continuation:"))
-            })
-            .map(|row| row.request_id)
-            .collect()
+        self.f.children().await
     }
 }
 

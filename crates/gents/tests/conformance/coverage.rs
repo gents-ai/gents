@@ -685,6 +685,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalConfigReactivationCases".to_string(),
         ));
     }
+    if !snapshot.goal_reset_resume_cases.is_empty() {
+        emitted.insert((
+            "goal_reset_resume_cases".to_string(),
+            "GoalResetResumeCases".to_string(),
+        ));
+    }
     if !snapshot.graph_failure_attribution_traces.is_empty() {
         emitted.insert((
             "graph_failure_attribution_traces".to_string(),

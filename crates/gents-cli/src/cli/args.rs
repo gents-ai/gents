@@ -3941,6 +3941,13 @@ pub(crate) struct GoalSetArgs {
         help = "Remove the charged-token budget"
     )]
     pub(crate) clear_token_budget: bool,
+    #[arg(
+        long,
+        value_name = "on|off",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        help = "Resume a usage-limited goal by itself at the reset the provider reported"
+    )]
+    pub(crate) auto_resume: Option<bool>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }

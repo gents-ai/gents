@@ -1490,6 +1490,25 @@ fn set_account_lists_without_an_account_and_moves_companions_on_request() {
 }
 
 #[test]
+fn goal_set_takes_an_auto_resume_switch() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "goal", "set", "--session", "s"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Goal {
+            command: GoalCommand::Set(args),
+        }) => Ok(args.auto_resume),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(parse(&[]).unwrap(), None);
+    assert_eq!(parse(&["--auto-resume", "on"]).unwrap(), Some(true));
+    assert_eq!(parse(&["--auto-resume", "off"]).unwrap(), Some(false));
+    assert!(parse(&["--auto-resume", "maybe"]).is_err());
+}
+
+#[test]
 fn goal_resume_on_takes_an_account_and_requires_from() {
     let parse = |argv: &[&str]| match Cli::try_parse_from(
         [&["gents", "goal", "resume-on"][..], argv].concat(),
