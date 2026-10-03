@@ -503,11 +503,14 @@ test.describe("kit shell", () => {
     await sendButton(page).click();
     await expect(page.getByText(/received "inspect the runtime"/)).toBeVisible();
 
-    await page
-      .getByTestId("window-bar")
-      .getByRole("link", { name: "Sessions" })
-      .last()
-      .click();
+    /* the list, not the previous screen: the rail's own link, which the
+       menu sheet holds below md */
+    const toSessions = async () => {
+      const menu = page.getByRole("button", { name: "Menu" });
+      if (await menu.isVisible()) await menu.click();
+      await page.getByRole("link", { name: "Sessions" }).first().click();
+    };
+    await toSessions();
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /introduction-and-greetings/ })
@@ -517,11 +520,7 @@ test.describe("kit shell", () => {
       page.getByText(/seeded turn gives the transcript a stable row/),
     ).toBeVisible();
 
-    await page
-      .getByTestId("window-bar")
-      .getByRole("link", { name: "Sessions" })
-      .last()
-      .click();
+    await toSessions();
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /inspect the runtime/ })

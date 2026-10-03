@@ -19,7 +19,6 @@ import {
 import {
   Check,
   ArrowDown,
-  ArrowLeft,
   ChevronDown,
   Copy,
   Pencil,
@@ -1704,13 +1703,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               )}
             >
               <PaneBar>
-                <a
-                  href={href({ name: "sessions" })}
-                  aria-label="Sessions"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
-                >
-                  <ArrowLeft className="size-4" />
-                </a>
                 {/* the header's facts, once the header has scrolled out: they
                     ease in where the reader's eye already is, and the bar's
                     height never changes, so nothing moves */}
