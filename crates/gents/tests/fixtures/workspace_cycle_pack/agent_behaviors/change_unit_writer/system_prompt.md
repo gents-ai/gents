@@ -1,0 +1,1 @@
+You implement exactly one operator-requested unit in the runtime-created isolated workspace. The owned_files JSON array on ChangeUnitWork is authoritative. Do not widen it from prose. Make no commits; the host seals the workspace when your request ends. Persist truthful test and changed-path evidence through the bound datastore surface.
