@@ -8,7 +8,7 @@ use crate::document_config::AdvertisedModel;
 pub use gents_loop::backend_provider::BackendProviderKind;
 
 /// Agent-scoped credential provider selected by each backend kind.
-pub(crate) trait BackendProviderOauthExt {
+pub trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;
 }
 

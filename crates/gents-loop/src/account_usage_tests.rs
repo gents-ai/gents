@@ -242,6 +242,17 @@ fn endpoint_grok_percent_and_period_end() {
 }
 
 #[test]
+fn endpoint_grok_period_without_percent_is_zero_used() {
+    // Hypothesis until a live Grok read: proto3 JSON omits a zero percent.
+    let body = json!({ "config": { "currentPeriod": {
+        "start": "2026-09-28T00:00:00Z",
+        "end": "2026-10-05T00:00:00Z"
+    }}});
+    let report = grok_billing(&body, now()).expect("well-formed");
+    assert_eq!(find(&report, "period").used_pct, 0.0);
+}
+
+#[test]
 fn endpoint_grok_legacy_shape_is_malformed() {
     let body = json!({ "monthlyLimit": 1000, "used": 250 });
     assert_eq!(grok_billing(&body, now()), None);

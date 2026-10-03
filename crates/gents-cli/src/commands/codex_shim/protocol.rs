@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::usage_observation::account_usage::{visible_windows, Freshness};
+use gents::usage_observation::account_usage::{visible_windows, Freshness, STALE_AFTER};
 use gents::usage_observation::StoredUsage;
 use gents::InferenceBackend;
 use gents_codex_protocol as codex;
@@ -274,7 +274,8 @@ pub(super) fn empty_rate_limits() -> codex::RateLimitSnapshot {
 
 /// `account/rateLimits/read` from the stored usage of the session's account:
 /// fresh windows only (the protocol cannot mark a value as last-known), by
-/// Codex slot label; credits only when both of Codex's booleans are known.
+/// Codex slot label; credits only when fresh and both of Codex's booleans
+/// are known.
 pub(super) fn rate_limits_from_usage(
     stored: Option<&StoredUsage>,
     now: DateTime<Utc>,
@@ -297,6 +298,9 @@ pub(super) fn rate_limits_from_usage(
         primary: slot("primary"),
         secondary: slot("secondary"),
         credits: stored.report.credits.as_ref().and_then(|credits| {
+            if now - credits.observed_at > STALE_AFTER {
+                return None;
+            }
             Some(codex::CreditsSnapshot {
                 has_credits: credits.has_credits?,
                 unlimited: credits.unlimited?,
@@ -309,6 +313,23 @@ pub(super) fn rate_limits_from_usage(
             .as_ref()
             .and_then(|plan| serde_json::from_value(json!(plan.name)).ok()),
         ..empty_rate_limits()
+    }
+}
+
+/// `account/read` from the stored usage of the session's account: ChatGPT
+/// with a known plan, never with an email (no sign-in identity leaves the
+/// node); otherwise an API key, as before usage existed.
+pub(super) fn account_from_usage(stored: Option<&StoredUsage>) -> codex::Account {
+    let plan_type = stored
+        .and_then(|stored| stored.report.plan.as_ref())
+        .and_then(|plan| serde_json::from_value(json!(plan.name)).ok())
+        .filter(|plan_type| serde_json::to_value(plan_type).ok() != Some(json!("unknown")));
+    match plan_type {
+        Some(plan_type) => codex::Account::Chatgpt {
+            email: String::new(),
+            plan_type,
+        },
+        None => codex::Account::ApiKey {},
     }
 }
 
@@ -620,6 +641,51 @@ mod tests {
             json!("unknown")
         );
         assert_eq!(snapshot.credits, None);
+    }
+
+    #[test]
+    fn rate_limits_from_usage_drops_stale_credits() {
+        use gents::usage_observation::account_usage::UsageCredits;
+        let now = Utc::now();
+        let mut usage = stored(Vec::new());
+        usage.report.credits = Some(UsageCredits {
+            has_credits: Some(true),
+            unlimited: Some(false),
+            balance: Some("3.00".into()),
+            observed_at: now - chrono::Duration::minutes(16),
+        });
+
+        assert_eq!(rate_limits_from_usage(Some(&usage), now).credits, None);
+    }
+
+    #[test]
+    fn account_read_with_a_stored_plan_is_chatgpt_with_no_email() {
+        let mut usage = stored(Vec::new());
+        usage.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
+            name: "plus".into(),
+            observed_at: Utc::now(),
+        });
+        assert_eq!(
+            serde_json::to_value(account_from_usage(Some(&usage))).unwrap(),
+            json!({ "type": "chatgpt", "email": "", "planType": "plus" })
+        );
+    }
+
+    #[test]
+    fn account_read_without_a_plan_is_api_key() {
+        let api_key = json!({ "type": "apiKey" });
+        let mut unknown = stored(Vec::new());
+        unknown.report.plan = Some(gents::usage_observation::account_usage::UsagePlan {
+            name: "not-a-codex-plan".into(),
+            observed_at: Utc::now(),
+        });
+        for usage in [None, Some(stored(Vec::new())), Some(unknown)] {
+            assert_eq!(
+                serde_json::to_value(account_from_usage(usage.as_ref())).unwrap(),
+                api_key,
+                "{usage:?}"
+            );
+        }
     }
 
     #[test]

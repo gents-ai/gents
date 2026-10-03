@@ -332,6 +332,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "an inference endpoint and its model catalog (backend grant).",
             commands: &[
                 "backend list",
+                "backend accounts  each account and account-free backend: state, profiles using it, last stored usage; read-only",
                 "backend [preview] create BACKEND_ID  options: endpoint; optional name, wire-api (chat_completions|responses)",
                 "backend discover BACKEND_ID",
                 "backend get [BACKEND_ID]",
@@ -514,7 +515,7 @@ fn crud_help(
         (resource, verb),
         ("behavior", Some("clone" | "disable" | "default" | "create"))
             | ("skill", Some("import"))
-            | ("backend", Some("discover"))
+            | ("backend", Some("discover" | "accounts"))
     ) {
         if let Some(text) = command_help(
             resource,
@@ -551,7 +552,7 @@ fn crud_help(
         writeln!(out, "For get/update, choose one: target_id names the exact document; or omit target_id and use options.behavior to select the behavior's bound document (default: you). Do not combine them. behavior get shows the selected document IDs.")?;
     }
     if resource == "backend" {
-        writeln!(out, "Create requires set.endpoint; optional set.name/openai_wire_api. Only enabled unauthenticated OpenAI-compatible endpoints can be created. Also: backend discover ID.")?;
+        writeln!(out, "Create requires set.endpoint; optional set.name/openai_wire_api. Only enabled unauthenticated OpenAI-compatible endpoints can be created. Also: backend discover ID; backend accounts (read-only).")?;
     }
     if resource == "skill" {
         writeln!(

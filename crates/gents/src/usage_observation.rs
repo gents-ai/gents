@@ -13,16 +13,18 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
-    usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW, REWRITE_AFTER,
+    usage_from_headers, UsagePlan, UsageReport, UsageSource, UsageWindow, READ_SKIP_WINDOW,
+    REWRITE_AFTER,
 };
 use gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME as COLLECTION;
 use rig::http_client::HeaderMap;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
 use crate::config::ResolvedBehavior;
 use crate::config_client::ConfigAccess;
-use crate::document_config::InferenceBackend;
+use crate::document_config::{BackendAuth, InferenceBackend};
 use crate::graphql::escape_graphql_string;
 use crate::oauth_credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
@@ -63,15 +65,16 @@ impl UsageAccount {
         })
     }
 
-    /// The account `backend` names for `agent_did` (account = backend).
+    /// The account `backend` names for `agent_did` (account = backend): a
+    /// sign-in only for principal OAuth, as [`crate::oauth_credential::backend_account`].
     fn for_backend(agent_did: &str, backend: &InferenceBackend) -> Self {
-        match backend.provider_kind.oauth_provider() {
-            Some(provider) => Self::Credential {
+        match (backend.provider_kind.oauth_provider(), &backend.auth) {
+            (Some(provider), BackendAuth::PrincipalOAuth { account_ref }) => Self::Credential {
                 agent_did: agent_did.to_string(),
                 provider: provider.to_string(),
-                account_ref: backend.auth.oauth_account_ref().map(str::to_string),
+                account_ref: account_ref.clone(),
             },
-            None => Self::Backend {
+            _ => Self::Backend {
                 agent_did: agent_did.to_string(),
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
@@ -102,6 +105,83 @@ impl StoredUsage {
             read_at,
             read_error,
         }
+    }
+}
+
+/// Stored usage as a surface shows it: visible windows with their reset
+/// countdown and age, or a note saying why there is no number.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UsageView {
+    pub windows: Vec<WindowView>,
+    pub plan: Option<String>,
+    /// Only when `windows` is empty: never a percentage, never "unlimited".
+    pub note: Option<&'static str>,
+    pub read_at: Option<DateTime<Utc>>,
+    pub read_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WindowView {
+    pub label: String,
+    pub window_minutes: Option<i64>,
+    pub used_pct: f64,
+    pub resets_at: Option<DateTime<Utc>>,
+    pub resets_in_secs: Option<i64>,
+    pub source: UsageSource,
+    pub observed_at: DateTime<Utc>,
+    pub age_secs: i64,
+    /// Older than [`account_usage::STALE_AFTER`]: the last known value.
+    pub last_known: bool,
+}
+
+/// `stored` for an account of `kind` at `now`.
+pub fn usage_view(
+    stored: Option<&StoredUsage>,
+    kind: crate::BackendProviderKind,
+    now: DateTime<Utc>,
+) -> UsageView {
+    use crate::BackendProviderKind as Kind;
+    let empty = StoredUsage::default();
+    let stored = stored.unwrap_or(&empty);
+    let visible = account_usage::visible_windows(&stored.report, now);
+    // Claude's `/api/oauth/usage` scale is unverified live (percent or
+    // fraction); its windows stay hidden until a live check confirms it.
+    let unverified = |window: &UsageWindow| {
+        kind == Kind::ClaudeCliSubscription && window.source == UsageSource::Endpoint
+    };
+    let windows: Vec<_> = visible
+        .iter()
+        .filter(|(window, _)| !unverified(window))
+        .map(|(window, freshness)| WindowView {
+            label: window.label.clone(),
+            window_minutes: window.window_minutes,
+            used_pct: window.used_pct,
+            resets_at: window.resets_at,
+            resets_in_secs: window.resets_at.map(|at| (at - now).num_seconds()),
+            source: window.source,
+            observed_at: window.observed_at,
+            age_secs: (now - window.observed_at).num_seconds(),
+            last_known: *freshness == account_usage::Freshness::Stale,
+        })
+        .collect();
+    let read_ok = stored.read_at.is_some() && stored.read_error.is_none();
+    let note = match kind {
+        _ if !windows.is_empty() => None,
+        _ if visible.iter().any(|(window, _)| unverified(window)) => Some("not verified"),
+        Kind::OpenAiCompatible if stored.report.is_empty() && stored.read_at.is_none() => {
+            Some("not reported")
+        }
+        Kind::OpenRouter if read_ok && stored.report.windows.is_empty() => {
+            Some("no cap on this key")
+        }
+        _ => Some("unknown"),
+    };
+    UsageView {
+        windows,
+        plan: stored.report.plan.as_ref().map(|plan| plan.name.clone()),
+        note,
+        read_at: stored.read_at,
+        read_error: stored.read_error.clone(),
     }
 }
 
@@ -145,10 +225,9 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             else {
                 return Ok(None);
             };
-            let reference = format!(
-                "ref:{}:{}",
-                account_ref.as_deref().unwrap_or("original"),
-                row.doc_id.as_deref().context("sign-in without _docID")?
+            let reference = fallback_key(
+                account_ref.as_deref(),
+                row.doc_id.as_deref().context("sign-in without _docID")?,
             );
             Ok(Some(Target {
                 agent_did: agent_did.clone(),
@@ -164,6 +243,42 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             }))
         }
     }
+}
+
+/// The key of usage seen before the account's key is known: DID-free, and
+/// apart from an earlier account that reused the reference.
+pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
+    format!("ref:{}:{doc_id}", account_ref.unwrap_or("original"))
+}
+
+/// Deletes `agent_did`'s `provider` usage rows under `keys` in the caller's
+/// transaction, for an account's remove. This is the one usage write
+/// outside the runtime (with a runtime up the CLI writes over HTTP). It is
+/// safe because a delete creates nothing, so it cannot race the unique
+/// create the runtime-only writer guards; a runtime write racing it lands
+/// before it (deleted) or after it (a row no enabled account resolves to).
+// ponytail: rows under an account's earlier key (a key change) stay behind,
+// unreachable and token-free; sweep by key prefix if row counts show.
+pub(crate) async fn delete_usage_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+    keys: &[String],
+) -> Result<()> {
+    let response = txn
+        .execute(&format!(
+            r#"mutation {{ delete_{COLLECTION}(filter: {{ agent_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _in: {} }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(provider),
+            crate::graphql::graphql_string_list_literal(keys.iter().map(String::as_str)),
+        ))
+        .await?;
+    anyhow::ensure!(
+        response.get("errors").is_none_or(Value::is_null),
+        "deleting provider usage failed: {}",
+        response["errors"]
+    );
+    Ok(())
 }
 
 fn row_query(target: &Target, key: &str) -> String {
@@ -356,7 +471,8 @@ impl UsageReporter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UsageTrigger {
     /// The account list was opened.
     Open,
@@ -364,7 +480,8 @@ pub enum UsageTrigger {
     Refresh,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", content = "reason", rename_all = "snake_case")]
 pub enum UsageRead {
     Read,
     SkippedRecent,
@@ -484,11 +601,14 @@ pub async fn read_account_usage(
                         .headers(crate::xai_grok_oauth::build_xai_grok_oauth_headers()?),
                     account_usage::grok_billing,
                 ),
-                _ => (
+                Kind::ClaudeCliSubscription => (
                     http.get(&endpoints.claude_usage)
                         .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
                     account_usage::claude_oauth_usage,
                 ),
+                // Returned above; listed so a new kind fails to compile
+                // instead of sending its bearer to another provider.
+                Kind::OpenAiCompatible | Kind::OpenRouter => return Ok(UsageRead::NotReported),
             };
             (request.bearer_auth(token), parse)
         }
@@ -523,6 +643,105 @@ pub async fn read_account_usage(
             .await?;
             Ok(UsageRead::Unavailable(error))
         }
+    }
+}
+
+/// One on-demand read's outcome for an account (`account_ref`, no
+/// `backend_id`) or an account-free backend (`backend_id`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUsageRead {
+    pub provider: String,
+    pub account_ref: Option<String>,
+    pub backend_id: Option<String>,
+    pub outcome: UsageRead,
+}
+
+/// Reads the usage of each of `agent_did`'s accounts and account-free
+/// backends once, concurrently: `provider` keeps only that provider's
+/// accounts. A disabled account gets no read; an account not on this node
+/// is left out. One account's store error never hides the others.
+pub async fn read_principal_usage(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    trigger: UsageTrigger,
+    provider: Option<&str>,
+    endpoints: &UsageEndpoints,
+    now: DateTime<Utc>,
+) -> Result<Vec<AccountUsageRead>> {
+    let access = ConfigAccess::Local(node.clone());
+    let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
+    let backends = access
+        .transact("usage_observation.read_principal", |txn| {
+            Box::pin(async move {
+                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+            })
+        })
+        .await?;
+    // An enabled backend claims its account; an enabled account no enabled
+    // backend names is read through its provider's preset connection.
+    let mut seen = std::collections::HashSet::new();
+    let mut jobs = Vec::new();
+    for backend in &backends {
+        let (entry, account_enabled) =
+            match crate::oauth_credential::backend_account(backend, &accounts) {
+                Some(None) => continue,
+                Some(Some(account)) => {
+                    if !backend.enabled
+                        || provider.is_some_and(|provider| provider != account.provider)
+                        || !seen.insert(account.credential_id.as_str())
+                    {
+                        continue;
+                    }
+                    (account_entry(account), account.enabled)
+                }
+                None if provider.is_some() => continue,
+                None => {
+                    let entry = AccountUsageRead {
+                        provider: backend.provider_kind.as_str().to_string(),
+                        account_ref: None,
+                        backend_id: Some(backend.backend_id.clone()),
+                        outcome: UsageRead::Disabled,
+                    };
+                    (entry, true)
+                }
+            };
+        jobs.push((entry, account_enabled, backend.clone()));
+    }
+    for account in &accounts {
+        if provider.is_some_and(|provider| provider != account.provider)
+            || seen.contains(account.credential_id.as_str())
+        {
+            continue;
+        }
+        let backend = crate::oauth_credential::preset_account_backend(
+            agent_did,
+            &account.provider,
+            account.account_ref.as_deref(),
+            account.label.clone(),
+        )?;
+        jobs.push((account_entry(account), account.enabled, backend));
+    }
+    let reads = jobs.into_iter().map(|(entry, account_enabled, backend)| {
+        let node = node.clone();
+        async move {
+            if !account_enabled {
+                return entry;
+            }
+            let outcome = read_account_usage(node, agent_did, &backend, trigger, endpoints, now)
+                .await
+                .unwrap_or_else(|_| unavailable("store error"));
+            AccountUsageRead { outcome, ..entry }
+        }
+    });
+    Ok(futures::future::join_all(reads).await)
+}
+
+fn account_entry(account: &crate::oauth_credential::AccountSummary) -> AccountUsageRead {
+    AccountUsageRead {
+        provider: account.provider.clone(),
+        account_ref: account.account_ref.clone(),
+        backend_id: None,
+        outcome: UsageRead::Disabled,
     }
 }
 

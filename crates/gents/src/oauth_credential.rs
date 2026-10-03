@@ -665,23 +665,41 @@ fn account_backend(
     credential: &OAuthCredential,
     account_ref: &str,
 ) -> Result<crate::InferenceBackend> {
+    preset_account_backend(
+        &credential.agent_did,
+        &credential.provider,
+        Some(account_ref),
+        effective_account_label(credential),
+    )
+}
+
+/// `provider`'s preset connection for `agent_did`'s account `account_ref`.
+pub(crate) fn preset_account_backend(
+    agent_did: &str,
+    provider: &str,
+    account_ref: Option<&str>,
+    name: String,
+) -> Result<crate::InferenceBackend> {
     use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
-    let (provider, auth) = match credential.provider.as_str() {
+    let (provider_id, auth) = match provider {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
         crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
         other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
     };
-    let spec = crate::inference_setup::connection_spec(provider, auth, "")?;
+    let spec = crate::inference_setup::connection_spec(provider_id, auth, "")?;
     Ok(crate::InferenceBackend {
-        agent_did: credential.agent_did.clone(),
-        backend_id: format!("{}-{account_ref}", credential.provider),
-        name: effective_account_label(credential),
+        agent_did: agent_did.to_owned(),
+        backend_id: match account_ref {
+            Some(account_ref) => format!("{provider}-{account_ref}"),
+            None => provider.to_owned(),
+        },
+        name,
         provider_kind: spec.provider_kind,
         openai_wire_api: spec.openai_wire_api,
         endpoint: spec.endpoint,
         auth: crate::document_config::BackendAuth::PrincipalOAuth {
-            account_ref: Some(account_ref.to_owned()),
+            account_ref: account_ref.map(str::to_owned),
         },
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
@@ -1270,19 +1288,43 @@ pub async fn set_account_enabled(
     ensure_matched(&response, "update_OAuthCredential", credential_id)
 }
 
-/// Delete an account's row inside the caller's transaction.
+/// Delete an account's row and its usage rows inside the caller's
+/// transaction.
 pub async fn remove_account_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
     credential_id: &str,
 ) -> Result<()> {
+    let filter = account_filter(agent_did, Some(credential_id));
     let response = txn
         .execute(&format!(
-            "mutation {{ delete_OAuthCredential(filter: {}) {{ _docID }} }}",
-            account_filter(agent_did, Some(credential_id)),
+            "query {{ OAuthCredential(filter: {filter}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}"
         ))
         .await?;
-    ensure_matched(&response, "delete_OAuthCredential", credential_id)
+    let row = oauth_credentials_from_response(&response)
+        .into_iter()
+        .next()
+        .ok_or_else(|| account_not_found(credential_id))??;
+    let response = txn
+        .execute(&format!(
+            "mutation {{ delete_OAuthCredential(filter: {filter}) {{ _docID }} }}"
+        ))
+        .await?;
+    ensure_matched(&response, "delete_OAuthCredential", credential_id)?;
+    let doc_id = row
+        .doc_id
+        .as_deref()
+        .context("stored OAuthCredential has no _docID")?;
+    let keys: Vec<_> = row
+        .provider_account_key
+        .iter()
+        .cloned()
+        .chain([crate::usage_observation::fallback_key(
+            row.account_ref.as_deref(),
+            doc_id,
+        )])
+        .collect();
+    crate::usage_observation::delete_usage_in_txn(txn, agent_did, &row.provider, &keys).await
 }
 
 fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {
