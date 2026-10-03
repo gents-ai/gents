@@ -176,27 +176,11 @@ iroh = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3f
 iroh-base = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
 iroh-dns = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
 iroh-relay = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
-# rig-core fork: upstream rig's OpenAI provider drops reasoning from vLLM-style
-# servers. The Responses streaming decoder only handles OpenAI's hosted
-# `response.reasoning_summary_text.delta`; vLLM streams the raw chain-of-thought
-# as `response.reasoning_text.delta`, which rig has no variant for (also a
-# `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
-# fork our Responses-API reasoning capture is silently empty.
-#
-# The rev carries one more commit than the fork branch above: reqwest as an
-# optional dependency, so rig-core builds for wasm32-wasip1 with
-# default-features = false, which is what `gents-loop` needs to compile as a
-# sealed guest. It is sourcenetwork/rig#3, opened against
-# `vllm-reasoning-compat` (this same line of work), and this pin moves to
-# sourcenetwork/rig once it lands there.
-#
-# A `[patch."https://github.com/sourcenetwork/rig"]` table layered on top of
-# this same entry was tried first and does not apply: Cargo patches are
-# resolved against the source a dependency's manifest names directly
-# (crates-io here), not against the source an earlier patch substituted, so a
-# patch of a patch is silently unused (verified in an isolated two-crate
-# repro).
-rig-core = { git = "https://github.com/vertexclique/rig", rev = "36a4c7fa5dcc450659d88556f3b4ba2be8b6a079" }
+# Preserve vLLM reasoning and optional reqwest for sealed guests (sourcenetwork/rig#3).
+# This pin also preserves prompt_cache_key through the typed Responses serializer.
+# Cargo patches the dependency's original crates.io source, not a git source
+# introduced by another patch entry.
+rig-core = { git = "https://github.com/jackzampolin/rig", rev = "7e44b7a9ce081fa1b54a4012c1691ebe04ca1845" }
 # noq 1.1.1 includes the stale-path and duplicate-Draining fixes, and
 # n0-computer/noq#723 has been closed. Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.
