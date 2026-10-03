@@ -2811,13 +2811,13 @@ mod tests {
                 },
             )
         }
-        async fn connect_peer(&self, addr: &str) -> P2PResult<()> {
+        async fn connect_peer(&self, _addr: &str) -> P2PResult<()> {
             self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.connected
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
-        async fn disconnect_peer(&self, addr: &str) -> P2PResult<()> {
+        async fn disconnect_peer(&self, _addr: &str) -> P2PResult<()> {
             unimplemented!()
         }
         async fn get_replicators(&self) -> P2PResult<Vec<ReplicatorInfo>> {
@@ -2825,51 +2825,51 @@ mod tests {
         }
         async fn add_replicator(
             &self,
-            collections: Vec<String>,
-            addr: Option<&str>,
-            filters: ReplicationFilters,
-            explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
-            expected_authorizer_did: Option<&str>,
+            _collections: Vec<String>,
+            _addr: Option<&str>,
+            _filters: ReplicationFilters,
+            _explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
+            _expected_authorizer_did: Option<&str>,
         ) -> P2PResult<()> {
             unimplemented!()
         }
         async fn remove_replicator(
             &self,
-            collections: Vec<String>,
-            addr: Option<&str>,
+            _collections: Vec<String>,
+            _addr: Option<&str>,
         ) -> P2PResult<()> {
             unimplemented!()
         }
         async fn get_collections(&self) -> P2PResult<Vec<String>> {
             unimplemented!()
         }
-        async fn add_collections(&self, collections: Vec<String>) -> P2PResult<()> {
+        async fn add_collections(&self, _collections: Vec<String>) -> P2PResult<()> {
             unimplemented!()
         }
-        async fn remove_collections(&self, collections: Vec<String>) -> P2PResult<()> {
+        async fn remove_collections(&self, _collections: Vec<String>) -> P2PResult<()> {
             unimplemented!()
         }
         async fn get_documents(&self) -> P2PResult<Vec<P2pDocumentInfo>> {
             unimplemented!()
         }
-        async fn add_documents(&self, docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+        async fn add_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
             unimplemented!()
         }
-        async fn remove_documents(&self, docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+        async fn remove_documents(&self, _docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
             unimplemented!()
         }
         async fn sync_documents(
             &self,
-            collection_name: &str,
-            doc_ids: Vec<String>,
-            timeout: Option<std::time::Duration>,
+            _collection_name: &str,
+            _doc_ids: Vec<String>,
+            _timeout: Option<std::time::Duration>,
         ) -> P2PResult<()> {
             unimplemented!()
         }
-        async fn sync_branchable_collection(&self, collection_id: &str) -> P2PResult<()> {
+        async fn sync_branchable_collection(&self, _collection_id: &str) -> P2PResult<()> {
             unimplemented!()
         }
-        async fn sync_collection_versions(&self, version_ids: Vec<String>) -> P2PResult<()> {
+        async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
             unimplemented!()
         }
         async fn resolve_peer_identity(
