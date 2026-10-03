@@ -447,7 +447,7 @@ fn log_p2p_health_transition(previous: &P2PHealth, next: &P2PHealth) {
             target: "gents_desktop_core::p2p_health",
             connected_peers = next.connected_peer_count,
             replicators = next.replicator_count,
-            "desktop P2P transport is healthy"
+            "desktop P2P transport probe succeeded"
         );
         return;
     }
