@@ -357,3 +357,80 @@ fn unreadable_reason_follows_the_exact_read_scope() {
     assert!(session_unreadable_reason(&unscoped, Some(desktop), true).is_some());
     assert_eq!(session_unreadable_reason(&unscoped, None, false), None);
 }
+
+#[tokio::test]
+async fn transcript_payload_page_batches_exact_dependencies_without_reading_other_history() {
+    use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
+    use gents::config_client::ConfigAccess;
+
+    let node = NodeBuilder::default().build().await.expect("node");
+    ensure_runtime_schemas(&node).await.expect("schemas");
+    for sequence in 1..=40 {
+        let response = ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{
+            segment: create_AgentOutputSegment(input: {{
+                agent_did: "agent", requester_did: "reader", session_id: "paged-payload",
+                request_doc_id: "request-{sequence}", source: {{kind: "authored", key: "answer"}},
+                writer: {{kind: "request_execution", execution_generation: "generation"}},
+                ordinal: 0, runs: [{{stream: 0, bytes: 1, declaration: {{block_index: 0, part_index: 0, payload: {{kind: "text"}}}}}}],
+                payload: "x", close: {{kind: "closed", outcome: "complete", segments: 1, stream_bytes: [1]}},
+                created_at: "2026-10-03T00:00:00Z"
+            }}) {{ _docID }}
+        }}"#)).await.expect("segment");
+        let close = response["data"]["segment"][0]["_docID"]
+            .as_str()
+            .expect("segment id");
+        let close = escape_graphql_string(close);
+        ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "answer-{sequence}", session_id: "paged-payload", agent_did: "agent", requester_did: "reader",
+                request_doc_id: "request-{sequence}", publication: {{kind: "request_execution", execution_generation: "generation"}},
+                outcome: "complete", sequence: {sequence}, role: "assistant",
+                blocks: [{{type: "text", text: {{output: {{close_doc_id: "{close}", stream: 0}}, presentation: {{kind: "full"}}}}}}],
+                created_at: "2026-10-03T00:00:00Z"
+            }}) {{ _docID }}
+        }}"#)).await.expect("header");
+    }
+    ConfigAccess::write_local(&node, "test.unrelated_history", r#"mutation {
+        create_AgentOutputSegment(input: {agent_did:"agent", requester_did:"reader", session_id:"paged-payload",
+            request_doc_id:"unreferenced", source:{kind:"not_a_source"}, payload:"must not read"}) { _docID }
+    }"#).await.expect("unrelated history");
+    let page = load_session_transcript_page(
+        &node,
+        "paged-payload",
+        Some("agent"),
+        Some("reader"),
+        None,
+        Some(40),
+    )
+    .await
+    .expect("page");
+    assert_eq!(page.store.transcript_messages.len(), 40);
+    assert_eq!(page.canonical_dependencies.output_segments.len(), 40);
+    assert_eq!(
+        page.query_count, 8,
+        "one page, two closure batches, five source batches"
+    );
+    for header in &page.store.transcript_messages {
+        assert!(matches!(
+            project_canonical_message(
+                header,
+                &page.canonical_dependencies.output_segments,
+                &[],
+                &[]
+            ),
+            CanonicalMessageProjection::Ready(_)
+        ));
+    }
+    let other = load_session_transcript_page(
+        &node,
+        "paged-payload",
+        Some("agent"),
+        Some("other-reader"),
+        None,
+        Some(40),
+    )
+    .await
+    .expect("other scope");
+    assert!(other.store.transcript_messages.is_empty());
+    assert!(other.canonical_dependencies.output_segments.is_empty());
+}

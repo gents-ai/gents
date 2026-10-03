@@ -32,7 +32,10 @@ mod agent_scope;
 mod document_patches;
 mod session_tip;
 mod session_transcript;
-pub use session_tip::{load_session_tip_store, load_session_tip_store_on};
+pub use session_tip::{
+    load_request_prompt_ownership, load_request_prompt_ownership_on, load_session_tip_store,
+    load_session_tip_store_on, RequestPromptFact, RequestPromptOwnership,
+};
 mod snapshot_loaders;
 
 pub use agent_scope::load_agent_scoped_snapshot;

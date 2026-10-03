@@ -43,6 +43,18 @@ structure ReadCoverage where
 def pendingOwnerAbsent (coverage : ReadCoverage) (materialized : Bool) : Bool :=
   coverage.promptOwnerKnown && !materialized
 
+/-- A physical prompt lookup covers only its own request, even when its rows
+are merged with a bounded session page. Native adapters retain scope checks. -/
+def pendingRequestOwnerAbsent (coverage : ReadCoverage) (requested observed : Nat)
+    (materialized : Bool) : Bool :=
+  pendingOwnerAbsent ⟨coverage.sessionComplete,
+    coverage.promptOwnerKnown && requested == observed⟩ materialized
+
+theorem unrelated_request_tip_is_not_pending (coverage : ReadCoverage)
+    (requested observed : Nat) (different : requested ≠ observed) (materialized : Bool) :
+    pendingRequestOwnerAbsent coverage requested observed materialized = false := by
+  simp [pendingRequestOwnerAbsent, pendingOwnerAbsent, different]
+
 theorem page_absence_is_not_pending (complete materialized : Bool) :
     pendingOwnerAbsent ⟨complete, false⟩ materialized = false := by
   simp [pendingOwnerAbsent]
