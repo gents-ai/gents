@@ -25,6 +25,19 @@ export function useRoute(): Route {
   return useNav().route;
 }
 
+/* back and forward, with whether each can go: the memory nav's own cursor */
+export type History = Pick<Nav, "canBack" | "canForward" | "back" | "forward">;
+
+export function useHistory(): History {
+  const nav = useNav();
+  return {
+    canBack: nav.canBack,
+    canForward: nav.canForward,
+    back: nav.back,
+    forward: nav.forward,
+  };
+}
+
 export function interceptNavClicks(root: ParentNode = document): () => void {
   const onClick = (event: Event) => {
     const mouse = event as MouseEvent;

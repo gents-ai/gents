@@ -46,7 +46,14 @@ import {
 } from "./ui/lib/scope";
 import "./ui/screens/surfaces";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
-import { bindNav, interceptNavClicks, navigate, useRoute } from "./ui/lib/router";
+import {
+  bindNav,
+  interceptNavClicks,
+  navigate,
+  useHistory,
+  useRoute,
+} from "./ui/lib/router";
+import { useHistoryInputs } from "./ui/lib/history-inputs";
 import { initTheme } from "./ui/theme";
 
 import "./App.css";
@@ -87,6 +94,8 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
   const route = useRoute();
+  const history = useHistory();
+  useHistoryInputs(history);
   const shell = useShell(
     bridge,
     route.name === "session" ? route.sessionId : undefined,
@@ -263,6 +272,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           <ShellProvider value={shell}>
             <AppShell
               route={route}
+              history={history}
               agentName={agent}
               agentDid={shell.selectedAgentDid}
               deployment={shell.selectedDeployment}
