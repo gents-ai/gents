@@ -54,6 +54,7 @@ import {
   useRoute,
 } from "./ui/lib/router";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
+import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { initTheme } from "./ui/theme";
 
 import "./App.css";
@@ -96,6 +97,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const route = useRoute();
   const history = useHistory();
   useHistoryInputs(history);
+  useSwipeNav(history);
   const shell = useShell(
     bridge,
     route.name === "session" ? route.sessionId : undefined,
