@@ -6,7 +6,7 @@
       "capabilities": [
         "default",
         "desktop-runtime-admin",
-        "native-windows", "native-swipe",
+        "native-windows",
         "native-e2e"
       ]
     }

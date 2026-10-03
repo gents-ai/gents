@@ -1,7 +1,0 @@
-{
-  "identifier": "native-swipe",
-  "description": "macOS views report sideways scroll room for the native history swipe.",
-  "windows": ["main", "gents-view-*"],
-  "platforms": ["macOS"],
-  "permissions": ["native-swipe"]
-}

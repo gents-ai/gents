@@ -14,6 +14,7 @@
     "opener:default",
     "dialog:allow-open",
     "gents-desktop-bridge:default",
-    "gents-desktop-bridge:full"
+    "gents-desktop-bridge:full",
+    "native-swipe"
   ]
 }
