@@ -2369,6 +2369,131 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         .is_some_and(|reason| reason.contains("insufficient_quota")));
 }
 
+const RENDERED_LIMIT: &str =
+    "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
+
+async fn seed_failed_call(
+    db: &TestDb,
+    call_id: &str,
+    call_kind: &str,
+    attempt: i64,
+    ended_at: &str,
+    failure_reason: &str,
+) {
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                add_InferenceCall(input: {{
+                    call_id: "{call_id}",
+                    request_id: "usage-limited-request",
+                    call_seq: 1,
+                    call_kind: "{call_kind}",
+                    attempt: {attempt},
+                    call_state: "failed",
+                    ended_at: "{ended_at}",
+                    failure_reason: "{failure_reason}"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed failed call: {:?}",
+        response.errors
+    );
+}
+
+async fn usage_limited_goal_after_failed_request(db: &TestDb) -> Option<String> {
+    create_request_for_agent_with_signed_fields(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        "usage-limited-request",
+        SESSION,
+        "failed",
+        "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Stop on the call that ended the request"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    let (mut source, _snapshot_tx) = source(db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+            .await
+            .is_err()
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    (goal.parsed_status() == Some(GoalStatus::UsageLimited))
+        .then_some(goal.last_failure)
+        .flatten()
+}
+
+#[tokio::test]
+async fn compaction_usage_limit_moves_goal_to_usage_limited() {
+    let db = test_db("goal-compaction-usage-limit").await;
+    seed_failed_call(
+        &db,
+        "compaction-call",
+        "compaction",
+        1,
+        "2026-07-15T00:00:10Z",
+        RENDERED_LIMIT,
+    )
+    .await;
+    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    assert!(
+        last_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
+        "{last_failure:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_later_limited_call_wins_over_an_earlier_retry() {
+    let db = test_db("goal-later-limited-call").await;
+    seed_failed_call(
+        &db,
+        "earlier-retry",
+        "inference",
+        2,
+        "2026-07-15T00:00:05Z",
+        "HttpError: Invalid status code 500",
+    )
+    .await;
+    seed_failed_call(
+        &db,
+        "later-compaction",
+        "compaction",
+        1,
+        "2026-07-15T00:00:10Z",
+        RENDERED_LIMIT,
+    )
+    .await;
+    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    assert!(
+        last_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
+        "{last_failure:?}"
+    );
+}
+
 #[tokio::test]
 async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     let db = test_db("goal-wrapup-retry-bound").await;

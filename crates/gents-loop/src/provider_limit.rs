@@ -276,10 +276,14 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
 
     let body_json = embedded_json(body);
     if usage_text || headers.usage_exhausted {
-        let resets_at = body_json
-            .as_ref()
-            .and_then(|json| json_resets_at(json, now))
-            .or_else(|| rendered_resets_at(body))
+        // A recorded rendering first: its time is absolute, a relative
+        // `resets_in_seconds` in its detail would move with the reader's clock.
+        let resets_at = rendered_resets_at(body)
+            .or_else(|| {
+                body_json
+                    .as_ref()
+                    .and_then(|json| json_resets_at(json, now))
+            })
             .or(headers.reset_at)
             .or(headers.retry_at);
         return Some(ProviderLimit::UsageExhausted(UsageLimit {

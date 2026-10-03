@@ -8,6 +8,8 @@ mod registry;
 mod slot_accounting;
 pub(crate) mod stream_guard;
 
+#[cfg(test)]
+pub(crate) use client::AdmittedCompletionModel;
 pub(crate) use client::{
     current_call_join, current_session_id, scope_backend, scope_call, scope_call_with_join,
     scope_call_with_token_and_failure_reason, scope_request, set_terminal_failure_reason,

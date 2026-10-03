@@ -1641,7 +1641,7 @@ const MOVE_OFF_ACCOUNT: &str =
 /// `<Product> account "<label>" is <state>.` A label that reads as a provider
 /// limit or a context-length error is replaced by the product name: bearer
 /// errors reach the limit classifiers, and a label is free text.
-fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
+pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
     let lower = label.to_ascii_lowercase();
     let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
         || lower.contains("context_length_exceeded")
@@ -1652,6 +1652,30 @@ fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
         label
     };
     format!("{} account \"{label}\" is {state}.", product.name)
+}
+
+/// The state an [`account_failure`] sentence in `text` names, if any.
+pub fn account_failure_state(text: &str) -> Option<&'static str> {
+    const STATES: [&str; 5] = [
+        "signed out (expired or revoked)",
+        "not entitled",
+        "unusable",
+        "disabled",
+        "removed from this node",
+    ];
+    [
+        CHATGPT_OAUTH_PRODUCT,
+        XAI_OAUTH_PRODUCT,
+        crate::claude_oauth::CLAUDE_OAUTH_PRODUCT,
+    ]
+    .iter()
+    .any(|product| text.contains(&format!("{} account \"", product.name)))
+    .then(|| {
+        STATES
+            .into_iter()
+            .find(|state| text.contains(&format!("\" is {state}.")))
+    })
+    .flatten()
 }
 
 pub struct DbCredentialBearer {

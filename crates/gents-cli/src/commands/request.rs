@@ -132,7 +132,10 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
             print_json(&value)?;
         }
         OutputFormat::Text => {
-            print!("{}", render_request_show_text(&snapshot));
+            print!(
+                "{}",
+                render_request_show_text(&snapshot, chrono::Utc::now())
+            );
         }
         _ => unreachable!("ensure_supported restricts request show output formats"),
     }
@@ -155,6 +158,7 @@ struct RequestShowSnapshot {
     native_executors_available: bool,
     native_executors: Vec<NativeExecutorView>,
     child_requests: Vec<ChildRequestView>,
+    blocked: Option<gents::blocked_turn::BlockedTurn>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -303,6 +307,12 @@ async fn load_request_show_snapshot(
 
     let request_terminal = canonical_request.is_terminal();
     let request_agent_did = canonical_request.agent_did.unwrap_or_default();
+    let blocked = gents::blocked_turn::blocked_turn(&access, &request_agent_did, request_id)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
+            None
+        });
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
@@ -373,6 +383,7 @@ async fn load_request_show_snapshot(
         native_executors_available,
         native_executors,
         child_requests,
+        blocked,
     })
 }
 
@@ -901,7 +912,10 @@ fn unsigned_field(row: &Value, field: &str) -> Option<u64> {
     })
 }
 
-fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
+fn render_request_show_text(
+    snapshot: &RequestShowSnapshot,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     let mut lines = Vec::new();
     let request = &snapshot.request;
     lines.push(format!("Request {}", request.request_id));
@@ -924,6 +938,46 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
         "failure_reason",
         request.failure_reason.as_deref(),
     );
+    if let Some(blocked) = &snapshot.blocked {
+        use gents::blocked_turn::BlockedReason;
+        let mut line = format!(
+            "blocked: {}",
+            match blocked.reason {
+                BlockedReason::UsageLimit => "usage limit",
+                BlockedReason::AccountDisabled => "account disabled",
+                BlockedReason::AccountRemoved => "account removed",
+                BlockedReason::AccountSignedOut => "account signed out",
+            }
+        );
+        if let Some(account) = &blocked.account {
+            line.push_str(&format!(" on account {:?}", account.label));
+        }
+        if blocked.reason == BlockedReason::UsageLimit {
+            line.push_str(&match blocked.resets_at {
+                Some(at) => {
+                    let secs = (at - now).num_seconds();
+                    let at = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                    if secs > 0 {
+                        format!(
+                            ", resets at {at} (in {})",
+                            super::accounts::short_duration(secs)
+                        )
+                    } else {
+                        format!(", reset at {at} (passed)")
+                    }
+                }
+                None => ", reset not reported".to_owned(),
+            });
+        }
+        lines.push(line);
+        if let (Some(profile), Some(switch)) = (&blocked.profile, &blocked.switch_command) {
+            let users = blocked.behaviors_on_profile.len();
+            let noun = if users == 1 { "behavior" } else { "behaviors" };
+            lines.push(format!(
+                "  profile {profile} (used by {users} {noun}); switch: {switch}"
+            ));
+        }
+    }
     push_option_line(
         &mut lines,
         "terminal_cause",
@@ -1430,6 +1484,97 @@ mod tests {
             },
             output,
         }
+    }
+
+    fn show_snapshot(blocked: Option<gents::blocked_turn::BlockedTurn>) -> RequestShowSnapshot {
+        let row = json!({
+            "request_id": "request", "lifecycle_state": "failed",
+            "failure_reason": "provider usage limit reached (reset time not reported)",
+        });
+        RequestShowSnapshot {
+            request: request_header_view(&row, None, Vec::new()).unwrap(),
+            output: CliOutputObservation::Absent,
+            cancel_cause: None,
+            tool_calls: Vec::new(),
+            backgrounded_tools: Vec::new(),
+            native_executors_available: false,
+            native_executors: Vec::new(),
+            child_requests: Vec::new(),
+            blocked,
+        }
+    }
+
+    fn usage_limit(
+        resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> gents::blocked_turn::BlockedTurn {
+        gents::blocked_turn::BlockedTurn {
+            reason: gents::blocked_turn::BlockedReason::UsageLimit,
+            account: Some(gents::blocked_turn::BlockedAccount {
+                label: "label-b".into(),
+                provider: "claude-subscription".into(),
+            }),
+            profile: Some("main".into()),
+            behaviors_on_profile: vec!["x".into(), "y".into()],
+            resets_at,
+            switch_command: Some("gents config profile set-account main <account>".into()),
+        }
+    }
+
+    fn show_now() -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(2026, 9, 25, 16, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn blocked_usage_limit_prints_account_reset_and_switch() {
+        let resets_at = show_now() + chrono::Duration::minutes(133);
+        let snapshot = show_snapshot(Some(usage_limit(Some(resets_at))));
+        let text = render_request_show_text(&snapshot, show_now());
+        assert!(
+            text.contains(
+                r#"blocked: usage limit on account "label-b", resets at 2026-09-25T18:13:00Z (in 2h13m)"#
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "profile main (used by 2 behaviors); switch: gents config profile set-account main <account>"
+            ),
+            "{text}"
+        );
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value.pointer("/blocked/reason"),
+            Some(&json!("usage_limit"))
+        );
+        let value = serde_json::to_value(show_snapshot(None)).unwrap();
+        assert_eq!(value.get("blocked"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn blocked_after_the_reset_prints_no_countdown() {
+        let resets_at = show_now() - chrono::Duration::days(1);
+        let text = render_request_show_text(
+            &show_snapshot(Some(usage_limit(Some(resets_at)))),
+            show_now(),
+        );
+        assert!(
+            text.contains(
+                r#"blocked: usage limit on account "label-b", reset at 2026-09-24T16:00:00Z (passed)"#
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn blocked_without_a_reset_prints_reset_not_reported() {
+        let text = render_request_show_text(&show_snapshot(Some(usage_limit(None))), show_now());
+        assert!(
+            text.contains(r#"blocked: usage limit on account "label-b", reset not reported"#),
+            "{text}"
+        );
+        let text = render_request_show_text(&show_snapshot(None), show_now());
+        assert!(!text.contains("blocked:"), "{text}");
     }
 
     #[test]
