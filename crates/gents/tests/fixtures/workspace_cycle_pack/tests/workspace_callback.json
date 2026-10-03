@@ -1,0 +1,47 @@
+{
+  "runtime": {
+    "repository": {
+      "files": {
+        "src/lib.rs": "pub fn change() {}\n"
+      },
+      "dirs": []
+    },
+    "seed": {
+      "collection": "ChangeUnitWork",
+      "fields": {
+        "work_unit_id": "change-unit:unit-${ATTEMPT}",
+        "repository_id": "change-unit-repository",
+        "base_sha": "${BASE_SHA}",
+        "branch": "change-unit-unit-${ATTEMPT}",
+        "title": "test unit",
+        "instructions": "Add one exact path change.",
+        "owned_files": "[\"src/lib.rs\"]",
+        "caused_by_correlation": "change-unit:unit-${ATTEMPT}",
+        "status": "ready"
+      }
+    },
+    "taken": {
+      "collection": "CallbackInvocation",
+      "filter": {
+        "callback_id": "change-unit-workspace"
+      }
+    },
+    "expect": [
+      {
+        "collection": "CallbackInvocation",
+        "filter": {
+          "callback_id": "change-unit-workspace"
+        },
+        "fields": {
+          "lifecycle_state": "succeeded"
+        }
+      },
+      {
+        "collection": "IsolatedWorkspace",
+        "fields": {
+          "lifecycle_state": "ready"
+        }
+      }
+    ]
+  }
+}
