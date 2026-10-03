@@ -1094,6 +1094,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CompactionCursorCases".to_string(),
         ));
     }
+    if !snapshot.routing_affinity_cases.is_empty() {
+        emitted.insert((
+            "routing_affinity_cases".to_string(),
+            "RoutingAffinityCases".to_string(),
+        ));
+    }
     if !snapshot.current_input_cases.is_empty() {
         emitted.insert((
             "current_input_cases".to_string(),

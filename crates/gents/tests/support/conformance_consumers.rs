@@ -196,6 +196,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_root_admission_cases_drive_production_root_policy",
         },
         ConformanceConsumer::RustTest {
+            id: "chatgpt_codex::tests::routing_affinity_matches_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/chatgpt_codex.rs",
+            module_path: "chatgpt_codex::tests",
+            function: "routing_affinity_matches_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::output::tests::current_input_selection_matches_lean_owner",
             package: "gents",
             source_path: "crates/gents/src/session/output.rs",

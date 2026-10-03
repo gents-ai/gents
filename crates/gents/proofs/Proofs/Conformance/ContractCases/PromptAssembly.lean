@@ -1602,4 +1602,23 @@ theorem replayPrefixCases_checks_decide_rule :
       row.leadingRemoval == (row.ordinaryEqual && row.reasoningSuffix)) = true := by
   native_decide
 
+structure RoutingAffinityCase where
+  name : String
+  codex : Bool
+  main : Bool
+  session : Option String
+  responses : List (Option String)
+
+def RoutingAffinityCase.expected (row : RoutingAffinityCase) : PromptAssembly.Provider.RoutingAffinity :=
+  row.responses.foldl PromptAssembly.Provider.RoutingAffinity.observe
+    (PromptAssembly.Provider.RoutingAffinity.start row.codex row.main row.session)
+
+def routingAffinityCases : List RoutingAffinityCase :=
+  [ ⟨"initial", true, true, some "session", []⟩
+  , ⟨"first_token_retained", true, true, some "session", [none, some "first", some "later"]⟩
+  , ⟨"new_execution_same_session", true, true, some "session", [none]⟩
+  , ⟨"auxiliary_isolated", true, false, some "session", [some "auxiliary"]⟩
+  , ⟨"other_provider", false, true, some "session", [some "other"]⟩
+  , ⟨"session_absent", true, true, none, [some "unscoped"]⟩ ]
+
 end Conformance.ContractCases

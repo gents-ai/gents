@@ -409,6 +409,7 @@ def snapshotJson : String :=
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
       promptAssemblyClaudeWireStartCasesJson ++ ","
+    ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
