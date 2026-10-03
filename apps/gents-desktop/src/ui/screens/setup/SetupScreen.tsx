@@ -353,6 +353,9 @@ function withoutProvider<T>(state: Partial<Record<ProviderId, T>>, id: ProviderI
   return next;
 }
 
+const notAdded = (label: string) =>
+  `This sign-in refreshed the account stored as ${label}. No account was added.`;
+
 export function SetupScreen({
   shell,
   onDone,
@@ -425,6 +428,9 @@ export function SetupScreen({
     Partial<Record<ProviderId, ConnectionDraft>>
   >({});
   const [signedIn, setSignedIn] = useState<Partial<Record<ProviderId, string>>>({});
+  const [storedAccounts, setStoredAccounts] = useState<ProviderAccountView[]>([]);
+  const [accountLabel, setAccountLabel] = useState("");
+  const [signInHint, setSignInHint] = useState<string | null>(null);
   const accountRevision = useRef(0);
   const setupAgentDid =
     agentDid ??
@@ -488,7 +494,9 @@ export function SetupScreen({
           setupAgentDidRef.current !== agentDid
         )
           return;
-        setSignedIn(providerSignInState(accounts));
+        setStoredAccounts(accounts);
+        /* adding a backend signs in a further account; only its own sign-in connects */
+        if (purpose !== "add-backend") setSignedIn(providerSignInState(accounts));
         setPendingSave(providerPendingSaveState(accounts));
         setAccountsObserved(true);
       })
@@ -678,15 +686,27 @@ export function SetupScreen({
       setBusy(false);
     }
   };
+  const accountsOf = (oauthProvider: OauthProvider) =>
+    storedAccounts.filter(
+      (account) =>
+        !account.pendingSave &&
+        account.provider === PROVIDER_CREDENTIAL_KIND[oauthProvider],
+    );
   const signIn = async () => {
     if (!connection) return;
     const oauthProvider = oauthProviderFor(connection.authMethod);
     if (!oauthProvider) return;
     if (requiresManagedRuntime && runtimeGate !== "ready") return;
     autoSignIn.current = null;
+    const label = accountLabel.trim();
+    if (label && accountsOf(oauthProvider).some((account) => account.label === label)) {
+      setError(`Another account is already labelled “${label}”. Choose another label.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     setAuthUrl(null);
+    setSignInHint(null);
     let unlisten = () => {};
     let agentDid: string | undefined;
     try {
@@ -696,16 +716,34 @@ export function SetupScreen({
       if (!agentDid) throw new Error("No agent to sign in");
       const result =
         oauthProvider === "openai"
-          ? await api.codexLogin(agentDid)
+          ? await (label
+              ? api.codexLogin(agentDid, null, label)
+              : api.codexLogin(agentDid))
           : oauthProvider === "anthropic"
-            ? await api.claudeLogin(agentDid)
-            : await api.grokLogin(agentDid);
+            ? await (label
+                ? api.claudeLogin(agentDid, null, label)
+                : api.claudeLogin(agentDid))
+            : await (label
+                ? api.grokLogin(agentDid, null, label)
+                : api.grokLogin(agentDid));
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
-      setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
       setPendingSave((current) => withoutProvider(current, provider));
-      invalidateDiscovery();
       setAuthUrl(null);
+      const outcome = result.signIn;
+      if (outcome.result === "refreshed") setSignInHint(outcome.hint);
+      /* an added account's backend was created with the account, and a refreshed
+         one already has its backend: nothing to save */
+      if (
+        purpose === "add-backend" &&
+        (outcome.accountRef !== null || outcome.result === "refreshed")
+      ) {
+        if (outcome.result === "added") onDone(await api.fetchDesktopSnapshot());
+        else setSignInHint(outcome.hint ?? notAdded(outcome.label));
+        return;
+      }
+      setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
+      invalidateDiscovery();
     } catch (cause) {
       if (agentDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
         setAuthUrl(null);
@@ -723,6 +761,9 @@ export function SetupScreen({
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
     if (!agentDid || !oauthProvider || !api.retrySaveProviderAccount) return;
     const pendingProvider = provider;
+    /* with a stored account, a store adds only under a new reference, so a
+       retry returning no reference refreshed the original account */
+    const hadStored = accountsOf(oauthProvider).length > 0;
     setBusy(true);
     setError(null);
     try {
@@ -736,11 +777,19 @@ export function SetupScreen({
       );
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
+      if (purpose === "add-backend" && account.accountRef !== null) {
+        onDone(await api.fetchDesktopSnapshot());
+        return;
+      }
+      setPendingSave((current) => withoutProvider(current, pendingProvider));
+      if (purpose === "add-backend" && hadStored) {
+        setSignInHint(notAdded(account.label));
+        return;
+      }
       setSignedIn((current) => ({
         ...current,
         [pendingProvider]: account.credentialId,
       }));
-      setPendingSave((current) => withoutProvider(current, pendingProvider));
       invalidateDiscovery();
     } catch (cause) {
       if (bridgeErrorCode(cause) === "notFound") void observeAccounts(agentDid);
@@ -976,6 +1025,8 @@ export function SetupScreen({
       return;
     autoSignIn.current = null;
     if (signedIn[provider] || pendingSave[provider]) return;
+    const oauthProvider = oauthProviderFor(connection.authMethod)!;
+    if (purpose === "add-backend" && accountsOf(oauthProvider).length) return;
     void signIn();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -990,6 +1041,7 @@ export function SetupScreen({
     runtimeGate,
     signedIn,
     pendingSave,
+    storedAccounts,
   ]);
   if (step === "welcome") {
     return (
@@ -1288,32 +1340,45 @@ export function SetupScreen({
                 Account connected
               </p>
             ) : (
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-muted-foreground">
-                  {authLabel(connection!.authMethod)}
-                </p>
-                <span className="flex gap-2">
-                  {busy ? (
-                    <Button variant="outline" onClick={cancelSignIn}>
-                      Cancel
+              <>
+                {purpose === "add-backend" ? (
+                  <Field label="Account label">
+                    <Input
+                      disabled={busy}
+                      value={accountLabel}
+                      onChange={(event) => setAccountLabel(event.target.value)}
+                      placeholder="Optional, e.g. Work"
+                    />
+                  </Field>
+                ) : null}
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-muted-foreground">
+                    {authLabel(connection!.authMethod)}
+                  </p>
+                  <span className="flex gap-2">
+                    {busy ? (
+                      <Button variant="outline" onClick={cancelSignIn}>
+                        Cancel
+                      </Button>
+                    ) : null}
+                    {!busy && pendingSave[provider] && api.retrySaveProviderAccount ? (
+                      <Button variant="brand" onClick={retrySaveSignIn}>
+                        Retry save
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant={pendingSave[provider] && !busy ? "outline" : "brand"}
+                      disabled={busy}
+                      onClick={signIn}
+                    >
+                      {busy ? <Spinner /> : null}
+                      {busy ? "Waiting…" : "Sign in"}
                     </Button>
-                  ) : null}
-                  {!busy && pendingSave[provider] && api.retrySaveProviderAccount ? (
-                    <Button variant="brand" onClick={retrySaveSignIn}>
-                      Retry save
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant={pendingSave[provider] && !busy ? "outline" : "brand"}
-                    disabled={busy}
-                    onClick={signIn}
-                  >
-                    {busy ? <Spinner /> : null}
-                    {busy ? "Waiting…" : "Sign in"}
-                  </Button>
-                </span>
-              </div>
+                  </span>
+                </div>
+              </>
             )}
+            {signInHint ? <p className="text-muted-foreground">{signInHint}</p> : null}
             {authUrl ? (
               <button
                 type="button"

@@ -7,6 +7,10 @@ use clap::Parser;
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
+/// The account remove and usage read the desktop shares with `gents accounts`.
+pub mod accounts {
+    pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
+}
 mod caused_sessions;
 mod cli;
 mod commands;

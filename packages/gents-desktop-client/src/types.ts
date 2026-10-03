@@ -150,8 +150,14 @@ export type {
   InferenceCallSummary,
 } from "./types/backendHealth.js";
 export type { ProviderAccountView } from "./generated/ProviderAccountView.js";
+export type { SignInView } from "./generated/SignInView.js";
 export type { ProviderAccountsRequest } from "./generated/ProviderAccountsRequest.js";
 export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccountDisconnectRequest.js";
+export type { ProviderAccountRenameRequest } from "./generated/ProviderAccountRenameRequest.js";
+export type { ProviderAccountRemoveRequest } from "./generated/ProviderAccountRemoveRequest.js";
+export type { ProviderUsageReadRequest } from "./generated/ProviderUsageReadRequest.js";
+export type { BackendUsageView } from "./generated/BackendUsageView.js";
+export type { UsageWindowView } from "./generated/UsageWindowView.js";
 export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";
 export type { InferenceProviderOption } from "./generated/InferenceProviderOption.js";
 export type { InferenceAuthOption } from "./generated/InferenceAuthOption.js";

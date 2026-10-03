@@ -234,9 +234,195 @@ describe("setup provider sign-in", () => {
         onDone={vi.fn()}
       />,
     );
-    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(await screen.findByLabelText("Account label")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
   });
+});
+
+describe("add another account", () => {
+  const KIND = {
+    openai: "chatgpt-codex",
+    anthropic: "claude-subscription",
+    grok: "xai-oauth",
+  } as const;
+  const stored = (provider: string) => ({
+    credentialId: "credential-personal",
+    agentDid: AGENT,
+    provider,
+    accountId: null,
+    planType: null,
+    accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+    lastRefresh: null,
+    enabled: true,
+    pendingSave: false,
+    accountRef: null,
+    label: "Personal",
+  });
+  const signedIn = (
+    result: string,
+    hint: string | null = null,
+    accountRef: string | null = "acct-2",
+  ) =>
+    vi.fn().mockResolvedValue({
+      docId: "credential-doc",
+      credentialId: "credential-work",
+      agentDid: AGENT,
+      provider: "claude-subscription",
+      accountId: null,
+      chatgptPlanType: null,
+      isFedramp: false,
+      accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+      enabled: true,
+      signIn: { result, label: "Work", accountRef, hint },
+    });
+  function addForm(
+    provider: keyof typeof KIND,
+    overrides: Partial<DesktopApiAdapter> = {},
+  ) {
+    const { api, shell } = setup({
+      listProviderAccounts: vi.fn().mockResolvedValue([stored(KIND[provider])]),
+      ...overrides,
+    });
+    const onDone = vi.fn();
+    render(
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        purpose="add-backend"
+        provider={provider}
+        agentDid={AGENT}
+        onCancel={vi.fn()}
+        onDone={onDone}
+      />,
+    );
+    return { api, onDone };
+  }
+
+  it("signs a labelled account in once and closes when it was added", async () => {
+    const { api, onDone } = addForm("anthropic", { claudeLogin: signedIn("added") });
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Account label"), "Work");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(api.claudeLogin).toHaveBeenCalledTimes(1);
+    expect(api.claudeLogin).toHaveBeenCalledWith(AGENT, null, "Work");
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("draws the hint after a refreshed sign-in and stays open", async () => {
+    const hint = "Signed in to Work again. To add another account, sign out first.";
+    const { onDone } = addForm("anthropic", {
+      claudeLogin: signedIn("refreshed", hint),
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(hint)).toBeVisible();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps Sign in offered after a sign-in refreshes the original account", async () => {
+    const hint = "This is the account already stored as Personal.";
+    const { api, onDone } = addForm("anthropic", {
+      claudeLogin: signedIn("refreshed", hint, null),
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(hint)).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("says no account was added when a refresh has no hint", async () => {
+    const { api, onDone } = addForm("anthropic", {
+      claudeLogin: signedIn("refreshed", null, null),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(
+      await screen.findByText(
+        "This sign-in refreshed the account stored as Work. No account was added.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("closes after Retry save stores an added account", async () => {
+    const work = {
+      ...stored(KIND.anthropic),
+      credentialId: "credential-work",
+      label: "Work",
+    };
+    const { api, onDone } = addForm("anthropic", {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValue([stored(KIND.anthropic), { ...work, pendingSave: true }]),
+      retrySaveProviderAccount: vi
+        .fn()
+        .mockResolvedValue({ ...work, accountRef: "acct-2" }),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
+      AGENT,
+      "claude-subscription",
+    );
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("keeps Sign in offered after Retry save refreshes the original account", async () => {
+    const personal = stored(KIND.anthropic);
+    const { api, onDone } = addForm("anthropic", {
+      listProviderAccounts: vi
+        .fn()
+        .mockResolvedValue([personal, { ...personal, pendingSave: true }]),
+      retrySaveProviderAccount: vi.fn().mockResolvedValue(personal),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
+    expect(
+      await screen.findByText(
+        "This sign-in refreshed the account stored as Personal. No account was added.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Retry save" }),
+    ).not.toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+  });
+
+  it("refuses a label another account of the provider shows", async () => {
+    const { api } = addForm("anthropic", { claudeLogin: signedIn("added") });
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Account label"), " Personal ");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Personal");
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+  });
+
+  it.each(["openai", "anthropic", "grok"] as const)(
+    "adds another %s account",
+    async (provider) => {
+      const name =
+        provider === "openai"
+          ? "codexLogin"
+          : provider === "anthropic"
+            ? "claudeLogin"
+            : "grokLogin";
+      const { api, onDone } = addForm(provider, { [name]: signedIn("added") });
+      await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+      expect(login(api, provider)).toHaveBeenCalledWith(AGENT);
+      expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("setup save", () => {
