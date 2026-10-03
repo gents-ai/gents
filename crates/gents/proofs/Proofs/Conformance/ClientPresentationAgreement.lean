@@ -1,4 +1,5 @@
 import Proofs.ClientShell.PresentationAgreement
+import Proofs.ClientShell.Projection
 
 namespace Conformance.ClientPresentationAgreement
 
@@ -67,7 +68,35 @@ def PresentationCase.toJson (c : PresentationCase) : String :=
 def casesJson : String :=
   "[" ++ String.intercalate "," (cases.map PresentationCase.toJson) ++ "]"
 
+def recoveryKindJson (kind : RecoveryStatusKind) : String :=
+  jsonString (match kind with | .ready => "ready" | .waiting => "waiting")
+
+def recoveryActionJson : Option Unit → String
+  | none => "null"
+  | some _ => jsonString "required"
+
+def recoveryCaseJson (surface : String) (connected routeReady pairingPending : Bool) : String :=
+  let projected := if surface = "transport" then projectTransportRecovery connected
+    else projectRouteRecovery routeReady pairingPending
+  "{\"name\":" ++ jsonString s!"{surface}_{connected}_{routeReady}_{pairingPending}" ++
+    ",\"surface\":" ++ jsonString surface ++
+    ",\"connected\":" ++ toString connected ++
+    ",\"routeReady\":" ++ toString routeReady ++
+    ",\"pairingPending\":" ++ toString pairingPending ++
+    ",\"expected_kind\":" ++ recoveryKindJson projected.kind ++
+    ",\"expected_action\":" ++ recoveryActionJson projected.action ++ "}"
+
+def recoveryCasesJson : String :=
+  let transport := [false, true].map fun connected =>
+    recoveryCaseJson "transport" connected false false
+  let route := [false, true].flatMap fun ready => [false, true].map fun pairing =>
+    recoveryCaseJson "route" true ready pairing
+  "[" ++ String.intercalate "," (transport ++ route) ++ "]"
+
+def presentationAndRecoveryJson : String :=
+  "{\"presentationCases\":" ++ casesJson ++ ",\"recoveryCases\":" ++ recoveryCasesJson ++ "}"
+
 end Conformance.ClientPresentationAgreement
 
 def main : IO Unit :=
-  IO.println Conformance.ClientPresentationAgreement.casesJson
+  IO.println Conformance.ClientPresentationAgreement.presentationAndRecoveryJson
