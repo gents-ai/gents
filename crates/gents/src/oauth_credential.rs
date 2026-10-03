@@ -1013,6 +1013,9 @@ pub struct AccountSummary {
     /// The provider's default account ([`AccountPick::ProviderDefault`]).
     pub default: bool,
     pub access_token_expires_at: DateTime<Utc>,
+    /// When this sign-in took its slot; `None` for a row stored before the
+    /// field existed.
+    pub connected_at: Option<DateTime<Utc>>,
 }
 
 /// The account a principal OAuth backend runs on, among `accounts` (one
@@ -1034,6 +1037,96 @@ pub fn backend_account<'a>(
             .iter()
             .find(|account| account.provider == provider && account.account_ref == *account_ref),
     )
+}
+
+/// Whether the account a backend runs on can serve it. `Missing` covers an
+/// account removed from this node and one signed in on another node: stored
+/// rows cannot tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountState {
+    Enabled,
+    Disabled,
+    Missing,
+}
+
+impl AccountState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+            Self::Missing => "account not on this node",
+        }
+    }
+}
+
+impl Serialize for AccountState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// The account a backend runs on, as views show it: a label, never an
+/// identity or token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServingAccount {
+    pub label: String,
+    pub state: AccountState,
+    /// The sign-in provider of a principal OAuth backend.
+    #[serde(skip)]
+    pub provider: Option<&'static str>,
+}
+
+/// [`backend_account`] as a label and state. A backend that uses no account
+/// is its own account; one whose account is not on this node keeps its
+/// backend name, which for an added account is its label.
+pub fn serving_account(
+    backend: &crate::InferenceBackend,
+    accounts: &[AccountSummary],
+) -> ServingAccount {
+    let state = |enabled| {
+        if enabled {
+            AccountState::Enabled
+        } else {
+            AccountState::Disabled
+        }
+    };
+    use crate::backend_provider::BackendProviderOauthExt;
+    let provider = matches!(
+        backend.auth,
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
+    )
+    .then(|| backend.provider_kind.oauth_provider())
+    .flatten();
+    let (label, state) = match backend_account(backend, accounts) {
+        None => (backend.name.clone(), state(backend.enabled)),
+        Some(None) => (backend.name.clone(), AccountState::Missing),
+        Some(Some(account)) => (account.label.clone(), state(account.enabled)),
+    };
+    ServingAccount {
+        label,
+        state,
+        provider,
+    }
+}
+
+/// Where a profile can move instead: `provider`'s enabled accounts by label,
+/// or how to sign one in when there is none.
+pub fn enabled_accounts_note(provider: &str, accounts: &[AccountSummary]) -> String {
+    let product = sign_in_product(provider);
+    let name = product.as_ref().map_or(provider, |product| product.name);
+    let enabled: Vec<_> = accounts
+        .iter()
+        .filter(|account| account.provider == provider && account.enabled)
+        .map(|account| format!("{:?}", account.label))
+        .collect();
+    match (enabled.is_empty(), product) {
+        (false, _) => format!("enabled {name} accounts: {}", enabled.join(", ")),
+        (true, Some(product)) => format!(
+            "no enabled {name} account on this node; sign one in with `gents {}`",
+            product.login_command
+        ),
+        (true, None) => format!("no enabled {name} account on this node"),
+    }
 }
 
 /// The providers whose sign-ins are accounts: the ones a backend reads.
@@ -1103,6 +1196,7 @@ pub async fn list_accounts(
             enabled: row.enabled,
             default: defaults.contains(&row.credential_id),
             access_token_expires_at: row.access_token_expires_at,
+            connected_at: row.connected_at,
         })
         .collect())
 }
@@ -1499,6 +1593,25 @@ fn refresh_update_mutation(
     )
 }
 
+const MOVE_OFF_ACCOUNT: &str =
+    "Move a profile off it: gents config profile set-account <profile> <account> (gents accounts list).";
+
+/// `<Product> account "<label>" is <state>.` A label that reads as a provider
+/// limit or a context-length error is replaced by the product name: bearer
+/// errors reach the limit classifiers, and a label is free text.
+fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
+    let lower = label.to_ascii_lowercase();
+    let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
+        || lower.contains("context_length_exceeded")
+        || lower.contains("maximum context length")
+    {
+        product.name
+    } else {
+        label
+    };
+    format!("{} account \"{label}\" is {state}.", product.name)
+}
+
 pub struct DbCredentialBearer {
     node: Arc<EmbeddedNode>,
     agent_did: String,
@@ -1564,19 +1677,27 @@ impl DbCredentialBearer {
     }
 
     async fn load_credential(&self) -> Result<OAuthCredential> {
-        let credential = lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(classify_oauth_auth_error(
-                    &self.product,
-                    &self.agent_did,
-                    &self.provider,
-                    &OAuthAuthProblem::Missing,
-                ))
-            })?;
+        let Some(credential) =
+            lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id).await?
+        else {
+            let label = self.cached().await.map_or_else(
+                || self.product.name.to_owned(),
+                |cached| effective_account_label(&cached),
+            );
+            anyhow::bail!(
+                "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
+                 this one.",
+                account_failure(&self.product, &label, "removed from this node"),
+            );
+        };
         if !credential.enabled {
             anyhow::bail!(
-                "{}",
+                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                account_failure(
+                    &self.product,
+                    &effective_account_label(&credential),
+                    "disabled"
+                ),
                 classify_oauth_auth_error(
                     &self.product,
                     &self.agent_did,
@@ -1656,13 +1777,24 @@ impl DbCredentialBearer {
         Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
     }
 
-    fn auth_error(&self, problem: &OAuthAuthProblem) -> anyhow::Error {
-        anyhow::anyhow!(classify_oauth_auth_error(
-            &self.product,
-            &self.agent_did,
-            &self.provider,
-            problem,
-        ))
+    /// `credential` is the row being refreshed, never the cache: after a
+    /// remove and a new sign-in at this `credential_id` the cache can still
+    /// hold the removed account.
+    fn auth_error(
+        &self,
+        credential: &OAuthCredential,
+        problem: &OAuthAuthProblem,
+    ) -> anyhow::Error {
+        let state = match problem {
+            OAuthAuthProblem::Expired => "signed out (expired or revoked)",
+            OAuthAuthProblem::NotEntitled => "not entitled",
+            _ => "unusable",
+        };
+        anyhow::anyhow!(
+            "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+            account_failure(&self.product, &effective_account_label(credential), state),
+            classify_oauth_auth_error(&self.product, &self.agent_did, &self.provider, problem),
+        )
     }
 
     async fn refresh_tokens(
@@ -1740,14 +1872,14 @@ impl BearerSource for DbCredentialBearer {
 
         if let Some((failed_at, problem)) = last_failure.as_ref() {
             if failed_at.elapsed() < REFRESH_FAILURE_COOLDOWN {
-                return Err(self.auth_error(problem));
+                return Err(self.auth_error(&credential, problem));
             }
         }
 
         let refreshed = match self.refresh_tokens(&credential.refresh_token).await {
             Ok(refreshed) => refreshed,
             Err(problem) => {
-                let error = self.auth_error(&problem);
+                let error = self.auth_error(&credential, &problem);
                 *last_failure = Some((std::time::Instant::now(), problem));
                 return Err(error);
             }
@@ -2134,6 +2266,147 @@ mod tests {
             "tier gate should not push re-login as the fix: {msg}"
         );
         assert!(msg.contains("api.x.ai"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod serving_account_tests {
+    use super::*;
+    use crate::document_config::BackendAuth;
+
+    fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!(
+                "claude-subscription:did:key:z6MkTest{}",
+                account_ref.unwrap_or("")
+            ),
+            provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+            account_ref: account_ref.map(str::to_owned),
+            label: label.into(),
+            identity: Some("IDENTITY".into()),
+            plan: None,
+            enabled,
+            default: account_ref.is_none(),
+            access_token_expires_at: Utc::now(),
+            connected_at: None,
+        }
+    }
+
+    fn backend(
+        name: &str,
+        provider_kind: &str,
+        auth: BackendAuth,
+        enabled: bool,
+    ) -> crate::InferenceBackend {
+        serde_json::from_value(json!({
+            "agent_did": "did:key:z6MkTest", "backend_id": name, "name": name,
+            "provider_kind": provider_kind, "endpoint": "http://127.0.0.1:1/v1",
+            "auth": auth, "enabled": enabled,
+        }))
+        .unwrap()
+    }
+
+    fn oauth(account_ref: Option<&str>) -> BackendAuth {
+        BackendAuth::PrincipalOAuth {
+            account_ref: account_ref.map(str::to_owned),
+        }
+    }
+
+    fn accounts() -> Vec<AccountSummary> {
+        vec![
+            account(None, "Claude", true),
+            account(Some("acct-b"), "label-b", false),
+        ]
+    }
+
+    #[test]
+    fn an_account_backend_names_its_account() {
+        let original = backend("claude", "ClaudeCliSubscription", oauth(None), true);
+        assert_eq!(
+            serving_account(&original, &accounts()),
+            ServingAccount {
+                label: "Claude".into(),
+                state: AccountState::Enabled,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            }
+        );
+        let b = backend(
+            "label-b",
+            "ClaudeCliSubscription",
+            oauth(Some("acct-b")),
+            true,
+        );
+        assert_eq!(
+            serving_account(&b, &accounts()),
+            ServingAccount {
+                label: "label-b".into(),
+                state: AccountState::Disabled,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            }
+        );
+    }
+
+    #[test]
+    fn a_backend_whose_account_is_gone_is_missing_by_its_name() {
+        let gone = backend(
+            "label-gone",
+            "ClaudeCliSubscription",
+            oauth(Some("acct-other")),
+            true,
+        );
+        assert_eq!(
+            serving_account(&gone, &accounts()),
+            ServingAccount {
+                label: "label-gone".into(),
+                state: AccountState::Missing,
+                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            }
+        );
+    }
+
+    #[test]
+    fn an_api_key_backend_is_its_own_account() {
+        let key = BackendAuth::ApiKey {
+            key: "key-SECRET".into(),
+        };
+        for (enabled, state) in [
+            (true, AccountState::Enabled),
+            (false, AccountState::Disabled),
+        ] {
+            let api = backend("OpenAI", "OpenAiCompatible", key.clone(), enabled);
+            assert_eq!(
+                serving_account(&api, &accounts()),
+                ServingAccount {
+                    label: "OpenAI".into(),
+                    state,
+                    provider: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_serving_account_holds_no_identity() {
+        for backend in [
+            backend("claude", "ClaudeCliSubscription", oauth(None), true),
+            backend(
+                "label-gone",
+                "ClaudeCliSubscription",
+                oauth(Some("acct-other")),
+                true,
+            ),
+        ] {
+            let json = serde_json::to_value(serving_account(&backend, &accounts())).unwrap();
+            let text = json.to_string();
+            assert!(
+                !text.contains("IDENTITY") && !text.contains("SECRET"),
+                "{text}"
+            );
+            assert_eq!(
+                json["state"],
+                serving_account(&backend, &accounts()).state.as_str()
+            );
+        }
     }
 }
 
@@ -4093,7 +4366,10 @@ mod backfill_tests {
 
 #[cfg(test)]
 mod cooldown_tests {
-    use super::test_support::{one_shot_token_server, seed_credential, test_node, TOKEN_URL_ENV};
+    use super::test_support::{
+        one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
+        TOKEN_URL_ENV,
+    };
     use super::*;
 
     /// A failed refresh is served from the cooldown on the next call instead
@@ -4175,6 +4451,223 @@ mod cooldown_tests {
             "{first}"
         );
         assert_eq!(first.to_string(), second.to_string());
+    }
+
+    fn grok_bearer(node: Arc<EmbeddedNode>, did: &str) -> DbCredentialBearer {
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        DbCredentialBearer::new(
+            node,
+            did,
+            provider,
+            oauth_credential_id(did, provider),
+            true,
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        )
+    }
+
+    async fn set_label(node: &EmbeddedNode, did: &str, label: Option<&str>) {
+        let credential_id = oauth_credential_id(did, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER);
+        let mutation = format!(
+            r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
+            gents_protocol::graphql::nullable_string_field("label", label),
+        );
+        crate::config_client::ConfigAccess::write_local(node, "test.label", &mutation)
+            .await
+            .unwrap();
+    }
+
+    /// A refresh against a one-shot 401 `invalid_grant` endpoint, then a
+    /// second call inside the cooldown; returns both errors and the request.
+    async fn revoked_twice(bearer: &DbCredentialBearer) -> (String, String, String) {
+        let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
+        let _env = TOKEN_URL_ENV.lock().await;
+        std::env::set_var(
+            crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            &url,
+        );
+        let first = bearer.current_bearer().await.expect_err("revoked");
+        let request = handle.await.expect("server");
+        let second = bearer.current_bearer().await.expect_err("cooldown");
+        std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        (first.to_string(), second.to_string(), request)
+    }
+
+    #[tokio::test]
+    async fn a_revoked_refresh_names_the_account() {
+        for (label, named) in [(Some("label-a"), "label-a"), (None, "Grok")] {
+            let node = Arc::new(test_node().await);
+            let did = "did:key:z6MkTestRevokedNamed";
+            let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+            seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+            set_label(&node, did, label).await;
+            let (first, second, _) = revoked_twice(&grok_bearer(node, did)).await;
+            for error in [&first, &second] {
+                assert!(
+                    error.starts_with(&format!(
+                        "Grok account \"{named}\" is signed out (expired or revoked)"
+                    )),
+                    "{error}"
+                );
+                assert!(error.contains("is expired or revoked"), "{error}");
+                assert!(
+                    error.contains("gents config profile set-account"),
+                    "{error}"
+                );
+                assert!(
+                    !error.contains("SECRET") && !error.contains("IDENTITY"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_revoked_refresh_never_uses_another_account() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestRevokedOther";
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+        let mut other = lookup_oauth_credential_by_id(&node, &oauth_credential_id(did, provider))
+            .await
+            .unwrap()
+            .unwrap();
+        other.doc_id = None;
+        other.credential_id = format!("{}:acct-b", other.credential_id);
+        other.account_ref = Some("acct-b".into());
+        other.refresh_token = "refresh-B".into();
+        other.access_token_expires_at = Utc::now() + Duration::hours(1);
+        upsert_oauth_credential(&node, &other).await.unwrap();
+        let (_, _, request) = revoked_twice(&grok_bearer(node, did)).await;
+        assert!(request.contains("refresh-TEST"), "{request}");
+        assert!(!request.contains("refresh-B"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn a_reused_slot_names_the_new_account() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestReusedSlot";
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let credential_id = oauth_credential_id(did, provider);
+        seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+        set_label(&node, did, Some("label-a")).await;
+        let cached = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let bearer = DbCredentialBearer::with_cache(
+            node.clone(),
+            did,
+            provider,
+            credential_id.clone(),
+            true,
+            Some(cached),
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        );
+        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        access
+            .transact("test.remove", |txn| {
+                let credential_id = credential_id.clone();
+                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+            })
+            .await
+            .unwrap();
+        seed_credential_with_refresh_token(
+            &node,
+            did,
+            provider,
+            Utc::now() - Duration::minutes(1),
+            "refresh-NEW",
+        )
+        .await;
+        set_label(&node, did, Some("label-new")).await;
+        let (first, _, request) = revoked_twice(&bearer).await;
+        assert!(request.contains("refresh-NEW"), "{request}");
+        assert!(first.contains("\"label-new\""), "{first}");
+        assert!(
+            !first.contains("label-a") && !first.contains("removed"),
+            "{first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_disabled_or_removed_row_names_the_account() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkTestDisabledNamed";
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let credential_id = oauth_credential_id(did, provider);
+        seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+        set_label(&node, did, Some("label-a")).await;
+        let cached = lookup_oauth_credential_by_id(&node, &credential_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let bearer = DbCredentialBearer::with_cache(
+            node.clone(),
+            did,
+            provider,
+            credential_id.clone(),
+            true,
+            Some(cached),
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        );
+        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        set_account_enabled(&access, did, &credential_id, false)
+            .await
+            .unwrap();
+        let disabled = bearer
+            .current_bearer()
+            .await
+            .expect_err("disabled")
+            .to_string();
+        assert!(
+            disabled.starts_with("Grok account \"label-a\" is disabled"),
+            "{disabled}"
+        );
+        assert!(disabled.contains("set-account"), "{disabled}");
+
+        access
+            .transact("test.remove", |txn| {
+                let credential_id = credential_id.clone();
+                Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
+            })
+            .await
+            .unwrap();
+        let removed = bearer
+            .current_bearer()
+            .await
+            .expect_err("removed")
+            .to_string();
+        assert!(
+            removed.starts_with("Grok account \"label-a\" is removed from this node"),
+            "{removed}"
+        );
+        assert!(removed.contains("set-account"), "{removed}");
+        assert!(removed.contains("adds a new account"), "{removed}");
+        assert!(
+            !removed.contains(XAI_OAUTH_PRODUCT.login_command),
+            "{removed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_limit_like_label_is_not_a_limit() {
+        for label in ["usage limit", "maximum context length"] {
+            let node = Arc::new(test_node().await);
+            let did = "did:key:z6MkTestLimitLabel";
+            let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+            seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+            set_label(&node, did, Some(label)).await;
+            let (first, _, _) = revoked_twice(&grok_bearer(node, did)).await;
+            assert!(first.starts_with("Grok account \"Grok\""), "{first}");
+            assert!(!first.contains(label), "{first}");
+            assert!(
+                gents_loop::provider_limit::classify_provider_limit(&first, Utc::now()).is_none(),
+                "{first}"
+            );
+        }
     }
 }
 

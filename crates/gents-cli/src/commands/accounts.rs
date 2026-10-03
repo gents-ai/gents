@@ -111,13 +111,13 @@ async fn target_access(target: &AccountsTargetArgs) -> Result<(crate::CommandAcc
 }
 
 /// The principal's accounts and the configuration that uses them.
-struct Snapshot {
-    accounts: Vec<AccountSummary>,
-    backends: Vec<InferenceBackend>,
-    profiles: Vec<InferenceProfile>,
+pub(crate) struct Snapshot {
+    pub(crate) accounts: Vec<AccountSummary>,
+    pub(crate) backends: Vec<InferenceBackend>,
+    pub(crate) profiles: Vec<InferenceProfile>,
 }
 
-async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
+pub(crate) async fn snapshot(access: &ConfigAccess, agent_did: &str) -> Result<Snapshot> {
     let accounts = gents::oauth_credential::list_accounts(access, agent_did).await?;
     let (backends, profiles) = access
         .transact("accounts.config", |txn| {
@@ -162,7 +162,7 @@ impl Snapshot {
 
     /// The one account `needle` (label, `credential_id` or `account_ref`)
     /// names, among `provider`'s when given.
-    fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
+    pub(crate) fn pick(&self, needle: &str, provider: Option<&str>) -> Result<&AccountSummary> {
         let candidates: Vec<_> = self
             .accounts
             .iter()
@@ -239,7 +239,7 @@ pub(crate) async fn account_rows(
     for backend in &snapshot.backends {
         let status = match backend_account(backend, &snapshot.accounts) {
             Some(Some(_)) => continue,
-            Some(None) => "account not on this node",
+            Some(None) => gents::oauth_credential::AccountState::Missing.as_str(),
             None if backend.enabled => "enabled",
             None => "disabled",
         };

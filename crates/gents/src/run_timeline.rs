@@ -720,6 +720,10 @@ pub struct TimelineInferenceCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+    /// Label of the account that served the call, resolved when read from
+    /// `backend_id`; absent when the call predates the serving sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// The proven state vocabulary recorded at one durable Goal version.
@@ -890,6 +894,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 queued_at: call.queued_at.clone(),
                 started_at: call.started_at.clone(),
                 ended_at: call.ended_at.clone(),
+                account: None,
             },
         ));
     }

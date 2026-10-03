@@ -1402,3 +1402,62 @@ fn login_commands_take_a_label_and_only_their_own_provider() {
         );
     }
 }
+
+#[test]
+fn profile_set_and_set_account_take_an_account() {
+    let set = |extra: &[&str]| {
+        let argv = [
+            &["gents", "config", "profile", "set", "--file", "f"][..],
+            extra,
+        ]
+        .concat();
+        match Cli::try_parse_from(&argv).map(|cli| cli.command) {
+            Ok(Command::Config {
+                command:
+                    ConfigCommand::Profile {
+                        command: InferenceProfileCommand::Set(args),
+                    },
+            }) => Ok((args.account, args.provider)),
+            Ok(_) => panic!("{argv:?} parsed as another command"),
+            Err(error) => Err(error),
+        }
+    };
+    assert_eq!(set(&[]).unwrap(), (None, None));
+    assert_eq!(
+        set(&["--account", "label-b"]).unwrap(),
+        (Some("label-b".into()), None)
+    );
+    assert_eq!(
+        set(&["--provider", "claude-subscription"]).unwrap(),
+        (None, Some("claude-subscription".into()))
+    );
+    assert_eq!(
+        set(&["--account", "label-b", "--provider", "claude-subscription"]).unwrap(),
+        (Some("label-b".into()), Some("claude-subscription".into()))
+    );
+    assert!(set(&["--provider", "unknown"]).is_err());
+
+    for extra in [&[][..], &["--provider", "claude-subscription"][..]] {
+        let argv = [
+            &["gents", "config", "profile", "set-account", "p", "label-b"][..],
+            extra,
+        ]
+        .concat();
+        let Command::Config {
+            command:
+                ConfigCommand::Profile {
+                    command: InferenceProfileCommand::SetAccount(args),
+                },
+        } = Cli::try_parse_from(&argv)
+            .unwrap_or_else(|error| panic!("{argv:?}: {error}"))
+            .command
+        else {
+            panic!("{argv:?} parsed as another command");
+        };
+        assert_eq!(
+            (args.profile.as_str(), args.account.as_str()),
+            ("p", "label-b")
+        );
+        assert_eq!(args.provider.is_some(), !extra.is_empty());
+    }
+}

@@ -511,6 +511,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_profiles_on_two_accounts_are_served_by_their_own() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        for (kind, wire, provider) in [
+            (
+                BackendProviderKind::ChatGptCodex,
+                crate::OpenAiWireApi::Responses,
+                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            ),
+            (
+                BackendProviderKind::XaiGrokOAuth,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            ),
+            (
+                BackendProviderKind::ClaudeCliSubscription,
+                crate::OpenAiWireApi::Responses,
+                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            ),
+        ] {
+            let on_a = test_behavior(kind, wire);
+            seed_oauth_account(node.as_ref(), &on_a, provider, None).await;
+            seed_oauth_account(node.as_ref(), &on_a, provider, Some("acct-b")).await;
+            let mut on_b = on_a.clone();
+            on_b.backend_auth = crate::document_config::BackendAuth::PrincipalOAuth {
+                account_ref: Some("acct-b".into()),
+            };
+            let original = crate::oauth_credential::oauth_credential_id(on_a.agent_did(), provider);
+            for (behavior, credential_id, token) in [
+                (&on_a, original.clone(), "access-original"),
+                (&on_b, format!("{original}:acct-b"), "access-acct-b"),
+            ] {
+                build_backend_client(node.clone(), behavior, "key", Duration::from_secs(5))
+                    .await
+                    .unwrap_or_else(|error| panic!("{kind:?} {credential_id}: {error:#}"));
+                let bearer = crate::oauth_credential::test_support::bound_bearer(&credential_id)
+                    .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
+                assert_eq!(bearer.current_bearer().await.unwrap(), token, "{kind:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
         let node = test_node().await;
         crate::migration::ensure_all_runtime_migrations(node.clone())
