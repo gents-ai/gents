@@ -82,42 +82,45 @@ export function FleetDashboard({
     return request;
   }
 
-  const enrollmentNotice = enrollmentRequests === null ? (
-    <section
-      aria-live="polite"
-      className="fleet-enrollment-pending"
-      data-testid="fleet-enrollment-pending"
-    >
-      <div>
-        <p className="eyebrow">Enrollment state unavailable</p>
-        <strong>Waiting for the signed enrollment state</strong>
-        <p className="muted">New enrollment is disabled until the database can be read.</p>
+  const enrollmentNotice =
+    enrollmentRequests === null ? (
+      <section
+        aria-live="polite"
+        className="fleet-enrollment-pending"
+        data-testid="fleet-enrollment-pending"
+      >
+        <div>
+          <p className="eyebrow">Enrollment state unavailable</p>
+          <strong>Waiting for the signed enrollment state</strong>
+          <p className="muted">
+            New enrollment is disabled until the database can be read.
+          </p>
+        </div>
+      </section>
+    ) : enrollmentRequests.length > 0 ? (
+      <div data-testid="fleet-enrollment-pending">
+        {enrollmentRequests.map((request) => (
+          <section
+            aria-live="polite"
+            className="fleet-enrollment-pending"
+            key={request.requestId}
+          >
+            <div>
+              <p className="eyebrow">Enrollment requested</p>
+              <strong>
+                {request.state === "approved"
+                  ? "Approval received · finishing secure route"
+                  : "Waiting for pairing request acceptance"}
+              </strong>
+              <p className="muted">
+                Request <span className="mono">{request.requestId}</span> ·
+                expires {request.expiresAt}
+              </p>
+            </div>
+          </section>
+        ))}
       </div>
-    </section>
-  ) : enrollmentRequests.length > 0 ? (
-    <div data-testid="fleet-enrollment-pending">
-      {enrollmentRequests.map((request) => (
-        <section
-          aria-live="polite"
-          className="fleet-enrollment-pending"
-          key={request.requestId}
-        >
-          <div>
-            <p className="eyebrow">Enrollment requested</p>
-            <strong>
-              {request.state === "approved"
-                ? "Approval received · finishing secure route"
-                : "Waiting for pairing request acceptance"}
-            </strong>
-            <p className="muted">
-              Request <span className="mono">{request.requestId}</span> · expires{" "}
-              {request.expiresAt}
-            </p>
-          </div>
-        </section>
-      ))}
-    </div>
-  ) : null;
+    ) : null;
   const enrollmentBlocked = enrollmentRequests === null;
 
   if (!hasDeployments) {

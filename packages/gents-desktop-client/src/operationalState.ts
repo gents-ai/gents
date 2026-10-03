@@ -18,8 +18,7 @@ export type OperationalStatusLayer =
   | "inference"
   | "reconcile";
 
-export type OperationalRecoveryAction =
-  "configureInference" | null;
+export type OperationalRecoveryAction = "configureInference" | null;
 
 /** Shared presentation-safe status. Surfaces choose density, not meaning. */
 export type OperationalStatus = {
@@ -87,22 +86,29 @@ function fallbackBehaviorId(deployment: DeploymentView): string | null {
   const principalDefault = deployment.agentPrincipal.defaultBehaviorId?.trim();
   if (
     principalDefault &&
-    deployment.behaviors.some((behavior) => behavior.behaviorId === principalDefault)
+    deployment.behaviors.some(
+      (behavior) => behavior.behaviorId === principalDefault,
+    )
   ) {
     return principalDefault;
   }
-  const markedDefault = deployment.behaviors.find((behavior) => behavior.isDefault);
+  const markedDefault = deployment.behaviors.find(
+    (behavior) => behavior.isDefault,
+  );
   if (markedDefault) {
     return markedDefault.behaviorId;
   }
   const conventional = `${deployment.agentDid}:default`;
   if (
-    deployment.behaviors.some((behavior) => behavior.behaviorId === conventional)
+    deployment.behaviors.some(
+      (behavior) => behavior.behaviorId === conventional,
+    )
   ) {
     return conventional;
   }
   return (
-    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ?? null
+    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ??
+    null
   );
 }
 
@@ -133,8 +139,7 @@ export function selectedBehaviorReadinessDecision(
   }
 
   const readiness = deployment.behaviorReadiness;
-  const behaviorId =
-    selectedBehaviorId ?? fallbackBehaviorId(deployment);
+  const behaviorId = selectedBehaviorId ?? fallbackBehaviorId(deployment);
   const replicaLag =
     readiness.source.state === "unknown" &&
     readiness.source.reason === "readiness_stale" &&
@@ -390,8 +395,7 @@ export function projectDeploymentOperationalState(
           detail: "No runtime configuration reconciliation is pending.",
         });
 
-  const behaviorBlocker =
-    behavior.kind === "ready" ? null : behavior;
+  const behaviorBlocker = behavior.kind === "ready" ? null : behavior;
   const admissionBlocker =
     transport.kind !== "ready"
       ? transport
@@ -464,11 +468,7 @@ export function projectClientOperationalStatus(
 }
 
 export type SyncHealthStateName =
-  | "healthy"
-  | "syncing"
-  | "offline"
-  | "failed"
-  | "incompatible";
+  "healthy" | "syncing" | "offline" | "failed" | "incompatible";
 
 export function syncHealthState(
   syncHealth: SyncHealthView | null | undefined,
@@ -520,9 +520,7 @@ export function projectSyncOperationalStatus(
     reason: state,
     label,
     shortLabel: state === "healthy" ? "Sync healthy" : label,
-    detail:
-      syncHealth?.lastError ??
-      `Database synchronization is ${state}.`,
+    detail: syncHealth?.lastError ?? `Database synchronization is ${state}.`,
   });
 }
 
