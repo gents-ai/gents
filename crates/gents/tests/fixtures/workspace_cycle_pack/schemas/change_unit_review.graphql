@@ -1,6 +1,9 @@
 type ChangeUnitReview {
   review_id: String @index(unique: true) @immutable
   work_unit_id: String @index @immutable
+  handoff_id: String @index @immutable
+  reply_session_id: String @index @immutable
+  attempt: Int @immutable
   implementation_id: String @immutable
   workspace_id: String @immutable
   writer_receipt_id: String @immutable
