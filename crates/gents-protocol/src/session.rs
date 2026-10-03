@@ -4,18 +4,18 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One session, owned by a principal and derived from one behavior.
+/// One session, owned by a node and derived from one agent.
 /// `_docID` and revision metadata belong to the database envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSession {
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     /// Exact requester scope; absence is not a wildcard or a grant of access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// The only configuration selection. Context and inference resolve through it.
-    pub behavior_id: String,
+    pub agent_id: String,
     /// Original session creation time, unchanged by resume or later requests.
     pub created_at: String,
     /// Explicit close time; absent for an open session. Reopening clears it.
@@ -91,7 +91,7 @@ pub enum SessionTitleSource {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SessionProvenance {
-    /// Task invoked to create this session, scoped to the session's agent_did.
+    /// Task invoked to create this session, scoped to the session's node_did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub task_id: Option<String>,
