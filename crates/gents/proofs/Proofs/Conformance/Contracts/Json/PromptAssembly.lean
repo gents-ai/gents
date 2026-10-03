@@ -8,6 +8,13 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
+def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun row =>
+  "{\"name\":" ++ jsonString row.name ++ ",\"codex\":" ++ toString row.codex ++
+  ",\"main\":" ++ toString row.main ++ ",\"session\":" ++ jsonOptionalString row.session ++
+  ",\"responses\":" ++ jsonArray (row.responses.map (jsonOptionalString)) ++
+  ",\"expected_session\":" ++ jsonOptionalString row.expected.session ++
+  ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
+
 def currentInputCaseJson (witness : CurrentInputCase) : String :=
   "{\"name\":" ++ jsonString witness.name ++
   ",\"current_request\":" ++ jsonString witness.currentRequest ++

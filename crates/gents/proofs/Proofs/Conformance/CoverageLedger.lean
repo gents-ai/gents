@@ -1524,6 +1524,11 @@ def caseCoverage : List CoverageEntry :=
       "CompactionCursorCases"
       "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
       "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "routing_affinity_cases"
+      "RoutingAffinityCases"
+      "chatgpt_codex::tests::routing_affinity_matches_lean_owner")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "current_input_cases"
       "CurrentInputCases"

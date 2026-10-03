@@ -41,6 +41,7 @@ pub(super) struct ScriptedModel {
     /// `RenderedRequestCapturingHttpClient`.
     capture_requests: bool,
     stream_entry_gate: Option<Arc<StreamEntryGate>>,
+    provider_observer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
 }
 
 impl ScriptedModel {
@@ -62,7 +63,16 @@ impl ScriptedModel {
             stall_after_chunks: false,
             capture_requests: true,
             stream_entry_gate: None,
+            provider_observer: None,
         }
+    }
+
+    pub(super) fn with_provider_observer(
+        mut self,
+        observer: Arc<dyn Fn(bool) + Send + Sync>,
+    ) -> Self {
+        self.provider_observer = Some(observer);
+        self
     }
 
     pub(super) fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
@@ -125,6 +135,9 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        if let Some(observer) = &self.provider_observer {
+            observer(true);
+        }
         if let Some(gate) = &self.stream_entry_gate {
             gate.entered.notify_one();
             gate.release.notified().await;
@@ -166,7 +179,14 @@ impl CompletionModel for ScriptedModel {
         } else {
             Box::pin(stream::iter(items))
         };
-        Ok(StreamingCompletionResponse::stream(inner))
+        let observer = self.provider_observer.clone();
+        let inner = inner.map(move |item| {
+            if let Some(observer) = &observer {
+                observer(false);
+            }
+            item
+        });
+        Ok(StreamingCompletionResponse::stream(Box::pin(inner)))
     }
 }
 
