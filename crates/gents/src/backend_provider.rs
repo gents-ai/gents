@@ -117,7 +117,10 @@ impl OpenAiModelRecord {
     }
 
     /// Preserve provider-advertised limits without inferring them from model IDs.
-    fn into_advertised(self, kind: BackendProviderKind) -> Option<AdvertisedModel> {
+    /// `xai_api`: an `OpenAiCompatible` backend at the xAI API endpoint, whose
+    /// `/v1/models` advertises `capabilities.reasoning_effort` exactly for the
+    /// models that accept an effort (absent means none) and `context_length`.
+    fn into_advertised(self, kind: BackendProviderKind, xai_api: bool) -> Option<AdvertisedModel> {
         let reasoning_efforts = if kind == BackendProviderKind::ClaudeCliSubscription {
             self.capabilities.as_ref().map(|caps| {
                 ["low", "medium", "high", "xhigh", "max"]
@@ -126,6 +129,17 @@ impl OpenAiModelRecord {
                     .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
                     .collect()
             })
+        } else if xai_api {
+            Some(
+                self.capabilities
+                    .as_ref()
+                    .and_then(|caps| caps["reasoning_effort"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .collect(),
+            )
         } else {
             None
         };
@@ -142,7 +156,7 @@ impl OpenAiModelRecord {
             },
             if kind == BackendProviderKind::XaiGrokOAuth {
                 self.context_window
-            } else if kind == BackendProviderKind::OpenRouter {
+            } else if kind == BackendProviderKind::OpenRouter || xai_api {
                 self.context_length
             } else if kind == BackendProviderKind::OpenAiCompatible {
                 self.max_model_len
@@ -247,6 +261,8 @@ pub async fn discover_models(
     api_key: Option<&str>,
     oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
+    let xai_api = kind == BackendProviderKind::OpenAiCompatible
+        && crate::inference_setup::is_xai_api_endpoint(endpoint);
     let endpoint = match kind {
         BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
         BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
@@ -380,7 +396,7 @@ pub async fn discover_models(
         let openai_models = models
             .data
             .into_iter()
-            .filter_map(|model| model.into_advertised(kind));
+            .filter_map(|model| model.into_advertised(kind, xai_api));
         let chatgpt_codex_models = models
             .models
             .into_iter()
@@ -432,7 +448,7 @@ mod tests {
         }))
         .unwrap();
         let advertised = router
-            .into_advertised(BackendProviderKind::OpenRouter)
+            .into_advertised(BackendProviderKind::OpenRouter, false)
             .unwrap();
         assert_eq!(advertised.context_window, Some(128000));
         assert_eq!(advertised.max_output_tokens, Some(4096));
@@ -442,11 +458,58 @@ mod tests {
         .unwrap();
         assert_eq!(
             local
-                .into_advertised(BackendProviderKind::OpenAiCompatible)
+                .into_advertised(BackendProviderKind::OpenAiCompatible, false)
                 .unwrap()
                 .context_window,
             Some(1048576)
         );
+    }
+
+    #[test]
+    fn xai_api_catalog_records_effort_lists_and_context_length() {
+        use crate::config::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+        let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
+        let grok_4_3 = || {
+            record(serde_json::json!({
+                "id":"grok-4.3", "object":"model", "context_length":1000000,
+                "capabilities":{"reasoning_effort":["none","low","medium","high","xhigh"],
+                    "default_reasoning_effort":"low"}
+            }))
+        };
+        let grok_4_5 = record(serde_json::json!({
+            "id":"grok-4.5", "object":"model", "context_length":2000000,
+            "capabilities":{"reasoning_effort":["low","medium","high","xhigh"],
+                "default_reasoning_effort":"high"}
+        }));
+        let grok_4_20 = record(serde_json::json!({
+            "id":"grok-4.20-0309-reasoning", "object":"model", "context_length":2000000
+        }));
+        let xai = |record: OpenAiModelRecord| {
+            record
+                .into_advertised(BackendProviderKind::OpenAiCompatible, true)
+                .unwrap()
+        };
+        let advertised = xai(grok_4_3());
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Off, Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(1000000));
+        let advertised = xai(grok_4_5);
+        assert_eq!(
+            advertised.reasoning_efforts,
+            Some(vec![Low, Medium, High, XHigh])
+        );
+        assert_eq!(advertised.context_window, Some(2000000));
+        let advertised = xai(grok_4_20);
+        assert_eq!(advertised.reasoning_efforts, Some(vec![]));
+        assert_eq!(advertised.context_window, Some(2000000));
+
+        let other = grok_4_3()
+            .into_advertised(BackendProviderKind::OpenAiCompatible, false)
+            .unwrap();
+        assert_eq!(other.reasoning_efforts, None);
+        assert_eq!(other.context_window, None);
     }
 
     #[test]

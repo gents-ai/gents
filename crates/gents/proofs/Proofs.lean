@@ -22,6 +22,7 @@ import Proofs.CanonicalOutput
 import Proofs.StreamingResponse.ReasoningAudit
 import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.PromptAssembly.ClaudeWire
+import Proofs.PromptAssembly.ResponsesStorage
 import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture

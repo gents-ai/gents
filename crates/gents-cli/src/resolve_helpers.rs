@@ -173,6 +173,51 @@ mod tests {
         assert_eq!(resolved.openai_wire_api, Some(OpenAiWireApi::Responses));
     }
 
+    fn xai_preset() -> BackendPresetArg {
+        <BackendPresetArg as clap::ValueEnum>::from_str("xai", false).expect("xai preset")
+    }
+
+    #[test]
+    fn xai_preset_resolves_the_xai_responses_backend() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(xai_preset()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve xai preset");
+
+        assert_eq!(resolved.endpoint, "https://api.x.ai/v1");
+        assert_eq!(
+            resolved.provider_kind,
+            BackendProviderKind::OpenAiCompatible
+        );
+        assert_eq!(resolved.openai_wire_api, Some(OpenAiWireApi::Responses));
+        assert_eq!(resolved.api_key_env_var.as_deref(), Some("XAI_API_KEY"));
+    }
+
+    #[test]
+    fn explicit_wire_api_overrides_xai_preset() {
+        let resolved = resolve_backend_config_with_preset(
+            Some(xai_preset()),
+            None,
+            None,
+            Some(OpenAiWireApiArg::ChatCompletions),
+            None,
+            None,
+            BackendResolutionMode::ConfigWrite,
+        )
+        .expect("resolve xai preset");
+
+        assert_eq!(
+            resolved.openai_wire_api,
+            Some(OpenAiWireApi::ChatCompletions)
+        );
+    }
+
     #[test]
     fn generic_openai_compatible_omits_wire_api_by_default() {
         let resolved = resolve_backend_config_with_preset(
