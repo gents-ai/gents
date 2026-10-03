@@ -130,9 +130,11 @@ describe("Add agent enrollment", () => {
       render(<AgentsScreen shell={shell} />);
       await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
       expect(
-        screen.queryByRole("menuitem", { name: "Remove" }),
+        await screen.findByRole("menuitem", { name: "Rename" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("menuitem", { name: "Remove peer" }),
       ).not.toBeInTheDocument();
-      expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
     },
   );
 
@@ -140,7 +142,9 @@ describe("Add agent enrollment", () => {
     const { shell } = fleet([remote]);
     render(<AgentsScreen shell={shell} />);
     await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
-    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("menuitem", { name: "Remove peer" }),
+    ).toBeInTheDocument();
   });
 
   it("retains initial remote enrollment", async () => {
