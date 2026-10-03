@@ -226,7 +226,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{
             update_AgentRequest(
-                filter: {{
+                docID: "{doc_id}", filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     agent_did: {{ _eq: "{agent_did}" }},
                     lifecycle_state: {{ _eq: "pending" }}

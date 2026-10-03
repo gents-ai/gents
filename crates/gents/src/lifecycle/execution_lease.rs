@@ -39,7 +39,7 @@ impl Drop for RequestLifecycle {
             let expired = (Utc::now() - chrono::Duration::milliseconds(1)).to_rfc3339();
             let active = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing]);
             let mutation = format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
+                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
                     lifecycle_state: {{ _in: {active} }} }},
                 input: {{ execution_lease_expires_at: "{expired}" }}
             ) {{ _docID }} }}"#);
@@ -519,7 +519,7 @@ async fn terminalize_execution_with_time(
             let target = escape_graphql_string(effective_outcome.request_state().as_str());
             let state = escape_graphql_string(state.as_str());
             let mutation = format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
+                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
                     execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
                 input: {{ lifecycle_state: "{target}", execution_generation: "{next_generation}",
                     execution_lease_expires_at: "{timestamp_gql}", failure_reason: "{reason}",
