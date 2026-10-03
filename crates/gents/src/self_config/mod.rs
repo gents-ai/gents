@@ -18,8 +18,9 @@ mod tests;
 mod text_tests;
 
 pub use ops::{
-    apply_tool_grant_selection, guard_behavior_keeps_reach, guard_tools_keep_control,
-    validate_tool_network_selection, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
+    apply_tool_grant_selection, guard_backend_auth, guard_backend_choice,
+    guard_behavior_keeps_reach, guard_tools_keep_control, validate_tool_network_selection,
+    PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -209,7 +210,38 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
     request.guard = Box::new(|_, stored, merged| guard_behavior_keeps_reach(stored, merged));
+    fence_profile_pick(&mut request);
     request
+}
+/// An `inference_profile_id` pick may not switch accounts of one provider.
+/// Unset (compaction only) reuses the behavior's profile.
+fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
+    request.validate = Box::new(|txn, anchor, stored, merged| {
+        Box::pin(async move {
+            let Some(next) = merged.get("inference_profile_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let current = stored.get("inference_profile_id").and_then(Value::as_str);
+            if current == Some(next) {
+                return Ok(());
+            }
+            let owner = merged
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("document is missing agent_did")?;
+            let current_backend = match current {
+                Some(id) => Some(ops::profile_backend_id(txn, owner, id).await?),
+                None => anchor
+                    .profile
+                    .get("backend_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            };
+            let next_backend = ops::profile_backend_id(txn, owner, next).await?;
+            ops::guard_backend_choice_in_txn(txn, owner, current_backend.as_deref(), &next_backend)
+                .await
+        })
+    });
 }
 
 /// Model-facing patches may target any owned behavior, including the invoking
@@ -283,6 +315,7 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
                     .await?;
                 require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
             }
+            ops::guard_compaction_choice_in_txn(txn, target, anchor, stored, merged).await?;
             validation.await
         })
     });
@@ -413,11 +446,32 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
     }
 }
 fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    anchored_request(
+    let mut request = anchored_request(
         SelfConfigTarget::InferenceProfile,
         "inference_profile_id",
         patch,
-    )
+    );
+    fence_profile_backend(&mut request);
+    request
+}
+/// A profile's backend selection may not switch accounts of one provider.
+fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
+    request.validate = Box::new(|txn, _, stored, merged| {
+        Box::pin(async move {
+            let Some(next) = merged.get("backend_id").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let current = stored.get("backend_id").and_then(Value::as_str);
+            if current == Some(next) {
+                return Ok(());
+            }
+            let owner = merged
+                .get("agent_did")
+                .and_then(Value::as_str)
+                .context("profile is missing agent_did")?;
+            ops::guard_backend_choice_in_txn(txn, owner, current, next).await
+        })
+    });
 }
 fn profile_create_request(
     owner: String,
@@ -434,6 +488,7 @@ fn profile_create_request(
         merged.insert("agent_did".into(), json!(owner));
         Ok(())
     });
+    fence_profile_backend(&mut request);
     request
 }
 fn profile_target_request(
@@ -451,7 +506,12 @@ fn profile_target_request(
             "retry_policy_id",
             patch,
         ),
-        "compaction" => anchored_request(SelfConfigTarget::Compaction, "compaction_id", patch),
+        "compaction" => {
+            let mut request =
+                anchored_request(SelfConfigTarget::Compaction, "compaction_id", patch);
+            fence_profile_pick(&mut request);
+            request
+        }
         other => bail!("unknown profile target {other:?}"),
     })
 }
@@ -462,16 +522,7 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         let stored = stored.clone();
         Box::pin(async move {
             let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
-            if matches!(
-                backend.auth,
-                crate::document_config::BackendAuth::ApiKey { .. }
-            ) {
-                let previous: crate::InferenceBackend = decode_merged("InferenceBackend", &stored)?;
-                anyhow::ensure!(
-                    backend.auth == previous.auth,
-                    "raw API keys are operator-managed; select an environment or OAuth reference"
-                );
-            }
+            guard_backend_auth(&stored, &merged)?;
             backend.validate()
         })
     });
@@ -1082,7 +1133,33 @@ async fn persona_preview(
         make_default: args.make_default,
         ..Default::default()
     };
-    let verdict = decide_persona_request(&doc, &catalog);
+    let mut verdict = decide_persona_request(&doc, &catalog);
+    if matches!(verdict, PersonaVerdict::Admit) {
+        let current_behavior = matches!(op, PersonaOp::Edit)
+            .then_some(args.behavior_id.as_deref())
+            .flatten();
+        let next_profile = args.profile_id.value();
+        let actor = ::identity::Did::new(agent_did.to_owned())
+            .context("self-config principal DID is not ACP-addressable")?;
+        if let Err(error) = crate::config_client::ConfigAccess::transact_local(
+            node,
+            Some(actor),
+            "self_config.preview_persona_profile_choice",
+            |txn| {
+                Box::pin(guard_persona_profile_choice(
+                    txn,
+                    agent_did,
+                    current_behavior,
+                    clone_from.as_deref(),
+                    next_profile,
+                ))
+            },
+        )
+        .await
+        {
+            verdict = PersonaVerdict::Reject(format!("{error:#}"));
+        }
+    }
     let rejection = match &verdict {
         PersonaVerdict::Admit => None,
         PersonaVerdict::Reject(detail) => Some(detail.clone()),
@@ -1153,6 +1230,69 @@ async fn persona_preview(
         "process_ceiling": process_ceiling,
     }
     .pretty()
+}
+
+/// Create and clone have no current backend; edit's is the target behavior's.
+/// A clone also keeps its source's context, which moves its compaction from
+/// its own profile to whatever that context compacts on.
+async fn guard_persona_profile_choice(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    current_behavior: Option<&str>,
+    clone_from: Option<&str>,
+    next_profile: Option<&str>,
+) -> Result<()> {
+    let Some(next_profile) = next_profile else {
+        return Ok(());
+    };
+    let current_profile = match current_behavior {
+        Some(behavior_id) => {
+            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, behavior_id)
+                .await?
+                .and_then(|(_, doc)| {
+                    doc.get("inference_profile_id")?
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                })
+        }
+        None => None,
+    };
+    let current_backend = match current_profile {
+        Some(profile) => Some(ops::profile_backend_id(txn, agent_did, &profile).await?),
+        None => None,
+    };
+    let next_backend = ops::profile_backend_id(txn, agent_did, next_profile).await?;
+    ops::guard_backend_choice_in_txn(txn, agent_did, current_backend.as_deref(), &next_backend)
+        .await?;
+    let source = match clone_from {
+        Some(id) => {
+            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, id).await?
+        }
+        None => None,
+    };
+    let Some((_, source)) = source else {
+        return Ok(());
+    };
+    let own =
+        serde_json::Map::from_iter([("inference_profile_id".to_owned(), json!(next_profile))]);
+    let mut cloned = own.clone();
+    if let Some(context) = source.get("context_id") {
+        cloned.insert("context_id".to_owned(), context.clone());
+    }
+    let anchor = ops::BehaviorAnchor {
+        doc: source,
+        context: serde_json::Map::new(),
+        profile: serde_json::Map::new(),
+        execution: serde_json::Map::new(),
+    };
+    ops::guard_compaction_choice_in_txn(
+        txn,
+        SelfConfigTarget::AgentBehavior,
+        &anchor,
+        &own,
+        &cloned,
+    )
+    .await
 }
 
 async fn persona_mutate(
@@ -1244,13 +1384,28 @@ async fn persona_mutate(
     let mutation = local_persona_request_mutation(&record);
     let actor = ::identity::Did::new(identity.did().to_owned())
         .context("self-config principal DID is not ACP-addressable")?;
+    let current_behavior = (op == "edit")
+        .then_some(record.behavior_id.as_deref())
+        .flatten();
     crate::config_client::ConfigAccess::transact_local(
         node,
         Some(actor),
         "self_config.create_persona_request",
         |txn| {
             let mutation = &mutation;
-            Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
+            let next_profile = record.profile_id.as_deref();
+            let clone_from = record.clone_from.as_deref();
+            Box::pin(async move {
+                guard_persona_profile_choice(
+                    txn,
+                    agent_did,
+                    current_behavior,
+                    clone_from,
+                    next_profile,
+                )
+                .await?;
+                txn.execute_local_response(mutation).await.map(|_| ())
+            })
         },
     )
     .await?;
@@ -1884,6 +2039,30 @@ impl PackInstaller {
         Ok((rollback, installed))
     }
 
+    /// Pack slots have no current backend: each bound profile must be
+    /// account-free or on its provider's default account.
+    async fn fence_bindings(
+        &self,
+        bindings: &crate::pack::PackInferenceBindings,
+    ) -> anyhow::Result<()> {
+        let owner = self.core.agent_did();
+        crate::config_client::ConfigAccess::transact_local(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.pack_profile_choice",
+            |txn| {
+                Box::pin(async move {
+                    for profile in bindings.values() {
+                        let backend = ops::profile_backend_id(txn, owner, profile).await?;
+                        ops::guard_backend_choice_in_txn(txn, owner, None, &backend).await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn preview(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
         let distribution = self.resolve(operation, &args).await?;
         if let Some(expected) = args.expected_digest.as_deref() {
@@ -1936,6 +2115,7 @@ impl PackInstaller {
             &args.inference_slots,
         )
         .await?;
+        self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
             agent_did: self.core.agent_did().to_owned(),
         };
@@ -2030,6 +2210,7 @@ impl PackInstaller {
             &args.inference_slots,
         )
         .await?;
+        self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
             agent_did: self.core.agent_did().to_owned(),
         };

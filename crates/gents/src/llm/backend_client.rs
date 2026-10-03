@@ -144,6 +144,17 @@ pub(crate) async fn build_backend_client(
     api_key: &str,
     build_timeout: Duration,
 ) -> Result<BackendClient> {
+    // Removed by the #2117 resolver PR: until then only the original account
+    // resolves, and it must never stand in for a named one.
+    if let crate::document_config::BackendAuth::PrincipalOAuth {
+        account_ref: Some(account_ref),
+    } = &behavior.backend_auth
+    {
+        anyhow::bail!(
+            "backend account {account_ref:?} for behavior {}: account references require the multi-account resolver",
+            behavior.behavior_id
+        );
+    }
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
             let build_context = format!(
@@ -423,6 +434,35 @@ mod tests {
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await
             .expect("test OAuthCredential must persist");
+    }
+
+    #[tokio::test]
+    async fn backend_account_reference_fails_closed_before_the_original_credential() {
+        let node = test_node().await;
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let mut codex = test_behavior(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+        );
+        seed_oauth_credential(
+            node.as_ref(),
+            &codex,
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await;
+        codex.backend_auth = crate::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-b".into()),
+        };
+        let error = build_backend_client(node, &codex, "key", Duration::from_secs(5))
+            .await
+            .err()
+            .expect("an account reference must not build with the original credential");
+        assert!(
+            format!("{error:#}").contains("account references require the multi-account resolver"),
+            "{error:#}"
+        );
     }
 
     /// Seed credentials so every OAuth route reaches a concrete client. A

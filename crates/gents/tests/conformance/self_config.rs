@@ -1,7 +1,8 @@
 //! Generated field tables and patch results checked against the existing patch owner.
-//! Guarded rows replay the Lean no-lockout verdict through the production Tools
-//! guard. Reference validation and transactional rejection need an end-to-end
-//! ConfigApplyTxn consumer; this test does not simulate them.
+//! Guarded rows replay the Lean guard verdict through the production guard of
+//! their target (Tools and Behavior no-lockout, Backend auth, and the Profile
+//! account choice). Reference validation and transactional rejection need an
+//! end-to-end ConfigApplyTxn consumer; this test does not simulate them.
 use crate::lean_vocab_test::{
     lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
 };
@@ -115,16 +116,50 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 SelfConfigTarget::AgentBehavior => {
                     gents::self_config::guard_behavior_keeps_reach(&stored, &candidate)
                 }
-                other => panic!("{}: no no-lockout guard for {other:?}", case.name),
+                SelfConfigTarget::InferenceBackend => {
+                    gents::self_config::guard_backend_auth(&stored, &candidate)
+                }
+                SelfConfigTarget::InferenceProfile => {
+                    let backend = |doc: &Map<String, Value>| {
+                        let id = doc.get("backend_id")?;
+                        case.backends
+                            .iter()
+                            .find(|backend| &parse_nested(backend.backend_id.clone().into()) == id)
+                            .map(typed_backend)
+                    };
+                    match backend(&candidate) {
+                        Some(next) => gents::self_config::guard_backend_choice(
+                            backend(&stored).as_ref(),
+                            &next,
+                        ),
+                        None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                    }
+                }
+                other => panic!("{}: no runtime guard for {other:?}", case.name),
             };
             assert_eq!(
                 verdict.is_ok(),
                 case.accepted,
-                "{}: runtime no-lockout guard",
+                "{}: runtime guard",
                 case.name
             );
         }
     }
+}
+
+fn typed_backend(
+    backend: &crate::lean_vocab_test::LeanSelfConfigBackend,
+) -> gents::InferenceBackend {
+    let id = parse_nested(backend.backend_id.clone().into());
+    serde_json::from_value(serde_json::json!({
+        "agent_did": "did:key:agent-a",
+        "backend_id": id,
+        "name": id,
+        "provider_kind": backend.provider_kind,
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": parse_nested(Value::String(backend.auth.clone())),
+    }))
+    .unwrap_or_else(|error| panic!("{}: {error}", backend.backend_id))
 }
 
 /// Lean rows abstract nested Tools groups as their canonical JSON text.

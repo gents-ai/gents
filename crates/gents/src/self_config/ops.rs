@@ -22,7 +22,7 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::Tools;
+use crate::document_config::{BackendAuth, Tools};
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
@@ -773,6 +773,166 @@ pub fn guard_tools_keep_control(
         "no-lockout guard: self-config must keep the tools category"
     );
     Ok(())
+}
+/// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
+/// API key, and a principal-OAuth candidate keeps the stored account reference
+/// (none for a non-OAuth backend). A stored or candidate `auth` that does not
+/// decode is rejected.
+pub fn guard_backend_auth(
+    stored: &Map<String, Value>,
+    candidate: &Map<String, Value>,
+) -> Result<()> {
+    let auth = |doc: &Map<String, Value>| {
+        serde_json::from_value::<BackendAuth>(doc.get("auth").cloned().unwrap_or(Value::Null))
+            .map_err(|error| anyhow!("backend auth is not valid: {error}"))
+    };
+    let (stored, candidate) = (auth(stored)?, auth(candidate)?);
+    if matches!(candidate, BackendAuth::ApiKey { .. }) {
+        anyhow::ensure!(
+            candidate == stored,
+            "raw API keys are operator-managed; select an environment or OAuth reference"
+        );
+    }
+    if let BackendAuth::PrincipalOAuth { account_ref } = &candidate {
+        let stored_ref = match &stored {
+            BackendAuth::PrincipalOAuth { account_ref } => account_ref.as_ref(),
+            _ => None,
+        };
+        anyhow::ensure!(
+            account_ref.as_ref() == stored_ref,
+            "OAuth account references are operator-managed; keep the backend's account_ref as stored"
+        );
+    }
+    Ok(())
+}
+/// Lean `SelfConfig.backendChoiceAllowed`: whether a model selection may move
+/// from the `current` backend (none on create) to `next`.
+pub fn guard_backend_choice(
+    current: Option<&crate::InferenceBackend>,
+    next: &crate::InferenceBackend,
+) -> Result<()> {
+    let BackendAuth::PrincipalOAuth { account_ref } = &next.auth else {
+        return Ok(());
+    };
+    // The #2117 resolver replaces this with the provider's earliest-connected
+    // enabled account; until then the default is the original account.
+    let default_account: Option<&String> = None;
+    let allowed = match current {
+        Some(current) if current.provider_kind == next.provider_kind => current.auth == next.auth,
+        _ => account_ref.as_ref() == default_account,
+    };
+    anyhow::ensure!(
+        allowed,
+        "backend {} selects another {} account; keep the current account, or pick an account-free backend or another provider's default account",
+        next.backend_id,
+        next.provider_kind
+    );
+    Ok(())
+}
+/// [`guard_backend_choice`] over the owner's stored backends, inside the
+/// write transaction; `current_backend_id` is `None` on create.
+pub(crate) async fn guard_backend_choice_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    current_backend_id: Option<&str>,
+    next_backend_id: &str,
+) -> Result<()> {
+    let backend = |id: String| async move {
+        read_owned_doc(txn, SelfConfigTarget::InferenceBackend, owner, &id)
+            .await?
+            .map(|(_, doc)| crate::InferenceBackend::from_value(&Value::Object(doc)))
+            .transpose()
+    };
+    let current = match current_backend_id {
+        Some(id) => backend(id.to_owned()).await?,
+        None => None,
+    };
+    let next = backend(next_backend_id.to_owned())
+        .await?
+        .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
+    guard_backend_choice(current.as_ref(), &next)
+}
+/// Compaction summaries run on the compaction's profile, else the behavior's
+/// (`CompactionConfig::inference_profile_id`). A behavior `context_id` or a
+/// context `compaction_id` edit that moves that backend is a pick too.
+pub(crate) async fn guard_compaction_choice_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    anchor: &BehaviorAnchor,
+    stored: &Map<String, Value>,
+    merged: &Map<String, Value>,
+) -> Result<()> {
+    let field = |doc: &Map<String, Value>, name: &str| {
+        doc.get(name).and_then(Value::as_str).map(ToOwned::to_owned)
+    };
+    let owner = field(&anchor.doc, "agent_did").context("behavior is missing agent_did")?;
+    let read = |collection: SelfConfigTarget, id: Option<String>, name: &'static str| {
+        let owner = owner.clone();
+        async move {
+            Ok::<_, anyhow::Error>(match id {
+                Some(id) => read_owned_doc(txn, collection, &owner, &id)
+                    .await?
+                    .and_then(|(_, doc)| field(&doc, name)),
+                None => None,
+            })
+        }
+    };
+    let (current, next) = match target {
+        SelfConfigTarget::AgentContext => {
+            let profile = field(&anchor.doc, "inference_profile_id");
+            (
+                (field(stored, "compaction_id"), profile.clone()),
+                (field(merged, "compaction_id"), profile),
+            )
+        }
+        SelfConfigTarget::AgentBehavior => {
+            let context = |doc: &Map<String, Value>| {
+                read(
+                    SelfConfigTarget::AgentContext,
+                    field(doc, "context_id"),
+                    "compaction_id",
+                )
+            };
+            (
+                (
+                    context(stored).await?,
+                    field(stored, "inference_profile_id"),
+                ),
+                (
+                    context(merged).await?,
+                    field(merged, "inference_profile_id"),
+                ),
+            )
+        }
+        _ => return Ok(()),
+    };
+    if current == next {
+        return Ok(());
+    }
+    let backend = |(compaction, profile): (Option<String>, Option<String>)| async {
+        let profile = read(
+            SelfConfigTarget::Compaction,
+            compaction,
+            "inference_profile_id",
+        )
+        .await?
+        .or(profile)
+        .context("behavior inference profile is missing")?;
+        profile_backend_id(txn, &owner, &profile).await
+    };
+    let (current, next) = (backend(current).await?, backend(next).await?);
+    guard_backend_choice_in_txn(txn, &owner, Some(&current), &next).await
+}
+/// The backend an owned profile selects.
+pub(crate) async fn profile_backend_id(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    profile_id: &str,
+) -> Result<String> {
+    read_owned_doc(txn, SelfConfigTarget::InferenceProfile, owner, profile_id)
+        .await?
+        .and_then(|(_, doc)| doc.get("backend_id")?.as_str().map(ToOwned::to_owned))
+        .with_context(|| format!("InferenceProfile {profile_id:?} not found"))
 }
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
     let tools = decode_merged::<Tools>("Tools", merged)?;

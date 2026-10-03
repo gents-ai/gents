@@ -690,7 +690,7 @@ fn backend_config_view(
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
-        BackendAuth::PrincipalOAuth => ("principal_oauth", false, None),
+        BackendAuth::PrincipalOAuth { .. } => ("principal_oauth", false, None),
     };
     let advertised_models = match gents::config::backend_catalog(row, observation) {
         Ok(catalog) => catalog,
@@ -1048,7 +1048,7 @@ mod backend_config_view_tests {
         assert!(!serde_json::to_string(&view)
             .unwrap()
             .contains("NEVER-EXPORT-KEY"));
-        backend.auth = gents::document_config::BackendAuth::PrincipalOAuth;
+        backend.auth = gents::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"backend","catalogs":[
                 {"agent_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},

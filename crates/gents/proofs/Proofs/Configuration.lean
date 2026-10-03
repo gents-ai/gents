@@ -432,20 +432,22 @@ theorem omitted_context_capabilities_empty :
   exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- Auth is explicit. OAuth lookup uses the executing principal and existing
-credential owner; the backend contains no copied OAuth tokens or host identity. -/
+credential owner; the backend contains no copied OAuth tokens or host identity.
+A principal-OAuth `account` is an opaque, DID-free reference minted when an
+account is first stored; `none` is the provider's original account. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
   | environment (name : String)
-  | principalOAuth
+  | principalOAuth (account : Option String)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
-  | .principalOAuth => some scope
+  | .principalOAuth _ => some scope
   | _ => none
 
-theorem oauth_uses_execution_scope (scope : String) :
-    oauthLookupOwner scope .principalOAuth = some scope := rfl
+theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
+    oauthLookupOwner scope (.principalOAuth account) = some scope := rfl
 
 /-! ## Backend capacity defaults -/
 

@@ -76,7 +76,7 @@ async fn backend_check(
         ),
         "backend is disabled or has no healthy probe observation"
     );
-    if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
+    if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
     }
@@ -127,7 +127,7 @@ mod tests {
         let backend: InferenceBackend = serde_json::from_value(json!({
             "agent_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": BackendAuth::PrincipalOAuth,
+            "auth": BackendAuth::PrincipalOAuth { account_ref: None },
         }))
         .unwrap();
         for (owner, status) in [

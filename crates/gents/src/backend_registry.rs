@@ -107,7 +107,7 @@ impl InferenceBackend {
             }
             _ => {}
         }
-        if matches!(self.auth, BackendAuth::PrincipalOAuth)
+        if matches!(self.auth, BackendAuth::PrincipalOAuth { .. })
             != self.provider_kind.is_agent_scoped_oauth()
         {
             violations
@@ -125,7 +125,7 @@ impl InferenceBackend {
     /// Catalog authentication scope of this connection: `None` for shared
     /// credentials, the owning principal for principal OAuth.
     pub fn catalog_scope(&self) -> Option<&str> {
-        matches!(self.auth, BackendAuth::PrincipalOAuth).then_some(self.agent_did.as_str())
+        matches!(self.auth, BackendAuth::PrincipalOAuth { .. }).then_some(self.agent_did.as_str())
     }
 }
 
@@ -153,7 +153,7 @@ impl BackendAuth {
                 );
                 Ok(Some(key))
             }
-            Self::PrincipalOAuth => {
+            Self::PrincipalOAuth { .. } => {
                 anyhow::bail!("principal OAuth requires the invoking principal's OAuthCredential")
             }
         }
@@ -636,7 +636,7 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     for backend in backends {
         // Agent-scoped credential refresh and discovery remain with the existing
         // invoking-agent owner. A fleet scan cannot choose an OAuth principal.
-        if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
+        if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
             continue;
         }
         if let Err(error) = discover_shared_backend(node, &backend).await {

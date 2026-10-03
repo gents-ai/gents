@@ -1241,7 +1241,7 @@ fn wide_open_tools_id_for_agent(agent_did: &str) -> String {
 /// unauthenticated endpoint (local model server) stays explicit.
 fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
     if backend.provider_kind.is_agent_scoped_oauth() {
-        return Ok(BackendAuth::PrincipalOAuth);
+        return Ok(BackendAuth::PrincipalOAuth { account_ref: None });
     }
     match (
         backend.api_key.as_deref(),
@@ -2522,7 +2522,7 @@ mod tests {
         backend.api_key = Some("ignored".to_string());
         assert_eq!(
             backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::PrincipalOAuth
+            BackendAuth::PrincipalOAuth { account_ref: None }
         );
     }
 

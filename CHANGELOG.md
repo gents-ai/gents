@@ -281,6 +281,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- Subscription (principal OAuth) backends can carry an optional account
+  reference; without one they keep using the provider's original account.
+  Backends with a reference are refused at run time until multi-account
+  resolution lands. The model's config tool cannot set or change a backend's
+  account reference, and wherever it picks a profile or backend (profile,
+  behavior, compaction, persona and pack slot) it can keep the current
+  account, use an account-free backend, or move to another provider's default
+  account. Stored backends, profiles and config exports are unchanged (#2116).
+
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
   thread was waiting on, keep running and stay attached; an awaited subagent

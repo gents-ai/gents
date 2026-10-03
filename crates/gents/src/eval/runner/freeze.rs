@@ -733,7 +733,7 @@ async fn inference_binding(
             None => None,
         };
 
-    if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
+    if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
         return Err(refused(format!(
             "backend {:?} authenticates with principal_oauth; an eval run must not \
              spend the launching principal's subscription credential",

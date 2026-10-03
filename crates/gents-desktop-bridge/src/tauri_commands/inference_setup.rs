@@ -485,7 +485,7 @@ async fn publish_discovered_catalog(
     use gents::document_config::BackendAuth;
     let agent_did = request.agent_did.trim();
     let auth = match (spec.oauth_provider, api_key) {
-        (Some(_), _) => BackendAuth::PrincipalOAuth,
+        (Some(_), _) => BackendAuth::PrincipalOAuth { account_ref: None },
         (None, Some(key)) => BackendAuth::ApiKey {
             key: key.to_string(),
         },

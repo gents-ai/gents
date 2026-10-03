@@ -308,7 +308,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "behavior [preview] edit BEHAVIOR_ID  set/clear: behavior fields",
                 "behavior context get|preview|edit  options.behavior; set/clear: context fields",
             ],
-            notes: "Create derives behavior_id <DID>:<slug of display-name> (a collision appends -2) and returns it; it takes no id. The slug alone resolves wherever a behavior ID is accepted. Change the prompt through context update; set.system_prompt replaces it.",
+            notes: "Create derives behavior_id <DID>:<slug of display-name> (a collision appends -2) and returns it; it takes no id. The slug alone resolves wherever a behavior ID is accepted. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "give it tools ([\"help\",\"tools\"]) and test it in a fresh session.",
         },
         "tools" => Page {
@@ -325,7 +325,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "profile get PROFILE_ID",
                 "profile get|preview|edit [TARGET]  options.behavior; TARGET is profile (default), sampling, execution, retry-policy or compaction",
             ],
-            notes: "Create requires backend_id and model_name; it selects nothing. To change your future requests, update your current behavior’s inference_profile_id; cloning creates another role instead. Update profiles by exact ID. Editing a shared profile affects every behavior selecting it; create another profile for different settings, reusing backend and sampling. Without an ID, get/update use options.behavior to select the bound profile.",
+            notes: "Create requires backend_id and model_name; it selects nothing. To change your future requests, update your current behavior’s inference_profile_id; cloning creates another role instead. Update profiles by exact ID. Editing a shared profile affects every behavior selecting it; create another profile for different settings, reusing backend and sampling. Without an ID, get/update use options.behavior to select the bound profile. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "select a new profile with behavior update BEHAVIOR_ID and set.inference_profile_id.",
         },
         "backend" => Page {
@@ -371,7 +371,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
             ],
-            notes: "Bind every declared inference slot to an existing profile. A pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. A pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
             next: "run the installed graph with the graph tools.",
         },
         _ => return None,
