@@ -423,6 +423,111 @@ describe("configuration panels", () => {
     expect(screen.getByText("saved-model")).toBeVisible();
   });
 
+  describe("subscription backends and the account each references", () => {
+    const claudeBackend = (backendId: string, accountRef: string | null) => ({
+      ...deployment.inferenceBackends[0]!,
+      backendId,
+      name: backendId,
+      providerKind: "ClaudeCliSubscription" as const,
+      endpoint: "claude-cli://subscription",
+      accountRef,
+    });
+    const claudeDeployment = {
+      ...deployment,
+      inferenceBackends: [
+        claudeBackend("claude", null),
+        claudeBackend("claude-2", "acct-2"),
+        claudeBackend("claude-3", "acct-other"),
+      ],
+    };
+    const claudeAccount = (
+      credentialId: string,
+      accountRef: string | null,
+      accountId: string,
+      enabled = true,
+    ) => ({
+      credentialId,
+      agentDid: deployment.agentDid,
+      provider: "claude-subscription",
+      accountId,
+      planType: null,
+      accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+      lastRefresh: null,
+      enabled,
+      pendingSave: false,
+      accountRef,
+    });
+
+    it("never borrows another account for a backend in the list", async () => {
+      const { api, shell } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity", false),
+        claudeAccount("cred-2", "acct-2", "second-identity"),
+      ]);
+      render(<InferencePanel shell={shell} deployment={claudeDeployment} />);
+      expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
+      expect(screen.getAllByText(/· not signed in$/)).toHaveLength(1);
+      expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
+    });
+
+    for (const [item, credentialId, identity] of [
+      ["claude", "cred-original", "original-identity"],
+      ["claude-2", "cred-2", "second-identity"],
+    ] as const) {
+      it(`shows and disconnects the account ${item} references`, async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue([
+          claudeAccount("cred-original", null, "original-identity"),
+          claudeAccount("cred-2", "acct-2", "second-identity"),
+        ]);
+        render(
+          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
+        );
+        expect(await screen.findByText(identity)).toBeVisible();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: "Disconnect" }));
+        await user.click(screen.getByRole("button", { name: "Disconnect now" }));
+        expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+          deployment.agentDid,
+          credentialId,
+        );
+      });
+    }
+
+    for (const [item, auth] of [
+      ["claude-2", { kind: "principal_oauth", account_ref: "acct-2" }],
+      ["claude", { kind: "principal_oauth" }],
+    ] as const) {
+      it(`saving ${item} keeps its account reference`, async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue([]);
+        render(
+          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
+        );
+        const user = await replace("Name", `${item} edited`);
+        await user.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+        const { patches } = api.patchConfigComponents.mock.calls[0][0];
+        expect(patches[0].changes.auth).toEqual(auth);
+      });
+    }
+
+    it("says a backend's account is not on this node and offers no reconnect", async () => {
+      const { api, shell } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity"),
+      ]);
+      render(
+        <InferencePanel shell={shell} deployment={claudeDeployment} item="claude-3" />,
+      );
+      expect(await screen.findByText(/account not on this node/)).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: /connect/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("original-identity")).not.toBeInTheDocument();
+    });
+  });
+
   it("does not treat a disabled subscription credential as signed in", async () => {
     const { api, shell } = harness();
     api.listProviderAccounts.mockResolvedValue([

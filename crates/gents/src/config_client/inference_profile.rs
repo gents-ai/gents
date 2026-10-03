@@ -5,6 +5,26 @@ use crate::document_config::InferenceProfile;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
+/// Every profile of `agent_did` in this transaction's snapshot.
+pub async fn list_inference_profiles_in_txn(
+    txn: &super::ConfigApplyTxn<'_>,
+    agent_did: &str,
+) -> Result<Vec<InferenceProfile>> {
+    let fields = super::config_projection(Collection::InferenceProfile, None)?
+        .0
+        .join(" ");
+    let response = txn
+        .execute(&format!(
+            r#"{{ InferenceProfile(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
+            crate::graphql::escape_graphql_string(agent_did)
+        ))
+        .await?;
+    gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceProfile")
+        .into_iter()
+        .map(|row| serde_json::from_value(row).context("decoding scoped InferenceProfile"))
+        .collect()
+}
+
 /// Replace a complete inference profile through the common configuration writer.
 /// Sampling and execution settings are references, never a second set of profile
 /// fields. Explicit sparse patches remain owned by the patch API.

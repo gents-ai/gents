@@ -670,6 +670,7 @@ mod tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
 
         let models = discover_models(
@@ -712,6 +713,7 @@ mod tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
 
         let models = discover_models(
@@ -770,6 +772,7 @@ mod tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         }
     }
 

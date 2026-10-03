@@ -429,6 +429,8 @@ pub struct OAuthCredentialRow {
     pub connected_at: Option<String>,
     #[serde(default)]
     pub provider_account_key: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

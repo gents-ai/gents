@@ -114,6 +114,7 @@ pub fn credential_from_login_tokens(
             .as_deref()
             .zip(tokens.account_uuid.as_deref())
             .map(|(organization, account)| format!("{organization}:{account}")),
+        label: None,
     }
 }
 

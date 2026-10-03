@@ -724,6 +724,7 @@ fn backend_config_view(
         models,
         advertised_models,
         probe_status: observation.and_then(|observation| observation.probe_status.clone()),
+        account_ref: row.auth.oauth_account_ref().map(str::to_owned),
     }
 }
 
@@ -1060,8 +1061,14 @@ mod backend_config_view_tests {
             ]
         })).unwrap();
         let view = backend_config_view(&backend, Some(&observation));
+        assert_eq!(view.account_ref, None);
         assert_eq!(view.models, ["own-model"]);
         assert_eq!(view.advertised_models[0].context_window, Some(272_000));
         assert_eq!(view.advertised_models[0].max_context_window, Some(872_000));
+        backend.auth = gents::document_config::BackendAuth::PrincipalOAuth {
+            account_ref: Some("acct-2".into()),
+        };
+        let view = backend_config_view(&backend, Some(&observation));
+        assert_eq!(view.account_ref.as_deref(), Some("acct-2"));
     }
 }

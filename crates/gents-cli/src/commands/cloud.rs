@@ -346,6 +346,7 @@ fn credential_from_session(
         account_ref: None,
         connected_at: None,
         provider_account_key: None,
+        label: None,
     }
 }
 

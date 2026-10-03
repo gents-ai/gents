@@ -44,6 +44,7 @@ export function buildInferenceSetupPlan({
   const sameConnection = deployment.inferenceBackends.find(
     (backend) =>
       backend.providerKind === discovery.providerKind &&
+      !backend.accountRef &&
       normalizedEndpoint(backend.endpoint) ===
         normalizedEndpoint(discovery.effectiveEndpoint),
   );

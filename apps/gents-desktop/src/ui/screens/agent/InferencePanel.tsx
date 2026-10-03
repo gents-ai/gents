@@ -160,24 +160,42 @@ export function useAccounts(shell: Shell, agentDid: string) {
   return { accounts, reload: load };
 }
 
+/* the stored account a subscription backend runs on: the one with the
+   backend's reference; no reference is the provider's original account */
+function referencedAccount(
+  accounts: ProviderAccountView[],
+  provider: string,
+  accountRef: string | null | undefined,
+) {
+  return accounts.find(
+    (a) =>
+      a.provider === provider &&
+      !a.pendingSave &&
+      (a.accountRef ?? null) === (accountRef ?? null),
+  );
+}
+
 /* the account card for a subscription backend */
 function AccountRows({
   shell,
   deployment,
   kind,
+  accountRef,
   accounts,
   reload,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   kind: string;
+  accountRef: string | null;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
 }) {
   const sub = SUBSCRIPTION[kind]!;
-  const account = accounts.find(
-    (a) => a.provider === sub.provider && a.enabled && !a.pendingSave,
-  );
+  const stored = referencedAccount(accounts, sub.provider, accountRef);
+  const account = stored?.enabled ? stored : undefined;
+  /* signing in here would add a new account, never this one */
+  const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -233,6 +251,12 @@ function AccountRows({
       setBusy(false);
     }
   };
+  if (elsewhere)
+    return (
+      <Row label="Account" description={sub.note}>
+        <span className="text-sm text-muted-foreground">account not on this node</span>
+      </Row>
+    );
   return (
     <>
       <Row label="Account" description={sub.note}>
@@ -370,7 +394,11 @@ export function BackendEditor({
       { min: 1 },
     );
     let auth: InferenceBackend["auth"] | undefined;
-    if (isSubscriptionKind(next.providerKind)) auth = { kind: "principal_oauth" };
+    if (isSubscriptionKind(next.providerKind))
+      auth = {
+        kind: "principal_oauth",
+        ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
+      };
     else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
     else if (next.apiKeyEnvVar.trim())
       auth = { kind: "environment", variable: next.apiKeyEnvVar.trim() };
@@ -521,6 +549,7 @@ export function BackendEditor({
             shell={shell}
             deployment={deployment}
             kind={d.draft.providerKind}
+            accountRef={backend.accountRef ?? null}
             accounts={accounts}
             reload={reload}
           />
@@ -803,13 +832,13 @@ export function InferencePanel({
   const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
-    const account =
-      sub &&
-      accounts.find((a) => a.provider === sub.provider && a.enabled && !a.pendingSave);
+    const stored = sub && referencedAccount(accounts, sub.provider, b.accountRef);
     const cred = sub
-      ? account
+      ? stored?.enabled
         ? "signed in"
-        : "not signed in"
+        : b.accountRef && !stored
+          ? "account not on this node"
+          : "not signed in"
       : b.apiKeyConfigured
         ? "key stored"
         : b.apiKeyEnvVar

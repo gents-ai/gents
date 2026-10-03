@@ -863,8 +863,8 @@ const OAUTH_ROW_READERS: &[&str] = &[
 /// lowered. Never raise.
 #[rustfmt::skip]
 const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    // Reachability probe, the account list view (resolver order) and disconnect by credential_id.
-    ("crates/gents-desktop-bridge/src/tauri_commands/inference_setup.rs", 3),
+    // Reachability probe and the account list view (resolver order).
+    ("crates/gents-desktop-bridge/src/tauri_commands/inference_setup.rs", 2),
     // Loads the runtime view (its write into `oauth_credentials` sits in a macro, unseen here).
     ("crates/gents/src/agent/document_view/load.rs", 1),
     // Readiness picks through the resolver over the view's rows.

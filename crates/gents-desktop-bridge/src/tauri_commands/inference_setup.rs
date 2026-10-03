@@ -13,7 +13,7 @@ use gents::inference_setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
     InferenceSetupCatalog,
 };
-use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential};
+use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,8 +79,8 @@ async fn require_reachable_configuration(
 async fn upsert_through(
     access: anyhow::Result<gents::ConfigAccess>,
     credential: OAuthCredential,
-) -> anyhow::Result<String> {
-    gents::oauth_credential::upsert_oauth_credential_on(&access?, &credential).await
+) -> anyhow::Result<SignIn> {
+    gents::oauth_credential::store_sign_in(&access?, credential, None).await
 }
 
 fn credential_not_saved(credential: &OAuthCredential, error: &anyhow::Error) -> BridgeError {
@@ -108,13 +108,13 @@ async fn save_issued_credential(
     pending: &PendingOAuthCredentials,
     access: anyhow::Result<gents::ConfigAccess>,
     issued: IssuedOAuthCredential,
-) -> Result<String, BridgeError> {
+) -> Result<SignIn, BridgeError> {
     let credential = issued.credential().clone();
     match pending
         .save(issued, |credential| upsert_through(access, credential))
         .await
     {
-        CredentialSave::Saved(doc_id) => Ok(doc_id),
+        CredentialSave::Saved(signed) => Ok(signed),
         CredentialSave::Superseded => Err(BridgeError::untyped(format!(
             "A newer {} sign-in for this agent replaced this one.",
             provider_label(&credential.provider)
@@ -142,7 +142,7 @@ async fn retry_pending_credential(
             )
         })?;
     match saved {
-        Ok(_) => Ok(credential),
+        Ok(signed) => Ok(signed.credential),
         Err(error) => Err(credential_not_saved(&credential, &error)),
     }
 }
@@ -682,7 +682,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let doc_id = save_issued_credential(
+    let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
         state.pending_oauth_credentials.issue(credential.clone()),
@@ -696,7 +696,10 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(CodexLoginResult::redacted(doc_id, &credential))
+    Ok(CodexLoginResult::redacted(
+        signed.doc_id,
+        &signed.credential,
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -776,6 +779,9 @@ pub(crate) struct ProviderAccountView {
     /// not a stored account until `desktop_provider_account_retry_save`
     /// succeeds.
     pub pending_save: bool,
+    /// Which of the provider's accounts this is; `None` is the original
+    /// account, which a backend without a reference runs on.
+    pub account_ref: Option<String>,
 }
 
 impl ProviderAccountView {
@@ -799,6 +805,7 @@ impl From<&OAuthCredential> for ProviderAccountView {
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
             pending_save: false,
+            account_ref: credential.account_ref.clone(),
         }
     }
 }
@@ -843,17 +850,14 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     let access = core
         .operator_access(request.agent_did.trim())
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let credentials = list_oauth_credentials_on(&access, request.agent_did.trim())
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let mut credential = credentials
-        .into_iter()
-        .find(|entry| entry.credential_id == request.credential_id)
-        .ok_or_else(|| BridgeError::untyped("provider account not found"))?;
-    credential.enabled = false;
-    gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    gents::oauth_credential::set_account_enabled(
+        &access,
+        request.agent_did.trim(),
+        &request.credential_id,
+        false,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
@@ -972,7 +976,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now());
-    let doc_id = save_issued_credential(
+    let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
         state.pending_oauth_credentials.issue(credential.clone()),
@@ -984,7 +988,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(GrokLoginResult::redacted(doc_id, &credential))
+    Ok(GrokLoginResult::redacted(signed.doc_id, &signed.credential))
 }
 
 #[cfg(test)]
@@ -1043,6 +1047,7 @@ mod provider_account_tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1071,6 +1076,7 @@ mod provider_account_tests {
             account_ref: None,
             connected_at: None,
             provider_account_key: None,
+            label: None,
         }
     }
 
@@ -1165,6 +1171,9 @@ mod provider_account_tests {
             credential_id: format!("{provider}:{agent}"),
             provider: provider.to_string(),
             provider_account_key: Some("user:principal-1".to_string()),
+            // Grok rows carry no `account_id`.
+            account_id: None,
+            label: None,
             ..issued_credential(agent)
         };
         gents::oauth_credential::upsert_oauth_credential_on(
@@ -1500,6 +1509,146 @@ mod provider_account_tests {
         assert_eq!(*writes.lock().unwrap(), ["token-b", "token-d"]);
     }
 
+    /// A Claude sign-in of `account` (key `org-1:{account}`, or none) whose
+    /// display label is `account_id`.
+    fn claude_sign_in(
+        agent_did: &str,
+        account: Option<&str>,
+        account_id: &str,
+        token: &str,
+    ) -> OAuthCredential {
+        gents::claude_oauth::credential_from_login_tokens(
+            agent_did,
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &gents::claude_oauth::ClaudeLoginTokens {
+                access_token: token.into(),
+                refresh_token: format!("refresh-{token}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(account_id.into()),
+                organization_uuid: account.map(|_| "org-1".into()),
+                account_uuid: account.map(str::to_owned),
+            },
+            chrono::Utc::now(),
+        )
+    }
+
+    fn two_accounts(agent: &str, keyed: bool) -> (OAuthCredential, OAuthCredential) {
+        (
+            claude_sign_in(agent, keyed.then_some("account-a"), "acct-a", "token-a"),
+            claude_sign_in(agent, keyed.then_some("account-b"), "acct-b", "token-b"),
+        )
+    }
+
+    fn saved_write(_: OAuthCredential) -> std::future::Ready<anyhow::Result<()>> {
+        std::future::ready(Ok(()))
+    }
+
+    #[tokio::test]
+    async fn a_held_sign_in_of_one_account_survives_a_saved_sign_in_of_another() {
+        for keyed in [true, false] {
+            let pending = PendingOAuthCredentials::default();
+            let agent = "did:key:zAgent";
+            let (a, b) = two_accounts(agent, keyed);
+            assert!(matches!(
+                pending.save(pending.issue(a), failed_write).await,
+                CredentialSave::Failed(_)
+            ));
+            assert!(matches!(
+                pending.save(pending.issue(b), saved_write).await,
+                CredentialSave::Saved(())
+            ));
+            assert_eq!(held_tokens(&pending, agent), ["token-a"], "keyed: {keyed}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_older_sign_in_of_one_account_is_not_superseded_by_another() {
+        for keyed in [true, false] {
+            let pending = PendingOAuthCredentials::default();
+            let agent = "did:key:zAgent";
+            let (a, b) = two_accounts(agent, keyed);
+            let older = pending.issue(a);
+            let newer = pending.issue(b);
+            assert!(matches!(
+                pending.save(newer, saved_write).await,
+                CredentialSave::Saved(())
+            ));
+            assert!(
+                matches!(
+                    pending.save(older, saved_write).await,
+                    CredentialSave::Saved(())
+                ),
+                "keyed: {keyed}"
+            );
+        }
+        let pending = PendingOAuthCredentials::default();
+        let agent = "did:key:zAgent";
+        let older = pending.issue(claude_sign_in(
+            agent,
+            Some("account-a"),
+            "acct-a",
+            "token-1",
+        ));
+        let newer = pending.issue(claude_sign_in(
+            agent,
+            Some("account-a"),
+            "acct-a",
+            "token-2",
+        ));
+        assert!(matches!(
+            pending.save(newer, saved_write).await,
+            CredentialSave::Saved(())
+        ));
+        assert!(matches!(
+            pending.save(older, saved_write).await,
+            CredentialSave::Superseded
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_second_accounts_desktop_sign_in_is_added_beside_the_first() {
+        let node = serving_node().await;
+        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let agent = "did:key:zAgent";
+        let pending = PendingOAuthCredentials::default();
+        let (a, b) = two_accounts(agent, true);
+        save_issued_credential(&pending, access(), pending.issue(a))
+            .await
+            .expect("save the first account");
+        let first = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), agent)
+            .await
+            .unwrap();
+        let signed = save_issued_credential(&pending, access(), pending.issue(b))
+            .await
+            .expect("save the second account");
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), agent)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(stored.contains(&first[0]), "the first account is untouched");
+        let second = stored
+            .iter()
+            .find(|row| row.doc_id != first[0].doc_id)
+            .unwrap();
+        assert_eq!(signed.credential.credential_id, second.credential_id);
+        assert_ne!(signed.credential.credential_id, first[0].credential_id);
+        let views = observe_provider_accounts(&pending, access(), agent)
+            .await
+            .unwrap();
+        let view = |credential_id: &str| {
+            views
+                .iter()
+                .find(|view| view.credential_id == credential_id)
+                .unwrap()
+                .account_ref
+                .clone()
+        };
+        assert_eq!(view(&first[0].credential_id), None);
+        assert!(second.account_ref.is_some());
+        assert_eq!(view(&second.credential_id), second.account_ref);
+    }
+
     #[tokio::test]
     async fn accounts_list_in_resolver_order() {
         let node = serving_node().await;
@@ -1687,7 +1836,7 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     };
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());
-    let doc_id = save_issued_credential(
+    let signed = save_issued_credential(
         &state.pending_oauth_credentials,
         core.operator_access(&agent_did),
         state.pending_oauth_credentials.issue(credential.clone()),
@@ -1699,7 +1848,10 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
 
-    Ok(ClaudeLoginResult::redacted(doc_id, &credential))
+    Ok(ClaudeLoginResult::redacted(
+        signed.doc_id,
+        &signed.credential,
+    ))
 }
 
 #[tauri::command]

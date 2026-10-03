@@ -329,6 +329,7 @@ pub async fn bootstrap_oauth_client(
             product,
         )
     });
+    bearer.adopt_document(&credential).await;
     Ok((bearer, credential))
 }
 
@@ -528,5 +529,86 @@ mod tests {
             1,
             "refreshed once per request"
         );
+    }
+
+    /// Remove-all then a sign-in re-creates the original slot at the same
+    /// `credential_id`: a client built after that serves the new row, while a
+    /// rebuild on the same row keeps its cached token.
+    #[tokio::test]
+    async fn a_rebuilt_client_does_not_serve_a_removed_sign_ins_cached_token() {
+        use crate::claude_oauth::{
+            credential_from_login_tokens, ClaudeLoginTokens, CLAUDE_OAUTH_PRODUCT,
+            CLAUDE_OAUTH_PROVIDER,
+        };
+        use crate::config_client::ConfigAccess;
+        use crate::oauth_credential::{
+            remove_account_in_txn, store_sign_in, test_support::test_node, AccountPick,
+            OAuthRefreshKind, SignInResult,
+        };
+        let node = Arc::new(test_node().await);
+        let access = ConfigAccess::Local(node.clone());
+        let did = "did:key:z6MkTestRebuiltClient";
+        let sign_in = |who: &str, expires_in| {
+            credential_from_login_tokens(
+                did,
+                CLAUDE_OAUTH_PROVIDER,
+                &ClaudeLoginTokens {
+                    access_token: format!("access-{who}"),
+                    refresh_token: format!("refresh-{who}"),
+                    expires_in: Some(expires_in),
+                    scope: None,
+                    account_id: Some(format!("label-{who}")),
+                    organization_uuid: Some("org-1".into()),
+                    account_uuid: Some(format!("account-{who}")),
+                },
+                chrono::Utc::now(),
+            )
+        };
+        let bootstrap = || {
+            bootstrap_oauth_client(
+                node.clone(),
+                did,
+                CLAUDE_OAUTH_PROVIDER,
+                OAuthRefreshKind::Claude,
+                CLAUDE_OAUTH_PRODUCT,
+                AccountPick::Reference(None),
+            )
+        };
+        let a = store_sign_in(&access, sign_in("a", 7200), None)
+            .await
+            .unwrap();
+        let (bearer, _) = bootstrap().await.unwrap();
+        assert_eq!(bearer.current_bearer().await.unwrap(), "access-a");
+
+        // Same document, changed underneath: the cached token stands.
+        ConfigAccess::write_local(
+            &node,
+            "test.same_document",
+            &format!(
+                r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ access_token: "access-a-stored" }}) {{ _docID }} }}"#,
+                a.doc_id
+            ),
+        )
+        .await
+        .unwrap();
+        let (bearer, _) = bootstrap().await.unwrap();
+        assert_eq!(bearer.current_bearer().await.unwrap(), "access-a");
+
+        let credential_id = a.credential.credential_id.as_str();
+        access
+            .transact("test.remove_account", |txn| {
+                Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
+            })
+            .await
+            .unwrap();
+        // An earlier expiry than the cached token: adoption is by document.
+        let b = store_sign_in(&access, sign_in("b", 3600), None)
+            .await
+            .unwrap();
+        assert_eq!(b.result, SignInResult::Added);
+        assert_eq!(b.credential.credential_id, a.credential.credential_id);
+        assert_ne!(b.doc_id, a.doc_id);
+        let (bearer, _) = bootstrap().await.unwrap();
+        assert_eq!(bearer.current_bearer().await.unwrap(), "access-b");
     }
 }

@@ -1374,3 +1374,31 @@ fn task_run_separates_invocation_identity_from_continued_session() {
         _ => panic!("expected Task run"),
     }
 }
+
+#[test]
+fn login_commands_take_a_label_and_only_their_own_provider() {
+    for (command, provider) in [
+        ("codex-login", "chatgpt-codex"),
+        ("claude-login", "claude-subscription"),
+        ("grok-login", "xai-oauth"),
+    ] {
+        let label = |cli: Cli| match cli.command {
+            Command::CodexLogin(args) => (args.label, args.provider),
+            Command::ClaudeLogin(args) => (args.label, args.provider),
+            Command::GrokLogin(args) => (args.label, args.provider),
+            _ => panic!("expected {command}"),
+        };
+        let parsed = Cli::try_parse_from(["gents", command]).expect("default provider");
+        assert_eq!(label(parsed), (None, provider.to_string()));
+        let parsed = Cli::try_parse_from(["gents", command, "--label", "Work"])
+            .unwrap_or_else(|error| panic!("{command} --label: {error}"));
+        assert_eq!(
+            label(parsed),
+            (Some("Work".to_string()), provider.to_string())
+        );
+        assert!(
+            Cli::try_parse_from(["gents", command, "--provider", "other-provider"]).is_err(),
+            "{command} must refuse another provider"
+        );
+    }
+}

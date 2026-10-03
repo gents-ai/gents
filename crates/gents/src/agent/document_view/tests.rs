@@ -1398,6 +1398,7 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_
         account_ref: None,
         connected_at: None,
         provider_account_key: None,
+        label: None,
     };
     let mutation = crate::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = node.execute(&mutation).await;
@@ -1554,6 +1555,90 @@ async fn readiness_follows_the_backend_account_reference() {
     assert!(!ready(view).await, "a disabled acct-x row never resolves");
 }
 
+#[tokio::test]
+async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
+    use crate::config_client::ConfigAccess;
+    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-account-lifecycle"));
+    let did = identity.did().to_string();
+    let default_behavior_id = crate::default_behavior_id_for_agent(&did);
+    bind_default_behavior_claude_backend(node.as_ref(), &did, &default_behavior_id).await;
+    let access = ConfigAccess::Local(node.clone());
+    let sign_in = |who: &str| {
+        crate::claude_oauth::credential_from_login_tokens(
+            did.clone(),
+            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &crate::claude_oauth::ClaudeLoginTokens {
+                access_token: format!("access-{who}"),
+                refresh_token: format!("refresh-{who}"),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: Some(format!("label-{who}")),
+                organization_uuid: Some("org-1".into()),
+                account_uuid: Some(format!("account-{who}")),
+            },
+            chrono::Utc::now(),
+        )
+    };
+    store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b_ref = b.credential.account_ref.clone().expect("b has a reference");
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    // One behavior, its backend pointed at A (no reference) or at B.
+    let ready_on = |account_ref: Option<String>| {
+        let node = node.clone();
+        let did = did.clone();
+        let resolve_context = &resolve_context;
+        let default_behavior_id = default_behavior_id.clone();
+        async move {
+            let mut view = load_document_runtime_view(node.as_ref(), &did)
+                .await
+                .expect("document view");
+            for backend in view.backends.values_mut() {
+                backend.value.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+                    account_ref: account_ref.clone(),
+                };
+            }
+            let snapshot =
+                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                    .await
+                    .expect("snapshot");
+            !snapshot
+                .unavailable_behaviors
+                .contains_key(&default_behavior_id)
+        }
+    };
+    assert!(ready_on(None).await && ready_on(Some(b_ref.clone())).await);
+
+    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+        .await
+        .unwrap();
+    assert!(
+        !ready_on(Some(b_ref.clone())).await,
+        "a disabled account stops"
+    );
+    assert!(ready_on(None).await, "the other account keeps running");
+
+    access
+        .transact("test.remove_account", |txn| {
+            let did = did.clone();
+            let credential_id = b.credential.credential_id.clone();
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(!ready_on(Some(b_ref)).await, "a removed account stops");
+    assert!(ready_on(None).await, "the other account keeps running");
+}
+
 /// Install the canonical chain for `behavior_id` and bind it as the principal's
 /// explicit default, then swap the chain's InferenceBackend to the
 /// ClaudeCliSubscription provider so resolution requires a Claude
@@ -1702,6 +1787,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         account_ref: None,
         connected_at: None,
         provider_account_key: None,
+        label: None,
     };
     let doc_id = crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
         .await

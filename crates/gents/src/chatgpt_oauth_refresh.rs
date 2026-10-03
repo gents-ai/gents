@@ -149,13 +149,29 @@ pub fn chatgpt_account_key(
     id_token: Option<&str>,
     account_id: Option<&str>,
 ) -> Option<String> {
-    let account_id = account_id.filter(|id| !id.is_empty())?;
+    chatgpt_account_keys(access_token, id_token, account_id)
+        .into_iter()
+        .next()
+}
+
+/// Every key form these tokens show for one account, primary first: the
+/// member id, then `account_id:user` (see [`chatgpt_account_key`]). One
+/// account's tokens can show either form, so a match compares the sets.
+pub fn chatgpt_account_keys(
+    access_token: &str,
+    id_token: Option<&str>,
+    account_id: Option<&str>,
+) -> Vec<String> {
+    let Some(account_id) = account_id.filter(|id| !id.is_empty()) else {
+        return Vec::new();
+    };
     let text = |value: Option<&Value>| {
         value
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
             .map(str::to_owned)
     };
+    let mut keys = Vec::new();
     let access = jwt_payload(access_token);
     let access_auth = access.as_ref().and_then(|claims| claims.get(AUTH_CLAIMS));
     if access_auth
@@ -163,21 +179,22 @@ pub fn chatgpt_account_key(
         .and_then(Value::as_str)
         == Some(account_id)
     {
-        if let Some(member) = text(access_auth.and_then(|auth| auth.get("chatgpt_account_user_id")))
-        {
-            return Some(member);
-        }
+        keys.extend(text(
+            access_auth.and_then(|auth| auth.get("chatgpt_account_user_id")),
+        ));
     }
-    let id = jwt_payload(id_token?)?;
-    let user = text(id.get("chatgpt_user_id"))
-        .or_else(|| {
-            text(
-                id.get(AUTH_CLAIMS)
-                    .and_then(|auth| auth.get("chatgpt_user_id")),
-            )
-        })
-        .or_else(|| text(id.get("sub")))?;
-    Some(format!("{account_id}:{user}"))
+    if let Some(id) = id_token.and_then(jwt_payload) {
+        let user = text(id.get("chatgpt_user_id"))
+            .or_else(|| {
+                text(
+                    id.get(AUTH_CLAIMS)
+                        .and_then(|auth| auth.get("chatgpt_user_id")),
+                )
+            })
+            .or_else(|| text(id.get("sub")));
+        keys.extend(user.map(|user| format!("{account_id}:{user}")));
+    }
+    keys
 }
 
 const AUTH_CLAIMS: &str = "https://api.openai.com/auth";
