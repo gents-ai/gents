@@ -98,7 +98,7 @@ impl ResolvedInference {
             .advertised_model
             .as_ref()
             .and_then(|model| model.reasoning_efforts.as_deref());
-        if self.backend.provider_kind == BackendProviderKind::ClaudeCliSubscription {
+        if self.backend.provider_kind.uses_messages_wire() {
             crate::inference_setup::claude_supported_reasoning_efforts(
                 &self.profile.model_name,
                 advertised,
@@ -494,6 +494,33 @@ mod tests {
             display_name: None,
             enabled: true,
         })
+    }
+
+    #[test]
+    fn anthropic_key_resolves_claude_reasoning_efforts() {
+        let inference = ResolvedInference {
+            backend: serde_json::from_value(serde_json::json!({
+                "agent_did": "did:key:backend-owner",
+                "backend_id": "anthropic-key",
+                "name": "Anthropic API",
+                "provider_kind": "AnthropicApiKey",
+                "endpoint": crate::claude_subscription::ANTHROPIC_API_ENDPOINT,
+                "auth": {"kind": "environment", "variable": "ANTHROPIC_API_KEY"}
+            }))
+            .unwrap(),
+            profile: serde_json::from_value(serde_json::json!({
+                "agent_did": "did:key:backend-owner",
+                "profile_id": "opus",
+                "backend_id": "anthropic-key",
+                "model_name": "claude-opus-5-5"
+            }))
+            .unwrap(),
+            sampling: None,
+            execution: None,
+            retry_policy: None,
+            advertised_model: None,
+        };
+        assert!(inference.resolved_reasoning_efforts().is_some());
     }
 
     fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedBehavior {

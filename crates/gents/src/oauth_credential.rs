@@ -629,6 +629,11 @@ pub trait BearerSource: Send + Sync {
     fn invalidate(&self) -> impl Future<Output = ()> + Send {
         async {}
     }
+
+    /// Whether the bearer is an OAuth sign-in (which needs the OAuth beta).
+    fn is_oauth(&self) -> bool {
+        true
+    }
 }
 
 pub struct DbCredentialBearer {

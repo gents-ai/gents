@@ -2203,6 +2203,8 @@ pub(crate) enum BackendPresetArg {
         alias = "claude-cli"
     )]
     ClaudeCliSubscription,
+    #[value(name = "anthropic")]
+    Anthropic,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -2220,6 +2222,7 @@ impl BackendPresetArg {
             Self::ChatGptCodex => "chatgpt-codex",
             Self::XaiGrokOAuth => "xai-oauth",
             Self::ClaudeCliSubscription => "claude-cli-subscription",
+            Self::Anthropic => "anthropic",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -2232,6 +2235,7 @@ impl BackendPresetArg {
             Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
             Self::XaiGrokOAuth => BackendProviderKind::XaiGrokOAuth,
             Self::ClaudeCliSubscription => BackendProviderKind::ClaudeCliSubscription,
+            Self::Anthropic => BackendProviderKind::AnthropicApiKey,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::Ollama
@@ -2250,6 +2254,7 @@ impl BackendPresetArg {
             Self::ClaudeCliSubscription => {
                 Some(gents::claude_subscription::default_backend_endpoint())
             }
+            Self::Anthropic => Some(gents::claude_subscription::ANTHROPIC_API_ENDPOINT),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -2267,7 +2272,11 @@ impl BackendPresetArg {
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
             Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
             Self::ClaudeCliSubscription => Some(gents::claude_subscription::default_model_name()),
-            Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
+            Self::GenericOpenAiCompatible
+            | Self::OpenAi
+            | Self::OpenRouter
+            | Self::Anthropic
+            | Self::Vllm => None,
         }
     }
 
@@ -2275,6 +2284,7 @@ impl BackendPresetArg {
         match self {
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
+            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
@@ -2293,6 +2303,7 @@ impl BackendPresetArg {
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
             | Self::ClaudeCliSubscription
+            | Self::Anthropic
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,

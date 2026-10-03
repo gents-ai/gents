@@ -95,4 +95,17 @@ describe("configuration validation", () => {
       ).toMatchObject({ document: { auth: { kind: "principal_oauth" } } });
     },
   );
+
+  it("stores an Anthropic key backend's env var as environment auth", () => {
+    expect(
+      backendSave("did:key:agent", {
+        ...baseBackend,
+        providerKind: "AnthropicApiKey",
+        endpoint: "https://api.anthropic.com/v1",
+        apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      }),
+    ).toMatchObject({
+      document: { auth: { kind: "environment", variable: "ANTHROPIC_API_KEY" } },
+    });
+  });
 });

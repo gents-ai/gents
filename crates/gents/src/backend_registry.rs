@@ -113,6 +113,14 @@ impl InferenceBackend {
             violations
                 .push("backend auth selection is incompatible with the provider adapter".into());
         }
+        let anthropic_endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+        if self.provider_kind == BackendProviderKind::AnthropicApiKey
+            && self.endpoint.trim_end_matches('/') != anthropic_endpoint
+        {
+            violations.push(format!(
+                "AnthropicApiKey endpoint must be {anthropic_endpoint}; a different endpoint is not supported"
+            ));
+        }
         violations
     }
 
