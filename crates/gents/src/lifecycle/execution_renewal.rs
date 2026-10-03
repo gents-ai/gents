@@ -166,7 +166,7 @@ async fn renew_once_with_time(
             let expiry = escape_graphql_string(expiry);
             let next = escape_graphql_string(&next.to_rfc3339());
             let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
+                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
                     execution_generation: {{ _eq: "{owner}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
                 input: {{ execution_lease_expires_at: "{next}" }}
             ) {{ _docID }} }}"#)).await?;

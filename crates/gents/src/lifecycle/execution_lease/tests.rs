@@ -1187,3 +1187,72 @@ async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
 }
 
 mod workspace_recovery;
+
+#[tokio::test]
+async fn native_doc_id_targeting_preserves_request_update_filters() {
+    let (node, _dir) = test_node().await;
+    let target = claimed_owner(&node).await;
+    let unrelated = claimed_owner(&node).await;
+    let before = request_row(&node, &target.request.doc_id).await;
+    let unrelated_before = request_row(&node, &unrelated.request.doc_id).await;
+    let doc_id = escape_graphql_string(&target.request.doc_id);
+    let generation = before.execution_generation.as_deref().unwrap();
+    let expiry = before.execution_lease_expires_at.as_deref().unwrap();
+    let next = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
+    for (state, observed_generation, expected_rows) in [
+        ("processing", generation, 0),
+        ("claimed", "superseded-generation", 0),
+        ("claimed", generation, 1),
+    ] {
+        let mutation = format!(
+            r#"mutation {{ update_AgentRequest(
+            docID: "{doc_id}",
+            filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
+                execution_generation: {{ _eq: "{observed_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
+            input: {{ execution_lease_expires_at: "{next}" }}
+        ) {{ _docID }} }}"#,
+            state = escape_graphql_string(state),
+            observed_generation = escape_graphql_string(observed_generation),
+            expiry = escape_graphql_string(expiry),
+            next = escape_graphql_string(&next),
+        );
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test.request_doc_id_filters",
+            &mutation,
+        )
+        .await
+        .unwrap();
+        let rows = response.data.as_ref().unwrap()["update_AgentRequest"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), expected_rows);
+        let observed = request_row(&node, &target.request.doc_id).await;
+        assert_eq!(observed.lifecycle_state, before.lifecycle_state);
+        assert_eq!(observed.execution_generation, before.execution_generation);
+        if expected_rows == 0 {
+            assert_eq!(
+                observed.execution_lease_expires_at,
+                before.execution_lease_expires_at
+            );
+        } else {
+            assert_eq!(rows[0]["_docID"], target.request.doc_id);
+            assert_eq!(
+                DateTime::parse_from_rfc3339(
+                    observed.execution_lease_expires_at.as_deref().unwrap()
+                )
+                .unwrap(),
+                DateTime::parse_from_rfc3339(&next).unwrap()
+            );
+        }
+        let unrelated_after = request_row(&node, &unrelated.request.doc_id).await;
+        assert_eq!(
+            unrelated_after.lifecycle_state,
+            unrelated_before.lifecycle_state
+        );
+        assert_eq!(
+            lease_tuple(&unrelated_after),
+            lease_tuple(&unrelated_before)
+        );
+    }
+}

@@ -69,7 +69,7 @@ async fn drain_pending_session_requests_where_in_txn(
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{
+                    docID: "{escaped_doc_id}", filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         {scope},
                         lifecycle_state: {{ _eq: "pending" }}
