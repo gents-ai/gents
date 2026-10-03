@@ -656,7 +656,7 @@ impl ConfigCommandTool {
                     "behavior" => {
                         ["clone", "disable", "default", "context"].contains(&verb.as_str())
                     }
-                    "backend" => verb == "discover",
+                    "backend" => ["discover", "accounts"].contains(&verb.as_str()),
                     "skill" => verb == "import",
                     _ => false,
                 };
