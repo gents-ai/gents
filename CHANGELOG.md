@@ -58,6 +58,12 @@ source consistency checks, not a separate runtime compatibility version.
   re-initialize it with a file or `macos-keychain` identity. Existing stores
   enable access control in place on their next start.
 
+- `OAuthCredential` gains optional account fields (account reference,
+  provider account key, label and connection time) by baseline re-pin; there
+  is deliberately no migration step. A store created by an earlier build fails
+  `ensure_migrations` with `UnknownLineage` for `OAuthCredential`: reset it
+  and sign in again (#2116).
+
 - `Tools.self_config.self_config_dry_run` is renamed `self_config_preview`
   (#2062). It grants the `config` preview verb; it never blocked writes. There
   is no alias: rewrite stored Tools documents and manifests that set the old
