@@ -14,7 +14,7 @@
     },
     {
       "name": "repository placement path is operator-configurable",
-      "expr": ".config.repository_placements[] | select(.repository_id == \"change-unit-repository\") | (.host_path == (env.GENTS_CHANGE_UNIT_ROOT // \".\") or .host_path == \".\")"
+      "expr": "(.config.repository_placements[] | select(.repository_id == \"change-unit-repository\") | .host_path) as $root | ($root == (env.GENTS_CHANGE_UNIT_ROOT // \".\") or $root == \".\") and ([.config.tools[] | select(.tools_id == \"change-unit-writer-tools\" or .tools_id == \"change-unit-review-tools\") | .host.root == $root] | all)"
     },
     {
       "name": "integration is acknowledgement-only and serialized",
