@@ -937,8 +937,10 @@ async fn authenticate_enrolled_server(
 ) -> Result<String> {
     timeout(P2P_OPERATION_TIMEOUT, async {
         let address = enrolled_server_address(approval, known).await?;
-        p2p.connect_peer(&address).await.map_err(map_p2p_error)?;
         let peer = TransportPeerId::new(approval.server_peer.clone()).map_err(map_p2p_error)?;
+        if !super::bootstrap::is_connected_peer(p2p, peer.as_str()).await? {
+            p2p.connect_peer(&address).await.map_err(map_p2p_error)?;
+        }
         let resolved = p2p
             .resolve_peer_identity(&peer)
             .await
@@ -2781,5 +2783,138 @@ mod tests {
             &enrollment,
             &BTreeMap::new()
         ));
+    }
+    use defra_p2p_adapter::{
+        ExplicitReplayCapabilityInput, P2PResult, P2pDocumentInfo, ReplicationFilters,
+        ReplicatorInfo,
+    };
+    struct EnrollmentTransport {
+        peer: String,
+        connected: std::sync::atomic::AtomicBool,
+        dials: std::sync::atomic::AtomicUsize,
+        observations: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl P2POps for EnrollmentTransport {
+        async fn local_peer_id(&self) -> P2PResult<String> {
+            unimplemented!()
+        }
+        async fn listen_addresses(&self) -> P2PResult<Vec<String>> {
+            unimplemented!()
+        }
+        async fn connected_peers(&self) -> P2PResult<Vec<String>> {
+            Ok(
+                if self.connected.load(std::sync::atomic::Ordering::SeqCst) {
+                    vec![self.peer.clone()]
+                } else {
+                    vec![]
+                },
+            )
+        }
+        async fn connect_peer(&self, addr: &str) -> P2PResult<()> {
+            self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.connected
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        async fn disconnect_peer(&self, addr: &str) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn get_replicators(&self) -> P2PResult<Vec<ReplicatorInfo>> {
+            unimplemented!()
+        }
+        async fn add_replicator(
+            &self,
+            collections: Vec<String>,
+            addr: Option<&str>,
+            filters: ReplicationFilters,
+            explicit_replay_capabilities: Vec<ExplicitReplayCapabilityInput>,
+            expected_authorizer_did: Option<&str>,
+        ) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn remove_replicator(
+            &self,
+            collections: Vec<String>,
+            addr: Option<&str>,
+        ) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn get_collections(&self) -> P2PResult<Vec<String>> {
+            unimplemented!()
+        }
+        async fn add_collections(&self, collections: Vec<String>) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn remove_collections(&self, collections: Vec<String>) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn get_documents(&self) -> P2PResult<Vec<P2pDocumentInfo>> {
+            unimplemented!()
+        }
+        async fn add_documents(&self, docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn remove_documents(&self, docs: Vec<P2pDocumentRequest>) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn sync_documents(
+            &self,
+            collection_name: &str,
+            doc_ids: Vec<String>,
+            timeout: Option<std::time::Duration>,
+        ) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn sync_branchable_collection(&self, collection_id: &str) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn sync_collection_versions(&self, version_ids: Vec<String>) -> P2PResult<()> {
+            unimplemented!()
+        }
+        async fn resolve_peer_identity(
+            &self,
+            _: &TransportPeerId,
+        ) -> P2PResult<Option<identity::Did>> {
+            self.observations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(P2PError::unsupported("identity challenge rejected"))
+        }
+    }
+    #[tokio::test]
+    async fn repeated_enrollment_observations_reuse_connection_but_authenticate_fail_closed() {
+        let transport = Arc::new(EnrollmentTransport {
+            peer: "approved-peer".into(),
+            connected: false.into(),
+            dials: 0.into(),
+            observations: 0.into(),
+        });
+        let p2p: Arc<dyn P2POps> = transport.clone();
+        let approval = ApprovedStatusEnrollment {
+            network_id: String::new(),
+            request_id: String::new(),
+            server_peer: transport.peer.clone(),
+            server_ticket: "ticket".into(),
+            admin_did: "did:key:approved".into(),
+            owner_agent: String::new(),
+            request_digest: String::new(),
+            authorization_sequence: 1,
+            authorization_expires_at: String::new(),
+            decided_at: String::new(),
+        };
+        for _ in 0..8 {
+            assert!(authenticate_enrolled_server(&p2p, &approval, None)
+                .await
+                .is_err());
+        }
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(transport.dials.load(SeqCst), 1);
+        assert_eq!(transport.observations.load(SeqCst), 8);
+        transport.connected.store(false, SeqCst);
+        assert!(authenticate_enrolled_server(&p2p, &approval, None)
+            .await
+            .is_err());
+        assert_eq!(transport.dials.load(SeqCst), 2);
+        assert_eq!(transport.observations.load(SeqCst), 9);
     }
 }
