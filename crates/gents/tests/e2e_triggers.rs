@@ -14,5 +14,7 @@ mod app_collection_pairing_p2p_e2e;
 mod event_source_trigger_e2e;
 #[path = "e2e_triggers/event_source_trigger_p2p_e2e.rs"]
 mod event_source_trigger_p2p_e2e;
+#[path = "e2e_triggers/workspace_change_unit_cycle.rs"]
+mod workspace_change_unit_cycle;
 #[path = "e2e_triggers/write_tool_trigger_e2e.rs"]
 mod write_tool_trigger_e2e;

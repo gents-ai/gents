@@ -268,9 +268,9 @@ impl MaterializerHandle for ProductionMaterializer {
                 None => None,
             };
             let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
-            workspace.require_authority_if_workspace_id()?;
             crate::workspace::stamp_workspace_lineage(node.as_ref(), &behavior_did, &mut workspace)
                 .await?;
+            workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),

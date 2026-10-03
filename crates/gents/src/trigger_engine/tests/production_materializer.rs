@@ -688,23 +688,19 @@ async fn workspace_requests(
 }
 
 #[tokio::test]
-async fn materializer_rejects_missing_workspace_owner_without_actor_fallback() {
+async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_behavior("general");
-    // Even an actor-owned workspace cannot repair an incomplete source tuple.
-    insert_ready_workspace(
-        &node,
-        "ws-incomplete",
-        behavior.agent_did(),
-        behavior.agent_did(),
-    )
-    .await;
+    let owner = behavior.agent_did().to_string();
+    // The event-source document carries the workspace id and authority but
+    // not its owner. The canonical workspace owner supplies that binding.
+    insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
     let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
-    let error = materializer
+    let request_id = materializer
         .materialize(
             &workspace_writer_task(),
             Some("trigger-incomplete"),
@@ -720,14 +716,60 @@ async fn materializer_rejects_missing_workspace_owner_without_actor_fallback() {
             None,
         )
         .await
+        .expect("canonical workspace resolves the missing owner");
+    let rows = workspace_requests(&node, "ws-incomplete").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
+    assert_eq!(
+        rows[0]["workspace_owner_agent_did"].as_str(),
+        Some(owner.as_str())
+    );
+    assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
+}
+
+#[tokio::test]
+async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let behavior = integration_test_behavior("general");
+    let owner = behavior.agent_did().to_string();
+    insert_ready_workspace(
+        &node,
+        "ws-foreign-ownerless",
+        "did:key:another-owner",
+        &owner,
+    )
+    .await;
+    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
+    let error = materializer
+        .materialize(
+            &workspace_writer_task(),
+            Some("trigger-foreign-ownerless"),
+            TriggerKind::Event,
+            Some("trigger-foreign-ownerless-doc"),
+            Some("source"),
+            Some("corr"),
+            Some(&context),
+            "prompt",
+            None,
+            "test-fire",
+            None,
+            None,
+        )
+        .await
         .unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("owner principal and authority together"),
+            .contains("isolated workspace ws-foreign-ownerless not found"),
         "{error:#}"
     );
-    assert!(workspace_requests(&node, "ws-incomplete").await.is_empty());
+    assert!(workspace_requests(&node, "ws-foreign-ownerless")
+        .await
+        .is_empty());
 }
 
 #[tokio::test]

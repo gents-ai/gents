@@ -1,0 +1,3 @@
+A read-only review accepted sealed work unit {{ doc.work_unit_id }} in workspace {{ doc.workspace_id }}. The closure records writer receipt {{ doc.writer_receipt_id }} and seal {{ doc.writer_seal_hash }}.
+
+This is Integrate-bound. The host owns serial ApplyDiff integration after this request succeeds. Do not inspect or edit files, commit, run shell commands, or write an integration result. Acknowledge only that you authorize host integration for the exact accepted closure and workspace. Complete this request immediately before the acknowledgement. A failed host integration remains visible through the native AgentRequest/workspace journal; never claim integration without the later host receipt.
