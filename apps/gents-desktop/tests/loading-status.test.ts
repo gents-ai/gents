@@ -211,7 +211,7 @@ describe("session loading projection", () => {
     });
   });
 
-  it("attributes requested hydration to P2P when the enrolled agent is offline", () => {
+  it("waits for automatic P2P recovery during approved session hydration", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
@@ -228,7 +228,27 @@ describe("session loading projection", () => {
           },
         }),
       }),
-    ).toMatchObject({ layer: "p2p", phase: "blocked", action: "reconnect" });
+    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
+  });
+
+  it("waits for automatic route preparation without requiring reconnect", () => {
+    expect(
+      project({
+        operationalState: projectDeploymentOperationalState(
+          deployment({ source: "local-standard", chatSafe: false }),
+        ),
+      }),
+    ).toMatchObject({ layer: "p2p", phase: "loading", action: null });
+  });
+
+  it("does not require reconnect while an approved session snapshot arrives", () => {
+    expect(project({ session: null })).toMatchObject({
+      layer: "sessionSync",
+      action: null,
+    });
+    expect(project({ session: null, operationalState: null })).toMatchObject({
+      action: "retryLocal",
+    });
   });
 
   it("does not block a new enrolled chat on a lagged ready replica", () => {

@@ -228,7 +228,11 @@ fn connected_peer_id_candidates(peer: &str) -> Vec<String> {
     }
 
     let mut ids = vec![peer.to_string()];
-    if let Some(id) = peer_id_from_address_like_peer(peer) {
+    if let Some(id) = p2p::iroh::parse_public_peer_addr(peer)
+        .ok()
+        .map(|(peer_id, _)| peer_id.to_string())
+        .or_else(|| peer_id_from_address_like_peer(peer))
+    {
         if id != peer {
             ids.push(id);
         }
@@ -481,6 +485,26 @@ mod tests {
         let annotated = annotate_pairing_health(desired, &[], &connected);
 
         assert!(annotated[0].connected);
+    }
+
+    #[test]
+    fn connected_health_matches_endpoint_ticket_transport_identity() {
+        let peer_id = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        let (peer, addrs) =
+            p2p::iroh::parse_public_peer_addr(&format!("127.0.0.1:9999/p2p/{peer_id}")).unwrap();
+        let endpoint = p2p::iroh::endpoint_addr_from_parts(&peer, &addrs).unwrap();
+        let ticket = p2p::iroh::endpoint_ticket_string(&endpoint);
+        let desired = vec![desired_row(
+            "directory-entry",
+            "conversation",
+            &[],
+            &[ticket.as_str()],
+        )];
+        assert_eq!(desired[0].transport_peer_ids, [peer_id]);
+        let connected = vec![ticket.to_string()];
+        assert!(annotate_pairing_health(desired, &[], &connected)[0].connected);
+        let other = vec![desired_row("other-peer", "conversation", &[], &[])];
+        assert!(!annotate_pairing_health(other, &[], &connected)[0].connected);
     }
 
     #[test]

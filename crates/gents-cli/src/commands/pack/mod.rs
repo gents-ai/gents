@@ -676,74 +676,6 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .await
                     .into_iter()
                     .collect::<Result<Vec<_>>>()?;
-            for dependency in &dependencies {
-                anyhow::ensure!(
-                    dependency.manifest().metadata.kind == PackKind::Graph,
-                    "only graph dependencies are currently installable"
-                );
-            }
-            for slot in requested.keys() {
-                let declared_by_root = pack
-                    .manifest()
-                    .metadata
-                    .inference_slots
-                    .iter()
-                    .any(|declared| declared.name.as_str() == slot.as_str());
-                let declared_by_dependency = dependencies.iter().any(|dependency| {
-                    dependency
-                        .manifest()
-                        .metadata
-                        .inference_slots
-                        .iter()
-                        .any(|declared| declared.name.as_str() == slot.as_str())
-                });
-                anyhow::ensure!(
-                    declared_by_root || declared_by_dependency,
-                    "pack {} and its dependencies have no inference slot {slot:?}",
-                    pack.manifest().name
-                );
-            }
-            let root_requested = requested
-                .iter()
-                .filter(|(slot, _)| {
-                    pack.manifest()
-                        .metadata
-                        .inference_slots
-                        .iter()
-                        .any(|declared| declared.name.as_str() == slot.as_str())
-                })
-                .map(|(slot, profile)| (slot.clone(), profile.clone()))
-                .collect();
-            let inference = gents::pack::preview_pack_inference_bindings(
-                &access,
-                pack.manifest(),
-                &owner,
-                &root_requested,
-            )
-            .await?;
-            let mut dependency_inference = BTreeMap::new();
-            for dependency in &dependencies {
-                let dependency_requested = requested
-                    .iter()
-                    .filter(|(slot, _)| {
-                        dependency
-                            .manifest()
-                            .metadata
-                            .inference_slots
-                            .iter()
-                            .any(|declared| declared.name.as_str() == slot.as_str())
-                    })
-                    .map(|(slot, profile)| (slot.clone(), profile.clone()))
-                    .collect();
-                let preview = gents::pack::preview_pack_inference_bindings(
-                    &access,
-                    dependency.manifest(),
-                    &owner,
-                    &dependency_requested,
-                )
-                .await?;
-                dependency_inference.insert(dependency.manifest().name.clone(), preview);
-            }
             let temp = tempfile::tempdir()?;
             materialize(&pack, temp.path())?;
             let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
@@ -762,11 +694,22 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 &owner,
                 args.force_rebind_concrete_did,
             )?;
-            let desired = gents::pack::bind_pack_install_config(
+            let prepared = gents::pack::prepare_document_pack_install(
+                &access,
+                &owner,
                 pack.manifest(),
                 &authored,
-                &inference.bindings,
-            )?;
+                &requested,
+                &dependencies
+                    .iter()
+                    .map(PackSource::archive)
+                    .collect::<Vec<_>>(),
+                &|name| std::env::var(name).ok(),
+            )
+            .await?;
+            let desired = prepared.config;
+            let inference = prepared.inference;
+            let dependency_inference = prepared.dependency_inference;
             let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
             if args.preview {
                 return crate::print_json(&json!({

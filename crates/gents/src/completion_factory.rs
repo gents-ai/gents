@@ -386,8 +386,12 @@ fn request_additional_params(
 ) -> Option<serde_json::Value> {
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
+        BackendProviderKind::ChatGptCodex => {
+            let scope = normalize_cache_scope(request.session_id.as_str())
+                .or_else(|| normalize_cache_scope(request.request_id.as_str()))?;
+            Some(serde_json::json!({ "prompt_cache_key": scope }))
+        }
         BackendProviderKind::OpenRouter
-        | BackendProviderKind::ChatGptCodex
         | BackendProviderKind::XaiGrokOAuth
         | BackendProviderKind::ClaudeCliSubscription => None,
     }

@@ -134,7 +134,7 @@ export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
-  "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
+  "retryLocal" | "retryHydration" | "configureInference";
 
 export type SessionLoadingStatus = {
   layer: SessionLoadingLayer;
@@ -264,7 +264,7 @@ export function projectSessionLoadingStatus({
       title: "Waiting for session history",
       detail:
         "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
-      action: operationalState ? "reconnect" : "retryLocal",
+      action: operationalState ? null : "retryLocal",
     };
   }
 

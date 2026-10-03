@@ -90,8 +90,10 @@ pub enum PendingPlacement {
     BeforeMessage { message_sequence: i64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingInput {
+    /// Exact physical request identity; equal prompt content is not identity.
+    pub key: String,
     pub placement: PendingPlacement,
 }
 
@@ -107,7 +109,9 @@ pub enum TimelineSlot {
     ToolGroup {
         message_sequence: Option<i64>,
     },
-    Pending,
+    Pending {
+        key: String,
+    },
     Overlay,
 }
 
@@ -128,15 +132,16 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
 /// `messages` are the already-content-filtered transcript messages in arbitrary
 /// order (the shell decides which messages are worth showing — that is
 /// presentation). `group_sequences` are the `message_sequence` keys that have
-/// at least one tool call. `has_pending` / `overlay` gate the two tail slots.
+/// at least one tool call. `pending` supplies request-owned observations in admission order.
 ///
 /// Discipline, mirrored by `ClientShell.Timeline.buildOrder`:
 /// 1. sort messages by `sequence` (None first),
 /// 2. first-wins dedup by `key`, then by `dedup_token`,
 /// 3. each surviving message emits its slot (if `emits_item`) immediately
 ///    followed by its tool group (if it owns one), marking that group attached,
-/// 4. the pending turn immediately before the first durable message from the
-///    same request, or at the body tail when no such message is visible,
+/// 4. each distinct pending request key before its chosen durable message,
+///    or at the body tail when no anchor is visible; equal anchors retain
+///    admission order and physical identity dedup is first-wins,
 /// 5. orphan tool groups — those attached to no surviving message — in sequence
 ///    order, inserting the overlay immediately before the specifically targeted
 ///    active group when it owns a still-running, unmaterialized tool turn,
@@ -145,7 +150,7 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
 pub fn build_timeline_order(
     messages: &[TimelineMessageInput],
     group_sequences: &[Option<i64>],
-    pending: Option<PendingInput>,
+    pending: &[PendingInput],
     overlay: Option<OverlayInput>,
 ) -> Vec<TimelineSlot> {
     let mut ordered: Vec<&TimelineMessageInput> = messages.iter().collect();
@@ -163,11 +168,12 @@ pub fn build_timeline_order(
     let mut seen_keys = std::collections::BTreeSet::new();
     let mut seen_tokens = std::collections::BTreeSet::new();
     let mut attached = std::collections::BTreeSet::new();
-    let pending_target = pending.and_then(|pending| match pending.placement {
-        PendingPlacement::Tail => None,
-        PendingPlacement::BeforeMessage { message_sequence } => Some(message_sequence),
-    });
-    let mut pending_placed = false;
+    let mut seen_pending = std::collections::BTreeSet::new();
+    let pending: Vec<_> = pending
+        .iter()
+        .filter(|input| seen_pending.insert(input.key.as_str()))
+        .collect();
+    let mut pending_placed = std::collections::BTreeSet::new();
 
     for message in ordered {
         if !seen_keys.insert(message.key.clone()) {
@@ -178,13 +184,17 @@ pub fn build_timeline_order(
                 continue;
             }
         }
-        if pending_target.is_some()
-            && !pending_placed
-            && message.sequence == pending_target
-            && (message.emits_item || group_sequences.contains(&message.sequence))
-        {
-            slots.push(TimelineSlot::Pending);
-            pending_placed = true;
+        for input in &pending {
+            if matches!(input.placement, PendingPlacement::BeforeMessage { message_sequence }
+                if message.sequence == Some(message_sequence))
+                && !pending_placed.contains(input.key.as_str())
+                && (message.emits_item || group_sequences.contains(&message.sequence))
+            {
+                slots.push(TimelineSlot::Pending {
+                    key: input.key.clone(),
+                });
+                pending_placed.insert(input.key.as_str());
+            }
         }
         if message.emits_item {
             slots.push(TimelineSlot::Message {
@@ -200,8 +210,12 @@ pub fn build_timeline_order(
         }
     }
 
-    if pending.is_some() && !pending_placed {
-        slots.push(TimelineSlot::Pending);
+    for input in &pending {
+        if !pending_placed.contains(input.key.as_str()) {
+            slots.push(TimelineSlot::Pending {
+                key: input.key.clone(),
+            });
+        }
     }
 
     let mut orphans: Vec<Option<i64>> = group_sequences
@@ -269,10 +283,11 @@ mod tests {
             .count()
     }
 
-    fn pending_tail() -> Option<PendingInput> {
-        Some(PendingInput {
+    fn pending_tail() -> Vec<PendingInput> {
+        vec![PendingInput {
+            key: "request".into(),
             placement: PendingPlacement::Tail,
-        })
+        }]
     }
 
     #[test]
@@ -306,7 +321,7 @@ mod tests {
         ];
         // seq 0 is owned by message "a"; seq 5 is an orphan (no message owns it).
         let groups = vec![Some(0), Some(5)];
-        let slots = build_timeline_order(&messages, &groups, None, None);
+        let slots = build_timeline_order(&messages, &groups, &[], None);
 
         assert_eq!(
             count_group(&slots, Some(0)),
@@ -341,7 +356,7 @@ mod tests {
         let shown = build_timeline_order(
             &messages,
             &groups,
-            pending_tail(),
+            &pending_tail(),
             Some(OverlayInput {
                 has_durable_owner: false,
                 placement: OverlayPlacement::Tail,
@@ -356,7 +371,7 @@ mod tests {
         let hidden = build_timeline_order(
             &messages,
             &groups,
-            pending_tail(),
+            &pending_tail(),
             Some(OverlayInput {
                 has_durable_owner: true,
                 placement: OverlayPlacement::Tail,
@@ -367,7 +382,7 @@ mod tests {
             "a duplicate overlay must not be shown: {hidden:?}"
         );
 
-        let absent = build_timeline_order(&messages, &groups, pending_tail(), None);
+        let absent = build_timeline_order(&messages, &groups, &pending_tail(), None);
         assert!(!absent.contains(&TimelineSlot::Overlay));
     }
 
@@ -378,7 +393,7 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &groups,
-            pending_tail(),
+            &pending_tail(),
             Some(OverlayInput {
                 has_durable_owner: false,
                 placement: OverlayPlacement::BeforeOrphan {
@@ -415,7 +430,7 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &groups,
-            pending_tail(),
+            &pending_tail(),
             Some(OverlayInput {
                 has_durable_owner: false,
                 placement: OverlayPlacement::BeforeOrphan {
@@ -432,7 +447,9 @@ mod tests {
                     sequence: Some(0),
                     role: TimelineRole::User,
                 },
-                TimelineSlot::Pending,
+                TimelineSlot::Pending {
+                    key: "request".into()
+                },
                 TimelineSlot::ToolGroup {
                     message_sequence: Some(1),
                 },
@@ -452,7 +469,7 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &groups,
-            pending_tail(),
+            &pending_tail(),
             Some(OverlayInput {
                 has_durable_owner: false,
                 placement: OverlayPlacement::Tail,
@@ -472,11 +489,11 @@ mod tests {
     fn pending_turn_shown_iff_and_before_orphans() {
         let messages = vec![msg("a", 0, TimelineRole::User)];
         let groups = vec![Some(9)]; // orphan
-        let slots = build_timeline_order(&messages, &groups, pending_tail(), None);
+        let slots = build_timeline_order(&messages, &groups, &pending_tail(), None);
 
         let pending_pos = slots
             .iter()
-            .position(|s| matches!(s, TimelineSlot::Pending));
+            .position(|s| matches!(s, TimelineSlot::Pending { .. }));
         let orphan_pos = slots.iter().position(|s| {
             matches!(
                 s,
@@ -491,10 +508,10 @@ mod tests {
             "pending must precede orphan groups: {slots:?}"
         );
 
-        let no_pending = build_timeline_order(&messages, &groups, None, None);
+        let no_pending = build_timeline_order(&messages, &groups, &[], None);
         assert!(!no_pending
             .iter()
-            .any(|s| matches!(s, TimelineSlot::Pending)));
+            .any(|s| matches!(s, TimelineSlot::Pending { .. })));
     }
 
     #[test]
@@ -506,17 +523,18 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &[],
-            Some(PendingInput {
+            &[PendingInput {
+                key: "request".into(),
                 placement: PendingPlacement::BeforeMessage {
                     message_sequence: 3,
                 },
-            }),
+            }],
             None,
         );
 
         let pending_pos = slots
             .iter()
-            .position(|slot| matches!(slot, TimelineSlot::Pending))
+            .position(|slot| matches!(slot, TimelineSlot::Pending { .. }))
             .expect("pending slot");
         let continued_pos = slots
             .iter()
@@ -539,18 +557,21 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &[Some(3)],
-            Some(PendingInput {
+            &[PendingInput {
+                key: "request".into(),
                 placement: PendingPlacement::BeforeMessage {
                     message_sequence: 3,
                 },
-            }),
+            }],
             None,
         );
 
         assert_eq!(
             slots,
             vec![
-                TimelineSlot::Pending,
+                TimelineSlot::Pending {
+                    key: "request".into()
+                },
                 TimelineSlot::ToolGroup {
                     message_sequence: Some(3),
                 },
@@ -574,15 +595,21 @@ mod tests {
         let slots = build_timeline_order(
             &messages,
             &[],
-            Some(PendingInput {
+            &[PendingInput {
+                key: "request".into(),
                 placement: PendingPlacement::BeforeMessage {
                     message_sequence: 2,
                 },
-            }),
+            }],
             None,
         );
 
-        assert_eq!(slots.last(), Some(&TimelineSlot::Pending));
+        assert_eq!(
+            slots.last(),
+            Some(&TimelineSlot::Pending {
+                key: "request".into()
+            })
+        );
     }
 
     /// Lean `kept_keys_nodup`: first-wins dedup by key — a repeated message key
@@ -594,7 +621,7 @@ mod tests {
             msg("dup", 1, TimelineRole::Assistant),
             msg("other", 2, TimelineRole::Assistant),
         ];
-        let slots = build_timeline_order(&messages, &[], None, None);
+        let slots = build_timeline_order(&messages, &[], &[], None);
         let dup_count = slots
             .iter()
             .filter(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "dup"))
@@ -618,7 +645,7 @@ mod tests {
         // Both message sequences own a group; the second message is dropped by
         // presentation dedup, so its group becomes an orphan (placed in the tail),
         // not attached.
-        let slots = build_timeline_order(&[first, second], &[Some(0), Some(1)], None, None);
+        let slots = build_timeline_order(&[first, second], &[Some(0), Some(1)], &[], None);
 
         let m2_shown = slots
             .iter()
@@ -637,7 +664,7 @@ mod tests {
         let mut none_msg = msg("none", 0, TimelineRole::Assistant);
         none_msg.sequence = None;
         let some_msg = msg("some", 5, TimelineRole::Assistant);
-        let slots = build_timeline_order(&[some_msg, none_msg], &[], None, None);
+        let slots = build_timeline_order(&[some_msg, none_msg], &[], &[], None);
         let none_pos = slots
             .iter()
             .position(|s| matches!(s, TimelineSlot::Message { key, .. } if key == "none"));
@@ -654,11 +681,11 @@ mod tests {
     fn tail_pending_stays_after_sequence_less_messages() {
         let mut none_msg = msg("none", 0, TimelineRole::Assistant);
         none_msg.sequence = None;
-        let slots = build_timeline_order(&[none_msg], &[], pending_tail(), None);
+        let slots = build_timeline_order(&[none_msg], &[], &pending_tail(), None);
 
         assert!(matches!(
             slots.as_slice(),
-            [TimelineSlot::Message { .. }, TimelineSlot::Pending]
+            [TimelineSlot::Message { .. }, TimelineSlot::Pending { .. }]
         ));
     }
 }

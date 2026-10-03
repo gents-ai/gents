@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use gents_loop::rig_compat::cached_input_tokens_observation;
 use rig::client::CompletionClient;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::StreamingCompletionResponse;
@@ -100,7 +101,8 @@ where
                     }
                     result = self.inner.completion(request) => match result {
                         Ok(response) => {
-                            permit.finish_success(Some(response.usage)).await?;
+                            let cached = cached_input_tokens_observation(&response.raw_response);
+                            permit.finish_success_with_cache(Some(response.usage), cached).await?;
                             Ok(response)
                         }
                         Err(error) => {
@@ -112,7 +114,10 @@ where
             }
             None => match self.inner.completion(request).await {
                 Ok(response) => {
-                    permit.finish_success(Some(response.usage)).await?;
+                    let cached = cached_input_tokens_observation(&response.raw_response);
+                    permit
+                        .finish_success_with_cache(Some(response.usage), cached)
+                        .await?;
                     Ok(response)
                 }
                 Err(error) => {

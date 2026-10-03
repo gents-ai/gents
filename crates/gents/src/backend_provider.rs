@@ -691,7 +691,9 @@ mod tests {
     #[tokio::test]
     async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         let (endpoint, requests) =
-            spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-5.5"}]}"#).await;
+            spawn_model_discovery_server(
+                r#"{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]}]}"#,
+            ).await;
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
@@ -718,7 +720,22 @@ mod tests {
         .await
         .expect("ChatGPT Codex model discovery should succeed");
 
-        assert_eq!(model_names(&models), vec!["gpt-5.5"]);
+        assert_eq!(model_names(&models), vec!["gpt-6.1-sol"]);
+        assert_eq!(models[0].context_window, Some(272000));
+        assert_eq!(models[0].max_context_window, Some(872000));
+        assert_eq!(
+            models[0].reasoning_efforts.as_deref(),
+            Some(
+                &[
+                    crate::config::ReasoningEffort::Low,
+                    crate::config::ReasoningEffort::Medium,
+                    crate::config::ReasoningEffort::High,
+                    crate::config::ReasoningEffort::XHigh,
+                    crate::config::ReasoningEffort::Max,
+                    crate::config::ReasoningEffort::Ultra,
+                ][..]
+            )
+        );
         let requests = requests.lock().expect("requests lock");
         let request = requests.first().expect("captured request");
         let version = crate::chatgpt_codex::chatgpt_codex_client_version();

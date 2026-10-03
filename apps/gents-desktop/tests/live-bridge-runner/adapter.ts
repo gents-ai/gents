@@ -59,8 +59,6 @@ export function createBridgeHttpAdapter(
       client.postJson("/desktop/peer/status", { peerId }),
     requestStatusEnrollment: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
-    repairP2P: async () =>
-      client.postJson<DesktopClientSnapshot>("/desktop/p2p/repair", {}),
     fetchSessionSnapshot: async (sessionId, agentDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,

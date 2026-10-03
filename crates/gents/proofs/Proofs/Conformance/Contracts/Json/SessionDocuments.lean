@@ -62,6 +62,55 @@ private def tipCoverageJson (complete known materialized : Bool) : Json :=
     ("complete", toJson complete), ("known", toJson known),
     ("materialized", toJson materialized),
     ("pending", toJson (ClientShell.Timeline.pendingOwnerAbsent coverage materialized))]
+private def timelineSlotJson : ClientShell.Timeline.Slot → Json
+  | .message key seq role => Json.mkObj [("kind", toJson "message"),
+      ("key", toJson key), ("sequence", toJson seq),
+      ("role", toJson (match role with | .user => "user" | .assistant => "assistant"))]
+  | .toolGroup seq => Json.mkObj [("kind", toJson "tool_group"), ("sequence", toJson seq)]
+  | .pending key => Json.mkObj [("kind", toJson "pending"), ("key", toJson key)]
+  | .overlay => Json.mkObj [("kind", toJson "overlay")]
+
+private def pendingTimelineJson (name : String) (msgs : List ClientShell.Timeline.Msg)
+    (pending : List ClientShell.Timeline.PendingInput)
+    (groups : List Int := []) (overlay : Option ClientShell.Timeline.Overlay := none) : Json :=
+  Json.mkObj [("name", toJson name), ("operation", toJson "pending_timeline"),
+    ("messages", toJson (msgs.map (fun m => Json.mkObj [
+      ("key", toJson m.key), ("sequence", toJson m.seq),
+      ("role", toJson (match m.role with | .user => "user" | .assistant => "assistant")),
+      ("emits_item", toJson m.emitsItem), ("token", toJson m.token)]))),
+    ("pending", toJson (pending.map (fun p => Json.mkObj [
+      ("key", toJson p.key), ("before_sequence", toJson (match p.placement with
+        | .tail => (none : Option Int) | .beforeMessage seq => some seq))]))),
+    ("groups", toJson groups),
+    ("overlay", overlay.map (fun o => Json.mkObj [
+      ("has_durable_owner", toJson o.hasDurableOwner),
+      ("before_sequence", toJson (match o.placement with
+        | .tail => (none : Option Int) | .beforeOrphan seq => some seq))]) |>.getD Json.null),
+    ("slots", toJson ((ClientShell.Timeline.buildOrder groups msgs pending overlay).map timelineSlotJson))]
+
+private def pendingTimelineCases : List Json :=
+  let msgs : List ClientShell.Timeline.Msg := [⟨10, 2, .user, true, none⟩,
+    ⟨11, 3, .assistant, true, none⟩]
+  [pendingTimelineJson "empty_pending_preserves_durable_body" msgs [],
+   pendingTimelineJson "interrupted_before_next_durable_request" msgs
+     [⟨1, .beforeMessage 2⟩],
+   pendingTimelineJson "equal_anchor_keeps_distinct_request_identities" msgs
+     [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩, ⟨3, .tail⟩],
+   pendingTimelineJson "first_physical_identity_wins" msgs
+     [⟨1, .tail⟩, ⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
+   pendingTimelineJson "missing_anchor_falls_back_before_orphans" msgs
+     [⟨1, .beforeMessage 99⟩, ⟨2, .tail⟩] [8],
+   pendingTimelineJson "tool_first_replica_retains_pending_order"
+     [⟨10, 2, .assistant, false, none⟩]
+     [⟨1, .beforeMessage 2⟩, ⟨2, .beforeMessage 2⟩] [2, 8],
+   pendingTimelineJson "nonemitting_anchor_without_group_is_not_visible"
+     [⟨10, 2, .assistant, false, none⟩, ⟨11, 3, .assistant, true, none⟩]
+     [⟨1, .beforeMessage 2⟩, ⟨2, .tail⟩],
+   pendingTimelineJson "pending_tail_keeps_overlay_orphan_placement" msgs
+     [⟨1, .tail⟩, ⟨2, .tail⟩] [7, 8] (some ⟨false, .beforeOrphan 8⟩),
+   pendingTimelineJson "durable_owner_suppresses_overlay_only" msgs
+     [⟨1, .tail⟩, ⟨2, .tail⟩] [8] (some ⟨true, .tail⟩)]
+
 private def renameBefore : AgentSession.Document :=
   { indexed with title := some ⟨"task title", .task⟩ }
 private def renameJson : Json := Json.mkObj
@@ -147,7 +196,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson [renameJson, clearTitleJson,
+   ("projection", toJson (pendingTimelineCases ++ [renameJson, clearTitleJson,
       tipCoverageJson false false false,
       tipCoverageJson false true false,
       tipCoverageJson false true true,
@@ -173,7 +222,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       refreshJson "missing_current_row_noop" newerRequest [],
       refreshJson "foreign_scope_current_row_noop" newerRequest
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_behavior_current_row_noop" newerRequest [{ completedRequest with behavior := 99 }]]),
+      refreshJson "wrong_behavior_current_row_noop" newerRequest [{ completedRequest with behavior := 99 }]])),
    ("selection", toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,

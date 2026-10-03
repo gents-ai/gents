@@ -1,5 +1,6 @@
 use async_stream::try_stream;
 use futures::{future::BoxFuture, StreamExt};
+use gents_loop::rig_compat::{cached_input_tokens_observation, CachedInputTokensObservation};
 use rig::completion::{CompletionError, GetTokenUsage, Usage};
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamingCompletionResponse,
@@ -8,7 +9,12 @@ use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
 pub(crate) trait StreamGuardLifecycle {
-    fn mark_stream_success(&mut self, _usage: Option<Usage>) {}
+    fn mark_stream_success(
+        &mut self,
+        _usage: Option<Usage>,
+        _cached_input_tokens: CachedInputTokensObservation,
+    ) {
+    }
 
     fn mark_stream_error(&mut self, _error: &CompletionError) {}
 
@@ -46,7 +52,7 @@ pub(crate) fn hold_stream_guard<R, G>(
     guard: G,
 ) -> StreamingCompletionResponse<R>
 where
-    R: Clone + Unpin + GetTokenUsage + Send + 'static,
+    R: Clone + Unpin + GetTokenUsage + serde::Serialize + Send + 'static,
     G: StreamGuardLifecycle + Send + Unpin + 'static,
 {
     let guarded = try_stream! {
@@ -59,7 +65,10 @@ where
                         let mut terminal_guard = guard
                             .take()
                             .expect("stream guard finalization starts exactly once");
-                        terminal_guard.mark_stream_success(response.token_usage());
+                        terminal_guard.mark_stream_success(
+                            response.token_usage(),
+                            cached_input_tokens_observation(response),
+                        );
                         // The owned loop charges from the terminal item, while
                         // crash rehydrate charges from the InferenceCall row.
                         // Persist before publishing so the two cannot diverge.
@@ -79,7 +88,7 @@ where
             }
         }
         if let Some(mut terminal_guard) = guard.take() {
-            terminal_guard.mark_stream_success(None);
+            terminal_guard.mark_stream_success(None, CachedInputTokensObservation::NotAvailable);
             finish_guard(terminal_guard).await?;
         }
         if let Some(message_id) = inner.message_id {

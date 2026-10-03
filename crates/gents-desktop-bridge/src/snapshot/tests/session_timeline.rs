@@ -791,3 +791,124 @@ fn timeline_keys(snapshot: &DesktopSessionSnapshot) -> Vec<&str> {
         })
         .collect()
 }
+
+#[test]
+fn historical_pending_input_pages_with_its_durable_anchor() {
+    let mut snapshot = empty_timeline_snapshot();
+    snapshot.timeline_items = vec![
+        RenderedTimelineItem::PendingUserTurn {
+            item_key: "pending-interrupted".into(),
+            request_id: "interrupted".into(),
+            content: "keep this input".into(),
+            selected_skill_ids: vec![],
+            lifecycle_state: Some("interrupted".into()),
+            created_at: None,
+        },
+        assistant_item("anchor", 1),
+        assistant_item("later", 2),
+    ];
+    let all_items = snapshot.timeline_items.clone();
+    let page = timeline_page(2, true, false);
+    apply_session_timeline_page_with_query(&mut snapshot, None, Some(1), Some(&page)).unwrap();
+    assert_eq!(snapshot.timeline_items.len(), 1);
+    assert!(!snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { .. })));
+    snapshot.timeline_items = all_items;
+    apply_session_timeline_page_with_query(&mut snapshot, None, Some(3), Some(&page)).unwrap();
+    assert!(matches!(
+        snapshot.timeline_items[0],
+        RenderedTimelineItem::PendingUserTurn { .. }
+    ));
+    assert_ne!(
+        snapshot.timeline_page.unwrap().oldest_item_key.as_deref(),
+        Some("pending-interrupted")
+    );
+}
+
+#[test]
+fn request_only_history_uses_existing_local_window_without_durable_cursor() {
+    let mut snapshot = empty_timeline_snapshot();
+    snapshot.timeline_items = (0..100)
+        .map(|index| RenderedTimelineItem::PendingUserTurn {
+            item_key: format!("pending-{index}"),
+            request_id: format!("request-{index}"),
+            content: format!("input {index}"),
+            selected_skill_ids: vec![],
+            lifecycle_state: Some("interrupted".into()),
+            created_at: None,
+        })
+        .collect();
+    let mut local_snapshot = snapshot.clone();
+    apply_session_timeline_page(&mut local_snapshot, None, Some(40)).unwrap();
+    assert_eq!(local_snapshot.timeline_items.len(), 100);
+    assert!(!local_snapshot.timeline_page.as_ref().unwrap().has_older);
+    assert!(local_snapshot
+        .timeline_page
+        .as_ref()
+        .unwrap()
+        .oldest_item_key
+        .is_none());
+    let page = timeline_page(0, true, false);
+    apply_session_timeline_page_with_query(&mut snapshot, None, Some(40), Some(&page)).unwrap();
+    assert_eq!(snapshot.timeline_items.len(), 100);
+    let metadata = snapshot.timeline_page.unwrap();
+    assert_eq!(metadata.page_items, 100);
+    assert!(!metadata.has_older);
+    assert!(metadata.oldest_item_key.is_none());
+}
+
+#[test]
+fn local_pending_history_pages_with_durable_anchor_cursor() {
+    let mut full = empty_timeline_snapshot();
+    let pending = RenderedTimelineItem::PendingUserTurn {
+        item_key: "pending-old".into(),
+        request_id: "old".into(),
+        content: "interrupted input".into(),
+        selected_skill_ids: vec![],
+        lifecycle_state: Some("interrupted".into()),
+        created_at: None,
+    };
+    full.timeline_items = vec![
+        pending,
+        assistant_item("anchor", 1),
+        assistant_item("latest", 2),
+    ];
+    let mut before_anchor = full.clone();
+    apply_session_timeline_page(&mut before_anchor, Some("anchor"), Some(1)).unwrap();
+    assert!(before_anchor.timeline_items.is_empty());
+    let mut tip = full.clone();
+    apply_session_timeline_page(&mut tip, None, Some(1)).unwrap();
+    assert_eq!(timeline_keys(&tip), ["latest"]);
+    let cursor = tip.timeline_page.unwrap().oldest_item_key.unwrap();
+    apply_session_timeline_page(&mut full, Some(&cursor), Some(1)).unwrap();
+    assert_eq!(timeline_keys(&full), ["pending-old", "anchor"]);
+    let metadata = full.timeline_page.unwrap();
+    assert_eq!(metadata.oldest_item_key.as_deref(), Some("anchor"));
+    assert!(!metadata.has_older);
+    assert!(metadata.has_newer);
+}
+
+#[test]
+fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
+    let mut full = empty_timeline_snapshot();
+    full.timeline_items = vec![
+        assistant_item("latest", 2),
+        RenderedTimelineItem::PendingUserTurn {
+            item_key: "pending-current".into(),
+            request_id: "current".into(),
+            content: "current input".into(),
+            selected_skill_ids: vec![],
+            lifecycle_state: Some("interrupted".into()),
+            created_at: None,
+        },
+        tool_group(1),
+    ];
+    let mut local = full.clone();
+    apply_session_timeline_page(&mut local, None, Some(1)).unwrap();
+    assert_eq!(timeline_keys(&local), ["latest", "pending-current"]);
+    let page = timeline_page(2, true, false);
+    apply_session_timeline_page_with_query(&mut full, None, Some(1), Some(&page)).unwrap();
+    assert_eq!(timeline_keys(&full), ["latest", "pending-current"]);
+}

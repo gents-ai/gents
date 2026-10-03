@@ -34,7 +34,9 @@ fn rendered_timeline_durable_sequence(
 /// Bound the bridge-visible transcript while retaining an opaque, durable-row
 /// cursor for explicit older-page requests. The full database-backed snapshot
 /// remains authoritative inside the bridge; only IPC materialization is
-/// windowed here.
+/// windowed here. Request-owned inputs are already loaded session state; retain
+/// them beside their selected durable anchor (or the tip) for the frontend's
+/// existing local transcript window, without inventing a database cursor.
 pub fn apply_session_timeline_page(
     snapshot: &mut DesktopSessionSnapshot,
     before_item_key: Option<&str>,
@@ -54,11 +56,77 @@ pub fn apply_session_timeline_page_with_query(
         .unwrap_or(DEFAULT_SESSION_TIMELINE_PAGE_SIZE)
         .clamp(1, MAX_SESSION_TIMELINE_PAGE_SIZE);
 
-    let (page, has_older, has_newer, oldest_item_key) = if let Some(query_page) = query_page {
+    let mut end = if query_page.is_some() {
+        total_items
+    } else {
+        match before_item_key {
+            Some(cursor) => snapshot
+                .timeline_items
+                .iter()
+                .position(|item| rendered_timeline_item_key(item) == cursor)
+                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
+            None => total_items,
+        }
+    };
+    if query_page.is_none() && before_item_key.is_some() {
+        while end > 0
+            && matches!(
+                snapshot.timeline_items[end - 1],
+                crate::types::RenderedTimelineItem::PendingUserTurn { .. }
+            )
+        {
+            end -= 1;
+        }
+    }
+    let candidates = &snapshot.timeline_items[..end];
+    let (page, has_older, has_newer, oldest_item_key) = {
+        let mut pending_anchors = HashMap::new();
+        let mut next_sequence = None;
+        for item in candidates.iter().rev() {
+            if let crate::types::RenderedTimelineItem::ToolGroup {
+                message_sequence, ..
+            } = item
+            {
+                if !snapshot.messages.iter().any(|message| {
+                    message.sequence == *message_sequence
+                        && message.has_tool_calls
+                        && !message.has_tool_results
+                        && !message.runtime_control
+                }) {
+                    continue;
+                }
+            }
+            match rendered_timeline_durable_sequence(item) {
+                Some(Some(sequence)) => next_sequence = Some(sequence),
+                None if matches!(
+                    item,
+                    crate::types::RenderedTimelineItem::PendingUserTurn { .. }
+                ) =>
+                {
+                    if let Some(sequence) = next_sequence {
+                        pending_anchors.insert(rendered_timeline_item_key(item), sequence);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let page_sequence = |item: &crate::types::RenderedTimelineItem| {
+            pending_anchors
+                .get(rendered_timeline_item_key(item))
+                .copied()
+                .map(Some)
+                .or_else(|| rendered_timeline_durable_sequence(item))
+        };
         let mut sequence_counts = BTreeMap::<i64, usize>::new();
         let mut non_durable_items = 0_usize;
-        for item in &snapshot.timeline_items {
-            match rendered_timeline_durable_sequence(item) {
+        for item in candidates {
+            if matches!(
+                item,
+                crate::types::RenderedTimelineItem::PendingUserTurn { .. }
+            ) {
+                continue;
+            }
+            match page_sequence(item) {
                 Some(Some(sequence)) => {
                     *sequence_counts.entry(sequence).or_default() += 1;
                 }
@@ -92,10 +160,9 @@ pub fn apply_session_timeline_page_with_query(
             remaining -= item_count;
         }
 
-        let page = snapshot
-            .timeline_items
+        let page = candidates
             .iter()
-            .filter(|item| match rendered_timeline_durable_sequence(item) {
+            .filter(|item| match page_sequence(item) {
                 Some(Some(sequence)) => selected_sequences.contains(&sequence),
                 Some(None) => false,
                 None => true,
@@ -113,9 +180,11 @@ pub fn apply_session_timeline_page_with_query(
             .map(rendered_timeline_item_key)
             .map(str::to_owned)
             .or_else(|| {
-                if query_page.source_exhausted && !has_unselected_sequences {
+                if query_page.is_none_or(|page| page.source_exhausted) && !has_unselected_sequences
+                {
                     return None;
                 }
+                let query_page = query_page?;
                 query_page
                     .store
                     .transcript_messages
@@ -133,47 +202,10 @@ pub fn apply_session_timeline_page_with_query(
             });
         (
             page,
-            has_unselected_sequences || !query_page.source_exhausted,
-            query_page.has_newer,
+            has_unselected_sequences || query_page.is_some_and(|page| !page.source_exhausted),
+            query_page.map_or(end < total_items, |page| page.has_newer),
             oldest_item_key,
         )
-    } else {
-        let end = match before_item_key {
-            Some(cursor) => snapshot
-                .timeline_items
-                .iter()
-                .position(|item| rendered_timeline_item_key(item) == cursor)
-                .ok_or_else(|| format!("session timeline cursor is no longer present: {cursor}"))?,
-            None => total_items,
-        };
-        let mut start = end.saturating_sub(limit);
-        if start > 0 {
-            if let Some(boundary_sequence) =
-                rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-            {
-                if rendered_timeline_durable_sequence(&snapshot.timeline_items[start - 1])
-                    == Some(boundary_sequence)
-                {
-                    while start < end
-                        && rendered_timeline_durable_sequence(&snapshot.timeline_items[start])
-                            == Some(boundary_sequence)
-                    {
-                        start += 1;
-                    }
-                    if start == end {
-                        return Err(format!(
-                            "session timeline sequence group {boundary_sequence:?} exceeds the visible page budget of {limit}"
-                        ));
-                    }
-                }
-            }
-        }
-        let page = snapshot.timeline_items[start..end].to_vec();
-        let oldest_item_key = page
-            .first()
-            .map(rendered_timeline_item_key)
-            .map(str::to_owned);
-        (page, start > 0, end < total_items, oldest_item_key)
     };
     let newest_item_key = page
         .last()

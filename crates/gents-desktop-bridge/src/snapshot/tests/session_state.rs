@@ -254,7 +254,7 @@ fn canonical_transcript_keeps_partial_reconstruction_explicit() {
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "session-1", None)
             .expect("snapshot");
     assert!(
-        matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::AssistantMessage { reconstruction, content: None, .. }] if reconstruction.state == ReconstructionState::Loading)
+        matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::PendingUserTurn { .. }, RenderedTimelineItem::AssistantMessage { reconstruction, content: None, .. }] if reconstruction.state == ReconstructionState::Loading)
     );
 }
 

@@ -49,7 +49,6 @@ function usePeerRoute(
     selectAgent: route.selectAgent,
     setAddingPeer: vi.fn(),
     setError: vi.fn(),
-    setRepairingP2P: vi.fn(),
     setStarting: vi.fn(),
     snapshot: null,
   });
