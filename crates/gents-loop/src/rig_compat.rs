@@ -526,6 +526,32 @@ mod tests {
 
     #[cfg(feature = "native")]
     #[test]
+    fn responses_wire_conversion_preserves_prompt_cache_key() {
+        use rig::providers::openai::responses_api::CompletionRequest as ResponsesCompletionRequest;
+
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
+                "Continue this session",
+            )),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: Some(128),
+            tool_choice: None,
+            additional_params: Some(json!({"prompt_cache_key": "session-cache-key"})),
+            output_schema: None,
+        };
+        let converted = ResponsesCompletionRequest::try_from(("gpt-test".to_string(), request))
+            .expect("convert Responses request");
+        let wire = serde_json::to_value(converted).expect("serialize Responses wire request");
+        assert_eq!(wire["prompt_cache_key"], "session-cache-key");
+        assert!(wire.get("additional_params").is_none());
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
     fn responses_cache_observation_preserves_absent_zero_and_positive_details() {
         type Response =
             rig::providers::openai::responses_api::streaming::StreamingCompletionResponse;
