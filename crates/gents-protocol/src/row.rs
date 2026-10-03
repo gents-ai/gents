@@ -60,7 +60,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub purpose: Option<crate::request_admission::RequestPurpose>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
@@ -86,7 +86,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub runtime_source_kind: Option<String>,
     #[serde(default)]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -172,12 +172,13 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub valid_until: Option<String>,
     #[serde(default)]
-    pub subagent_depth: Option<i64>,
+    pub request_hop: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
-    /// Signed workspace reference scope, independent of the executing principal.
+    /// Node workspace scope copied from the verified workspace, independent of
+    /// the executing node; not host identity.
     #[serde(default)]
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
     #[serde(default)]
