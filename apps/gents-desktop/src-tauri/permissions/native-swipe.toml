@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "native-swipe"
+description = "Allow a view to report whether the content under the pointer can still scroll sideways, so a history swipe never takes a scroll it should leave alone."
+commands.allow = ["swipe_scroll_edges"]

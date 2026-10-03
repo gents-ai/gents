@@ -24,7 +24,7 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default", "desktop-runtime-admin", "native-windows"]
+      "capabilities": ["default", "desktop-runtime-admin", "native-windows", "native-swipe"]
     }
   },
   "bundle": {

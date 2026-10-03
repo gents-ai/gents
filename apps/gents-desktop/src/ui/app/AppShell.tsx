@@ -65,6 +65,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@gents/ui/components/sheet";
+import { SwipeHandles } from "./SwipeHandles";
 
 function RailItem({
   label,
@@ -695,6 +696,7 @@ export function AppShell({
               docked && dockVisible && paneCol - 8 < 360 ? { width: 360 } : undefined
             }
           >
+            <SwipeHandles />
             {error && (
               <div
                 role="alert"
