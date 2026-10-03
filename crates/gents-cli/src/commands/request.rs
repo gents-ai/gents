@@ -1516,7 +1516,7 @@ mod tests {
             profile: Some("main".into()),
             behaviors_on_profile: vec!["x".into(), "y".into()],
             resets_at,
-            switch_command: Some("gents config profile set-account main <account>".into()),
+            switch_command: Some("gents config profile set-account main".into()),
         }
     }
 
@@ -1538,7 +1538,7 @@ mod tests {
         );
         assert!(
             text.contains(
-                "profile main (used by 2 behaviors); switch: gents config profile set-account main <account>"
+                "profile main (used by 2 behaviors); switch: gents config profile set-account main"
             ),
             "{text}"
         );

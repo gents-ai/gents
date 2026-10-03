@@ -235,7 +235,8 @@ source consistency checks, not a separate runtime compatibility version.
   accounts (by label, `credential_id` or `account_ref`; `--provider` narrows
   a label two providers share), `--provider <provider>` alone picks the
   provider's earliest-connected enabled account and says so, and
-  `gents config profile set-account <profile> <account>` moves a profile.
+  `gents config profile set-account <profile> <account>` moves a profile to
+  another account of the same provider.
   Creating a profile on, or moving it to, a disabled account or one that is
   not on this node is refused, and the error lists the enabled accounts; other
   edits of such a profile are allowed. `config profile list` and `show` name
@@ -291,6 +292,21 @@ source consistency checks, not a separate runtime compatibility version.
   unchanged. A Goal now reads the call that ended its request, so an earlier
   failed retry no longer hides a later usage limit. A recorded reset no
   longer moves when read later.
+- Move a profile to another account in one step (#2121). `gents config
+  profile set-account <profile>` lists the provider's other enabled accounts
+  whose backend offers the profile's model, each with its stored usage (where
+  it came from and how old it is) or "unknown", the behaviors and plugin model
+  slots that use the profile and the cost: after the move the provider's
+  prompt cache starts empty, so the next turns are slower and use more of the
+  new account's quota. With an account it moves the profile, and every
+  behavior, plugin slot and session on it uses that account from its next
+  turn; `--with-compaction` also moves the other profiles of those behaviors
+  that are on the same account. A disabled or removed account, another
+  provider's account, or one whose catalog does not offer the model is
+  refused; when no account qualifies the error says how to add one.
+  `gents goal resume-on <account> --from <request>` moves the profile that
+  hit a usage limit and resumes the Goal; retrying with the same `--from`
+  returns the same continuation.
 
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at

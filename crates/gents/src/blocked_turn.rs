@@ -97,18 +97,20 @@ pub(crate) fn blocked_turn_from(
             },
         };
         let backend_id = call.backend_id.as_deref();
-        let mut on_backend = profiles.iter().filter(|profile| {
+        // The profile that served the call's kind, while it is still on the
+        // call's backend; a sibling left there did not serve the call.
+        let served = if call.call_kind.as_deref() == Some("compaction") {
+            profiles.last()
+        } else {
+            profiles.first()
+        };
+        let profile = served.filter(|profile| {
             references
                 .profile_with_backend(profile)
                 .ok()
                 .flatten()
                 .is_some_and(|(profile, _)| Some(profile.backend_id.as_str()) == backend_id)
         });
-        let profile = if call.call_kind.as_deref() == Some("compaction") {
-            on_backend.next_back()
-        } else {
-            on_backend.next()
-        };
         let started_at = call
             .started_at
             .as_deref()
@@ -163,7 +165,7 @@ pub(crate) fn blocked_turn_from(
             .unwrap_or_default(),
         switch_command: profile
             .as_deref()
-            .map(|profile| format!("gents config profile set-account {profile} <account>")),
+            .map(|profile| format!("gents config profile set-account {profile}")),
         profile,
         resets_at,
     })
@@ -186,6 +188,30 @@ pub async fn blocked_turn(
     agent_did: &str,
     request_id: &str,
 ) -> Result<Option<BlockedTurn>> {
+    let (accounts, references, request, call) =
+        stopped_request(access, agent_did, request_id).await?;
+    Ok(blocked_turn_from(
+        &references,
+        &accounts,
+        &request,
+        call.as_ref(),
+        Utc::now(),
+    ))
+}
+
+/// What [`blocked_turn_from`] reads for `request_id`: the principal's
+/// accounts, then one configuration snapshot, the request row and its last
+/// failed call. An unknown request is an error.
+pub(crate) async fn stopped_request(
+    access: &ConfigAccess,
+    agent_did: &str,
+    request_id: &str,
+) -> Result<(
+    Vec<AccountSummary>,
+    ConfigReferences,
+    AgentRequestRow,
+    Option<FailedCall>,
+)> {
     let accounts = list_accounts(access, agent_did).await?;
     let (references, request, call) = access
         .transact("blocked_turn.request", |txn| {
@@ -203,13 +229,7 @@ pub async fn blocked_turn(
             })
         })
         .await?;
-    Ok(blocked_turn_from(
-        &references,
-        &accounts,
-        &request,
-        call.as_ref(),
-        Utc::now(),
-    ))
+    Ok((accounts, references, request, call))
 }
 
 /// [`blocked_turn`] for the latest request of `session_id`'s canonical Goal.

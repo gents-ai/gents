@@ -1455,9 +1455,76 @@ fn profile_set_and_set_account_take_an_account() {
             panic!("{argv:?} parsed as another command");
         };
         assert_eq!(
-            (args.profile.as_str(), args.account.as_str()),
-            ("p", "label-b")
+            (args.profile.as_str(), args.account.as_deref()),
+            ("p", Some("label-b"))
         );
         assert_eq!(args.provider.is_some(), !extra.is_empty());
     }
+}
+
+#[test]
+fn set_account_lists_without_an_account_and_moves_companions_on_request() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "config", "profile", "set-account"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Config {
+            command:
+                ConfigCommand::Profile {
+                    command: InferenceProfileCommand::SetAccount(args),
+                },
+        }) => Ok((args.profile, args.account, args.with_compaction)),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(parse(&["p"]).unwrap(), ("p".into(), None, false));
+    assert_eq!(
+        parse(&["p", "label-b", "--with-compaction"]).unwrap(),
+        ("p".into(), Some("label-b".into()), true)
+    );
+    assert!(
+        parse(&["p", "--with-compaction"]).is_err(),
+        "companions move only with an account"
+    );
+}
+
+#[test]
+fn goal_resume_on_takes_an_account_and_requires_from() {
+    let parse = |argv: &[&str]| match Cli::try_parse_from(
+        [&["gents", "goal", "resume-on"][..], argv].concat(),
+    )
+    .map(|cli| cli.command)
+    {
+        Ok(Command::Goal {
+            command: GoalCommand::ResumeOn(args),
+        }) => Ok((
+            args.account,
+            args.from,
+            args.scope.session,
+            args.with_compaction,
+        )),
+        Ok(_) => panic!("{argv:?} parsed as another command"),
+        Err(error) => Err(error),
+    };
+    assert_eq!(
+        parse(&["label-b", "--from", "r1", "--session", "s"]).unwrap(),
+        ("label-b".into(), "r1".into(), "s".into(), false)
+    );
+    assert!(
+        parse(&[
+            "label-b",
+            "--from",
+            "r1",
+            "--session",
+            "s",
+            "--with-compaction"
+        ])
+        .unwrap()
+        .3
+    );
+    assert_eq!(
+        parse(&["label-b", "--session", "s"]).unwrap_err().kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
 }

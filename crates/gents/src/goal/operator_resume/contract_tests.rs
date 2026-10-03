@@ -1,6 +1,5 @@
+use super::support;
 use super::*;
-#[path = "support.rs"]
-mod support;
 use serde::Deserialize;
 use serde_json::json;
 use support::*;

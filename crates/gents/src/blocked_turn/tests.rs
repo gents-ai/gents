@@ -190,7 +190,7 @@ fn rejected_headers_limit() {
             profile: Some("main".into()),
             behaviors_on_profile: vec!["x".into(), "y".into()],
             resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
-            switch_command: Some("gents config profile set-account main <account>".into()),
+            switch_command: Some("gents config profile set-account main".into()),
         })
     );
 }
@@ -230,7 +230,7 @@ fn compaction_call_names_the_compaction_profile() {
     assert_eq!(turn.behaviors_on_profile, ["x"]);
     assert_eq!(
         turn.switch_command.as_deref(),
-        Some("gents config profile set-account summ <account>")
+        Some("gents config profile set-account summ")
     );
 }
 
@@ -252,9 +252,26 @@ fn call_kind_picks_the_profile_when_both_share_the_backend() {
     assert_eq!(compaction.behaviors_on_profile, ["x"]);
     assert_eq!(
         compaction.switch_command.as_deref(),
-        Some("gents config profile set-account summ <account>")
+        Some("gents config profile set-account summ")
     );
     assert_eq!(stopped("inference").profile.as_deref(), Some("main"));
+}
+
+#[test]
+fn a_moved_profile_is_not_replaced_by_its_sibling() {
+    let stopped = |main_backend, summ_backend, call_kind| {
+        let call = call(A, call_kind, anthropic_rejected());
+        blocked(
+            &references(documents(main_backend, summ_backend)),
+            &accounts(),
+            &failed_request("limit"),
+            Some(&call),
+        )
+        .expect("blocked")
+        .profile
+    };
+    assert_eq!(stopped(B, A, "inference"), None, "main moved off A");
+    assert_eq!(stopped(A, B, "compaction"), None, "summ moved off A");
 }
 
 #[test]

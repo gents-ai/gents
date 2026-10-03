@@ -58,6 +58,102 @@ pub async fn resume_goal_request(
     }
 }
 
+/// A Goal resumed on another account: the move, `None` when the profile was
+/// already there, and the resume.
+#[derive(Debug, Clone, Serialize)]
+pub struct GoalResumeOnReceipt {
+    pub switch: Option<crate::config_client::SwitchReceipt>,
+    pub resume: GoalResumeReceipt,
+}
+
+/// Move the profile whose usage limit stopped `from_request_id` to
+/// `target_backend_id` (with `move_companions`, its companions), then resume
+/// the Goal from that request. A retry with the same `from_request_id` finds
+/// the profile already on the target and returns the same continuation.
+/// `plugin_slots` gives the plugins bound to the moved profile on the host.
+#[allow(clippy::too_many_arguments)]
+pub async fn resume_goal_on_account(
+    access: &crate::ConfigAccess,
+    identity: &dyn AgentIdentity,
+    agent_did: &str,
+    session_id: &str,
+    from_request_id: &str,
+    target_backend_id: &str,
+    move_companions: bool,
+    plugin_slots: &dyn Fn(&str) -> Result<Vec<String>>,
+) -> Result<GoalResumeOnReceipt> {
+    use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
+    anyhow::ensure!(
+        identity.did() == agent_did,
+        "goal resume requires the target principal's signing identity"
+    );
+    let (accounts, references, request, call) =
+        stopped_request(access, agent_did, from_request_id).await?;
+    anyhow::ensure!(
+        request.session_id.as_deref() == Some(session_id),
+        "resume predecessor must uniquely belong to the goal owner and session"
+    );
+    let now = Utc::now();
+    let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref(), now)
+        .filter(|turn| turn.reason == BlockedReason::UsageLimit)
+        .with_context(|| {
+            format!(
+                "request {from_request_id:?} did not stop on a usage limit; move its profile \
+                 with `gents config profile set-account <profile>` and resume with \
+                 `gents goal resume-request --from {from_request_id}`"
+            )
+        })?;
+    let switch = match limited.profile {
+        Some(profile) => {
+            let receipt = async {
+                let slots = plugin_slots(&profile)?;
+                crate::config_client::switch_profile_account(
+                    access,
+                    agent_did,
+                    &profile,
+                    target_backend_id,
+                    move_companions,
+                    &slots,
+                )
+                .await
+            }
+            .await
+            .map_err(|error| anyhow::anyhow!("switch failed; nothing changed: {error:#}"))?;
+            Some(receipt)
+        }
+        // The profile that served the call left the limited account: an
+        // earlier run moved it. Done when it runs on the target.
+        None => {
+            let on_target = call.map(|call| FailedCall {
+                backend_id: Some(target_backend_id.to_owned()),
+                ..call
+            });
+            blocked_turn_from(&references, &accounts, &request, on_target.as_ref(), now)
+                .and_then(|turn| turn.profile)
+                .context(
+                    "switch failed; nothing changed: the profile that hit the limit is on \
+                     neither its account nor the target; move it with `gents config profile \
+                     set-account <profile>` and resume with `gents goal resume-request`",
+                )?;
+            None
+        }
+    };
+    let resume = resume_goal_request(access, identity, agent_did, session_id, from_request_id)
+        .await
+        .map_err(|error| match &switch {
+            Some(receipt) => anyhow::anyhow!(
+                "resume failed after the switch committed (profile {} is now on {}); run the \
+                 same command again with the same --from: {error:#}",
+                receipt.profile,
+                receipt.account.label
+            ),
+            None => anyhow::anyhow!(
+                "resume failed; run the same command again with the same --from: {error:#}"
+            ),
+        })?;
+    Ok(GoalResumeOnReceipt { switch, resume })
+}
+
 async fn stage_resume(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn AgentIdentity,
@@ -226,3 +322,7 @@ async fn stage_resume(
 
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod support;
+#[cfg(test)]
+mod tests;
