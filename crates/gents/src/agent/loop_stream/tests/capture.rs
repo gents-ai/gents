@@ -714,3 +714,150 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
 }
 
 const CAPTURE_SCOPE_SINK: &str = "inference.1";
+
+#[tokio::test]
+async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction() {
+    use gents_loop::provider_input::routing_affinity::current;
+    use gents_loop::session_hook::SessionHook;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let session = hook.session_id().await.unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_for_observer = seen.clone();
+    let expected_session = session.clone();
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(transient_provider_error("affinity retry")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ToolCall(
+                RawStreamingToolCall::new("fc-1".into(), "echo".into(), serde_json::json!({}))
+                    .with_call_id("call-1".into()),
+            ),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ])
+    .with_provider_observer(Arc::new(move |dispatch| {
+        let affinity = current().expect("main provider poll has execution affinity");
+        assert_eq!(affinity.session(), expected_session);
+        if dispatch {
+            seen_for_observer
+                .lock()
+                .unwrap()
+                .push(affinity.token().map(str::to_owned));
+            affinity.observe(Some("first"));
+        } else {
+            assert_eq!(affinity.token(), Some("first"));
+        }
+    }));
+    let mut cfg = owned_config(4);
+    cfg.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::ChatGptCodex,
+        crate::OpenAiWireApi::Responses,
+        "gpt-5-codex",
+    ));
+    cfg.max_tokens = Some(6_000);
+    cfg.context_window = 6_500;
+    cfg.compaction_threshold = 0.25;
+    let auxiliary_counter = cfg.provider_input_counter.clone();
+    cfg.turn_compactor = Some(Arc::new(move |_| {
+        let counter = auxiliary_counter.clone();
+        Box::pin(async move {
+            assert!(
+                current().is_none(),
+                "compaction must not inherit main affinity"
+            );
+            let model = ScriptedModel::new(vec![
+                RawStreamingChoice::Message("summary".into()),
+                RawStreamingChoice::FinalResponse(()),
+            ])
+            .without_capture()
+            .with_provider_observer(Arc::new(|_| assert!(current().is_none())));
+            let mut auxiliary_config = config(0);
+            auxiliary_config.provider_input_counter = counter;
+            let auxiliary = run_loop_stream(
+                model,
+                None::<gents_loop::session_hook::NoopSessionHook>,
+                TaggedMessage::unassociated(Message::user("summarize")),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                auxiliary_config,
+            );
+            futures::pin_mut!(auxiliary);
+            while let Some(item) = auxiliary.next().await {
+                item.unwrap();
+            }
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![TaggedMessage::unassociated(Message::user(
+                    "compacted prompt",
+                ))],
+                reduction_key: "affinity-compaction".into(),
+            })
+        })
+    }));
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        cfg,
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
+    )
+    .await;
+    assert_eq!(collected.error, None, "{collected:?}");
+    assert!(current().is_none());
+    let modeled_token = |name: &str| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .routing_affinity_cases
+            .iter()
+            .find(|case| case["name"].as_str() == Some(name))
+            .unwrap()["expected_token"]
+            .as_str()
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            modeled_token("initial"),
+            modeled_token("first_token_retained"),
+            modeled_token("first_token_retained")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn other_provider_loop_has_no_codex_affinity() {
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".into()),
+        RawStreamingChoice::FinalResponse(()),
+    ])
+    .with_provider_observer(Arc::new(|_| {
+        assert!(gents_loop::provider_input::routing_affinity::current().is_none());
+    }));
+    let stream = run_loop_stream(
+        model,
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("hi")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        owned_config(0),
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert_eq!(collected.error, None, "{collected:?}");
+}
