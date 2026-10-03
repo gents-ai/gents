@@ -69,7 +69,7 @@ def casesJson : String :=
   "[" ++ String.intercalate "," (cases.map PresentationCase.toJson) ++ "]"
 
 def recoveryKindJson (kind : RecoveryStatusKind) : String :=
-  jsonString (match kind with | .ready => "ready" | .waiting => "waiting")
+  jsonString (match kind with | .ready => "ready" | .waiting => "waiting" | .blocked => "blocked")
 
 def recoveryActionJson : Option Unit → String
   | none => "null"
@@ -77,7 +77,8 @@ def recoveryActionJson : Option Unit → String
 
 def recoveryCaseJson (surface : String) (connected routeReady pairingPending : Bool) : String :=
   let projected := if surface = "transport" then projectTransportRecovery connected
-    else projectRouteRecovery routeReady pairingPending
+    else if surface = "route" then projectRouteRecovery routeReady pairingPending
+    else projectConnectionFailure
   "{\"name\":" ++ jsonString s!"{surface}_{connected}_{routeReady}_{pairingPending}" ++
     ",\"surface\":" ++ jsonString surface ++
     ",\"connected\":" ++ toString connected ++
@@ -91,7 +92,8 @@ def recoveryCasesJson : String :=
     recoveryCaseJson "transport" connected false false
   let route := [false, true].flatMap fun ready => [false, true].map fun pairing =>
     recoveryCaseJson "route" true ready pairing
-  "[" ++ String.intercalate "," (transport ++ route) ++ "]"
+  "[" ++ String.intercalate "," (transport ++ route ++ ["offline", "failed", "incompatible", "deploymentError"].map fun surface =>
+    recoveryCaseJson surface false false false) ++ "]"
 
 def presentationAndRecoveryJson : String :=
   "{\"presentationCases\":" ++ casesJson ++ ",\"recoveryCases\":" ++ recoveryCasesJson ++ "}"

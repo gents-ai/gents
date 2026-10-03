@@ -25,8 +25,6 @@ export type ChatComposerProps = {
   turnState: string | null;
   onDraftChange: (value: string) => void;
   onConfigureInference?: () => void;
-  onReconnect?: () => void | Promise<unknown>;
-  reconnecting?: boolean;
   onInterruptClick: () => void;
   onSend: (event: FormEvent) => void;
   skills?: SkillView[];
@@ -44,8 +42,6 @@ export function ChatComposer({
   turnState,
   onDraftChange,
   onConfigureInference,
-  onReconnect,
-  reconnecting = false,
   onInterruptClick,
   onSend,
   skills = [],
@@ -215,19 +211,6 @@ export function ChatComposer({
           )}
         </div>
         <div className="composer-actions">
-          {onReconnect ? (
-            <button
-              className="ghost-button"
-              data-testid="composer-reconnect"
-              disabled={reconnecting}
-              onClick={() =>
-                void Promise.resolve(onReconnect()).catch(() => {})
-              }
-              type="button"
-            >
-              {reconnecting ? "Reconnecting…" : "Reconnect agent"}
-            </button>
-          ) : null}
           {onConfigureInference ? (
             <button
               className="ghost-button"

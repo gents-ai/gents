@@ -4,7 +4,6 @@ import type {
   BootstrapSummary,
   DeploymentView,
   EnrollmentRequestView,
-  P2PHealth,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
@@ -18,16 +17,13 @@ export type FleetDashboardProps = {
   deployments: DeploymentView[];
   enrollmentRequests: EnrollmentRequestView[] | null;
   loading: boolean;
-  p2pHealth: P2PHealth | null;
   syncHealth?: SyncHealthView | null;
-  repairingP2P: boolean;
   starting: boolean;
   onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
-  onRepairP2P: () => Promise<unknown>;
   brand?: ReactNode;
   copy?: FleetCopy;
   headerLeadingActions?: ReactNode;
@@ -43,16 +39,13 @@ export function FleetDashboard({
   bootstrap,
   deployments,
   enrollmentRequests,
-  p2pHealth,
   syncHealth = null,
-  repairingP2P,
   starting,
   onRequestStatusEnrollment,
   onOpenChat,
   onOpenConfig,
   onRemovePeer,
   onRenamePeer,
-  onRepairP2P,
   brand,
   copy,
   headerLeadingActions,
@@ -70,15 +63,6 @@ export function FleetDashboard({
     ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
       wizardDeployment)
     : null;
-  const needsP2PRepair =
-    deployments.some(
-      (deployment) =>
-        !deployment.dialSucceeded || Boolean(deployment.lastError),
-    ) ||
-    (p2pHealth
-      ? p2pHealth.consecutiveFailures > 0 || Boolean(p2pHealth.lastError)
-      : false);
-
   useEffect(() => {
     if (
       !renderInferenceSetup ||
@@ -180,18 +164,6 @@ export function FleetDashboard({
         {brand}
         <div className="fleet-header-actions">
           {headerLeadingActions}
-          {needsP2PRepair ? (
-            <button
-              className="ghost-button"
-              data-testid="fleet-repair-p2p"
-              disabled={repairingP2P}
-              onClick={() => void onRepairP2P()}
-              title="Re-dial saved peers and refresh the desktop client's P2P connections"
-              type="button"
-            >
-              {repairingP2P ? "Reconnecting…" : "Reconnect P2P"}
-            </button>
-          ) : null}
           <button
             className="primary-button"
             disabled={enrollmentBlocked}

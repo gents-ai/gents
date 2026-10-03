@@ -58,6 +58,7 @@ def projectTransportIndicator : TransportHealth → TransportIndicator
 inductive RecoveryStatusKind where
   | ready
   | waiting
+  | blocked
   deriving DecidableEq, Repr
 
 /-- Transport and route readiness are observations of automatic native recovery.
@@ -75,6 +76,15 @@ def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
 
 def projectRouteRecovery (routeReady : Bool) (_pairingPending : Bool) : RecoveryStatus :=
   { kind := if routeReady then .ready else .waiting, action := none }
+
+/-- Failed P2P observations remain visible blockers. Recovery is automatic;
+operator remediation for credentials or configuration belongs to its own action. -/
+def projectConnectionFailure : RecoveryStatus :=
+  { kind := .blocked, action := none }
+
+theorem connection_failure_preserves_block_without_reconnect :
+    projectConnectionFailure.kind = .blocked ∧ projectConnectionFailure.action = none := by
+  exact ⟨rfl, rfl⟩
 
 theorem transport_recovery_requires_no_action (connected : Bool) :
     (projectTransportRecovery connected).action = none := by

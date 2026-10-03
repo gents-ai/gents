@@ -1,6 +1,3 @@
-/* A conversation that is loading, blocked or failed, with the one action
-   the desktop offers for it: try again, reconnect, or configure
-   inference. Nothing here is invented; the projection is the desktop's. */
 import { useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -12,13 +9,11 @@ import { toast } from "sonner";
 const LABEL = {
   retryLocal: "Try again",
   retryHydration: "Try again",
-  reconnect: "Reconnect",
   configureInference: "Configure inference",
 };
 const BUSY = {
   retryLocal: "Retrying…",
   retryHydration: "Retrying…",
-  reconnect: "Reconnecting…",
   configureInference: "Opening…",
 };
 
@@ -40,8 +35,7 @@ export function LoadingStatus({ shell }: { shell: Shell }) {
     }
     setBusy(true);
     try {
-      if (action === "reconnect") await shell.reconnect();
-      else if (action === "retryHydration")
+      if (action === "retryHydration")
         await shell.retrySessionHydration(shell.selectedSessionId);
       else await shell.refreshSnapshot();
     } catch (e) {

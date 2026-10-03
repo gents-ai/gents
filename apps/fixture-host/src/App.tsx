@@ -246,8 +246,6 @@ export function App() {
           deployments={deployments}
           enrollmentRequests={runtime?.enrollmentRequests ?? null}
           loading={false}
-          p2pHealth={runtime?.p2pHealth ?? null}
-          repairingP2P={false}
           starting={!storeState.started && busy}
           onRequestStatusEnrollment={(address) =>
             run("peer_enroll", async () => {
@@ -266,11 +264,6 @@ export function App() {
           onRenamePeer={(peerId, label) =>
             run("peer_rename", () => bridge.api.renamePeer(peerId, label)).then(
               () => store.refresh(),
-            )
-          }
-          onRepairP2P={() =>
-            run("repair_p2p", () => bridge.api.repairP2P()).then(() =>
-              store.refresh(),
             )
           }
         />

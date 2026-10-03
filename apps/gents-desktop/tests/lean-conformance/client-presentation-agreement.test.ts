@@ -4,8 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   projectDeploymentTransportStatus,
+  projectDeploymentOperationalState,
+  projectSyncOperationalStatus,
   projectRouteOperationalStatus,
 } from "@source-inc/gents-desktop-client";
+
+import { deployment } from "../config-panel-wiring/fixtures";
 
 import type { Shell } from "../../src/ui/hooks/useShell";
 import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen";
@@ -20,11 +24,12 @@ type GeneratedPresentationCase = {
 
 type GeneratedRecoveryCase = {
   name: string;
-  surface: "transport" | "route";
+  surface:
+    "transport" | "route" | "offline" | "failed" | "incompatible" | "deploymentError";
   connected: boolean;
   routeReady: boolean;
   pairingPending: boolean;
-  expected_kind: "ready" | "waiting";
+  expected_kind: "ready" | "waiting" | "blocked";
   expected_action: null;
 };
 
@@ -67,15 +72,25 @@ describe("ClientShell presentation agreement", () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
     expect(cases).toHaveLength(22);
-    expect(recoveryCases).toHaveLength(6);
+    expect(recoveryCases).toHaveLength(10);
     for (const contractCase of recoveryCases) {
       const actual =
         contractCase.surface === "transport"
           ? projectDeploymentTransportStatus(contractCase.connected)
-          : projectRouteOperationalStatus(
-              contractCase.routeReady,
-              contractCase.pairingPending,
-            );
+          : contractCase.surface === "route"
+            ? projectRouteOperationalStatus(
+                contractCase.routeReady,
+                contractCase.pairingPending,
+              )
+            : contractCase.surface === "deploymentError"
+              ? projectDeploymentOperationalState({
+                  ...deployment,
+                  dialSucceeded: false,
+                  lastError: "Denied",
+                }).summary
+              : projectSyncOperationalStatus({
+                  state: contractCase.surface,
+                } as Parameters<typeof projectSyncOperationalStatus>[0]);
       expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
     }

@@ -19,7 +19,7 @@ export type OperationalStatusLayer =
   | "reconcile";
 
 export type OperationalRecoveryAction =
-  "reconnect" | "configureInference" | null;
+  "configureInference" | null;
 
 /** Shared presentation-safe status. Surfaces choose density, not meaning. */
 export type OperationalStatus = {
@@ -409,7 +409,6 @@ export function projectDeploymentOperationalState(
         label: "Agent connection error",
         shortLabel: "Error",
         detail: error,
-        action: "reconnect",
       })
     : (admissionBlocker ??
       (sync.kind !== "ready" ? sync : null) ??
@@ -524,7 +523,6 @@ export function projectSyncOperationalStatus(
     detail:
       syncHealth?.lastError ??
       `Database synchronization is ${state}.`,
-    action: state === "offline" || state === "failed" ? "reconnect" : null,
   });
 }
 

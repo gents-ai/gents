@@ -15,7 +15,6 @@ type PeerActionParams = {
   refreshSnapshot: () => Promise<void>;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
-  setRepairingP2P: Dispatch<SetStateAction<boolean>>;
   selectedAgentDidRef: MutableRefObject<string | null>;
   selectAgent: (agentDid: string | null) => void;
   setStarting: Dispatch<SetStateAction<boolean>>;
@@ -29,7 +28,6 @@ export function createDesktopShellPeerActions({
   refreshSnapshot,
   setAddingPeer,
   setError,
-  setRepairingP2P,
   selectedAgentDidRef,
   selectAgent,
   setStarting,
@@ -125,7 +123,6 @@ export function createDesktopShellPeerActions({
   }
 
   async function onRepairP2P() {
-    setRepairingP2P(true);
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.repairP2P());
@@ -134,8 +131,6 @@ export function createDesktopShellPeerActions({
       const message = formatPeerConnectionError(err, "repair-p2p");
       setError(message);
       throw new Error(message);
-    } finally {
-      setRepairingP2P(false);
     }
   }
 

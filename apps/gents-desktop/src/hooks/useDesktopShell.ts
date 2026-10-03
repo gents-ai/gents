@@ -39,7 +39,6 @@ export function useDesktopShell({
   const [savingBehaviorConfig, setSavingBehaviorConfig] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [addingPeer, setAddingPeer] = useState(false);
-  const [repairingP2P, setRepairingP2P] = useState(false);
   const [runningTask, setRunningTask] = useState(false);
   const runningTaskCountRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
@@ -227,7 +226,6 @@ export function useDesktopShell({
     ensureDesktopClientStarted,
     setAddingPeer,
     setError,
-    setRepairingP2P,
     selectedAgentDidRef,
     selectAgent,
     setStarting,
@@ -365,7 +363,6 @@ export function useDesktopShell({
     savingBehaviorConfig,
     savingConfig,
     addingPeer,
-    repairingP2P,
     runningTask,
     error,
     onDismissError,
@@ -424,7 +421,6 @@ export function useDesktopShell({
     onFetchPeerStatus,
     onRequestStatusEnrollment,
     onInitLocalRuntime,
-    onRepairP2P,
     onSendMessage,
     onRetryMessage,
     onRenameSessionTitle,

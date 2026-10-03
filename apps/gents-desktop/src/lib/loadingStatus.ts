@@ -134,7 +134,7 @@ export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
-  "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
+  "retryLocal" | "retryHydration" | "configureInference";
 
 export type SessionLoadingStatus = {
   layer: SessionLoadingLayer;
