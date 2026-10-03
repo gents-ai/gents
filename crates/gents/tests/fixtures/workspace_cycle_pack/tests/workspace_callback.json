@@ -17,7 +17,10 @@
         "instructions": "Add one exact path change.",
         "owned_files": "[\"src/lib.rs\"]",
         "caused_by_correlation": "change-unit:unit-${ATTEMPT}",
-        "status": "ready"
+        "status": "ready",
+        "handoff_id": "change-unit:unit-${ATTEMPT}",
+        "reply_session_id": "workspace-cycle-supervisor",
+        "attempt": 1
       }
     },
     "taken": {

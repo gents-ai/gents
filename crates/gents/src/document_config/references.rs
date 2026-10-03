@@ -145,10 +145,10 @@ impl ConfigReferences {
     }
 
     /// Event Triggers of this snapshot whose Task opts into `emit_outcome`,
-    /// as `(trigger_id, task_id, event_source_id, source_collection)`.
+    /// as `(trigger_id, task_id, event_source_id, source_collection, per_document)`.
     /// Unresolvable links are the reference validator's diagnostic and are
     /// omitted here.
-    pub(crate) fn outcome_event_deliveries(&self) -> Vec<(String, String, String, String)> {
+    pub(crate) fn outcome_event_deliveries(&self) -> Vec<(String, String, String, String, bool)> {
         self.documents
             .iter()
             .filter(|((collection, _), _)| *collection == Collection::Trigger)
@@ -167,12 +167,14 @@ impl ConfigReferences {
                         .get(&(Collection::EventSource, event_source_id.clone()))?,
                 )
                 .ok()?;
+                let per_document = source.group.is_none();
                 task.emit_outcome.then(|| {
                     (
                         trigger.trigger_id.clone(),
                         task.task_id.clone(),
                         event_source_id.clone(),
                         source.source_collection,
+                        per_document,
                     )
                 })
             })

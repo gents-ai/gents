@@ -11,7 +11,7 @@ use gents::pack::{
     install_pack_documents, load_pack_config, DriftPolicy, PackIdentity, PackInstallOptions,
     PackManifest,
 };
-use gents::{Collection, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{AgentIdentity, Collection, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::support::streaming_backend::{
@@ -23,9 +23,10 @@ const WORK_UNIT: &str = "change-unit:cycle-accepted";
 const WRITER_TASK_MARK: &str = "Implement one requested change";
 const REVIEW_TASK_MARK: &str = "Independently review the sealed writer workspace";
 const INTEGRATE_TASK_MARK: &str = "A read-only review accepted sealed work unit";
-const RECORD_TASK_MARK: &str = "Record successful host integration";
+const RECORD_TASK_MARK: &str = "Record integration outcome";
 const RECORD_PLAN: &str = RECORD_TASK_MARK;
-const REJECT_TASK_MARK: &str = "Close rejected change unit";
+const REJECT_TASK_MARK: &str = "Record terminal outcome";
+const FAILURE_UNIT: &str = "change-unit:cycle-inbox";
 const MODEL: &str = "workspace-cycle-script";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -47,7 +48,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let (base_sha, base_tree) = create_repository(&repo);
 
     install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo).await;
+    install_pack(&access, &owner, &repo, root.path()).await;
     select_default_behavior(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
@@ -135,7 +136,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         &access,
         "ChangeUnitClosure",
         WORK_UNIT,
-        "closure_id work_unit_id implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
+        "_docID closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
         |rows| rows.iter().any(|row| row["status"] == "accepted"),
     )
     .await;
@@ -211,6 +212,23 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         writer_receipt["seal_hash"]
     );
     wait_request_completed(&access, integration_request["request_id"].as_str().unwrap()).await;
+    let outcome = wait_integrator_outcome(
+        &access,
+        WORK_UNIT,
+        accepted["_docID"].as_str().unwrap(),
+        integration_request["request_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(outcome["source_collection"], "ChangeUnitClosure");
+    assert_eq!(outcome["source_handoff_id"], WORK_UNIT);
+    assert_eq!(outcome["source_doc_id"], accepted["_docID"]);
+    assert_eq!(outcome["reply_session_id"], accepted["reply_session_id"]);
+    assert_eq!(outcome["attempt"], accepted["attempt"]);
+    assert_eq!(outcome["terminal_state"], "completed");
+    assert_eq!(
+        integration_receipt["produced_by_request_id"], outcome["request_id"],
+        "success evidence must name the exact request that produced the integration receipt"
+    );
     assert_eq!(
         git(
             &repo,
@@ -233,12 +251,20 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let closure = accepted;
     let result_args = json!({
         "result_id": "result-cycle-accepted",
+        "work_unit_id": WORK_UNIT,
+        "handoff_id": closure["handoff_id"],
+        "reply_session_id": closure["reply_session_id"],
+        "attempt": closure["attempt"],
         "closure_id": closure["closure_id"],
         "implementation_id": closure["implementation_id"],
         "review_id": closure["review_id"],
+        "workspace_id": closure["workspace_id"],
         "status": "integrated",
         "writer_receipt_id": closure["writer_receipt_id"],
         "writer_seal_hash": closure["writer_seal_hash"],
+        "integrator_receipt_id": integration_receipt["receipt_id"],
+        "integrator_seal_hash": integration_receipt["seal_hash"],
+        "head_sha": integration_receipt["head_sha"],
         "summary": "The host integrated the accepted sealed workspace.",
     });
     backend.enqueue_response(
@@ -260,7 +286,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         &access,
         "ChangeUnitResult",
         WORK_UNIT,
-        "result_id work_unit_id closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary",
+        "result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary",
         |rows| rows.iter().any(|row| row["status"] == "integrated"),
     )
     .await;
@@ -279,6 +305,9 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
         integration_receipt["seal_hash"]
     );
     assert_eq!(result["head_sha"], integration_receipt["head_sha"]);
+    assert_eq!(result["handoff_id"], WORK_UNIT);
+    assert_eq!(result["reply_session_id"], accepted["reply_session_id"]);
+    assert_eq!(result["attempt"], accepted["attempt"]);
     assert!(result_plan);
     wait_cycle_requests_completed(
         &access,
@@ -297,6 +326,12 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_unit_pack_rejection_records_terminal_result_without_integration() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "gents=info,gents_migration=warn",
+        ))
+        .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
     ensure_native_fs_runner_for_test();
     let backend = rejected_backend();
@@ -308,7 +343,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let (base_sha, _) = create_repository(&repo);
 
     install_inference(&access, &owner, backend.endpoint()).await;
-    install_pack(&access, &owner, &repo).await;
+    install_pack(&access, &owner, &repo, root.path()).await;
     select_default_behavior(&access, &db.node, &owner).await;
     gents::backend_registry::set_backend_probe_status(
         &db.node,
@@ -363,7 +398,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         &access,
         "ChangeUnitClosure",
         REJECTED_UNIT,
-        "closure_id work_unit_id implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
+        "closure_id work_unit_id handoff_id reply_session_id attempt implementation_id review_id workspace_id writer_receipt_id writer_seal_hash status",
         |rows| rows.iter().any(|row| row["status"] == "rejected"),
     )
     .await;
@@ -378,9 +413,14 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
                 "write_change_unit_result",
                 json!({
                     "result_id": "result-cycle-rejected",
+                    "work_unit_id": REJECTED_UNIT,
+                    "handoff_id": closures[0]["handoff_id"],
+                    "reply_session_id": closures[0]["reply_session_id"],
+                    "attempt": closures[0]["attempt"],
                     "closure_id": closures[0]["closure_id"],
                     "implementation_id": closures[0]["implementation_id"],
                     "review_id": closures[0]["review_id"],
+                    "workspace_id": closures[0]["workspace_id"],
                     "status": "rejected",
                     "writer_receipt_id": writer_receipts[0]["receipt_id"],
                     "writer_seal_hash": writer_receipts[0]["seal_hash"],
@@ -420,6 +460,9 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         results[0]["writer_seal_hash"],
         writer_receipts[0]["seal_hash"]
     );
+    assert_eq!(results[0]["handoff_id"], REJECTED_UNIT);
+    assert_eq!(results[0]["reply_session_id"], "workspace-cycle-lead");
+    assert_eq!(results[0]["attempt"], 1);
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), base_sha);
     assert_eq!(
         std::fs::read_to_string(repo.join("src/lib.rs")).unwrap(),
@@ -433,6 +476,116 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
         .await
         .unwrap();
     assert!(integrator_receipts["data"]["WorkspaceReceipt"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    runtime.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "gents=info,gents_migration=warn",
+        ))
+        .try_init();
+    let _p2p = super::P2P_E2E_LOCK.lock().await;
+    ensure_native_fs_runner_for_test();
+    let backend = failure_inbox_backend();
+    let db = test_db("workspace-change-unit-failure-inbox").await;
+    let owner = db.node_identity.did().to_owned();
+    let access = ConfigAccess::Local(db.node.clone());
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("source-repo");
+    let (base_sha, _) = create_repository(&repo);
+
+    install_inference(&access, &owner, backend.endpoint()).await;
+    install_pack(&access, &owner, &repo, root.path()).await;
+    select_default_behavior(&access, &db.node, &owner).await;
+    gents::backend_registry::set_backend_probe_status(
+        &db.node,
+        &owner,
+        "workspace-cycle-backend",
+        gents::HEALTHY_PROBE_STATUS,
+    )
+    .await
+    .unwrap();
+    install_workspace_root(&access, root.path()).await;
+    disable_pack_writer_trigger(&access).await;
+
+    let desktop =
+        gents::KeyIdentity::load_or_create(root.path().join("supervisor.key"), None).unwrap();
+    let supervisor_session = "workspace-cycle-lead";
+    let created_at = chrono::Utc::now().to_rfc3339();
+    access
+        .write(
+            "workspace_cycle.create_supervisor_session",
+            &format!(
+                "mutation {{ create_AgentSession(input: {{ session_id: \"{}\", requester_did: \"{}\", agent_did: \"{}\", behavior_id: \"change-unit-test-supervisor\", created_at: \"{}\" }}) {{ _docID }} }}",
+                escape_graphql_string(supervisor_session),
+                escape_graphql_string(desktop.did()),
+                escape_graphql_string(&owner),
+                escape_graphql_string(&created_at),
+            ),
+        )
+        .await
+        .expect("create the existing supervisor session");
+    install_failure_inbox_triggers(&access, &owner).await;
+    select_default_behavior(&access, &db.node, &owner).await;
+
+    let agent = Gents::from_default_behavior_documents(
+        db.node.clone(),
+        db.node_identity.clone(),
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::readwrite(root.path()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("test triggers resolve to installed behavior");
+    assert!(agent.unavailable_behaviors().is_empty());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut handle = tokio::spawn(agent.run(shutdown_rx));
+    tokio::select! {
+        result = gents::eval::runner::embedded::wait_for_runtime_ready(&db.node, &owner) => {
+            result.expect("runtime ready");
+        }
+        result = &mut handle => panic!("runtime exited before readiness: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_secs(20)) => {
+            let state = access.execute("{ AgentRuntime { agent_did reconcile_phase last_reconcile_result last_reconcile_error } AgentBehaviorReadiness { agent_did snapshot_json } Trigger { trigger_id enabled last_error } }").await.unwrap();
+            panic!("runtime did not publish readiness after 20 seconds; state={state:#}");
+        }
+    }
+    let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
+
+    create_work_unit(&access, &owner, FAILURE_UNIT, &base_sha, "inbox").await;
+    let callback = wait_callback_result(&access, FAILURE_UNIT).await;
+    assert_eq!(callback["work_unit_id"], FAILURE_UNIT);
+    let failed = wait_failure_outcome(&access, FAILURE_UNIT).await;
+    assert_eq!(failed["source_collection"], "CallbackResult");
+    assert_eq!(failed["source_doc_id"], callback["_docID"]);
+    assert_eq!(failed["source_handoff_id"], FAILURE_UNIT);
+    assert_eq!(failed["reply_session_id"], supervisor_session);
+    assert_eq!(failed["attempt"], 1);
+    assert_eq!(failed["trigger_id"], "change-unit-test-failure");
+    assert_eq!(failed["terminal_state"], "failed");
+
+    let inbox = wait_supervisor_inbox(&access, &backend, FAILURE_UNIT).await;
+    assert_eq!(inbox["session_id"], supervisor_session);
+    assert_eq!(inbox["behavior_id"], "change-unit-test-supervisor");
+    assert_eq!(inbox["requester_did"], desktop.did());
+    assert_eq!(inbox["lifecycle_state"], "completed");
+    assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
+
+    let outcome_count = access
+        .execute(&format!(
+            "{{ FireOutcome(filter: {{ trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, source_handoff_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+            escape_graphql_string(FAILURE_UNIT)
+        ))
+        .await
+        .unwrap();
+    assert!(outcome_count["data"]["FireOutcome"]
         .as_array()
         .unwrap()
         .is_empty());
@@ -578,6 +731,7 @@ fn scripted_backend() -> MockStreamingBackend {
                         "verdict": "accepted",
                         "findings": "[]",
                         "summary": "The exact owned-file change matches the request.",
+                        "attempt": 1,
                     })
                     .to_string(),
                 )],
@@ -592,6 +746,7 @@ fn scripted_backend() -> MockStreamingBackend {
                         "implementation_id": "implementation-cycle-accepted",
                         "review_id": "review-cycle-accepted",
                         "status": "accepted",
+                        "attempt": 1,
                     })
                     .to_string(),
                 )],
@@ -627,6 +782,22 @@ fn scripted_backend() -> MockStreamingBackend {
             .expect("mock provider starts");
     backend.enable_dynamic_followups(RECORD_PLAN);
     backend
+}
+
+fn failure_inbox_backend() -> MockStreamingBackend {
+    let unit = StreamPlan::current_authored_user(
+        "change-unit:cycle-inbox",
+        vec![
+            StreamResponse::bad_request(
+                "scripted failure for the change-unit supervisor inbox test",
+            ),
+            StreamResponse::completes(
+                "change-unit:cycle-inbox",
+                ["The failed stage reached the supervisor session."],
+            ),
+        ],
+    );
+    MockStreamingBackend::start_with_plans(MODEL, vec![unit]).expect("mock provider starts")
 }
 
 fn rejected_backend() -> MockStreamingBackend {
@@ -685,6 +856,7 @@ fn rejected_backend() -> MockStreamingBackend {
                             "verdict": "rejected",
                             "findings": "[\"The candidate violates the requested API contract.\"]",
                             "summary": "The change must not be integrated.",
+                            "attempt": 1,
                         })
                         .to_string(),
                     ),
@@ -700,6 +872,7 @@ fn rejected_backend() -> MockStreamingBackend {
                         "implementation_id": "implementation-cycle-rejected",
                         "review_id": "review-cycle-rejected",
                         "status": "rejected",
+                        "attempt": 1,
                     })
                     .to_string(),
                 )],
@@ -796,7 +969,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         .unwrap();
 }
 
-async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
+async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path, tool_root: &Path) {
     let pack_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace_cycle_pack");
     let manifest: PackManifest =
@@ -822,6 +995,11 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
     .unwrap();
     let mut config = config;
     config.agent_principal.default_behavior_id = Some("change-unit-writer".to_owned());
+    for tools in &mut config.tools {
+        if let Some(host) = tools.host.as_mut() {
+            host.root = Some(tool_root.to_string_lossy().into_owned());
+        }
+    }
 
     for path in document_pack_schema_paths(&manifest).unwrap() {
         access
@@ -868,6 +1046,93 @@ async fn install_workspace_root(access: &ConfigAccess, root: &Path) {
         .write("workspace_cycle.install_workspace_root", &mutation)
         .await
         .unwrap();
+}
+
+async fn disable_pack_writer_trigger(access: &ConfigAccess) {
+    access
+        .write(
+            "workspace_cycle.disable_pack_writer_trigger",
+            r#"mutation { update_Trigger(filter: { trigger_id: { _eq: "change-unit-write" } }, input: { enabled: false }) { _docID } }"#,
+        )
+        .await
+        .expect("disable only the normal writer task for the inbox fixture");
+}
+
+async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
+    let config = json!({
+        "agent_principal": {"agent_did": owner},
+        "agent_behaviors": [
+            {
+                "agent_did": owner,
+                "behavior_id": "change-unit-test-supervisor",
+                "display_name": "Test Supervisor Inbox",
+                "inference_profile_id": "workspace-cycle-profile"
+            }
+        ],
+        "tasks": [
+            {
+                "agent_did": owner,
+                "task_id": "change-unit-test-failure-task",
+                "behavior_id": "change-unit-writer",
+                "prompt_template": "Test failure stage for {{ doc.work_unit_id }}.",
+                "emit_outcome": true
+            },
+            {
+                "agent_did": owner,
+                "task_id": "change-unit-supervisor-inbox-task",
+                "behavior_id": "change-unit-test-supervisor",
+                "prompt_template": "Supervisor inbox delivery: stage {{ doc.trigger_id }} for {{ doc.source_handoff_id }} failed: {{ doc.reason }}.",
+                "emit_outcome": false
+            }
+        ],
+        "event_sources": [
+            {
+                "agent_did": owner,
+                "event_source_id": "change-unit-test-failure-source",
+                "source_collection": "CallbackResult",
+                "event_kind": "created",
+                "correlation_field": "work_unit_id",
+                "workspace_authority": "readWrite",
+                "filter": "{ binding_id: { _eq: \"change-unit-workspace\" }, work_unit_id: { _eq: \"change-unit:cycle-inbox\" } }"
+            },
+            {
+                "agent_did": owner,
+                "event_source_id": "change-unit-supervisor-inbox-source",
+                "source_collection": "FireOutcome",
+                "event_kind": "created",
+                "correlation_field": "source_handoff_id",
+                "filter": "{ source_collection: { _eq: \"CallbackResult\" }, terminal_state: { _eq: \"failed\" }, trigger_id: { _eq: \"change-unit-test-failure\" }, source_handoff_id: { _eq: \"change-unit:cycle-inbox\" } }"
+            }
+        ],
+        "triggers": [
+            {
+                "agent_did": owner,
+                "trigger_id": "change-unit-test-failure",
+                "task_id": "change-unit-test-failure-task",
+                "source": {"kind": "event", "event_source_id": "change-unit-test-failure-source"},
+                "concurrency": "parallel"
+            },
+            {
+                "agent_did": owner,
+                "trigger_id": "change-unit-supervisor-inbox",
+                "task_id": "change-unit-supervisor-inbox-task",
+                "source": {"kind": "event", "event_source_id": "change-unit-supervisor-inbox-source"},
+                "session_id_template": "{{ doc.reply_session_id }}",
+                "concurrency": "queued_serial"
+            }
+        ]
+    });
+    let config: gents::document_config::PackConfig =
+        serde_json::from_value(config).expect("test event and Task documents deserialize");
+    let plan = DesiredStateApplyPlan::from_pack_config(&config)
+        .expect("test event and Task documents validate");
+    access
+        .transact("workspace_cycle.install_failure_inbox_triggers", |txn| {
+            let plan = &plan;
+            Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install test-only failure outcome and inbox triggers");
 }
 
 fn create_repository(repo: &Path) -> (String, String) {
@@ -927,6 +1192,8 @@ async fn create_work_unit(
         ("owned_files", "[\"src/lib.rs\"]"),
         ("status", "ready"),
         ("caused_by_correlation", work_unit_id),
+        ("handoff_id", work_unit_id),
+        ("reply_session_id", "workspace-cycle-lead"),
     ];
     let fields = fields
         .into_iter()
@@ -934,11 +1201,38 @@ async fn create_work_unit(
         .collect::<Vec<_>>()
         .join(",");
     let mutation =
-        format!("mutation {{ create_ChangeUnitWork(input: {{{fields}}}) {{ _docID }} }}");
+        format!("mutation {{ create_ChangeUnitWork(input: {{{fields},attempt:1}}) {{ _docID }} }}");
     access
         .write("workspace_cycle.seed_work", &mutation)
         .await
         .unwrap_or_else(|error| panic!("create work unit for {owner}: {error:#}"));
+}
+
+async fn wait_integrator_outcome(
+    access: &ConfigAccess,
+    work_unit_id: &str,
+    closure_doc_id: &str,
+    request_id: &str,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let query = format!(
+            "{{ FireOutcome(filter: {{ source_handoff_id: {{ _eq: \"{}\" }}, source_doc_id: {{ _eq: \"{}\" }}, request_id: {{ _eq: \"{}\" }} }}) {{ source_collection source_doc_id request_id source_handoff_id reply_session_id attempt terminal_state trigger_id }} }}",
+            escape_graphql_string(work_unit_id),
+            escape_graphql_string(closure_doc_id),
+            escape_graphql_string(request_id),
+        );
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["FireOutcome"].as_array().unwrap();
+        if let Some(row) = rows.first() {
+            return row.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "completed integrator FireOutcome did not appear for {work_unit_id}/{closure_doc_id}/{request_id}: {response:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn query_rows(
@@ -970,12 +1264,100 @@ async fn wait_rows(
         if ready(&rows) {
             return rows;
         }
+        if matches!(collection, "ChangeUnitReview" | "ChangeUnitResult") {
+            let behaviors: &[&str] = if collection == "ChangeUnitReview" {
+                &["change-unit-reviewer"]
+            } else {
+                &["change-unit-record", "change-unit-rejected"]
+            };
+            let failures = cycle_failure_diagnostics(access, work_unit_id, behaviors).await;
+            if !failures.is_empty() {
+                panic!("cycle request terminated before writing {collection}: {failures:#?}");
+            }
+        }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {collection} {work_unit_id}; last rows: {rows:#?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+async fn cycle_failure_diagnostics(
+    access: &ConfigAccess,
+    work_unit_id: &str,
+    behaviors: &[&str],
+) -> Vec<Value> {
+    let work_unit_id = escape_graphql_string(work_unit_id);
+    let requests = access
+        .execute(
+            &format!(
+                r#"{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: "{work_unit_id}" }} }}) {{ _docID request_id agent_did requester_did session_id lifecycle_state failure_reason caused_by_trigger_id }} }}"#
+            ),
+        )
+        .await
+        .ok()
+        .and_then(|response| response.get("data").cloned())
+        .and_then(|data| data.get("AgentRequest").cloned())
+        .and_then(|rows| rows.as_array().cloned())
+        .unwrap_or_default();
+    let mut failures = Vec::new();
+    for request in requests {
+        if !behaviors.contains(&request["behavior_id"].as_str().unwrap_or_default()) {
+            continue;
+        }
+        if !matches!(
+            request["lifecycle_state"].as_str(),
+            Some("failed" | "interrupted" | "completed")
+        ) {
+            continue;
+        }
+        let Some(request_id) = request["request_id"].as_str() else {
+            continue;
+        };
+        let id = escape_graphql_string(request_id);
+        let tools = access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ _docID tool_name lifecycle_state tool_failure_class denial_reason }} }}"#
+            ))
+            .await
+            .ok()
+            .and_then(|response| response.get("data").cloned())
+            .and_then(|data| data.get("AgentToolCall").cloned())
+            .unwrap_or(Value::Null);
+        let mut tool_results = Vec::new();
+        if let Some(rows) = tools.as_array() {
+            for tool in rows
+                .iter()
+                .filter(|tool| tool["lifecycle_state"] == "failed")
+            {
+                let (Some(tool_doc_id), Some(owner), Some(session_id)) = (
+                    tool["_docID"].as_str(),
+                    request["agent_did"].as_str(),
+                    request["session_id"].as_str(),
+                ) else {
+                    continue;
+                };
+                let result = gents::tool_call_lifecycle::load_tool_call_result(
+                    access,
+                    tool_doc_id,
+                    owner,
+                    session_id,
+                    request["requester_did"].as_str(),
+                )
+                .await
+                .and_then(|message| gents::tool_call_lifecycle::render_tool_result(&message));
+                tool_results.push(json!({
+                    "tool": tool,
+                    "result": result.unwrap_or_else(|error| format!("<unavailable: {error:#}>") )
+                }));
+            }
+        }
+        failures.push(
+            json!({ "request": request, "tool_calls": tools, "failed_tool_results": tool_results }),
+        );
+    }
+    failures
 }
 
 async fn wait_for_writer(
@@ -1071,6 +1453,77 @@ async fn wait_for_task_followup(backend: &MockStreamingBackend, marker: &str) {
     }
 }
 
+async fn wait_callback_result(access: &ConfigAccess, work_unit_id: &str) -> Value {
+    let work_unit_id = escape_graphql_string(work_unit_id);
+    let query = format!(
+        "{{ CallbackResult(filter: {{ work_unit_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID binding_id work_unit_id workspace_id }} }}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["CallbackResult"].as_array().unwrap();
+        if let Some(row) = rows.first() {
+            return row.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "workspace callback did not produce CallbackResult for {work_unit_id}: {response:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_failure_outcome(access: &ConfigAccess, work_unit_id: &str) -> Value {
+    let work_unit_id = escape_graphql_string(work_unit_id);
+    let query = format!(
+        "{{ FireOutcome(filter: {{ trigger_id: {{ _eq: \"change-unit-test-failure\" }}, source_handoff_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID source_collection source_doc_id request_id source_handoff_id reply_session_id attempt terminal_state trigger_id reason }} }}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["FireOutcome"].as_array().unwrap();
+        if let Some(row) = rows.first() {
+            return row.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed stage did not publish a FireOutcome for {work_unit_id}: {response:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_supervisor_inbox(
+    access: &ConfigAccess,
+    backend: &MockStreamingBackend,
+    work_unit_id: &str,
+) -> Value {
+    let work_unit_id = escape_graphql_string(work_unit_id);
+    let query = format!(
+        "{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, caused_by_correlation: {{ _eq: \"{work_unit_id}\" }} }}) {{ request_id requester_did session_id behavior_id lifecycle_state failure_reason content }} }}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let response = access.execute(&query).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        if let Some(row) = rows.first() {
+            if row["lifecycle_state"] == "completed" {
+                return row.clone();
+            }
+            assert!(
+                row["lifecycle_state"] != "failed",
+                "supervisor inbox request failed: {row:#}; matching provider calls={}",
+                backend.observed_requests(&work_unit_id)
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed-stage inbox request was not completed: {response:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 async fn wait_for_file_contents(path: &Path, expected: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -1117,7 +1570,7 @@ async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
 async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<Value> {
     let unit = escape_graphql_string(work_unit_id);
     let result_query = format!(
-        "{{ ChangeUnitResult(filter: {{work_unit_id: {{_eq: \"{unit}\"}}}}) {{ result_id work_unit_id closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary }} }}"
+        "{{ ChangeUnitResult(filter: {{work_unit_id: {{_eq: \"{unit}\"}}}}) {{ result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary }} }}"
     );
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {

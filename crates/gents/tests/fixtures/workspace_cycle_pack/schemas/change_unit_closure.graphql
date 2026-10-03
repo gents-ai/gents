@@ -1,6 +1,9 @@
 type ChangeUnitClosure {
   closure_id: String @index(unique: true) @immutable
   work_unit_id: String @index @immutable
+  handoff_id: String @index @immutable
+  reply_session_id: String @index @immutable
+  attempt: Int @immutable
   implementation_id: String @immutable
   review_id: String @immutable
   workspace_id: String @immutable
