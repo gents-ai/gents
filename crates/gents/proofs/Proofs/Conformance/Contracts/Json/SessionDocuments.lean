@@ -56,12 +56,12 @@ private def toolActivityJson (name : String) (now : Nat) (published : Bool)
       Json.mkObj [("now", toJson now), ("after", documentJson after)],
       Json.mkObj [("now", toJson (now + 1)),
         ("after", documentJson (AgentSession.toolActivity after rows event (now + 1) published))]])]
-private def tipCoverageJson (complete known materialized : Bool) : Json :=
+private def tipCoverageJson (complete known materialized : Bool) (observed : Nat := 1) : Json :=
   let coverage : ClientShell.Timeline.ReadCoverage := ⟨complete, known⟩
   Json.mkObj [("operation", toJson "tip_coverage"),
     ("complete", toJson complete), ("known", toJson known),
-    ("materialized", toJson materialized),
-    ("pending", toJson (ClientShell.Timeline.pendingOwnerAbsent coverage materialized))]
+    ("materialized", toJson materialized), ("observed_request", toJson observed),
+    ("pending", toJson (ClientShell.Timeline.pendingRequestOwnerAbsent coverage 1 observed materialized))]
 private def timelineSlotJson : ClientShell.Timeline.Slot → Json
   | .message key seq role => Json.mkObj [("kind", toJson "message"),
       ("key", toJson key), ("sequence", toJson seq),
@@ -197,6 +197,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
    ("projection", toJson (pendingTimelineCases ++ [renameJson, clearTitleJson,
+      tipCoverageJson false true false 2,
       tipCoverageJson false false false,
       tipCoverageJson false true false,
       tipCoverageJson false true true,

@@ -99,6 +99,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         store,
         store,
         None,
+        None,
         false,
         true,
         true,
@@ -128,6 +129,7 @@ pub async fn build_session_snapshot_for_agent(
         None,
         None,
         None,
+        None,
         true,
         true,
     )
@@ -142,6 +144,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
     transcript_store: Option<&ClientStore>,
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
+    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
     context_totals_exact: bool,
     include_live_tail: bool,
 ) -> Option<DesktopSessionSnapshot> {
@@ -197,9 +200,10 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         transcript_store.unwrap_or(store.as_ref()),
         context_store.or(transcript_store).unwrap_or(store.as_ref()),
         canonical_dependencies,
+        prompt_ownership,
         transcript_store.is_some(),
         context_totals_exact,
-        context_store.is_some() || context_totals_exact,
+        context_totals_exact,
         include_live_tail,
         agent_did,
         session_id,
@@ -363,15 +367,34 @@ mod paging_coverage_tests {
                 });
             }
             let store = ClientStore::from_rows(rows);
+            let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+            if case["known"].as_bool().unwrap() {
+                let doc = if case["observed_request"].as_u64().unwrap() == 1 {
+                    "request-doc"
+                } else {
+                    "other-request-doc"
+                };
+                ownership.by_request_doc_id.insert(
+                    doc.into(),
+                    gents_desktop_core::client::RequestPromptFact {
+                        agent_did: "agent".into(),
+                        session_id: "session".into(),
+                        requester_did: None,
+                        materialized: case["materialized"].as_bool().unwrap(),
+                        first_sequence: None,
+                    },
+                );
+            }
             let page = ClientStore::default();
             let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
                 &store,
                 &page,
                 &store,
                 None,
+                Some(&ownership),
                 true,
                 case["complete"].as_bool().unwrap(),
-                case["known"].as_bool().unwrap(),
+                false,
                 true,
                 Some("agent"),
                 "session",

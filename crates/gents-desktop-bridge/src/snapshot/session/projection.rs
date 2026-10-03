@@ -291,6 +291,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     transcript_store: &ClientStore,
     context_store: &ClientStore,
     canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
+    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
     transcript_is_bounded: bool,
     context_totals_exact: bool,
     pending_owner_known: bool,
@@ -456,7 +457,21 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         (None, observed) => observed,
     };
     let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
-    let pending_turn = (include_live_tail && pending_owner_known)
+    let owner_fact = |request: &AgentRequestRow| {
+        request
+            .doc_id
+            .as_ref()
+            .and_then(|doc| prompt_ownership?.by_request_doc_id.get(doc))
+            .filter(|fact| {
+                request.agent_did.as_deref() == Some(fact.agent_did.as_str())
+                    && request.session_id.as_deref() == Some(fact.session_id.as_str())
+                    && request.requester_did == fact.requester_did
+            })
+    };
+    let owner_absent = |request: &AgentRequestRow| {
+        owner_fact(request).map_or(pending_owner_known, |fact| !fact.materialized)
+    };
+    let pending_turn = (include_live_tail && latest_request.is_some_and(owner_absent))
         .then_some(latest_request_id.as_deref())
         .flatten()
         .as_deref()
@@ -683,7 +698,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .iter()
         .enumerate()
         .filter_map(|(index, request)| {
-            if !pending_owner_known
+            if !owner_absent(request)
                 || session_row.is_some_and(|session| request.requester_did != session.requester_did)
             {
                 return None;
@@ -695,7 +710,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 session_id,
                 &request.request_id,
             )?;
-            let anchor = full_transcript
+            let observed_anchor = full_transcript
                 .messages
                 .iter()
                 .filter(|row| {
@@ -708,6 +723,21 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 })
                 .map(|row| i64::from(row.message.sequence))
                 .min();
+            let exact_anchor = requests[index..]
+                .iter()
+                .filter(|later| {
+                    later.requester_did == request.requester_did
+                        && !gents::lifecycle::is_runtime_control_message(
+                            &later.input.clone().unwrap_or_default(),
+                            "",
+                        )
+                        && gents_protocol::request_admission::RequestPurpose::is_public(
+                            later.purpose,
+                        )
+                })
+                .filter_map(|later| owner_fact(later).and_then(|fact| fact.first_sequence))
+                .min();
+            let anchor = observed_anchor.into_iter().chain(exact_anchor).min();
             if transcript_is_bounded {
                 match anchor {
                     Some(sequence)
@@ -1199,32 +1229,111 @@ mod tests {
             "answer",
         );
         let full = ClientStore::from_rows(rows.clone());
+        let mut tip_rows = ClientStoreRows::default();
+        push_canonical_text_message(
+            &mut tip_rows,
+            "authored:req-2:prompt",
+            "session-1",
+            Some("req-2"),
+            1,
+            MessageRole::User,
+            "later question",
+        );
+        let tip = ClientStore::from_rows(tip_rows);
+        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        for (id, materialized, first_sequence) in [("req-1", false, None), ("req-2", true, Some(1))]
+        {
+            ownership.by_request_doc_id.insert(
+                id.into(),
+                gents_desktop_core::client::RequestPromptFact {
+                    agent_did: "did:test:amy".into(),
+                    session_id: "session-1".into(),
+                    requester_did: None,
+                    materialized,
+                    first_sequence,
+                },
+            );
+        }
         for (sequence, expected_pending) in [(1, true), (2, false)] {
             let mut page_rows = rows.clone();
             page_rows
                 .transcript_messages
                 .retain(|row| row.message.sequence == sequence);
             let page = ClientStore::from_rows(page_rows);
+            let context = page.merge_snapshot(tip.clone());
             let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
                 &full,
                 &page,
-                &full,
+                &context,
                 None,
+                Some(&ownership),
                 true,
-                true,
-                true,
+                false,
+                false,
                 sequence == 2,
                 Some("did:test:amy"),
                 "session-1",
                 None,
             )
             .unwrap();
+            assert!(
+                !snapshot.timeline_items.iter().any(|item| matches!(item,
+                RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2"))
+            );
             assert_eq!(
                 snapshot.timeline_items.iter().any(|item| matches!(item,
             RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-1")),
                 expected_pending
             );
         }
+        let mut control_rows = rows.clone();
+        let mut control = request("control", "session-1", RequestLifecycleState::Completed);
+        control.created_at = Some("2026-04-21T12:00:30Z".into());
+        control.input = Some(gents_protocol::request_input::RequestInput {
+            queue: Some(gents_protocol::request_input::RequestQueue {
+                source: gents_protocol::request_input::QueueSource::Goal,
+                policy: gents_protocol::request_input::QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: None,
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }),
+            ..Default::default()
+        });
+        control_rows.requests.push(control);
+        let control_store = ClientStore::from_rows(control_rows.clone());
+        ownership.by_request_doc_id.insert(
+            "control".into(),
+            gents_desktop_core::client::RequestPromptFact {
+                agent_did: "did:test:amy".into(),
+                session_id: "session-1".into(),
+                requester_did: None,
+                materialized: true,
+                first_sequence: Some(0),
+            },
+        );
+        control_rows
+            .transcript_messages
+            .retain(|row| row.message.sequence == 1);
+        let control_page = ClientStore::from_rows(control_rows);
+        let control_context = control_page.merge_snapshot(tip.clone());
+        let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+            &control_store,
+            &control_page,
+            &control_context,
+            None,
+            Some(&ownership),
+            true,
+            false,
+            false,
+            false,
+            Some("did:test:amy"),
+            "session-1",
+            None,
+        )
+        .unwrap();
+        assert!(snapshot.timeline_items.iter().any(|item| matches!(item,
+            RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-1")));
         push_canonical_text_message(
             &mut rows,
             "authored:req-1:prompt",
@@ -1242,6 +1351,7 @@ mod tests {
             &full,
             &page,
             &full,
+            None,
             None,
             true,
             true,
