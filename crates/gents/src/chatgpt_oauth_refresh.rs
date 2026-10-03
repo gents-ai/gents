@@ -134,6 +134,54 @@ pub fn decode_id_token_claims(id_token: &str) -> IdTokenClaims {
     }
 }
 
+/// The provider account key of a ChatGPT sign-in in workspace `account_id`:
+/// the access token's `chatgpt_account_user_id` (one workspace membership)
+/// when that token names `account_id`, else `account_id:user` with the
+/// id_token's `chatgpt_user_id`, else its `sub`.
+///
+/// The claims are not signature-verified; they are trusted only as far as the
+/// TLS-protected token endpoint they came from. The key only recognizes and
+/// deduplicates an account: it is never an authorization, routing or request
+/// header input. A missing, malformed or non-JWT input gives `None`, never an
+/// error, so a bad claim cannot fail a sign-in or refresh.
+pub fn chatgpt_account_key(
+    access_token: &str,
+    id_token: Option<&str>,
+    account_id: Option<&str>,
+) -> Option<String> {
+    let account_id = account_id.filter(|id| !id.is_empty())?;
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let access = jwt_payload(access_token);
+    let access_auth = access.as_ref().and_then(|claims| claims.get(AUTH_CLAIMS));
+    if access_auth
+        .and_then(|auth| auth.get("chatgpt_account_id"))
+        .and_then(Value::as_str)
+        == Some(account_id)
+    {
+        if let Some(member) = text(access_auth.and_then(|auth| auth.get("chatgpt_account_user_id")))
+        {
+            return Some(member);
+        }
+    }
+    let id = jwt_payload(id_token?)?;
+    let user = text(id.get("chatgpt_user_id"))
+        .or_else(|| {
+            text(
+                id.get(AUTH_CLAIMS)
+                    .and_then(|auth| auth.get("chatgpt_user_id")),
+            )
+        })
+        .or_else(|| text(id.get("sub")))?;
+    Some(format!("{account_id}:{user}"))
+}
+
+const AUTH_CLAIMS: &str = "https://api.openai.com/auth";
+
 pub fn jwt_expiration(jwt: &str) -> Option<DateTime<Utc>> {
     jwt_payload(jwt)?
         .get("exp")
@@ -169,6 +217,7 @@ fn parse_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth_credential::test_support::unsigned_jwt;
 
     #[test]
     fn decodes_nested_chatgpt_claims() {
@@ -218,12 +267,5 @@ mod tests {
             "plain text body",
             "non-JSON body is returned verbatim"
         );
-    }
-
-    fn unsigned_jwt(payload: Value) -> String {
-        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&payload).unwrap());
-        format!("{header}.{payload}.sig")
     }
 }

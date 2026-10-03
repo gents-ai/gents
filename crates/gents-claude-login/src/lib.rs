@@ -54,6 +54,9 @@ pub struct LoginTokens {
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
     pub account_id: Option<String>,
+    /// The organization and account ids of the token response, when present.
+    pub organization_uuid: Option<String>,
+    pub account_uuid: Option<String>,
 }
 
 impl fmt::Debug for LoginTokens {
@@ -368,17 +371,29 @@ struct TokenResponse {
     scope: Option<String>,
     #[serde(default)]
     account: Option<serde_json::Value>,
+    /// A `Value` so a malformed block leaves the ids empty instead of failing
+    /// the sign-in. Only its `uuid` is read; the name is never kept.
+    #[serde(default)]
+    organization: Option<serde_json::Value>,
+}
+
+fn text_field(block: &serde_json::Value, key: &str) -> Option<String> {
+    block
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn account_label(account: &serde_json::Value) -> Option<String> {
-    ["email_address", "uuid"].into_iter().find_map(|key| {
-        account
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    })
+    ["email_address", "uuid"]
+        .into_iter()
+        .find_map(|key| text_field(account, key))
+}
+
+fn uuid_of(block: Option<&serde_json::Value>) -> Option<String> {
+    text_field(block?, "uuid")
 }
 
 pub(crate) async fn exchange_code(
@@ -424,6 +439,8 @@ pub(crate) async fn exchange_code(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account.as_ref().and_then(account_label),
+        organization_uuid: uuid_of(tokens.organization.as_ref()),
+        account_uuid: uuid_of(tokens.account.as_ref()),
     })
 }
 
@@ -514,6 +531,8 @@ mod tests {
             expires_in: Some(60),
             scope: Some("user:inference".into()),
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let rendered = format!("{tokens:?}");
         assert!(!rendered.contains("SECRET"), "{rendered}");
@@ -549,7 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_posts_json_with_state_and_verifier() {
-        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"}}"#).await;
+        let (url, handle) = one_shot_server(200, r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800,"scope":"user:inference","account":{"uuid":"account-1","email_address":"person@example.test"},"organization":{"uuid":"org-1","name":"Example Org"}}"#).await;
         let opts = LoginOptions {
             token_url: url,
             ..options()
@@ -581,6 +600,42 @@ mod tests {
         assert_eq!(tokens.refresh_token, "refresh-NEW");
         assert_eq!(tokens.expires_in, Some(28800));
         assert_eq!(tokens.account_id.as_deref(), Some("person@example.test"));
+        assert_eq!(tokens.organization_uuid.as_deref(), Some("org-1"));
+        assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
+    }
+
+    /// A malformed organization block still signs in, with no organization id,
+    /// so no provider account key can be formed from the pair.
+    #[tokio::test]
+    async fn exchange_with_a_malformed_organization_signs_in_without_its_id() {
+        for organization in [
+            r#""org-1""#,
+            "42",
+            r#"["org-1"]"#,
+            r#"{"uuid":42}"#,
+            r#"{"name":"Example Org"}"#,
+        ] {
+            let body = format!(
+                r#"{{"access_token":"access-NEW","refresh_token":"refresh-NEW","account":{{"uuid":"account-1"}},"organization":{organization}}}"#
+            );
+            let (url, _handle) = one_shot_server(200, Box::leak(body.into_boxed_str())).await;
+            let opts = LoginOptions {
+                token_url: url,
+                ..options()
+            };
+            let tokens = exchange_code(
+                &opts,
+                "http://localhost:1/callback",
+                &generate_pkce(),
+                "code-1",
+                "state-1",
+            )
+            .await
+            .unwrap_or_else(|err| panic!("{organization}: {err}"));
+            assert_eq!(tokens.access_token, "access-NEW");
+            assert_eq!(tokens.organization_uuid, None, "{organization}");
+            assert_eq!(tokens.account_uuid.as_deref(), Some("account-1"));
+        }
     }
 
     #[tokio::test]

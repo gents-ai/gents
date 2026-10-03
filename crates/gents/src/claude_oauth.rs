@@ -60,6 +60,13 @@ pub struct ClaudeLoginTokens {
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
     pub account_id: Option<String>,
+    /// The organization and account ids of the token response, when present.
+    /// They form the provider account key. They are trusted only as far as the
+    /// TLS-protected token endpoint they came from, only recognize and
+    /// deduplicate an account, and are never an authorization, routing or
+    /// request header input.
+    pub organization_uuid: Option<String>,
+    pub account_uuid: Option<String>,
 }
 
 impl fmt::Debug for ClaudeLoginTokens {
@@ -102,6 +109,11 @@ pub fn credential_from_login_tokens(
         enabled: true,
         account_ref: None,
         connected_at: None,
+        provider_account_key: tokens
+            .organization_uuid
+            .as_deref()
+            .zip(tokens.account_uuid.as_deref())
+            .map(|(organization, account)| format!("{organization}:{account}")),
     }
 }
 
@@ -165,6 +177,8 @@ mod tests {
             expires_in: Some(28800),
             scope: Some(CLAUDE_OAUTH_SCOPES.into()),
             account_id: Some("person@example.test".into()),
+            organization_uuid: None,
+            account_uuid: None,
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -196,6 +210,8 @@ mod tests {
             expires_in: None,
             scope: None,
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let credential =
             credential_from_login_tokens("did:key:z6MkTest", CLAUDE_OAUTH_PROVIDER, &tokens, now);
@@ -203,6 +219,46 @@ mod tests {
             credential.access_token_expires_at,
             now + chrono::Duration::hours(1)
         );
+    }
+
+    fn claude_login(
+        organization_uuid: Option<&str>,
+        account_uuid: Option<&str>,
+    ) -> OAuthCredential {
+        let tokens = ClaudeLoginTokens {
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            expires_in: Some(28800),
+            scope: None,
+            account_id: Some("account-1".into()),
+            organization_uuid: organization_uuid.map(str::to_owned),
+            account_uuid: account_uuid.map(str::to_owned),
+        };
+        credential_from_login_tokens(
+            "did:key:z6MkTest",
+            CLAUDE_OAUTH_PROVIDER,
+            &tokens,
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn credential_from_login_tokens_keys_org_and_account() {
+        let credential = claude_login(Some("org-1"), Some("account-1"));
+        assert_eq!(
+            credential.provider_account_key.as_deref(),
+            Some("org-1:account-1")
+        );
+    }
+
+    #[test]
+    fn credential_from_login_tokens_without_both_ids_has_no_key() {
+        for (organization, account) in [(Some("org-1"), None), (None, Some("account-1"))] {
+            assert_eq!(
+                claude_login(organization, account).provider_account_key,
+                None
+            );
+        }
     }
 
     #[test]
@@ -213,6 +269,8 @@ mod tests {
             expires_in: Some(28800),
             scope: Some("user:profile".into()),
             account_id: None,
+            organization_uuid: None,
+            account_uuid: None,
         };
         let text = format!("{tokens:?}");
         assert!(!text.contains("SECRET"), "{text}");

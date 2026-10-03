@@ -1715,6 +1715,7 @@ async fn oauth_account_scope_matches_lean() {
             enabled: row["enabled"].as_bool().unwrap(),
             account_ref: account.map(str::to_string),
             connected_at: None,
+            provider_account_key: None,
         };
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }

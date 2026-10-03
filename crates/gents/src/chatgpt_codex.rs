@@ -45,6 +45,11 @@ impl OAuthCredential {
         let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
             .or(id_claims.expires_at)
             .unwrap_or_else(|| now + Duration::hours(1));
+        let provider_account_key = crate::chatgpt_oauth_refresh::chatgpt_account_key(
+            &access_token,
+            Some(id_token),
+            id_claims.account_id.as_deref(),
+        );
         Self {
             doc_id: None,
             credential_id: oauth_credential_id(&agent_did, &provider),
@@ -61,6 +66,7 @@ impl OAuthCredential {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key,
         }
     }
 }
@@ -830,6 +836,81 @@ mod tests {
         assert_eq!(credential.chatgpt_plan_type.as_deref(), Some("pro"));
         assert!(credential.is_fedramp);
         assert_eq!(credential.id_token.as_deref(), Some(id_token.as_str()));
+    }
+
+    fn chatgpt_login(id_claims: Value, access_token: String) -> OAuthCredential {
+        OAuthCredential::from_login_tokens(
+            "did:key:zAgent",
+            CHATGPT_CODEX_PROVIDER,
+            &crate::oauth_credential::test_support::unsigned_jwt(id_claims),
+            access_token,
+            "refresh".to_string(),
+            Utc::now(),
+        )
+    }
+
+    fn access_token(auth: Value) -> String {
+        crate::oauth_credential::test_support::unsigned_jwt(
+            json!({ "https://api.openai.com/auth": auth }),
+        )
+    }
+
+    #[test]
+    fn login_tokens_store_the_member_account_key() {
+        let id_claims =
+            json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" } });
+        for member in ["member-a", "member-b"] {
+            let credential = chatgpt_login(
+                id_claims.clone(),
+                access_token(json!({
+                    "chatgpt_account_id": "acct-ws",
+                    "chatgpt_account_user_id": member
+                })),
+            );
+            assert_eq!(credential.account_id.as_deref(), Some("acct-ws"));
+            assert_eq!(credential.provider_account_key.as_deref(), Some(member));
+        }
+    }
+
+    #[test]
+    fn login_tokens_fall_back_to_workspace_and_user() {
+        let no_member = || access_token(json!({ "chatgpt_account_id": "acct-ws" }));
+        let with_user_id = json!({ "https://api.openai.com/auth": {
+            "chatgpt_account_id": "acct-ws",
+            "chatgpt_user_id": "user-a"
+        } });
+        let with_sub = json!({
+            "sub": "user-a",
+            "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" }
+        });
+        let other_workspace = access_token(json!({
+            "chatgpt_account_id": "acct-other",
+            "chatgpt_account_user_id": "member-b"
+        }));
+        for (id_claims, access) in [
+            (with_user_id, no_member()),
+            (with_sub.clone(), no_member()),
+            (with_sub, other_workspace),
+        ] {
+            let credential = chatgpt_login(id_claims, access);
+            assert_eq!(
+                credential.provider_account_key.as_deref(),
+                Some("acct-ws:user-a")
+            );
+        }
+    }
+
+    #[test]
+    fn login_tokens_without_readable_claims_have_no_key() {
+        let no_user = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" } });
+        let no_workspace = json!({ "sub": "user-a" });
+        let member = access_token(json!({
+            "chatgpt_account_id": "acct-ws",
+            "chatgpt_account_user_id": "member-a"
+        }));
+        for (id_claims, access) in [(no_user, "not-a-jwt".to_string()), (no_workspace, member)] {
+            assert_eq!(chatgpt_login(id_claims, access).provider_account_key, None);
+        }
     }
 
     // `ensure_event_stream_content_type` is single-owned and unit-tested in

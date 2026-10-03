@@ -1042,6 +1042,7 @@ mod provider_account_tests {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1069,6 +1070,7 @@ mod provider_account_tests {
             enabled: true,
             account_ref: None,
             connected_at: None,
+            provider_account_key: None,
         }
     }
 
@@ -1152,6 +1154,52 @@ mod provider_account_tests {
             access_token: token.to_string(),
             ..issued_credential(agent_did)
         }
+    }
+
+    #[tokio::test]
+    async fn a_desktop_sign_in_writes_its_own_key() {
+        let agent = "did:key:zAgent";
+        let provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let node = serving_node().await;
+        let keyed = OAuthCredential {
+            credential_id: format!("{provider}:{agent}"),
+            provider: provider.to_string(),
+            provider_account_key: Some("user:principal-1".to_string()),
+            ..issued_credential(agent)
+        };
+        gents::oauth_credential::upsert_oauth_credential_on(
+            &gents::ConfigAccess::Local(node.clone()),
+            &keyed,
+        )
+        .await
+        .expect("seed a keyed row");
+
+        let keyless = gents::xai_oauth_login::credential_from_login_tokens(
+            agent,
+            provider,
+            &gents::xai_oauth_login::XaiLoginTokens {
+                access_token: "not-a-jwt".to_string(),
+                refresh_token: "keyless-refresh".to_string(),
+                id_token: None,
+                expires_in: Some(900),
+            },
+            chrono::Utc::now(),
+        );
+        let pending = PendingOAuthCredentials::default();
+        save_issued_credential(
+            &pending,
+            Ok(gents::ConfigAccess::Local(node.clone())),
+            pending.issue(keyless),
+        )
+        .await
+        .expect("save the sign-in");
+
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node), agent)
+            .await
+            .expect("list stored credentials");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].refresh_token, "keyless-refresh");
+        assert_eq!(stored[0].provider_account_key, None);
     }
 
     #[tokio::test]
@@ -1634,6 +1682,8 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
         expires_in: tokens.expires_in,
         scope: tokens.scope,
         account_id: tokens.account_id,
+        organization_uuid: tokens.organization_uuid,
+        account_uuid: tokens.account_uuid,
     };
     let credential =
         credential_from_login_tokens(&agent_did, &provider, &login_tokens, chrono::Utc::now());
