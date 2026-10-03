@@ -449,6 +449,51 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 }
 
 #[tokio::test]
+async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
+    let owner = base_backend().agent_did;
+    crate::ensure_agent_principal(&node, &owner).await?;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    crate::config_client::write_inference_backend_document(&access, &base_backend()).await?;
+    let mut future = serde_json::to_value(base_backend())?;
+    future["backend_id"] = "future".into();
+    future["provider_kind"] = "FutureProviderKind".into();
+    future["endpoint"] = "https://example.invalid/v1".into();
+    future["enabled"] = true.into();
+    access
+        .write(
+            "test.backend.future_kind",
+            &format!(
+                "mutation {{ create_InferenceBackend(input: {}) {{ _docID }} }}",
+                gents_protocol::graphql::graphql_input_literal(&future)?
+            ),
+        )
+        .await?;
+
+    let ids = |backends: Vec<InferenceBackend>| {
+        backends
+            .into_iter()
+            .map(|backend| backend.backend_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(list_all_backends(&node).await?), ["reviewers"]);
+    assert_eq!(ids(list_enabled_backends(&node).await?), ["reviewers"]);
+    assert_eq!(
+        ids(list_enabled_backends_for_agent(&node, &owner).await?),
+        ["reviewers"]
+    );
+    let error = lookup_backend(&node, &owner, "future")
+        .await
+        .expect_err("a single lookup stays strict");
+    assert!(
+        format!("{error:#}").contains("FutureProviderKind"),
+        "{error:#}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
