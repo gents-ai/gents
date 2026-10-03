@@ -139,6 +139,17 @@ impl std::fmt::Debug for BackendAuth {
     }
 }
 
+impl BackendAuth {
+    /// The account a principal OAuth backend names (Lean `oauthRef`); `None`
+    /// for other auth and for the provider's original account.
+    pub fn oauth_account_ref(&self) -> Option<&str> {
+        match self {
+            Self::PrincipalOAuth { account_ref } => account_ref.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// One backend catalog observed under a particular authentication scope.
 /// A principal's catalog must not be treated as another principal's entitlement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

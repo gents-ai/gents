@@ -73,8 +73,8 @@ OAuth backend is allowed when it keeps the current provider and account (which
 covers keeping the backend), or, from no backend or another provider, when it
 names that provider's default account `dflt kind`. Another account of the
 current provider is refused. The owner rule for the default is the provider's
-earliest-connected enabled account; until the multi-account resolver (#2117)
-it is the original account, so callers pass `fun _ => none`. -/
+earliest-connected enabled account (the resolver in `oauth_credential.rs`); the
+case rows fix it to the original account, `fun _ => none`. -/
 def backendChoiceAllowed (dflt : String → Option String)
     (current : Option (String × BackendAuth)) (next : String × BackendAuth) : Bool :=
   match next.2 with

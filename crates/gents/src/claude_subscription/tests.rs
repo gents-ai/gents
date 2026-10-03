@@ -160,7 +160,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody")
+    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody", None)
         .await
         .expect_err("missing");
     assert!(
@@ -180,10 +180,10 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
         chrono::Utc::now() + chrono::Duration::hours(8),
     )
     .await;
-    let client = ClaudeSubscriptionClient::build(node.clone(), "did:key:z6MkSeeded")
+    let client = ClaudeSubscriptionClient::build(node.clone(), "did:key:z6MkSeeded", None)
         .await
         .expect("client");
-    let again = ClaudeSubscriptionClient::build(node, "did:key:z6MkSeeded")
+    let again = ClaudeSubscriptionClient::build(node, "did:key:z6MkSeeded", None)
         .await
         .expect("client");
     assert!(
@@ -222,7 +222,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
-    let client = ClaudeSubscriptionClient::build(node, "did:key:z6MkStaleRefresh")
+    let client = ClaudeSubscriptionClient::build(node, "did:key:z6MkStaleRefresh", None)
         .await
         .expect("client");
     let bearer = client.bearer.current_bearer().await;

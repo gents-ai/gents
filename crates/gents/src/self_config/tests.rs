@@ -4743,6 +4743,87 @@ async fn behavior_profile_pick_cannot_switch_account() {
         .unwrap();
 }
 
+/// [`account_choice_core`] plus Grok backend `grok-g2` on account `g2` (profile
+/// `p-grok-g2`) and the principal's Grok sign-ins: the original row (no
+/// connection time) and `g2`, each enabled as given.
+async fn grok_accounts_core(behavior: &str, original: bool, g2: bool) -> SelfConfigCore {
+    let (node, _, core) = account_choice_core(behavior).await;
+    let owner = core.agent_did().to_owned();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let backend: crate::InferenceBackend = serde_json::from_value(json!({
+        "agent_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
+        "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind":"principal_oauth","account_ref":"g2"},
+    }))
+    .unwrap();
+    crate::config_client::write_inference_backend_document(&access, &backend)
+        .await
+        .unwrap();
+    let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+        "agent_did": owner, "profile_id": "p-grok-g2", "backend_id": "grok-g2",
+        "model_name": "test-model",
+    }))
+    .unwrap();
+    crate::config_client::write_inference_profile_document(&access, &profile)
+        .await
+        .unwrap();
+    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
+        let original_id = crate::oauth_credential::oauth_credential_id(&owner, provider);
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: match account_ref {
+                Some(account_ref) => format!("{original_id}:{account_ref}"),
+                None => original_id,
+            },
+            agent_did: owner.clone(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".into(),
+            refresh_token: "refresh-TEST".into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled,
+            account_ref: account_ref.map(str::to_string),
+            connected_at: account_ref.map(|_| chrono::Utc::now()),
+        };
+        crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+            .await
+            .unwrap();
+    }
+    core
+}
+
+#[tokio::test]
+async fn default_account_follows_the_resolver() {
+    let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
+    let accepted = |core: SelfConfigCore, profile: &'static str| async move {
+        core.preview(behavior_request(&core, to(profile)))
+            .await
+            .unwrap();
+        core.apply(behavior_request(&core, to(profile)))
+            .await
+            .unwrap();
+    };
+
+    // The original is disabled, so g2 is Grok's default account.
+    let core = grok_accounts_core("default-g2", false, true).await;
+    assert_account_choice_refused(&core, || behavior_request(&core, to("p-grok"))).await;
+    accepted(core, "p-grok-g2").await;
+
+    // Both enabled: the original has no connection time, so it sorts first.
+    let core = grok_accounts_core("default-original", true, true).await;
+    assert_account_choice_refused(&core, || behavior_request(&core, to("p-grok-g2"))).await;
+    accepted(core, "p-grok").await;
+
+    // None enabled: the no-reference backend is allowed and fails at run time.
+    let core = grok_accounts_core("default-none", false, false).await;
+    accepted(core, "p-grok").await;
+}
+
 /// An unset compaction profile reuses the behavior's, so that is its current.
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {

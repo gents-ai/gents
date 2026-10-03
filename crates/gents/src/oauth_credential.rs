@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled";
+const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at";
+/// The fields [`pick_oauth_credential`] reads: no token.
+const OAUTH_PICK_FIELDS: &str = "credential_id agent_did provider enabled account_ref connected_at";
 
 /// Display metadata only. Never use decoded, unverified claims for authorization
 /// or overwrite the account ID used by a provider's authentication headers.
@@ -193,6 +195,14 @@ pub struct OAuthCredential {
     #[serde(default)]
     pub last_refresh: Option<DateTime<Utc>>,
     pub enabled: bool,
+    /// Which of the provider's accounts this row is; `None` is the provider's
+    /// original account (the row upgraded in place).
+    #[serde(default)]
+    pub account_ref: Option<String>,
+    /// When the account was first stored; `None` for rows from before the
+    /// field existed.
+    #[serde(default)]
+    pub connected_at: Option<DateTime<Utc>>,
 }
 
 const REDACTED: &str = "[redacted]";
@@ -229,31 +239,14 @@ impl std::fmt::Debug for OAuthCredential {
             .field("access_token_expires_at", &self.access_token_expires_at)
             .field("last_refresh", &self.last_refresh)
             .field("enabled", &self.enabled)
+            .field("account_ref", &self.account_ref)
+            .field("connected_at", &self.connected_at)
             .finish()
     }
 }
 
 pub fn oauth_credential_id(agent_did: &str, provider: &str) -> String {
     format!("{provider}:{agent_did}")
-}
-
-pub fn oauth_credential_query(agent_did: &str, provider: &str) -> String {
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
-    format!(
-        r#"query {{
-            OAuthCredential(
-                filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    provider: {{ _eq: "{provider}" }},
-                    enabled: {{ _eq: true }}
-                }},
-                limit: 1
-            ) {{
-                {OAUTH_CREDENTIAL_FIELDS}
-            }}
-        }}"#
-    )
 }
 
 pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
@@ -277,7 +270,9 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     // immutability check rejects re-sending an immutable field on a pre-existing document, so the
     // `update` branch (re-login and per-request token rotation both land here) must omit it.
     // `credential_id` is likewise only ever written in `add`. Mirrors session/observations.rs.
-    let update_input = render_oauth_input(&fields, &["agent_did"]);
+    // `account_ref` and `connected_at` are set once, when a row is first stored; a refresh or
+    // re-sign-in never rewrites them.
+    let update_input = render_oauth_input(&fields, &["agent_did", "account_ref", "connected_at"]);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
@@ -295,25 +290,138 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     )
 }
 
-pub async fn lookup_oauth_credential(
-    node: &EmbeddedNode,
+/// Which of a provider's accounts a caller needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountPick<'a> {
+    /// The provider's default account, for callers with no backend.
+    ProviderDefault,
+    /// The account a backend names; `None` is the provider's original account
+    /// (the row with no `account_ref`), never another enabled account.
+    Reference(Option<&'a str>),
+}
+
+/// The fixed account order: earliest `connected_at` first, rows without one
+/// (stored before the field existed) before any time, ties by `credential_id`.
+fn resolver_order(a: &OAuthCredential, b: &OAuthCredential) -> std::cmp::Ordering {
+    (a.connected_at, &a.credential_id).cmp(&(b.connected_at, &b.credential_id))
+}
+
+/// The single credential pick: the first enabled row of `agent_did` and
+/// `provider` in [`resolver_order`] that `pick` names. Every reader that
+/// chooses a row goes through here.
+pub fn pick_oauth_credential<'c>(
+    rows: impl IntoIterator<Item = &'c OAuthCredential>,
     agent_did: &str,
     provider: &str,
+    pick: AccountPick<'_>,
+) -> Option<&'c OAuthCredential> {
+    rows.into_iter()
+        .filter(|row| row.agent_did == agent_did && row.provider == provider && row.enabled)
+        .filter(|row| match pick {
+            AccountPick::ProviderDefault => true,
+            AccountPick::Reference(account_ref) => row.account_ref.as_deref() == account_ref,
+        })
+        .min_by(|a, b| resolver_order(a, b))
+}
+
+fn enabled_oauth_credentials_query(agent_did: &str, provider: &str, fields: &str) -> String {
+    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let provider = crate::graphql::escape_graphql_string(provider);
+    format!(
+        r#"query {{
+            OAuthCredential(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    provider: {{ _eq: "{provider}" }},
+                    enabled: {{ _eq: true }}
+                }}
+            ) {{
+                {fields}
+            }}
+        }}"#
+    )
+}
+
+/// Read `agent_did`'s enabled rows for `provider` through `access` and pick one
+/// with [`pick_oauth_credential`].
+pub async fn resolve_oauth_credential(
+    access: &crate::config_client::ConfigAccess,
+    agent_did: &str,
+    provider: &str,
+    pick: AccountPick<'_>,
 ) -> Result<Option<OAuthCredential>> {
-    let response = node
-        .execute(&oauth_credential_query(agent_did, provider))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
-    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
-    oauth_credentials_from_response(&response)
+    let response = access
+        .execute(&enabled_oauth_credentials_query(
+            agent_did,
+            provider,
+            OAUTH_CREDENTIAL_FIELDS,
+        ))
+        .await?;
+    pick_from_response(&response, agent_did, provider, pick)
+}
+
+/// The provider's default account for `agent_did` (Lean `SelfConfig` `dflt`),
+/// read inside a self-config transaction. `None` means both "the original
+/// account is the default" and "no account is enabled"; the latter lets a move
+/// onto the provider's no-reference backend through, which then fails at run
+/// time with the missing-credential guidance, as with one account today.
+pub(crate) async fn provider_default_account_ref(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    provider: &str,
+) -> Result<Option<String>> {
+    let response = txn
+        .execute(&enabled_oauth_credentials_query(
+            agent_did,
+            provider,
+            OAUTH_PICK_FIELDS,
+        ))
+        .await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "OAuthCredential")
         .into_iter()
-        .next()
-        .transpose()
+        .map(pick_row_from_value)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        pick_oauth_credential(&rows, agent_did, provider, AccountPick::ProviderDefault)
+            .and_then(|row| row.account_ref.clone()),
+    )
+}
+
+/// Decode a row read with [`OAUTH_PICK_FIELDS`] like
+/// [`oauth_credential_from_value`], its token fields left blank. The pick
+/// takes whole rows; this keeps a model-driven transaction off the tokens.
+fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
+    let row: OAuthCredentialRow =
+        serde_json::from_value(value).context("decoding OAuthCredential row")?;
+    Ok(OAuthCredential {
+        doc_id: None,
+        credential_id: row.credential_id,
+        agent_did: required(row.agent_did, "agent_did")?,
+        provider: required(row.provider, "provider")?,
+        access_token: String::new(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: DateTime::default(),
+        last_refresh: None,
+        enabled: row.enabled.unwrap_or(true),
+        account_ref: clean_optional(row.account_ref),
+        connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
+    })
+}
+
+fn pick_from_response(
+    response: &Value,
+    agent_did: &str,
+    provider: &str,
+    pick: AccountPick<'_>,
+) -> Result<Option<OAuthCredential>> {
+    let rows = oauth_credentials_from_response(response)
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(pick_oauth_credential(&rows, agent_did, provider, pick).cloned())
 }
 
 pub async fn lookup_oauth_credential_by_id(
@@ -380,6 +488,8 @@ pub async fn list_oauth_credentials(
 /// Read agent-scoped credentials through the selected canonical control-plane
 /// access. Desktop-managed runtimes use their operator GraphQL endpoint here;
 /// callers must not fall back to a replicated client copy for private tokens.
+/// Rows come back in resolver order, so a list's first enabled row of a
+/// provider is the provider's default account.
 pub async fn list_oauth_credentials_on(
     access: &crate::config_client::ConfigAccess,
     agent_did: &str,
@@ -387,9 +497,11 @@ pub async fn list_oauth_credentials_on(
     let response = access
         .execute(&oauth_credentials_for_agent_query(agent_did))
         .await?;
-    oauth_credentials_from_response(&response)
+    let mut rows = oauth_credentials_from_response(&response)
         .into_iter()
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by(resolver_order);
+    Ok(rows)
 }
 
 pub async fn lookup_oauth_credential_by_doc_id(
@@ -513,6 +625,17 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
                 gents_protocol::graphql::graphql_bool_literal(credential.enabled)
             ),
         ),
+        (
+            "account_ref",
+            gents_protocol::graphql::nullable_string_field(
+                "account_ref",
+                credential.account_ref.as_deref(),
+            ),
+        ),
+        (
+            "connected_at",
+            datetime_field("connected_at", credential.connected_at),
+        ),
     ]
 }
 
@@ -547,6 +670,8 @@ pub(crate) fn oauth_credential_from_value(value: Value) -> Result<OAuthCredentia
         )?,
         last_refresh: parse_optional_datetime(row.last_refresh, "last_refresh")?,
         enabled: row.enabled.unwrap_or(true),
+        account_ref: clean_optional(row.account_ref),
+        connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
     })
 }
 
@@ -884,6 +1009,8 @@ mod tests {
             access_token_expires_at: DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap(),
             last_refresh: Some(DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap()),
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         }
     }
 
@@ -904,6 +1031,9 @@ mod tests {
             assert!(!debug.contains(token), "{token} leaked: {debug}");
         }
         assert!(debug.contains("acct-1"), "{debug}");
+        for field in ["account_ref", "connected_at"] {
+            assert!(debug.contains(field), "{field} missing: {debug}");
+        }
     }
 
     #[test]
@@ -1107,6 +1237,57 @@ mod tests {
     }
 
     #[test]
+    fn account_fields_are_only_in_the_add_block() {
+        let mut credential = sample_credential();
+        credential.account_ref = Some("acct-b".to_string());
+        credential.connected_at = Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap());
+        let mutation = oauth_credential_upsert_mutation(&credential);
+        let (add_block, update_block) = mutation.split_at(mutation.find("update:").unwrap());
+
+        assert!(
+            add_block.contains(r#"account_ref: "acct-b""#)
+                && add_block.contains(r#"connected_at: "2023-11-14T22:13:20Z""#),
+            "add block must set the account fields: {add_block}"
+        );
+        assert!(
+            !update_block.contains("account_ref") && !update_block.contains("connected_at"),
+            "update block must never rewrite the account fields: {update_block}"
+        );
+    }
+
+    #[tokio::test]
+    async fn account_fields_are_kept_when_a_row_is_stored_again() {
+        let node = super::test_support::test_node().await;
+        let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut credential = sample_credential();
+        credential.doc_id = None;
+        credential.account_ref = Some("acct-b".to_string());
+        credential.connected_at = Some(connected_at);
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+
+        let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.account_ref.as_deref(), Some("acct-b"));
+        assert_eq!(stored.connected_at, Some(connected_at));
+
+        // A refresh or re-sign-in stores the row again without the account fields.
+        credential.account_ref = None;
+        credential.connected_at = None;
+        credential.access_token = "access-rotated".to_string();
+        upsert_oauth_credential(&node, &credential).await.unwrap();
+
+        let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
+            .await
+            .unwrap()
+            .expect("stored row");
+        assert_eq!(stored.access_token, "access-rotated");
+        assert_eq!(stored.account_ref.as_deref(), Some("acct-b"));
+        assert_eq!(stored.connected_at, Some(connected_at));
+    }
+
+    #[test]
     fn not_entitled_copy_is_product_specific() {
         let msg = classify_oauth_auth_error(
             &CHATGPT_OAUTH_PRODUCT,
@@ -1135,6 +1316,182 @@ mod tests {
             "tier gate should not push re-login as the fix: {msg}"
         );
         assert!(msg.contains("api.x.ai"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::test_support::test_node;
+    use super::*;
+
+    const DID: &str = "did:key:zResolver";
+    const PROVIDER: &str = "xai-oauth";
+
+    fn row(
+        agent_did: &str,
+        provider: &str,
+        credential_id: &str,
+        account_ref: Option<&str>,
+        connected_at: Option<i64>,
+        enabled: bool,
+    ) -> OAuthCredential {
+        OAuthCredential {
+            doc_id: None,
+            credential_id: credential_id.to_string(),
+            agent_did: agent_did.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".to_string(),
+            refresh_token: "refresh-TEST".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap(),
+            last_refresh: None,
+            enabled,
+            account_ref: account_ref.map(str::to_string),
+            connected_at: connected_at
+                .map(|secs| DateTime::<Utc>::from_timestamp(secs, 0).unwrap()),
+        }
+    }
+
+    fn picked<'c>(rows: &'c [OAuthCredential], pick: AccountPick<'_>) -> Option<&'c str> {
+        pick_oauth_credential(rows, DID, PROVIDER, pick).map(|row| row.credential_id.as_str())
+    }
+
+    #[test]
+    fn resolver_picks_the_earliest_connected_enabled_account() {
+        let rows = [
+            row(DID, PROVIDER, "late", Some("late"), Some(2_000), true),
+            row(DID, PROVIDER, "early", Some("early"), Some(1_000), true),
+        ];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("early"));
+    }
+
+    #[test]
+    fn resolver_skips_a_disabled_account() {
+        let rows = [
+            row(DID, PROVIDER, "off", Some("off"), Some(500), false),
+            row(DID, PROVIDER, "on", Some("on"), Some(1_000), true),
+        ];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("on"));
+    }
+
+    #[test]
+    fn resolver_sorts_a_missing_connection_time_first() {
+        let rows = [
+            row(DID, PROVIDER, "timed", Some("timed"), Some(1_000), true),
+            row(DID, PROVIDER, "untimed", None, None, true),
+        ];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("untimed"));
+    }
+
+    #[test]
+    fn resolver_breaks_equal_times_by_credential_id() {
+        let rows = [
+            row(DID, PROVIDER, "b", Some("b"), Some(1_000), true),
+            row(DID, PROVIDER, "a", Some("a"), Some(1_000), true),
+        ];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("a"));
+    }
+
+    #[test]
+    fn resolver_never_returns_another_principal_or_provider() {
+        let rows = [
+            row("did:key:zOther", PROVIDER, "other-did", None, None, true),
+            row(DID, "chatgpt-codex", "other-provider", None, None, true),
+            row(DID, PROVIDER, "mine", None, Some(1_000), true),
+        ];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("mine"));
+        let foreign = [row("did:key:zOther", PROVIDER, "b", Some("b"), None, true)];
+        assert_eq!(picked(&foreign, AccountPick::Reference(Some("b"))), None);
+    }
+
+    #[test]
+    fn resolver_returns_nothing_when_no_account_is_enabled() {
+        let rows = [row(DID, PROVIDER, "off", None, None, false)];
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), None);
+        assert_eq!(picked(&rows, AccountPick::Reference(None)), None);
+    }
+
+    #[test]
+    fn resolver_reference_names_exactly_one_account() {
+        let rows = [
+            row(DID, PROVIDER, "earlier", Some("earlier"), Some(1_000), true),
+            row(DID, PROVIDER, "original", None, Some(2_000), true),
+            row(DID, PROVIDER, "b", Some("b"), Some(3_000), true),
+        ];
+        assert_eq!(
+            picked(&rows, AccountPick::Reference(None)),
+            Some("original")
+        );
+        assert_eq!(picked(&rows, AccountPick::Reference(Some("b"))), Some("b"));
+        assert_eq!(picked(&rows, AccountPick::ProviderDefault), Some("earlier"));
+
+        let disabled = [
+            row(DID, PROVIDER, "original", None, None, true),
+            row(DID, PROVIDER, "b", Some("b"), Some(1_000), false),
+        ];
+        assert_eq!(picked(&disabled, AccountPick::Reference(Some("b"))), None);
+    }
+
+    #[tokio::test]
+    async fn resolver_reads_through_config_access() {
+        let node = std::sync::Arc::new(test_node().await);
+        for credential in [
+            row(DID, PROVIDER, "xai-oauth:b", Some("b"), Some(1_000), true),
+            row(DID, PROVIDER, "xai-oauth:original", None, None, true),
+        ] {
+            upsert_oauth_credential(&node, &credential).await.unwrap();
+        }
+        let access = crate::config_client::ConfigAccess::Local(node);
+        for (pick, expected) in [
+            (AccountPick::Reference(Some("b")), "xai-oauth:b"),
+            (AccountPick::Reference(None), "xai-oauth:original"),
+            (AccountPick::ProviderDefault, "xai-oauth:original"),
+        ] {
+            let resolved = resolve_oauth_credential(&access, DID, PROVIDER, pick)
+                .await
+                .unwrap()
+                .map(|row| row.credential_id);
+            assert_eq!(resolved.as_deref(), Some(expected), "{pick:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn resolver_missing_account_keeps_the_missing_guidance() {
+        let node = std::sync::Arc::new(test_node().await);
+        let missing = classify_oauth_auth_error(
+            &XAI_OAUTH_PRODUCT,
+            DID,
+            PROVIDER,
+            &OAuthAuthProblem::Missing,
+        );
+        let bootstrap = |pick| {
+            crate::oauth_http::bootstrap_oauth_client(
+                node.clone(),
+                DID,
+                PROVIDER,
+                OAuthRefreshKind::Xai,
+                XAI_OAUTH_PRODUCT,
+                pick,
+            )
+        };
+        let Err(error) = bootstrap(AccountPick::ProviderDefault).await else {
+            panic!("no account is stored");
+        };
+        assert_eq!(error.to_string(), missing);
+
+        upsert_oauth_credential(
+            &node,
+            &row(DID, PROVIDER, "xai-oauth:original", None, None, true),
+        )
+        .await
+        .unwrap();
+        let Err(error) = bootstrap(AccountPick::Reference(Some("b"))).await else {
+            panic!("a reference never falls back to the original account");
+        };
+        assert_eq!(error.to_string(), missing);
     }
 }
 
@@ -1241,6 +1598,17 @@ pub(crate) mod test_support {
         node
     }
 
+    /// The bearer a client build bound for `credential_id`, without binding one.
+    pub(crate) fn bound_bearer(
+        credential_id: &str,
+    ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
+        super::bearer_registry()
+            .lock()
+            .expect("bearer registry mutex poisoned")
+            .get(credential_id)
+            .cloned()
+    }
+
     pub(crate) async fn seed_credential(
         node: &EmbeddedNode,
         agent_did: &str,
@@ -1272,6 +1640,8 @@ pub(crate) mod test_support {
             access_token_expires_at: expires_at,
             last_refresh: Some(Utc::now()),
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
         crate::oauth_credential::upsert_oauth_credential(node, &credential)
             .await

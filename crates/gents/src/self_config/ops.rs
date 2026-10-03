@@ -14,6 +14,7 @@ use defra_node::EmbeddedNode;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
+use crate::backend_provider::BackendProviderOauthExt;
 use crate::config_client::patch::{
     apply_patch, diff_docs, ensure_admissible, FieldDelta, SelfConfigPatch, SelfConfigTarget,
 };
@@ -807,19 +808,18 @@ pub fn guard_backend_auth(
 }
 /// Lean `SelfConfig.backendChoiceAllowed`: whether a model selection may move
 /// from the `current` backend (none on create) to `next`.
+/// `default_account` is `next`'s provider default account (Lean `dflt`).
 pub fn guard_backend_choice(
     current: Option<&crate::InferenceBackend>,
     next: &crate::InferenceBackend,
+    default_account: Option<&str>,
 ) -> Result<()> {
     let BackendAuth::PrincipalOAuth { account_ref } = &next.auth else {
         return Ok(());
     };
-    // The #2117 resolver replaces this with the provider's earliest-connected
-    // enabled account; until then the default is the original account.
-    let default_account: Option<&String> = None;
     let allowed = match current {
         Some(current) if current.provider_kind == next.provider_kind => current.auth == next.auth,
-        _ => account_ref.as_ref() == default_account,
+        _ => account_ref.as_deref() == default_account,
     };
     anyhow::ensure!(
         allowed,
@@ -850,7 +850,13 @@ pub(crate) async fn guard_backend_choice_in_txn(
     let next = backend(next_backend_id.to_owned())
         .await?
         .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
-    guard_backend_choice(current.as_ref(), &next)
+    let default_account = match (&next.auth, next.provider_kind.oauth_provider()) {
+        (BackendAuth::PrincipalOAuth { .. }, Some(provider)) => {
+            crate::oauth_credential::provider_default_account_ref(txn, owner, provider).await?
+        }
+        _ => None,
+    };
+    guard_backend_choice(current.as_ref(), &next, default_account.as_deref())
 }
 /// Compaction summaries run on the compaction's profile, else the behavior's
 /// (`CompactionConfig::inference_profile_id`). A behavior `context_id` or a

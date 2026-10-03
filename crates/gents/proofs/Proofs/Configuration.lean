@@ -449,6 +449,32 @@ def oauthLookupOwner (scope : String) : BackendAuth → Option String
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
     oauthLookupOwner scope (.principalOAuth account) = some scope := rfl
 
+/-- A stored OAuth sign-in: owner DID, provider kind, account reference (`none`
+is the provider's original account) and enabled flag. -/
+structure OAuthAccountRow where
+  owner : String
+  kind : String
+  account : Option String
+  enabled : Bool
+  deriving DecidableEq, Repr
+
+/-- The executing principal's enabled row of `kind` with exactly the requested
+account reference: a reference never falls back to another account, and another
+principal's row never resolves. Order among equal matches is the Rust resolver's
+(earliest-connected enabled first, `oauth_credential.rs`); it is not modeled,
+because it only matters once a principal holds several accounts. -/
+def oauthResolve (scope kind : String) (account : Option String)
+    (rows : List OAuthAccountRow) : Option OAuthAccountRow :=
+  rows.find? fun r => r.owner == scope && r.kind == kind && r.account == account && r.enabled
+
+theorem oauth_resolve_sound {scope kind : String} {account : Option String}
+    {rows : List OAuthAccountRow} {r : OAuthAccountRow}
+    (h : oauthResolve scope kind account rows = some r) :
+    r ∈ rows ∧ r.owner = scope ∧ r.kind = kind ∧ r.account = account ∧ r.enabled = true := by
+  have hp := List.find?_some h
+  simp only [Bool.and_eq_true, beq_iff_eq] at hp
+  exact ⟨List.mem_of_find?_eq_some h, hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
+
 /-! ## Backend capacity defaults -/
 
 /-- Resolved backend limits; authored optional signed integers are validated below. -/

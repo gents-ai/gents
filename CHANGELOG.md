@@ -289,12 +289,23 @@ source consistency checks, not a separate runtime compatibility version.
 
 - Subscription (principal OAuth) backends can carry an optional account
   reference; without one they keep using the provider's original account.
-  Backends with a reference are refused at run time until multi-account
-  resolution lands. The model's config tool cannot set or change a backend's
+  A backend with a reference uses that account, and never falls back to
+  another one. The model's config tool cannot set or change a backend's
   account reference, and wherever it picks a profile or backend (profile,
   behavior, compaction, persona and pack slot) it can keep the current
   account, use an account-free backend, or move to another provider's default
   account. Stored backends, profiles and config exports are unchanged (#2116).
+
+- Every reader of stored OAuth sign-ins (inference, health probes, readiness,
+  `diagnose`, `init`, the auth probes, model discovery and the desktop account
+  list) now picks the account through one resolver with a fixed order:
+  earliest-connected enabled account first, older sign-ins without a
+  connection time first, ties by credential id, never a disabled account. A
+  backend's account reference resolves that account for the running agent; a
+  backend without one uses the provider's original account. When the model
+  moves a profile to another provider, that provider's default account is the
+  resolver's first account. With one account per provider nothing changes
+  (#2117).
 
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the

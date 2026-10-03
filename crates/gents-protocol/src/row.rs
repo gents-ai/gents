@@ -423,6 +423,10 @@ pub struct OAuthCredentialRow {
     pub last_refresh: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_ref: Option<String>,
+    #[serde(default)]
+    pub connected_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

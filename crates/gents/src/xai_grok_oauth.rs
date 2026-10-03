@@ -290,6 +290,7 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
 async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
@@ -298,6 +299,7 @@ async fn build_authenticated_http(
         provider,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
+        crate::oauth_credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
@@ -319,11 +321,12 @@ pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
-    let http = build_authenticated_http(node, agent_did).await?;
+    let http = build_authenticated_http(node, agent_did, account_ref).await?;
     crate::inference_http::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
@@ -336,11 +339,12 @@ pub async fn build_responses_client(
 pub async fn build_chat_completions_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
+    account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
     let endpoint = normalize_endpoint(endpoint);
     // Identity headers ride along via `prepare` on every request.
-    let http = build_authenticated_http(node, agent_did).await?;
+    let http = build_authenticated_http(node, agent_did, account_ref).await?;
     crate::inference_http::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,

@@ -178,10 +178,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let chatgpt_auth_check = match crate::commands::codex_auth_probe::load_oauth_credential(
+    let chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         chatgpt_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {
@@ -225,10 +226,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let xai_auth_check = match crate::commands::grok_auth_probe::load_oauth_credential(
+    let xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         xai_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {
@@ -270,10 +272,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    let claude_auth_check = match crate::commands::grok_auth_probe::load_oauth_credential(
+    let claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         claude_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {

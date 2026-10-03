@@ -30,7 +30,7 @@ use rig::http_client::{
 use rig::wasm_compat::WasmCompatSend;
 
 use crate::oauth_credential::{
-    classify_oauth_auth_error, lookup_oauth_credential, shared_bearer, BearerSource,
+    classify_oauth_auth_error, resolve_oauth_credential, shared_bearer, AccountPick, BearerSource,
     DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthProduct, OAuthRefreshKind,
 };
 
@@ -287,28 +287,34 @@ where
     }
 }
 
-/// Look up the `OAuthCredential` for `(agent_did, provider)` and mint a
-/// shared, cached [`DbCredentialBearer`] against it. Single owner of the
-/// lookup-or-missing-error-then-cache-bearer preamble both `chatgpt_codex`'s
-/// and `xai_grok_oauth`'s client builders used to duplicate.
+/// Resolve the `OAuthCredential` `pick` names for `(agent_did, provider)` and
+/// mint a shared, cached [`DbCredentialBearer`] against it. Single owner of the
+/// resolve-or-missing-error-then-cache-bearer preamble the OAuth client
+/// builders and the health probe share.
 pub async fn bootstrap_oauth_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     provider: &str,
     refresh_kind: OAuthRefreshKind,
     product: OAuthProduct,
+    pick: AccountPick<'_>,
 ) -> Result<(Arc<DbCredentialBearer>, OAuthCredential)> {
-    let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
-        .await
-        .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(classify_oauth_auth_error(
-                &product,
-                agent_did,
-                provider,
-                &OAuthAuthProblem::Missing,
-            ))
-        })?;
+    let credential = resolve_oauth_credential(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        agent_did,
+        provider,
+        pick,
+    )
+    .await
+    .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
+    .ok_or_else(|| {
+        anyhow::anyhow!(classify_oauth_auth_error(
+            &product,
+            agent_did,
+            provider,
+            &OAuthAuthProblem::Missing,
+        ))
+    })?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
     let bearer = shared_bearer(&credential_id, || {

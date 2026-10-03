@@ -373,22 +373,26 @@ pub async fn discover_inference_models_for_core(
                 "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
             )
         })?;
-        gents::oauth_credential::list_oauth_credentials_on(&access, request.agent_did.trim())
-            .await
-            .map_err(|error| {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    agent_did = %request.agent_did.trim(),
-                    error = %format!("{error:#}"),
-                    "reading provider accounts for model discovery failed"
-                );
-                BridgeError::new(
-                    BridgeErrorCode::EndpointUnreachable,
-                    "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
-                )
-            })?
-            .into_iter()
-            .find(|credential| credential.enabled && credential.provider == provider)
+        // Discovery sets up a backend with no account reference, which runs on the original account.
+        gents::oauth_credential::resolve_oauth_credential(
+            &access,
+            request.agent_did.trim(),
+            provider,
+            gents::oauth_credential::AccountPick::Reference(None),
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                target: LOG_TARGET,
+                agent_did = %request.agent_did.trim(),
+                error = %format!("{error:#}"),
+                "reading provider accounts for model discovery failed"
+            );
+            BridgeError::new(
+                BridgeErrorCode::EndpointUnreachable,
+                "The agent is not running, so connected accounts could not be checked. Start the agent and try again.",
+            )
+        })?
     } else {
         None
     };
@@ -1036,6 +1040,8 @@ mod provider_account_tests {
                 .with_timezone(&chrono::Utc),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         };
         let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
         assert!(!json.contains("secret-access"));
@@ -1061,6 +1067,8 @@ mod provider_account_tests {
                 .with_timezone(&chrono::Utc),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
         }
     }
 
@@ -1442,6 +1450,62 @@ mod provider_account_tests {
         assert!(held_tokens(&pending, agent).is_empty());
         assert!(pending.retry(agent, provider, failed_write).await.is_none());
         assert_eq!(*writes.lock().unwrap(), ["token-b", "token-d"]);
+    }
+
+    #[tokio::test]
+    async fn accounts_list_in_resolver_order() {
+        let node = serving_node().await;
+        let access = gents::ConfigAccess::Local(node.clone());
+        let agent = "did:key:zOrder";
+        let at = |secs| chrono::DateTime::from_timestamp(secs, 0);
+        // Stored so that insertion order is not resolver order.
+        for (id, connected_at, enabled) in [
+            ("a", at(2_000), true),
+            ("b", at(1_000), true),
+            ("c", None, false),
+        ] {
+            let credential = OAuthCredential {
+                credential_id: format!("claude-subscription:{agent}:{id}"),
+                account_ref: Some(id.to_string()),
+                connected_at,
+                enabled,
+                ..issued_credential(agent)
+            };
+            gents::oauth_credential::upsert_oauth_credential_on(&access, &credential)
+                .await
+                .expect("store account");
+        }
+
+        let accounts = observe_provider_accounts(
+            &PendingOAuthCredentials::default(),
+            Ok(gents::ConfigAccess::Local(node)),
+            agent,
+        )
+        .await
+        .expect("observe accounts");
+        let ids: Vec<&str> = accounts
+            .iter()
+            .map(|account| account.credential_id.rsplit(':').next().unwrap())
+            .collect();
+        assert_eq!(ids, ["c", "b", "a"]);
+
+        let provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+        let first_match = accounts
+            .iter()
+            .find(|account| {
+                account.provider == provider && account.enabled && !account.pending_save
+            })
+            .map(|account| account.credential_id.clone());
+        let resolved = gents::oauth_credential::resolve_oauth_credential(
+            &access,
+            agent,
+            provider,
+            gents::oauth_credential::AccountPick::ProviderDefault,
+        )
+        .await
+        .expect("resolve")
+        .map(|credential| credential.credential_id);
+        assert_eq!(first_match, resolved);
     }
 }
 

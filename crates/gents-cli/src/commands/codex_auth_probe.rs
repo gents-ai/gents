@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::CodexAuthProbeArgs;
-use crate::config_writes::ConfigAccess;
 use crate::{resolve_agent_did, resolve_config_access};
 
 #[derive(Deserialize)]
@@ -30,15 +29,20 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
-    let credential = load_oauth_credential(&access, &agent_did, &provider)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(gents::oauth_credential::classify_chatgpt_auth_error(
-                &agent_did,
-                &provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
-            ))
-        })?;
+    let credential = gents::oauth_credential::resolve_oauth_credential(
+        &access,
+        &agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(gents::oauth_credential::classify_chatgpt_auth_error(
+            &agent_did,
+            &provider,
+            &gents::oauth_credential::OAuthAuthProblem::Missing,
+        ))
+    })?;
 
     let backend_url = gents::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
@@ -130,17 +134,4 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-pub(crate) async fn load_oauth_credential(
-    access: &ConfigAccess,
-    agent_did: &str,
-    provider: &str,
-) -> Result<Option<gents::oauth_credential::OAuthCredential>> {
-    let query = gents::oauth_credential::oauth_credential_query(agent_did, provider);
-    let response = access.execute(&query).await?;
-    gents::oauth_credential::oauth_credentials_from_response(&response)
-        .into_iter()
-        .next()
-        .transpose()
 }

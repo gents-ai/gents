@@ -59,13 +59,18 @@ impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionClient<S> {
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     /// Look the agent's Claude credential up once and bind the shared bearer.
     /// Fails closed with the `claude-login` hint when no enabled credential exists.
-    pub async fn build(node: Arc<EmbeddedNode>, agent_did: &str) -> Result<Self> {
+    pub async fn build(
+        node: Arc<EmbeddedNode>,
+        agent_did: &str,
+        account_ref: Option<&str>,
+    ) -> Result<Self> {
         let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
             node,
             agent_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
             CLAUDE_OAUTH_PRODUCT,
+            crate::oauth_credential::AccountPick::Reference(account_ref),
         )
         .await?;
         Ok(Self {

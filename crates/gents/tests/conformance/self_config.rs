@@ -128,9 +128,11 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                             .map(typed_backend)
                     };
                     match backend(&candidate) {
+                        // The Lean rows fix the default account to the original one (`fun _ => none`).
                         Some(next) => gents::self_config::guard_backend_choice(
                             backend(&stored).as_ref(),
                             &next,
+                            None,
                         ),
                         None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
                     }
