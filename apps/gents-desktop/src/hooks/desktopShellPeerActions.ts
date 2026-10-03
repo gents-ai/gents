@@ -122,24 +122,11 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onRepairP2P() {
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.repairP2P());
-      return next;
-    } catch (err) {
-      const message = formatPeerConnectionError(err, "repair-p2p");
-      setError(message);
-      throw new Error(message);
-    }
-  }
-
   return {
     onFetchPeerStatus,
     onRequestStatusEnrollment,
     onInitLocalRuntime,
     onRemovePeer,
     onRenamePeer,
-    onRepairP2P,
   };
 }

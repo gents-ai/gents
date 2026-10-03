@@ -123,6 +123,26 @@ describe("Add agent enrollment", () => {
     },
   );
 
+  it.each(["local-standard", "enrollment"])(
+    "hides impossible Remove for the managed agent with source %s",
+    async (source) => {
+      const { shell } = fleet([{ ...forge, source }]);
+      render(<AgentsScreen shell={shell} />);
+      await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
+      expect(
+        screen.queryByRole("menuitem", { name: "Remove" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    },
+  );
+
+  it("retains Remove for a remote enrolled peer", async () => {
+    const { shell } = fleet([remote]);
+    render(<AgentsScreen shell={shell} />);
+    await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
+    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeInTheDocument();
+  });
+
   it("retains initial remote enrollment", async () => {
     const { api, shell } = fleet([forge]);
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });

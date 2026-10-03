@@ -244,7 +244,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                         Check peer
                       </DropdownMenuItem>
                     </DropdownMenuGroup>
-                    {d.source !== "local" && (
+                    {!isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) && (
                       <>
                         <DropdownMenuSeparator />
                         <DropdownMenuGroup>

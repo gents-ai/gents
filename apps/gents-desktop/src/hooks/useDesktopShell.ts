@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { setDesktopShellTimingConfigForTests } from "./desktopShellRuntime";
 import { createDesktopShellChatActions } from "./desktopShellChatActions";
@@ -217,7 +217,6 @@ export function useDesktopShell({
     onInitLocalRuntime,
     onRemovePeer,
     onRenamePeer,
-    onRepairP2P,
   } = createDesktopShellPeerActions({
     api,
     mutateSnapshot,
@@ -230,26 +229,6 @@ export function useDesktopShell({
     selectAgent,
     setStarting,
   });
-  const foregroundRepairRef = useRef(onRepairP2P);
-  const foregroundRepairEnabledRef = useRef(Boolean(snapshot?.client));
-  foregroundRepairRef.current = onRepairP2P;
-  foregroundRepairEnabledRef.current = Boolean(snapshot?.client);
-
-  useEffect(() => {
-    function repairAfterForeground() {
-      if (
-        document.visibilityState === "visible" &&
-        foregroundRepairEnabledRef.current
-      ) {
-        void foregroundRepairRef.current().catch(() => {});
-      }
-    }
-
-    document.addEventListener("visibilitychange", repairAfterForeground);
-    return () =>
-      document.removeEventListener("visibilitychange", repairAfterForeground);
-  }, []);
-
   const { chatFolder, setChatFolder, adoptChatFolder } =
     useChatFolders(selectedSessionId);
 

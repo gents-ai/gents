@@ -119,7 +119,6 @@ export type DesktopApiAdapter = {
   requestStatusEnrollment: (
     serverAddress: string,
   ) => Promise<EnrollmentRequestView>;
-  repairP2P: () => Promise<DesktopClientSnapshot>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
     agentDid: string,
