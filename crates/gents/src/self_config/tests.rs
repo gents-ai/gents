@@ -5269,24 +5269,178 @@ async fn pack_search_uses_registry_pagination_without_installing() {
 }
 
 #[tokio::test]
-async fn pack_get_inspects_document_packs_without_granting_install() {
+async fn pack_documents_install_and_release_graph_dependencies() {
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("dependent_fixture");
+    let (_fixture, directory) = crate::test_support::fixture_pack_copy("review_graph", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    crate::pack_store::PackStore::new(home.path())
+        .import(&bytes[..], None)
+        .unwrap();
+    let (node, did, tools) = pack_tool("documents-dependencies", plugins).await;
+    let slots = [
+        "--inference-slot",
+        "worker=setup:inference",
+        "--inference-slot",
+        "coordinator=setup:inference",
+        "--inference-slot",
+        "verifier=setup:inference",
+    ];
+    let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
+    args.extend(slots);
+    let preview: Value = serde_json::from_str(&config_call(&tools, &args).await.unwrap()).unwrap();
+    assert_eq!(preview["ready"], true, "{preview}");
+    assert_eq!(
+        preview["dependencies"][0]["coordinate"],
+        "fixture/review_graph"
+    );
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let mut args = vec![
+        "pack",
+        "install",
+        "fixture/dependent_fixture",
+        "--digest",
+        digest,
+    ];
+    args.extend(slots);
+    config_call(&tools, &args).await.unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node);
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    config_call(&tools, &["pack", "remove", "fixture/dependent_fixture"])
+        .await
+        .unwrap();
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn pack_document_installation_uses_existing_lifecycle() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_node, _did, tools) = pack_tool("inspect-documents-pack", plugins).await;
+    let (node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
     let result: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(result["installable"], false);
-    assert!(result["supported_operations"].is_null());
-    let error = config_call(
+    assert_eq!(result["installable"], true);
+    let missing: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "preview", "install", "fixture/documents_fixture"],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing["ready"], false);
+    assert_eq!(missing["missing_inference_slots"], json!(["worker"]));
+    let preview: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "preview",
+                "install",
+                "fixture/documents_fixture",
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], true, "{preview}");
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none(),
+        "preview must not install documents"
+    );
+    let rejected = config_call(
         &tools,
-        &["pack", "preview", "install", "fixture/documents_fixture"],
+        &[
+            "pack",
+            "install",
+            "fixture/documents_fixture",
+            "--digest",
+            "sha256:wrong",
+            "--inference-slot",
+            "worker=setup:inference",
+        ],
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("supports graph packs only"));
+    assert!(rejected.to_string().contains("digest"), "{rejected}");
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "install",
+                "fixture/documents_fixture",
+                "--digest",
+                digest,
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["effective"]["digest"], digest);
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let updated: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &[
+                "pack",
+                "update",
+                "fixture/documents_fixture@1.0.0",
+                "--digest",
+                digest,
+                "--inference-slot",
+                "worker=setup:inference",
+            ],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(updated["effective"]["digest"], digest);
+    config_call(&tools, &["pack", "remove", "fixture/documents_fixture"])
+        .await
+        .unwrap();
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

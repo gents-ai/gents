@@ -362,7 +362,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "read back to confirm the targets are gone.",
         },
         "pack" => Page {
-            what: "discover registry packs and install graph packs with their configuration (pack grant). Other pack kinds require the CLI installer.",
+            what: "discover registry packs and install document or graph packs with their configuration (pack grant). Assets and plugins-only packs require the CLI installer.",
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
                 "pack list  options: limit, cursor; reads this home's store",
