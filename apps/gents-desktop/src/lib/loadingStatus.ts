@@ -264,7 +264,7 @@ export function projectSessionLoadingStatus({
       title: "Waiting for session history",
       detail:
         "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
-      action: operationalState ? "reconnect" : "retryLocal",
+      action: operationalState ? null : "retryLocal",
     };
   }
 

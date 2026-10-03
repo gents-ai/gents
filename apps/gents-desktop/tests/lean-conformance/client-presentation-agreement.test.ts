@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import {
+  projectDeploymentTransportStatus,
+  projectRouteOperationalStatus,
+} from "@source-inc/gents-desktop-client";
+
 import type { Shell } from "../../src/ui/hooks/useShell";
 import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen";
 
@@ -11,6 +16,21 @@ type GeneratedPresentationCase = {
   canonical_reason: string | null;
   expected_kind: "ready" | "disabled";
   expected_reason: string | null;
+};
+
+type GeneratedRecoveryCase = {
+  name: string;
+  surface: "transport" | "route";
+  connected: boolean;
+  routeReady: boolean;
+  pairingPending: boolean;
+  expected_kind: "ready" | "waiting";
+  expected_action: null;
+};
+
+type GeneratedCases = {
+  presentationCases: GeneratedPresentationCase[];
+  recoveryCases: GeneratedRecoveryCase[];
 };
 
 function runLean(proofsDir: string, args: string[]): Promise<string> {
@@ -30,7 +50,7 @@ function runLean(proofsDir: string, args: string[]): Promise<string> {
   });
 }
 
-async function generatedPresentationCases(): Promise<GeneratedPresentationCase[]> {
+async function generatedPresentationCases(): Promise<GeneratedCases> {
   const proofsDir = path.resolve(process.cwd(), "../../crates/gents/proofs");
   await runLean(proofsDir, ["build", "Proofs.Conformance.ClientPresentationAgreement"]);
   const stdout = await runLean(proofsDir, [
@@ -39,13 +59,26 @@ async function generatedPresentationCases(): Promise<GeneratedPresentationCase[]
     "--run",
     "Proofs/Conformance/ClientPresentationAgreement.lean",
   ]);
-  return JSON.parse(stdout.trim()) as GeneratedPresentationCase[];
+  return JSON.parse(stdout.trim()) as GeneratedCases;
 }
 
 describe("ClientShell presentation agreement", () => {
-  it("matches every Lean-generated local-draft case", async () => {
-    const cases = await generatedPresentationCases();
+  it("matches Lean-generated draft and automatic recovery cases", async () => {
+    const { presentationCases: cases, recoveryCases } =
+      await generatedPresentationCases();
     expect(cases).toHaveLength(22);
+    expect(recoveryCases).toHaveLength(6);
+    for (const contractCase of recoveryCases) {
+      const actual =
+        contractCase.surface === "transport"
+          ? projectDeploymentTransportStatus(contractCase.connected)
+          : projectRouteOperationalStatus(
+              contractCase.routeReady,
+              contractCase.pairingPending,
+            );
+      expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);
+      expect(actual.action, contractCase.name).toBe(contractCase.expected_action);
+    }
     for (const contractCase of cases) {
       const canonical: Shell["nonEmptyContentSendStatus"] =
         contractCase.canonical_reason

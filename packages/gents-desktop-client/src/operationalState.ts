@@ -301,13 +301,12 @@ export function projectDeploymentTransportStatus(
         detail: "The secure P2P transport is connected.",
       })
     : status({
-        kind: "blocked",
+        kind: "waiting",
         layer: "p2p",
         reason: "disconnected",
         label: "Agent connection is offline",
         shortLabel: "Not connected",
-        detail: "Reconnect the secure P2P connection to continue.",
-        action: "reconnect",
+        detail: "The secure P2P connection is recovering automatically.",
       });
 }
 
@@ -344,7 +343,6 @@ export function projectRouteOperationalStatus(
     shortLabel: "Preparing",
     detail:
       "The agent is connected, but its signed conversation route is not ready yet.",
-    action: "reconnect",
   });
 }
 
