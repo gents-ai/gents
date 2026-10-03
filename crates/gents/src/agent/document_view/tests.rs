@@ -722,6 +722,37 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     node.shutdown().await;
 }
 
+/// Usage observations are written on every provider response; they must
+/// never reload the runtime view.
+#[tokio::test]
+async fn usage_collection_write_never_reloads_the_runtime_view() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-usage"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        &crate::default_behavior_id_for_agent(identity.did()),
+    )
+    .await;
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("initial document view");
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "ProviderAccountUsage",
+        "opaque-usage-doc-id",
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
+
+    node.shutdown().await;
+}
+
 #[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
     let node = test_node().await;

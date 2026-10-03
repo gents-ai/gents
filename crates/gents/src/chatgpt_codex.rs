@@ -322,7 +322,7 @@ pub async fn build_responses_client(
 > {
     let provider = CHATGPT_CODEX_PROVIDER;
     let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
-        node,
+        node.clone(),
         agent_did,
         provider,
         OAuthRefreshKind::ChatGpt,
@@ -338,11 +338,15 @@ pub async fn build_responses_client(
     // system items, set `store`/`stream`, deleted the unsupported sampling
     // params, and forced `strict:false`. Capturing above it would persist a
     // request this backend never receives.
+    let usage = crate::usage_observation::UsageReporter::new(
+        node,
+        crate::usage_observation::UsageAccount::for_credential(&credential),
+    );
     let http = ChatGptCodexHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::<
-            crate::provider_http::ProviderHttpClient,
-        >::default(),
+        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+            crate::provider_http::ProviderHttpClient::with_usage(Default::default(), usage),
+        ),
     );
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
@@ -352,6 +356,9 @@ pub async fn build_responses_client(
     )
     .context("building ChatGPT Codex Responses client")
 }
+
+#[cfg(test)]
+mod usage_tests;
 
 #[cfg(test)]
 mod tests {

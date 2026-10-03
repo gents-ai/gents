@@ -266,7 +266,9 @@ async fn oauth_credential_for_probe(
     Ok(credential)
 }
 
-fn oauth_refresh_kind(kind: crate::backend_provider::BackendProviderKind) -> OAuthRefreshKind {
+pub(crate) fn oauth_refresh_kind(
+    kind: crate::backend_provider::BackendProviderKind,
+) -> OAuthRefreshKind {
     match kind {
         crate::backend_provider::BackendProviderKind::ChatGptCodex => OAuthRefreshKind::ChatGpt,
         crate::backend_provider::BackendProviderKind::XaiGrokOAuth => OAuthRefreshKind::Xai,
@@ -277,7 +279,7 @@ fn oauth_refresh_kind(kind: crate::backend_provider::BackendProviderKind) -> OAu
     }
 }
 
-fn oauth_product(
+pub(crate) fn oauth_product(
     kind: crate::backend_provider::BackendProviderKind,
 ) -> crate::oauth_credential::OAuthProduct {
     match kind {

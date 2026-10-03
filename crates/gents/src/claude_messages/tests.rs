@@ -844,6 +844,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
@@ -878,6 +879,7 @@ async fn transport_401_invalidates_the_bearer_once() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
@@ -906,6 +908,7 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
         HashSet::new(),
         &bearer,
         &ReqwestClient::new(),
+        None,
     )
     .await
     .err()
@@ -953,4 +956,55 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
         crate::error::classify_completion_error(&error),
         crate::error::InferenceError::PermanentFailure { .. }
     ));
+}
+
+/// A live Messages request records the unified usage headers for the
+/// reporter's account.
+#[test]
+fn usage_wiring_claude_live_messages_records_unified_headers() {
+    // The fixture lock spans the live request, so it is held outside the
+    // runtime: a std guard must not live across an await.
+    let _guard = lock_fixtures_for_test();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            let node =
+                std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+            let account = crate::usage_observation::UsageAccount::Backend {
+                agent_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                provider: "ClaudeCliSubscription".into(),
+                backend_id: "backend-usage-claude".into(),
+            };
+            let url = crate::provider_http::tests::one_shot_server(
+                "200 OK",
+                &[
+                    ("anthropic-ratelimit-unified-5h-utilization", "0.25"),
+                    ("anthropic-ratelimit-unified-5h-reset", "1790354400"),
+                ],
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )
+            .await;
+            let bearer = crate::claude_subscription::StaticBearer::new("access-TEST");
+            let _ = stream_messages_at(
+                &url,
+                "claude-sonnet-5",
+                &echo_request(),
+                HashSet::new(),
+                &bearer,
+                &ReqwestClient::new(),
+                Some(crate::usage_observation::UsageReporter::new(
+                    node.clone(),
+                    account.clone(),
+                )),
+            )
+            .await;
+
+            let stored = crate::provider_http::tests::stored_usage_eventually(&node, &account)
+                .await
+                .expect("usage recorded");
+            let window = &stored.report.windows[0];
+            assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
+        });
 }

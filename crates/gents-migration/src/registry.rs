@@ -622,6 +622,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::PACK_INSTALLATION,
         "bafyreig6h74o5jnh3t466vqhuj5qqcfifock267tmrhdlbaay66oh7pqxu"
     ),
+    baseline_entry!(
+        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME,
+        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE,
+        "bafyreifhv54fli6vfs3jt5kh5iglqmqaksxwihxu6ju3wsz3en7dlgzoyi"
+    ),
 ];
 
 /// Future schema evolution starts here, after the canonical baseline lands.

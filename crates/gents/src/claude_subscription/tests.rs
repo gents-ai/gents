@@ -259,3 +259,50 @@ fn kind_round_trips_and_is_agent_scoped() {
     );
     assert!(crate::BackendProviderKind::ClaudeCliSubscription.is_agent_scoped_oauth());
 }
+
+#[tokio::test]
+async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
+    let did = "did:key:z6MkUsageWireClaude";
+    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let credential = crate::oauth_credential::OAuthCredential {
+        doc_id: None,
+        credential_id: format!(
+            "{}:acct-ref-2",
+            crate::oauth_credential::oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
+        ),
+        agent_did: did.to_string(),
+        provider: CLAUDE_OAUTH_PROVIDER.to_string(),
+        access_token: "access-TEST".into(),
+        refresh_token: "refresh-TEST".into(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+        account_ref: Some("acct-ref-2".into()),
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
+    };
+    crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+        .await
+        .unwrap();
+
+    let client = ClaudeSubscriptionClient::build(node, did, Some("acct-ref-2"))
+        .await
+        .expect("client");
+
+    assert_eq!(
+        client
+            .usage
+            .as_ref()
+            .map(|reporter| reporter.account.clone()),
+        Some(crate::usage_observation::UsageAccount::Credential {
+            agent_did: did.to_string(),
+            provider: CLAUDE_OAUTH_PROVIDER.to_string(),
+            account_ref: Some("acct-ref-2".into()),
+        })
+    );
+}
