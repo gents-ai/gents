@@ -7,6 +7,15 @@ schemas operate or expose its vocabulary. Use DefraDB's DID identity and
 document ACP for database authorization. Reuse its transaction and P2P APIs
 through the existing Gents adapters.
 
+## Node/Agent vocabulary (#1785, #1799)
+
+Node is the DID-bound runtime identity; Agent is reusable configuration; Engineer
+replaces orchestrator. This is a deliberate clean break with no aliases. The
+prepared committed baseline supersedes historical launch pins. Dependencies flow
+specification -> executable Lean -> generated conformance -> implementation ->
+text/default-agent; stack each layer on its immediate parent, keep the
+intentionally red foundation from merging alone.
+
 ## Configuration refactor stack
 
 [PR #1430](https://github.com/gents-ai/gents/pull/1430) is the specification:
@@ -41,7 +50,7 @@ its implementation layers.
 ## Session-message stack (#1938)
 
 The session-message spec layer (`gents_protocol::request_admission`, the
-AgentRequest/AgentToolCall/AgentPrincipal SDL, `SubagentTools` and
+AgentRequest/AgentToolCall/Node SDL, `AgentTools` and
 `Proofs/Request/CausalHop.lean`) removes the privileged subagent position.
 Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
 L1 spec, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each on its
@@ -74,13 +83,13 @@ decoders and native adapters translate representations, not redefine policy.
 - The owned loop is the sole provider-input boundary. Durable transcripts may
   be permissive; sanitize and narrow them there.
 - DefraDB authenticates actors as DIDs and enforces document authorization
-  through ACP. Keep Gents principals bound to those DIDs; do not add a parallel
-  identity or authorization layer. Behaviors are reusable interfaces. The
-  operating convention is one active runtime per principal; enforcement is
+  through ACP. Keep Gents node identity bound to those DIDs; do not add a parallel
+  identity or authorization layer. Behaviors are reusable agent interfaces. The
+  operating convention is one active runtime per node; enforcement is
   deferred. Do not add host identity, leases, or host-migration machinery. Validate
   configured paths/resources through existing owners and fail affected work
   clearly when unavailable. Paths/observations are not portable identity data.
-- Tools, MCP services, subagent targets, skills, tasks, callbacks, schedules,
+- Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
   and event sources are documents. Tool groups are nested settings within Tools.
   Extend existing reconcilers and owners instead of adding side channels.
 - Task hooks are explicitly configured host commands on Task. Reuse existing
@@ -104,7 +113,7 @@ decoders and native adapters translate representations, not redefine policy.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with an agent-scoped `OAuthCredential` written by `gents claude-login` and
+  with a node-scoped `OAuthCredential` written by `gents claude-login` and
   refreshed by gents; the `claude` binary is not a dependency.
 
 ## Documentation and comments
