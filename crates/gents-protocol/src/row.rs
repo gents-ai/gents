@@ -306,7 +306,7 @@ pub struct AgentToolCallRow {
     #[serde(default, rename = "_docID")]
     pub doc_id: Option<String>,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub request_doc_id: Option<String>,
     pub tool_call_key: String,
