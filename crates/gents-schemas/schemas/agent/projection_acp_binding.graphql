@@ -1,11 +1,11 @@
-type ProjectionAcpBinding @branchable @index(fields: ["agent_did", "binding_id"], unique: true) {
+type ProjectionAcpBinding @branchable @index(fields: ["node_did", "binding_id"], unique: true) {
     # Stable manifest/config id for this projection access binding.
     binding_id: String @index
     # Required owner agent DID. Runtime auto-discovery only considers bindings for
-    # the root AgentRequest.agent_did.
-    agent_did: String @index
-    # Optional narrower behavior scope within the owner agent.
-    behavior_id: String @index
+    # the root AgentRequest.node_did.
+    node_did: String @index
+    # Optional narrower Agent scope within the owner node.
+    agent_id: String @index
     # Optional adapter projection id. Empty means all adapter projections for the
     # scoped agent/behavior.
     projection_id: String @index

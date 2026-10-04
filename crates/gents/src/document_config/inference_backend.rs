@@ -136,7 +136,7 @@ impl std::fmt::Debug for BackendAuth {
 pub struct BackendModelCatalog {
     /// None denotes the backend's shared credential scope; Some identifies the
     /// principal whose existing OAuthCredential was used. Never contains secrets.
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     /// Successful observation time. A failed refresh must not erase a prior
     /// catalog or claim it was freshly observed. Health remains separately owned.
     pub observed_at: String,

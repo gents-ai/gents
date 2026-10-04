@@ -18,7 +18,7 @@ use super::*;
 /// can name that next step instead of only the failure.
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "{} {id} field {field} references missing {} {target_id:?} within agent_did {agent_did}",
+    "{} {id} field {field} references missing {} {target_id:?} within node_did {node_did}",
     collection.graphql_type(),
     target.graphql_type()
 )]
@@ -28,7 +28,7 @@ pub struct MissingReference {
     pub field: String,
     pub target: Collection,
     pub target_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 /// Canonical configuration visible for one principal. Retained documents and
