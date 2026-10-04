@@ -420,6 +420,10 @@ async fn execute_graphql_async_with_tx(
                     attempt,
                     graphql,
                     error = %error,
+                    cause = ?error,
+                    is_timeout = error.is_timeout(),
+                    is_connect = error.is_connect(),
+                    timeout_ms = options.timeout.as_millis() as u64,
                     "retrying async GraphQL request after transport error"
                 );
                 last_error = Some(
