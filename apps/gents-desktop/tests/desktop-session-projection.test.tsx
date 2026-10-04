@@ -117,6 +117,35 @@ describe("useDesktopSessionProjection", () => {
     expect(result.current.sessionLoad.error).toContain("database read timed out");
   });
 
+  it("retains a read failure during retry and clears it only when the read succeeds", async () => {
+    let resolve!: (value: null) => void;
+    const retry = new Promise<null>((done) => {
+      resolve = done;
+    });
+    const { result } = renderProjection({
+      fetchSessionSnapshot: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("read timed out"))
+        .mockReturnValueOnce(retry),
+    } as unknown as DesktopApiAdapter);
+    await act(async () => {
+      await result.current.refreshSession("session-1");
+    });
+    let refresh!: Promise<DesktopSessionSnapshot | null>;
+    act(() => {
+      refresh = result.current.refreshSession("session-1");
+    });
+    expect(result.current.sessionLoad).toMatchObject({
+      phase: "loading",
+      error: "Error: read timed out",
+    });
+    await act(async () => {
+      resolve(null);
+      await refresh;
+    });
+    expect(result.current.sessionLoad).toMatchObject({ phase: "loaded", error: null });
+  });
+
   it("rejects an old snapshot after navigating away and back to the same session", async () => {
     const page = {
       totalItems: 1,

@@ -175,6 +175,18 @@ export function projectSessionLoadingStatus({
       !sessionLoad.agentDid ||
       sessionLoad.agentDid === selectedAgentDid);
 
+  if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
+    return {
+      layer: "localDatabase",
+      phase: "loading",
+      title: "Retrying conversation update",
+      detail: sessionMatches
+        ? "The last update failed. Displayed messages may be out of date."
+        : "The last read failed. Retrying this conversation.",
+      action: null,
+    };
+  }
+
   if (loadMatches && sessionLoad.phase === "loading" && !sessionMatches) {
     return {
       layer: "localDatabase",
