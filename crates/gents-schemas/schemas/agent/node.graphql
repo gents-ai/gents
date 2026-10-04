@@ -1,7 +1,7 @@
-type AgentPrincipal @branchable {
-    agent_did: String @index(unique: true)
+type Node @branchable {
+    node_did: String @index(unique: true)
     display_name: String
-    default_behavior_id: String @index
+    default_agent_id: String @index
     enabled: Boolean @index
     created_at: String
     updated_at: DateTime @index(direction: DESC)

@@ -10,18 +10,18 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
-/// Selects context and inference as one unit. Behaviors are reusable
-/// interfaces; the session binds to one by `behavior_id` only. There are no
+/// Selects context and inference as one unit. Agents are reusable
+/// interfaces; the session binds to one by `agent_id` only. There are no
 /// backend/model/compaction/skill copies here — `AgentContext` owns literal
 /// instructions, explicit skill selection, tools, and compaction, and
 /// `InferenceProfile` is the only model-selection path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AgentBehavior {
+pub struct Agent {
     /// Logical configuration key; `_docID` is the storage identity.
-    pub behavior_id: String,
-    pub agent_did: String,
+    pub agent_id: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
@@ -34,7 +34,7 @@ pub struct AgentBehavior {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub context_id: Option<String>,
     /// Required: the only model selection path is
-    /// Task -> AgentBehavior -> InferenceProfile. There is no default
+    /// Task -> Agent -> InferenceProfile. There is no default
     /// fallback.
     pub inference_profile_id: String,
     #[serde(
