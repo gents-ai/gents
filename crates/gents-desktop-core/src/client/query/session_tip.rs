@@ -50,6 +50,13 @@ pub async fn load_request_prompt_ownership(
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
     for chunk in requests.chunks(32) {
+        if let Some(query) = prompt_ownership_batch_query(chunk) {
+            let data =
+                execute_local_graphql_query(node, &query, "request prompt ownership").await?;
+            if decode_prompt_ownership_batch(&data, chunk, &mut facts)? {
+                continue;
+            }
+        }
         let query = prompt_ownership_query(chunk)?;
         let data = execute_local_graphql_query(node, &query, "request prompt ownership").await?;
         decode_prompt_ownership(&data, chunk, &mut facts)?;
@@ -63,11 +70,111 @@ pub async fn load_request_prompt_ownership_on(
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
     for chunk in requests.chunks(32) {
+        if let Some(query) = prompt_ownership_batch_query(chunk) {
+            let data =
+                execute_access_graphql_query(access, &query, "request prompt ownership").await?;
+            if decode_prompt_ownership_batch(&data, chunk, &mut facts)? {
+                continue;
+            }
+        }
         let query = prompt_ownership_query(chunk)?;
         let data = execute_access_graphql_query(access, &query, "request prompt ownership").await?;
         decode_prompt_ownership(&data, chunk, &mut facts)?;
     }
     Ok(facts)
+}
+
+fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> {
+    let first = requests.first()?;
+    let agent = escape_graphql_string(first.agent_did.as_deref()?);
+    let session = escape_graphql_string(first.session_id.as_deref()?);
+    let requester = first
+        .requester_did
+        .as_deref()
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    let ids = requests
+        .iter()
+        .map(|request| {
+            if request.agent_did != first.agent_did
+                || request.session_id != first.session_id
+                || request.requester_did != first.requester_did
+            {
+                return None;
+            }
+            Some(format!(
+                "\"{}\"",
+                escape_graphql_string(request.doc_id.as_deref()?)
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?
+        .join(",");
+    let limit = MAX_TIP_REQUEST_ROWS + 1;
+    Some(format!(
+        r#"query DesktopRequestPromptOwnership {{
+        AgentMessage(filter: {{agent_did: {{_eq: "{agent}"}}, session_id: {{_eq: "{session}"}},
+            requester_did: {{_eq: {requester}}}, request_doc_id: {{_in: [{ids}]}}}},
+            order: {{sequence: ASC}}, limit: {limit}) {{
+            _docID request_doc_id agent_did session_id requester_did message_key role sequence
+        }}
+    }}"#
+    ))
+}
+
+/// Only a complete bounded read can establish missing prompts. Oversized
+/// histories and tied anchors retain the exact per-request lookup path.
+fn decode_prompt_ownership_batch(
+    data: &Value,
+    requests: &[AgentRequestRow],
+    facts: &mut RequestPromptOwnership,
+) -> Result<bool> {
+    let rows = data
+        .get(AGENT_MESSAGE_NAME)
+        .and_then(Value::as_array)
+        .context("prompt batch omitted rows")?;
+    if rows.len() > MAX_TIP_REQUEST_ROWS {
+        return Ok(false);
+    }
+    let mut observations = serde_json::Map::new();
+    for (index, request) in requests.iter().enumerate() {
+        let doc = request
+            .doc_id
+            .as_deref()
+            .context("prompt lookup lacks physical request")?;
+        let matching = rows
+            .iter()
+            .filter(|row| row["request_doc_id"].as_str() == Some(doc))
+            .collect::<Vec<_>>();
+        if matching.len() > 1 && matching[0]["sequence"] == matching[1]["sequence"] {
+            return Ok(false);
+        }
+        let key = format!("authored:{doc}:prompt");
+        observations.insert(
+            format!("p{index}"),
+            Value::Array(
+                matching
+                    .iter()
+                    .filter(|row| {
+                        row["message_key"].as_str() == Some(key.as_str()) && row["role"] == "user"
+                    })
+                    .take(2)
+                    .map(|row| (*row).clone())
+                    .collect(),
+            ),
+        );
+        observations.insert(
+            format!("a{index}"),
+            Value::Array(
+                matching
+                    .first()
+                    .map(|row| (*row).clone())
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+    }
+    decode_prompt_ownership(&Value::Object(observations), requests, facts)?;
+    Ok(true)
 }
 
 fn prompt_ownership_query(requests: &[AgentRequestRow]) -> Result<String> {
@@ -333,6 +440,20 @@ mod tests {
         let ownership = load_request_prompt_ownership(&node, &requests)
             .await
             .unwrap();
+        let exact = execute_local_graphql_query(
+            &node,
+            &prompt_ownership_query(&requests).unwrap(),
+            "exact prompt ownership comparison",
+        )
+        .await
+        .unwrap();
+        let mut exact_facts = RequestPromptOwnership::default();
+        decode_prompt_ownership(&exact, &requests, &mut exact_facts).unwrap();
+        for (doc, fact) in &ownership.by_request_doc_id {
+            let expected = &exact_facts.by_request_doc_id[doc];
+            assert_eq!(fact.materialized, expected.materialized);
+            assert_eq!(fact.first_sequence, expected.first_sequence);
+        }
         assert!(ownership.by_request_doc_id["completed"].materialized);
         assert_eq!(
             ownership.by_request_doc_id["completed"].first_sequence,
@@ -344,6 +465,7 @@ mod tests {
             None
         );
         requests[0].requester_did = Some("different-requester".into());
+        assert!(prompt_ownership_batch_query(&requests).is_none());
         let other_scope = load_request_prompt_ownership(&node, &requests[..1])
             .await
             .unwrap();
@@ -371,5 +493,41 @@ mod tests {
         )
         .is_err());
         node.shutdown().await;
+    }
+
+    #[test]
+    fn incomplete_prompt_batches_do_not_establish_absence_or_select_tied_anchors() {
+        let requests = [AgentRequestRow {
+            doc_id: Some("request".into()),
+            agent_did: Some("agent".into()),
+            session_id: Some("session".into()),
+            ..Default::default()
+        }];
+        let row = serde_json::json!({
+            "request_doc_id": "request", "agent_did": "agent", "session_id": "session",
+            "requester_did": null, "message_key": "authored:request:prompt",
+            "role": "user", "sequence": 0
+        });
+        for rows in [
+            vec![row.clone(); MAX_TIP_REQUEST_ROWS + 1],
+            vec![row.clone(); 2],
+        ] {
+            let mut facts = RequestPromptOwnership::default();
+            assert!(!decode_prompt_ownership_batch(
+                &serde_json::json!({"AgentMessage": rows}),
+                &requests,
+                &mut facts,
+            )
+            .unwrap());
+            assert!(facts.by_request_doc_id.is_empty());
+        }
+        let mut later = row.clone();
+        later["sequence"] = serde_json::json!(1);
+        assert!(decode_prompt_ownership_batch(
+            &serde_json::json!({"AgentMessage": [row, later]}),
+            &requests,
+            &mut RequestPromptOwnership::default(),
+        )
+        .is_err());
     }
 }
