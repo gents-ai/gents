@@ -1,6 +1,6 @@
-type Skill @branchable @index(fields: ["agent_did", "skill_id"], unique: true) {
+type Skill @branchable @index(fields: ["node_did", "skill_id"], unique: true) {
     skill_id: String @index
-    agent_did: String @index
+    node_did: String @index
     name: String @index
     description: String
     instructions: String
