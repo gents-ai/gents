@@ -84,7 +84,7 @@ decoders and native adapters translate representations, not redefine policy.
   be permissive; sanitize and narrow them there.
 - DefraDB authenticates actors as DIDs and enforces document authorization
   through ACP. Keep Gents node identity bound to those DIDs; do not add a parallel
-  identity or authorization layer. Behaviors are reusable agent interfaces. The
+  identity or authorization layer. Agents are reusable configuration. The
   operating convention is one active runtime per node; enforcement is
   deferred. Do not add host identity, leases, or host-migration machinery. Validate
   configured paths/resources through existing owners and fail affected work
@@ -99,7 +99,7 @@ decoders and native adapters translate representations, not redefine policy.
   retain their action journals. Workspace integration with general hooks remains
   an explicit design TODO; preserve current workspace functionality until resolved.
 - AgentSession is the single durable session document; AgentConversation is retired.
-  Behavior is its only configuration selection. Title and creation provenance live
+  Agent is its only configuration selection. Title and creation provenance live
   within the session; request state and derived UI observations keep their existing
   owners. Use the canonical protocol session type rather than another writable copy.
 - Client sync has one observation owner: `gents::p2p_observability` adapts
