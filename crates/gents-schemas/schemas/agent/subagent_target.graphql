@@ -1,9 +1,9 @@
-# Calling principal owns this explicit destination behavior reference.
-type SubagentTarget @branchable @index(fields: ["agent_did", "target_id"], unique: true) {
+# Calling node owns this explicit destination agent reference.
+type SubagentTarget @branchable @index(fields: ["node_did", "target_id"], unique: true) {
     target_id: String
-    agent_did: String @index
-    target_agent_did: String @index
-    behavior_id: String @index
+    node_did: String @index
+    target_node_did: String @index
+    agent_id: String @index
     name: String
     description: String
     tags: [String!]
