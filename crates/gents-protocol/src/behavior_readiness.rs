@@ -230,8 +230,8 @@ pub fn project_behavior_readiness_source(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentBehaviorReadinessRow {
-    pub agent_did: String,
+pub struct NodeReadinessRow {
+    pub node_did: String,
     pub snapshot_json: String,
     pub updated_at: String,
 }

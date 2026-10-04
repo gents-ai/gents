@@ -32,16 +32,16 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentRuntimeRow {
-    pub agent_did: String,
+pub struct NodeRuntimeRow {
+    pub node_did: String,
     #[serde(default)]
     pub reconcile_phase: Option<String>,
     #[serde(default)]
-    pub behavior_executor_capacity: Option<i64>,
+    pub agent_executor_capacity: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_queue_depth: Option<i64>,
+    pub agent_executor_queue_depth: Option<i64>,
     #[serde(default)]
-    pub behavior_executor_status_json: Option<String>,
+    pub agent_executor_status_json: Option<String>,
     #[serde(default)]
     pub last_reconcile_result: Option<String>,
     #[serde(default)]
