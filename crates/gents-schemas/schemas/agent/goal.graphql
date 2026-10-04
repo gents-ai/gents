@@ -1,7 +1,7 @@
 type Goal @branchable {
     goal_id: String @index
     session_id: String @index
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     # Immutable idempotency identity for model/atomic submission creation.
     # Existing operator-created goals remain null.
     creation_key: String @immutable

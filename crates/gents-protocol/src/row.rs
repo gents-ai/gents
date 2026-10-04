@@ -208,7 +208,7 @@ pub struct MailboxItemRow {
     pub doc_id: String,
     pub item_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub status: String,
     pub kind: String,
     pub action: String,
@@ -227,8 +227,8 @@ pub struct MailboxItemRow {
     pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
-    pub target_agent_did: String,
-    pub target_behavior_id: String,
+    pub target_node_did: String,
+    pub target_agent_id: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -258,7 +258,7 @@ pub struct GoalRow {
     )]
     pub tags: Vec<String>,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
     pub creation_key: Option<String>,
     #[serde(default)]
@@ -403,7 +403,7 @@ pub struct OAuthCredentialRow {
     pub doc_id: Option<String>,
     pub credential_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
     #[serde(default)]
@@ -452,7 +452,7 @@ pub struct ToolServiceRegistryRow {
     #[serde(default)]
     pub mcp_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub send_agent_did: bool,
+    pub send_node_did: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub tools: Vec<ToolServiceEntry>,
     #[serde(default)]
@@ -463,7 +463,7 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
-/// Persisted snapshot of one MCP service's health, written by the agent's
+/// Persisted snapshot of one MCP service's health, written by the node's
 /// `health_checker` on every probe cycle. `status` carries the raw
 /// `ToolServiceHealthState` vocabulary ("healthy" / "degraded" / "evicted" /
 /// "reconnecting"; see `tool_service_health::ToolServiceHealthState`) so the
@@ -475,7 +475,7 @@ pub struct ToolServiceRegistryRow {
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
     #[serde(default)]
