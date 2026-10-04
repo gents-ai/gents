@@ -1,5 +1,5 @@
 # Calling node owns this explicit destination agent reference.
-type SubagentTarget @branchable @index(fields: ["node_did", "target_id"], unique: true) {
+type AgentTarget @branchable @index(fields: ["node_did", "target_id"], unique: true) {
     target_id: String
     node_did: String @index
     target_node_did: String @index
