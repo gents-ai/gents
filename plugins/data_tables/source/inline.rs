@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::Res;
 use crate::csv::{MAX_COLUMNS, column_names};
-use crate::names::{sanitize, unique};
+use crate::names::{Taken, sanitize, unique};
 use crate::table::{BATCH_ROWS, Batches, Fnv, TableSource, Warnings};
 use crate::typed::{Builder, ColType, FLOAT, INT, Inferrer, parse_float, parse_int};
 
@@ -176,7 +176,7 @@ pub fn parse_tables(v: &Value, warn: &Arc<Warnings>) -> Res<Vec<(String, InlineT
             return Err("tables must be a list of tables, one table or an object of tables".into());
         }
     }
-    let mut taken = HashSet::new();
+    let mut taken = Taken::default();
     let mut out = Vec::new();
     for (raw, t) in items {
         let name = unique(&sanitize(&raw), &mut taken);
@@ -217,17 +217,22 @@ fn build(name: &str, v: &Value, warn: &Arc<Warnings>) -> Res<InlineTable> {
         Some(c) => c,
         None => match rows.first() {
             Some(Value::Object(_)) => {
-                let mut keys: Vec<String> = Vec::new();
-                for r in &rows {
+                let mut seen: HashSet<&str> = HashSet::new();
+                let mut keys: Vec<&String> = Vec::new();
+                'rows: for r in &rows {
                     if let Value::Object(o) = r {
                         for k in o.keys() {
-                            if !keys.contains(k) {
-                                keys.push(k.clone());
+                            if seen.insert(k) {
+                                keys.push(k);
+                            }
+                            // Past the cap the table is refused below; no need to collect more.
+                            if keys.len() > MAX_COLUMNS {
+                                break 'rows;
                             }
                         }
                     }
                 }
-                keys.into_iter().map(|k| (k, None)).collect()
+                keys.into_iter().map(|k| (k.clone(), None)).collect()
             }
             _ => {
                 let width = rows
@@ -244,10 +249,27 @@ fn build(name: &str, v: &Value, warn: &Arc<Warnings>) -> Res<InlineTable> {
     if named.is_empty() {
         return Err(format!("inline table {name} has no columns"));
     }
-    if named.len() > MAX_COLUMNS.min(10_000) || named.len().saturating_mul(rows.len()) > MAX_CELLS {
+    if named.len() > MAX_COLUMNS || named.len().saturating_mul(rows.len()) > MAX_CELLS {
         return Err(format!(
             "inline table {name} is too large; bind a file instead"
         ));
+    }
+    let known: HashSet<&str> = named.iter().map(|(n, _)| n.as_str()).collect();
+    let extra = |r: &Value| match r {
+        Value::Array(a) => a.len() > named.len(),
+        Value::Object(o) => o.keys().any(|k| !known.contains(k.as_str())),
+        _ => false,
+    };
+    if let Some(first) = rows.iter().position(extra) {
+        let count = rows.iter().filter(|r| extra(r)).count();
+        warn.once(
+            &format!("inline-extra-{name}"),
+            format!(
+                "{count} rows of inline table {name} had values beyond its {} columns that were left out (first is row {})",
+                named.len(),
+                first + 1
+            ),
+        );
     }
     let header: Vec<(Vec<u8>, bool)> = named
         .iter()

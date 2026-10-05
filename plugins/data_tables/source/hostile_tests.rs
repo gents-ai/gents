@@ -260,10 +260,11 @@ fn broken_files_in_a_folder_are_reported_one_by_one_and_the_good_ones_still_work
 }
 
 #[test]
-fn a_file_with_ten_thousand_columns_is_queried_and_listed() {
+fn the_widest_file_is_queried_and_listed_in_seconds_and_a_wider_one_is_refused() {
+    let width = crate::csv::MAX_COLUMNS;
     let d = Dir::new();
-    let header: Vec<String> = (0..10_000).map(|i| format!("c{i}")).collect();
-    let row: Vec<String> = (0..10_000).map(|i| (i * 2).to_string()).collect();
+    let header: Vec<String> = (0..width).map(|i| format!("c{i}")).collect();
+    let row: Vec<String> = (0..width).map(|i| (i * 2).to_string()).collect();
     d.put(
         "w.csv",
         format!(
@@ -273,14 +274,31 @@ fn a_file_with_ten_thousand_columns_is_queried_and_listed() {
             row.join(",")
         ),
     );
-    let r = query(&d, "SELECT c9999, c0, c5000 FROM w").unwrap();
-    assert_eq!(r["rows"], json!([[19998, 0, 10000], [19998, 0, 10000]]));
+    let start = std::time::Instant::now();
+    let last = width - 1;
+    let r = query(&d, &format!("SELECT c{last}, c0, c{} FROM w", width / 2)).unwrap();
+    assert_eq!(
+        r["rows"],
+        json!([[last * 2, 0, width], [last * 2, 0, width]])
+    );
     let all = query(&d, "SELECT * FROM w").unwrap();
-    assert_eq!(all["columns"].as_array().unwrap().len(), 10_000);
-    assert_eq!(all["rows"][0].as_array().unwrap().len(), 10_000);
+    assert_eq!(all["columns"].as_array().unwrap().len(), width);
+    assert_eq!(all["rows"][0].as_array().unwrap().len(), width);
     assert_eq!(
         query(&d, "SELECT count(*) AS n FROM w").unwrap()["rows"],
         json!([[2]])
+    );
+    // Planning time grows faster than width; the cap keeps it to seconds, native and sandboxed.
+    assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+    let wider: Vec<String> = (0..=width).map(|i| format!("c{i}")).collect();
+    d.put("w2.csv", format!("{}\n1\n", wider.join(",")));
+    let e = query(&d, "SELECT * FROM w2").unwrap_err();
+    assert!(
+        e.contains(&format!(
+            "has {} columns, over the {width} one table may have",
+            width + 1
+        )),
+        "{e}"
     );
 }
 

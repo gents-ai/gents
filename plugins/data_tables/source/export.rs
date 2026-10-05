@@ -54,13 +54,19 @@ fn field(a: &ArrayRef, i: usize) -> Option<String> {
     })
 }
 
-/// A CSV field as bytes: quoted when it holds a delimiter, quote or line break, and
-/// quoted when it is the empty string, which an empty NULL field is not.
+/// A CSV field as bytes: quoted when it holds a delimiter the reader may sniff (`,` `;` tab
+/// `|`), a quote or a line break, or edge spaces, and quoted when it is the empty string,
+/// which an empty NULL field is not. Quoting every sniffable delimiter keeps a one-column
+/// table whose values hold `;` from being read back as two columns.
 fn encode(value: Option<String>, out: &mut Vec<u8>) {
     match value {
         None => {}
         Some(s) if s.is_empty() => out.extend_from_slice(b"\"\""),
-        Some(s) if s.contains([',', '"', '\n', '\r']) => {
+        Some(s)
+            if s.contains([',', ';', '|', '\t', '"', '\n', '\r'])
+                || s.starts_with(' ')
+                || s.ends_with(' ') =>
+        {
             out.push(b'"');
             out.extend_from_slice(s.replace('"', "\"\"").as_bytes());
             out.push(b'"');
@@ -109,9 +115,12 @@ fn header_line(names: &[String]) -> Vec<u8> {
     line
 }
 
+/// The longest output name: the hidden `.{name}.part` written beside it must fit in 255 bytes too.
+const MAX_NAME_BYTES: usize = 248;
+
 fn valid_name(name: &str) -> Res<()> {
     let bad = name.is_empty()
-        || name.len() > 255
+        || name.len() > MAX_NAME_BYTES
         || name.starts_with('.')
         || name.contains(['/', '\\', '\0']);
     if bad {
@@ -240,8 +249,8 @@ pub async fn export(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         Path::new(name).extension().and_then(|e| e.to_str()),
     ) {
         (Some(f), _) => f,
-        (None, Some("csv")) => ExportFormat::Csv,
-        (None, Some("parquet")) => ExportFormat::Parquet,
+        (None, Some(e)) if e.eq_ignore_ascii_case("csv") => ExportFormat::Csv,
+        (None, Some(e)) if e.eq_ignore_ascii_case("parquet") => ExportFormat::Parquet,
         _ => return Err("format is required unless output ends in .csv or .parquet".into()),
     };
     let dir = Path::new(
@@ -308,11 +317,21 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "|\"\"|\"a,b\"|\"say \"\"hi\"\"\"|plain|\"l1\nl2\"|"
         );
+        // Every delimiter the reader may sniff, and edge spaces, force quotes.
+        let mut out = Vec::new();
+        for v in ["a;b", "a|b", "a\tb", " a", "a ", "a b"] {
+            encode(Some(v.into()), &mut out);
+            out.push(b'|');
+        }
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "\"a;b\"|\"a|b\"|\"a\tb\"|\" a\"|\"a \"|a b|"
+        );
     }
 
     #[test]
     fn output_names_are_plain_file_names() {
-        for ok in ["a.csv", "out.parquet", "x"] {
+        for ok in ["a.csv", "out.parquet", "x", &"x".repeat(248)] {
             assert!(valid_name(ok).is_ok(), "{ok}");
         }
         for bad in [
@@ -322,7 +341,7 @@ mod tests {
             "a/b.csv",
             "a\\b.csv",
             "x\0.csv",
-            &"x".repeat(256),
+            &"x".repeat(249),
         ] {
             assert!(valid_name(bad).is_err(), "{bad}");
         }

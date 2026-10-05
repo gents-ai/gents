@@ -326,6 +326,22 @@ fn only_select_queries_are_accepted_and_nothing_is_written() {
         );
     }
     assert!(!target.exists());
+    // An EXPLAIN runs what it wraps (ANALYZE) or at least plans it; none may reach a writer.
+    for prefix in ["EXPLAIN", "EXPLAIN ANALYZE", "EXPLAIN VERBOSE"] {
+        for inner in [
+            format!("COPY (SELECT 1 AS x) TO '{}'", target.display()),
+            "CREATE EXTERNAL TABLE e STORED AS CSV LOCATION '/etc'".to_string(),
+            "INSERT INTO people VALUES ('a', 1, DATE '2024-01-01', true)".to_string(),
+            "CREATE TABLE x AS SELECT 1".to_string(),
+        ] {
+            assert_eq!(
+                err(&d, &format!("{prefix} {inner}")),
+                "only SELECT queries are accepted; to save a result as a file use the export mode",
+                "{prefix} {inner}"
+            );
+        }
+    }
+    assert!(!target.exists());
     assert!(err(&d, "SELECT 1 INTO t").contains("the query failed"));
     assert_eq!(
         err(&d, "SELECT 1; SELECT 2"),
@@ -842,4 +858,69 @@ fn describe_of_a_very_wide_table_names_the_columns_it_left_out() {
     let r = run(json!({"path": d.s(), "mode": "tables"})).unwrap();
     assert_eq!(r["tables"][0]["column_count"], 300);
     assert_eq!(r["tables"][0]["columns"].as_array().unwrap().len(), 300);
+}
+
+#[test]
+fn a_window_sum_that_overflows_fails_like_an_aggregate_sum() {
+    let d = shop();
+    let two = "(VALUES (9223372036854775807), (9223372036854775807)) AS t(x)";
+    for over in [
+        "OVER ()",
+        "OVER (ORDER BY x)",
+        "OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+        "OVER (PARTITION BY x)",
+    ] {
+        let e = err(&d, &format!("SELECT x, sum(x) {over} FROM {two}"));
+        assert!(e.contains("out of range Int64"), "{over}: {e}");
+    }
+    // A sum that fits is exact, keeps its column name and its integer type, and a
+    // cumulative frame gives each row its own running total.
+    let r = q(
+        &d,
+        "SELECT x, sum(x) OVER (ORDER BY x) AS run, sum(x) OVER () FROM (VALUES (1), (2), (4)) AS t(x)",
+    );
+    assert_eq!(r["rows"], json!([[1, 1, 7], [2, 3, 7], [4, 7, 7]]));
+    assert_eq!(
+        r["columns"],
+        json!([{"name": "x", "type": "int64"}, {"name": "run", "type": "int64"}, {"name": "sum(t.x) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "type": "int64"}])
+    );
+    let r = q(
+        &d,
+        "SELECT region, sum(units) OVER (PARTITION BY region ORDER BY day) AS s FROM sales WHERE units IS NOT NULL",
+    );
+    assert_eq!(
+        r["rows"],
+        json!([["north", 10], ["north", 15], ["south", 7], ["south", 10]])
+    );
+}
+
+#[test]
+fn mixed_signedness_integers_are_exact_or_overflow_with_a_plain_sentence() {
+    let d = shop();
+    let big = "SELECT CAST(9223372036854775807 AS BIGINT) {} CAST(1 AS BIGINT UNSIGNED) AS v";
+    for (op, want) in [("+", "9223372036854775808"), ("*", "9223372036854775807")] {
+        let r = q(&d, &big.replace("{}", op));
+        assert_eq!(r["rows"], json!([[want]]), "{op}");
+    }
+    let r = q(
+        &d,
+        "SELECT CAST(3 AS BIGINT UNSIGNED) * CAST(-2 AS BIGINT) AS v",
+    );
+    assert_eq!(r["rows"], json!([["-6"]]));
+    assert_eq!(
+        q(&d, "SELECT CAST(1 AS BIGINT) + CAST(1 AS BIGINT UNSIGNED)")["rows"],
+        json!([["2"]])
+    );
+    // Beyond what any decimal here holds, the failure is a sentence without internal names.
+    let e = err(
+        &d,
+        "SELECT CAST(18446744073709551615 AS BIGINT UNSIGNED) * CAST(9223372036854775807 AS BIGINT) * CAST(9223372036854775807 AS BIGINT)",
+    );
+    assert!(!e.contains("checked_") && !e.contains('\n'), "{e}");
+    for sql in [
+        "SELECT CAST(1 AS BIGINT) + CAST(1 AS BIGINT UNSIGNED)",
+        "SELECT CAST(1 AS BIGINT UNSIGNED) * CAST(1 AS BIGINT)",
+    ] {
+        assert!(query(&d, sql).is_ok(), "{sql}");
+    }
 }

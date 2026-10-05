@@ -256,5 +256,68 @@ fn an_export_that_widens_types_midway_restarts_cleanly() {
     assert_eq!(r["rows"], 100_006);
     let written = std::fs::read_to_string(d.path().join("o.csv")).unwrap();
     assert_eq!(written.lines().count(), 100_007);
-    assert!(written.ends_with("99999\nlate\n") || written.ends_with("100004\nlate\n"));
+    assert!(
+        written.ends_with("\n100004\nlate\n"),
+        "{}",
+        &written[written.len() - 30..]
+    );
+}
+
+#[test]
+fn a_name_that_leaves_room_for_the_temporary_file_is_written_and_a_longer_one_is_refused() {
+    let d = sales();
+    let name = format!("{}.csv", "n".repeat(244));
+    assert_eq!(name.len(), 248);
+    let r = export(&d, json!({"output": name})).unwrap();
+    assert_eq!(r["rows"], 5);
+    assert!(d.path().join(&name).is_file());
+    let too_long = format!("{}.csv", "n".repeat(245));
+    let e = export(&d, json!({"output": too_long})).unwrap_err();
+    assert!(e.starts_with("output must be a plain file name"), "{e}");
+}
+
+#[test]
+fn the_extension_picks_the_format_in_any_case() {
+    let d = sales();
+    for (name, format) in [
+        ("RESULT.CSV", "csv"),
+        ("Out.Parquet", "parquet"),
+        ("x.PARQUET", "parquet"),
+    ] {
+        let r = export(&d, json!({"output": name})).unwrap();
+        assert_eq!(r["format"], format, "{name}");
+        assert!(d.path().join(name).is_file(), "{name}");
+    }
+    let e = export(&d, json!({"output": "result.txt"})).unwrap_err();
+    assert_eq!(
+        e,
+        "format is required unless output ends in .csv or .parquet"
+    );
+}
+
+#[test]
+fn values_and_names_with_a_sniffable_delimiter_survive_an_export_and_a_read() {
+    // One column whose every value holds `;`: unquoted, the reader would take `;` as the
+    // delimiter and keep only the first part of each row.
+    for values in [
+        ["a;b", "c;d", "e;f"],
+        ["a|b", "c|d", "e|f"],
+        ["a\tb", "c\td", "e\tf"],
+    ] {
+        let d = Dir::new();
+        let rows: Vec<serde_json::Value> = values.iter().map(|v| json!([v])).collect();
+        run(json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"columns": ["v"], "rows": rows}}, "sql": "SELECT * FROM t"})).unwrap();
+        let back = query(&d, "SELECT * FROM o").unwrap();
+        assert_eq!(back["rows"], json!(rows), "{values:?}");
+        assert_eq!(back["warnings"], json!([]), "{values:?}");
+    }
+    // Column names with the delimiters too, over rows made only of the same character.
+    let d = Dir::new();
+    run(json!({"path": d.s(), "mode": "export", "output": "o.csv", "tables": {"t": {"columns": ["a;b", "c;d"], "rows": [["x;y", "z;w"], ["p;q", "r;s"]]}}, "sql": "SELECT * FROM t"})).unwrap();
+    let back = query(&d, "SELECT * FROM o").unwrap();
+    assert_eq!(
+        back["columns"],
+        json!([{"name": "a;b", "type": "text"}, {"name": "c;d", "type": "text"}])
+    );
+    assert_eq!(back["rows"], json!([["x;y", "z;w"], ["p;q", "r;s"]]));
 }

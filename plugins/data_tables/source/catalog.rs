@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::csv::{CsvTable, Options};
 use crate::inline::{InlineTable, parse_tables};
 use crate::json::JsonTable;
-use crate::names::{sanitize, unique};
+use crate::names::{Taken, sanitize, unique};
 use crate::parquet_src::ParquetTable;
 use crate::sheet::SheetTable;
 use crate::table::{Fnv, Infer, TableSource, Warnings, file_fingerprint};
@@ -288,7 +288,7 @@ impl Catalog {
             full: Mutex::default(),
             opened: Mutex::default(),
         };
-        let mut taken = HashSet::new();
+        let mut taken = Taken::default();
         let mut notes: Vec<String> = Vec::new();
         if let Some(path) = path {
             let root = Path::new(path);
@@ -387,7 +387,7 @@ impl Catalog {
         self.specs.push(spec);
     }
 
-    fn name_for(raw: String, rel: &str, taken: &mut HashSet<String>) -> (String, Option<String>) {
+    fn name_for(raw: String, rel: &str, taken: &mut Taken) -> (String, Option<String>) {
         let name = unique(&sanitize(&raw), taken);
         let note = (name != raw).then(|| format!("{rel} is the table {name}"));
         (name, note)
@@ -398,7 +398,7 @@ impl Catalog {
         rel: &str,
         full: &Path,
         fmt: Fmt,
-        taken: &mut HashSet<String>,
+        taken: &mut Taken,
         notes: &mut Vec<String>,
         explicit: bool,
     ) -> Res<()> {

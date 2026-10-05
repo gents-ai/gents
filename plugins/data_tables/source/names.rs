@@ -1,6 +1,6 @@
 //! Table and column names: turning file names into SQL names that need no
 //! quoting, and keeping them unique.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const MAX_NAME_CHARS: usize = 63;
 
@@ -29,15 +29,28 @@ pub fn sanitize(raw: &str) -> String {
     out.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// The names handed out so far, with the next number to try for each repeated base so that
+/// a thousand repeats cost a thousand steps, not a million.
+#[derive(Default)]
+pub struct Taken {
+    set: HashSet<String>,
+    next: HashMap<String, usize>,
+}
+
 /// `name`, or `name_2`, `name_3`... the first not in `taken`; the result is added to `taken`.
-pub fn unique(name: &str, taken: &mut HashSet<String>) -> String {
+pub fn unique(name: &str, taken: &mut Taken) -> String {
     let mut candidate = name.to_string();
-    let mut n = 2;
-    while taken.contains(&candidate) {
-        candidate = format!("{name}_{n}");
-        n += 1;
+    if taken.set.contains(&candidate) {
+        let n = taken.next.entry(name.to_string()).or_insert(2);
+        loop {
+            candidate = format!("{name}_{n}");
+            *n += 1;
+            if !taken.set.contains(&candidate) {
+                break;
+            }
+        }
     }
-    taken.insert(candidate.clone());
+    taken.set.insert(candidate.clone());
     candidate
 }
 
@@ -65,10 +78,27 @@ mod tests {
 
     #[test]
     fn unique_names_count_up_and_are_remembered() {
-        let mut taken = HashSet::new();
+        let mut taken = Taken::default();
         assert_eq!(unique("t", &mut taken), "t");
         assert_eq!(unique("t", &mut taken), "t_2");
         assert_eq!(unique("t", &mut taken), "t_3");
         assert_eq!(unique("t_2", &mut taken), "t_2_2");
+    }
+
+    #[test]
+    fn a_counted_name_skips_a_real_one_and_a_long_run_is_linear() {
+        let mut taken = Taken::default();
+        for n in ["a", "a_2", "a_4"] {
+            assert_eq!(unique(n, &mut taken), n);
+        }
+        assert_eq!(unique("a", &mut taken), "a_3");
+        assert_eq!(unique("a", &mut taken), "a_5");
+        let start = std::time::Instant::now();
+        let mut last = String::new();
+        for _ in 0..50_000 {
+            last = unique("dup", &mut taken);
+        }
+        assert_eq!(last, "dup_50000");
+        assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
     }
 }

@@ -19,6 +19,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 datafusion = { version = "55", default-features = false, features = ["sql", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions", "nested_expressions", "math_expressions"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
+indexmap = "2"
 memchr = "2"
 parquet = { version = "59", default-features = false, features = ["arrow", "snap", "brotli", "lz4", "zstd", "flate2-rust_backened"] }
 quick-xml = "0.42"

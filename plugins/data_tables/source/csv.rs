@@ -18,7 +18,8 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use crate::Res;
-use crate::csvparse::{Reader, Record};
+use crate::csvparse::{MAX_RECORD_BYTES, Reader, Record};
+use crate::names::{Taken, unique};
 use crate::table::{
     BATCH_BYTES, BATCH_ROWS, Batches, Infer, SAMPLE_ROWS, ScanError, TableSource, Warnings,
     file_fingerprint,
@@ -28,8 +29,10 @@ use crate::typed::{Builder, ColType, Inferrer, classify};
 const SNIFF_BYTES: u64 = 256 * 1024;
 const SNIFF_ROWS: usize = 100;
 const CANDIDATES: [u8; 4] = *b",;\t|";
-/// The most columns a table may have.
-pub const MAX_COLUMNS: usize = 100_000;
+/// The most columns a table may have. The SQL engine plans a wide table in time that grows
+/// faster than its width (a `SELECT *` over 10,000 columns took minutes in the sandbox), so a
+/// wider table is refused with a sentence instead of running into the wall-clock limit.
+pub const MAX_COLUMNS: usize = 2_000;
 
 /// What a caller may fix instead of detecting.
 #[derive(Clone, Copy, Default, Debug)]
@@ -198,13 +201,19 @@ pub fn sniff_delimiter(bytes: &[u8], complete: bool) -> u8 {
     best.2
 }
 
-/// Whether the first row of `rows` is a header.
+/// Whether the first row of `rows` is a header: every non-empty cell is text and a later row
+/// of some column is typed, or (when no cell is empty) the cells are distinct. A row with an
+/// empty cell needs the typed evidence, because a data row of text with a gap looks the same.
 pub fn detect_header(rows: &Rows) -> bool {
     let Some(first) = rows.first() else {
         return false;
     };
-    let texty = |cell: &(Vec<u8>, bool)| !cell.0.is_empty() && classify(&cell.0) == 0;
-    if !first.iter().all(texty) {
+    let filled: Vec<&[u8]> = first
+        .iter()
+        .map(|c| c.0.as_slice())
+        .filter(|b| !b.is_empty())
+        .collect();
+    if filled.is_empty() || !filled.iter().all(|b| classify(b) == 0) {
         return false;
     }
     let typed_below = (0..first.len()).any(|c| {
@@ -213,8 +222,8 @@ pub fn detect_header(rows: &Rows) -> bool {
             .filter_map(|r| r.get(c))
             .any(|(b, _)| !b.is_empty() && classify(b) != 0)
     });
-    let distinct: HashSet<&[u8]> = first.iter().map(|c| c.0.as_slice()).collect();
-    typed_below || distinct.len() == first.len()
+    let distinct: HashSet<&[u8]> = filled.iter().copied().collect();
+    typed_below || (filled.len() == first.len() && distinct.len() == first.len())
 }
 
 /// Column names from a header row: trimmed, empty ones numbered by position and repeats suffixed.
@@ -223,7 +232,7 @@ pub fn column_names(
     count: usize,
     warn: &Warnings,
 ) -> Vec<String> {
-    let mut taken: HashSet<String> = HashSet::new();
+    let mut taken = Taken::default();
     let mut names = Vec::with_capacity(count);
     let (mut renamed_empty, mut renamed_dup) = (0usize, 0usize);
     for i in 0..count {
@@ -239,16 +248,10 @@ pub fn column_names(
         } else {
             raw
         };
-        let mut name = base.clone();
-        let mut n = 2;
-        while taken.contains(&name) {
-            name = format!("{base}_{n}");
-            n += 1;
-        }
+        let name = unique(&base, &mut taken);
         if name != base {
             renamed_dup += 1;
         }
-        taken.insert(name.clone());
         names.push(name);
     }
     if renamed_empty > 0 {
@@ -297,16 +300,25 @@ impl CsvTable {
         infer: Infer,
         warn: &Arc<Warnings>,
     ) -> Res<Self> {
-        let mut head = Vec::new();
-        open_text(path)?
-            .take(SNIFF_BYTES)
-            .read_to_end(&mut head)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let complete = (head.len() as u64) < SNIFF_BYTES;
-        let delim = opts
-            .delimiter
-            .unwrap_or_else(|| sniff_delimiter(&head, complete));
-        let rows = sample_rows(&head, delim, complete);
+        // The sniff window grows until it holds two whole records, so a long header row is
+        // never cut: a table of many columns reads like any other.
+        let (mut window, mut head) = (SNIFF_BYTES, Vec::new());
+        let (delim, rows) = loop {
+            head.clear();
+            open_text(path)?
+                .take(window)
+                .read_to_end(&mut head)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let complete = (head.len() as u64) < window;
+            let delim = opts
+                .delimiter
+                .unwrap_or_else(|| sniff_delimiter(&head, complete));
+            let rows = sample_rows(&head, delim, complete);
+            if complete || rows.len() >= 2 || window > MAX_RECORD_BYTES as u64 {
+                break (delim, rows);
+            }
+            window *= 4;
+        };
         if rows.is_empty() {
             return Err(format!("{} has no rows to read", path.display()));
         }
@@ -574,6 +586,10 @@ mod tests {
             ("a|b|c\n1|2|3\n", b'|'),
             ("a,b\n1,2\n", b','),
             ("x\ny\nz\n", b','),
+            // A tie in agreement and width goes to the earlier candidate: `,` over `;`, and
+            // `;` over `|`.
+            ("a,b;c\nd,e;f\n", b','),
+            ("a;b|c\nd;e|f\n", b';'),
         ] {
             assert_eq!(sniff_delimiter(text.as_bytes(), true), delim, "{text:?}");
         }
@@ -921,22 +937,100 @@ mod tests {
     }
 
     #[test]
-    fn ten_thousand_columns_are_one_table_and_a_million_are_refused() {
-        let width = 10_000;
+    fn the_widest_table_is_one_table_and_one_column_more_is_refused() {
+        let width = MAX_COLUMNS;
         let header: Vec<String> = (0..width).map(|i| format!("c{i}")).collect();
         let row: Vec<String> = (0..width).map(|i| i.to_string()).collect();
         let (t, _, _d) = open(&format!("{}\n{}\n", header.join(","), row.join(",")));
         assert_eq!(columns(&t).len(), width);
         assert_eq!(
-            collect(&t, Some(&[9999, 0])).unwrap(),
-            vec![vec![json!(9999), json!(0)]]
+            collect(&t, Some(&[width - 1, 0])).unwrap(),
+            vec![vec![json!(width - 1), json!(0)]]
         );
         let dir = Dir::new();
-        let p = dir.put("w.csv", format!("{}\n", ",".repeat(MAX_COLUMNS)));
-        let err = CsvTable::open(&p, "w", Options::default(), Infer::Sample, &Warnings::new())
-            .err()
-            .unwrap();
-        assert!(err.contains("one table may have"), "{err}");
+        for wide in [width + 1, 50_000] {
+            let p = dir.put("w.csv", format!("{}\n", ",".repeat(wide - 1)));
+            let err = CsvTable::open(&p, "w", Options::default(), Infer::Sample, &Warnings::new())
+                .err()
+                .unwrap();
+            assert_eq!(
+                err,
+                format!(
+                    "{} has {wide} columns, over the {MAX_COLUMNS} one table may have",
+                    p.display()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_header_longer_than_the_first_sniff_window_is_still_read() {
+        // 1,500 names of 250 bytes: a 375 KB header, past the 256 KiB first window.
+        let header: Vec<String> = (0..1_500).map(|i| format!("{i:0>250}")).collect();
+        let row: Vec<String> = (0..1_500).map(|i| i.to_string()).collect();
+        let text = format!(
+            "{}\n{}\n{}\n",
+            header.join(","),
+            row.join(","),
+            row.join(",")
+        );
+        assert!(text.len() as u64 > SNIFF_BYTES + 100_000);
+        let (t, _, _d) = open(&text);
+        assert_eq!(columns(&t).len(), 1_500);
+        assert_eq!(columns(&t)[7].0, format!("{:0>250}", 7));
+        assert_eq!(t.row_count(), Some(2));
+        // The same shape without a header, whose first record is also longer than the window.
+        let (t, _, _d) = open(&format!("{}\n{}\n", row.join(","), row.join(",")));
+        assert_eq!(columns(&t).len(), 1_500);
+    }
+
+    #[test]
+    fn fifty_thousand_repeated_names_are_numbered_in_linear_time() {
+        let start = std::time::Instant::now();
+        let header = vec!["x"; 50_000].join(",");
+        let names = column_names(
+            Some(
+                &header
+                    .split(',')
+                    .map(|n| (n.as_bytes().to_vec(), false))
+                    .collect::<Vec<_>>(),
+            ),
+            50_000,
+            &Warnings::new(),
+        );
+        assert_eq!(names[0], "x");
+        assert_eq!(names[1], "x_2");
+        assert_eq!(names[49_999], "x_50000");
+        assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_pandas_style_header_with_an_empty_first_cell_is_a_header() {
+        let (t, warn, _d) = open(",a,b\n0,1,2\n1,3,4\n");
+        assert_eq!(
+            columns(&t),
+            cols(&[("column_1", "int64"), ("a", "int64"), ("b", "int64")])
+        );
+        assert_eq!(
+            collect(&t, None).unwrap(),
+            vec![
+                vec![json!(0), json!(1), json!(2)],
+                vec![json!(1), json!(3), json!(4)]
+            ]
+        );
+        assert_eq!(
+            warn.list(),
+            ["1 empty column name was named column_<position>"]
+        );
+        // Text under an empty-celled first row gives no typed evidence: still data.
+        let (t, _, _d) = open(",a\nx,y\n");
+        assert_eq!(t.row_count(), Some(2));
+        // A row of nothing but empty cells is never a header.
+        let rows: Rows = vec![
+            vec![(vec![], false), (vec![], false)],
+            vec![(b"1".to_vec(), false), (b"2".to_vec(), false)],
+        ];
+        assert!(!detect_header(&rows));
     }
 
     #[test]

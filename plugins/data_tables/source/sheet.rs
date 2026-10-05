@@ -95,10 +95,14 @@ fn flags(c: &Cell) -> Option<u8> {
     }
 }
 
+/// The first row as header cells, or `None` when a cell is not text. An empty or blank cell
+/// stays in place and is named by its position later.
 fn header_text(row: &[Cell]) -> Option<Vec<(Vec<u8>, bool)>> {
     row.iter()
         .map(|c| match c {
             Cell::Text(s) if !s.trim().is_empty() => Some((s.as_bytes().to_vec(), true)),
+            Cell::Empty => Some((Vec::new(), false)),
+            Cell::Text(_) => Some((Vec::new(), true)),
             _ => None,
         })
         .collect()
@@ -192,24 +196,22 @@ impl SheetTable {
 /// Decides whether the first row is a header and how wide the table is.
 fn layout(sample: &[Vec<Cell>], header: &mut bool) -> (bool, usize) {
     let first = &sample[0];
-    let texty = header_text(first).is_some();
+    let cells = header_text(first).unwrap_or_default();
+    let filled: Vec<&[u8]> = cells
+        .iter()
+        .map(|c| c.0.as_slice())
+        .filter(|b| !b.is_empty())
+        .collect();
     let typed_below = (0..first.len()).any(|c| {
         sample[1..]
             .iter()
             .filter_map(|r| r.get(c))
             .any(|cell| !matches!(cell, Cell::Empty | Cell::Text(_)))
     });
-    let names: HashSet<&str> = first
-        .iter()
-        .filter_map(|c| {
-            if let Cell::Text(s) = c {
-                Some(s.trim())
-            } else {
-                None
-            }
-        })
-        .collect();
-    *header = texty && (typed_below || names.len() == first.len());
+    let names: HashSet<&[u8]> = filled.iter().copied().collect();
+    // As in a CSV: a header with a gap needs a typed column below it as evidence.
+    *header = !filled.is_empty()
+        && (typed_below || (filled.len() == first.len() && names.len() == first.len()));
     let widest = if *header {
         first.len()
     } else {

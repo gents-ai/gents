@@ -115,13 +115,7 @@ impl Engine {
         let statement = state
             .sql_to_statement(sql, &dialect)
             .map_err(|e| explain(&e))?;
-        match &statement {
-            Statement::Statement(s) if matches!(**s, Ast::Query(_)) => check_depth(s)?,
-            Statement::Explain(_) => {}
-            _ => {
-                return Err("only SELECT queries are accepted; to save a result as a file use the export mode".into());
-            }
-        }
+        check_select(&statement)?;
         let plan = state
             .statement_to_plan(statement)
             .await
@@ -161,6 +155,19 @@ impl Visitor for Depth {
     fn post_visit_expr(&mut self, _: &SqlExpr) -> ControlFlow<()> {
         self.now -= 1;
         ControlFlow::Continue(())
+    }
+}
+
+/// Accepts a plain query, or an EXPLAIN of one; anything else (even wrapped in an EXPLAIN,
+/// which would run it) is refused.
+fn check_select(statement: &Statement) -> Res<()> {
+    match statement {
+        Statement::Statement(s) if matches!(**s, Ast::Query(_)) => check_depth(s),
+        Statement::Explain(e) => check_select(&e.statement),
+        _ => Err(
+            "only SELECT queries are accepted; to save a result as a file use the export mode"
+                .into(),
+        ),
     }
 }
 

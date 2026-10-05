@@ -516,6 +516,7 @@ dependencies = [
  "datafusion",
  "flate2",
  "futures",
+ "indexmap",
  "memchr",
  "parquet",
  "proptest",

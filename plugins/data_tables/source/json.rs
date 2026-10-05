@@ -7,6 +7,7 @@
 //! and a string under one key) make the column text, a nested value in a text
 //! column is its compact JSON. A top-level element that is not an object goes
 //! into a single column named `value`. Strings are never read as dates.
+use std::collections::HashMap;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::Res;
@@ -43,7 +45,7 @@ pub enum JType {
     /// A string, or anything that has no common type with its neighbours.
     Text,
     /// An object, its keys in order of first appearance.
-    Struct(Vec<(String, JType)>),
+    Struct(IndexMap<String, JType>),
     /// An array of one element type.
     List(Box<JType>),
 }
@@ -81,9 +83,11 @@ pub fn merge(a: JType, b: JType) -> JType {
         (Int { big: false }, Float) | (Float, Int { big: false }) => Float,
         (Struct(mut a), Struct(b)) => {
             for (k, t) in b {
-                match a.iter_mut().find(|(name, _)| *name == k) {
-                    Some((_, slot)) => *slot = merge(std::mem::replace(slot, Null), t),
-                    None => a.push((k, t)),
+                match a.get_mut(&k) {
+                    Some(slot) => *slot = merge(std::mem::replace(slot, Null), t),
+                    None => {
+                        a.insert(k, t);
+                    }
                 }
             }
             Struct(a)
@@ -180,10 +184,10 @@ pub fn build(values: &[Option<&Value>], t: &JType) -> Result<ArrayRef, Mismatch>
                 match v {
                     v if is_null(v) => children.iter_mut().for_each(|c| c.push(None)),
                     Some(Value::Object(map)) => {
-                        if map.keys().any(|k| !fields.iter().any(|(f, _)| f == k)) {
+                        if map.keys().any(|k| !fields.contains_key(k)) {
                             return Err(miss("a record has a field that was not seen before"));
                         }
-                        for ((name, _), c) in fields.iter().zip(children.iter_mut()) {
+                        for (name, c) in fields.keys().zip(children.iter_mut()) {
                             c.push(map.get(name));
                         }
                     }
@@ -192,8 +196,8 @@ pub fn build(values: &[Option<&Value>], t: &JType) -> Result<ArrayRef, Mismatch>
             }
             let arrays = children
                 .iter()
-                .zip(fields)
-                .map(|(c, (_, ft))| build(c, ft))
+                .zip(fields.values())
+                .map(|(c, ft)| build(c, ft))
                 .collect::<Result<Vec<_>, _>>()?;
             let arrow_fields = match arrow_type(t) {
                 DataType::Struct(f) => f,
@@ -368,6 +372,7 @@ impl JsonTable {
     /// Reads the head of `path` and infers its columns.
     pub fn open(path: &Path, table: &str, infer: Infer, warn: &Arc<Warnings>) -> Res<Self> {
         let mut columns: Vec<(String, JType)> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
         let mut single = false;
         let mut value_type = JType::Null;
         let (mut count, mut at_end) = (0u64, true);
@@ -383,11 +388,15 @@ impl JsonTable {
                 Value::Object(map) if !single => {
                     for (k, val) in map {
                         let t = type_of(val);
-                        match columns.iter_mut().find(|(n, _)| n == k) {
-                            Some((_, slot)) => {
+                        match index.get(k) {
+                            Some(&at) => {
+                                let slot = &mut columns[at].1;
                                 *slot = merge(std::mem::replace(slot, JType::Null), t)
                             }
-                            None => columns.push((k.clone(), t)),
+                            None => {
+                                index.insert(k.clone(), columns.len());
+                                columns.push((k.clone(), t));
+                            }
                         }
                     }
                 }
@@ -577,6 +586,22 @@ mod tests {
     use crate::testkit::{Dir, collect, cols, columns};
     use proptest::prelude::*;
     use serde_json::json;
+
+    fn st(fields: &[(&str, JType)]) -> JType {
+        JType::Struct(
+            fields
+                .iter()
+                .map(|(k, t)| (k.to_string(), t.clone()))
+                .collect(),
+        )
+    }
+
+    fn keys(t: &JType) -> Vec<(String, JType)> {
+        match t {
+            JType::Struct(m) => m.iter().map(|(k, t)| (k.clone(), t.clone())).collect(),
+            other => panic!("not a struct: {other:?}"),
+        }
+    }
 
     fn open_with(
         text: impl AsRef<[u8]>,
@@ -825,16 +850,13 @@ mod tests {
             List(Box::new(Float))
         );
         assert_eq!(
-            merge(
-                Struct(vec![("a".into(), Bool)]),
-                Struct(vec![("b".into(), Float), ("a".into(), Bool)])
-            ),
-            Struct(vec![("a".into(), Bool), ("b".into(), Float)])
+            keys(&merge(st(&[("a", Bool)]), st(&[("b", Float), ("a", Bool)]))),
+            [("a".to_string(), Bool), ("b".to_string(), Float)]
         );
         assert_eq!(type_of(&json!([])), List(Box::new(Null)));
         assert_eq!(
-            type_of(&json!({"a": [1, 2.5]})),
-            Struct(vec![("a".into(), List(Box::new(Float)))])
+            keys(&type_of(&json!({"a": [1, 2.5]}))),
+            [("a".to_string(), List(Box::new(Float)))]
         );
     }
 
