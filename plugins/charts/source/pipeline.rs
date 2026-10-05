@@ -22,6 +22,10 @@ enum Source {
 
 fn inline_text(raw: &serde_json::value::RawValue) -> Res<String> {
     let text = raw.get();
+    match text.trim_start().as_bytes().first() {
+        Some(b'[' | b'{' | b'"') => {}
+        _ => return fail("data must be columns and rows, a list of objects, or CSV text"),
+    }
     if text.trim_start().starts_with('"') {
         // A JSON string holding JSON or CSV text, as a graph record carries it.
         return serde_json::from_str::<String>(text).or_else(|_| fail("data is not valid text"));
@@ -174,7 +178,7 @@ pub fn render(req: &Request<'_>) -> Res<(Rendered, Vec<Written>)> {
         scale: spec.scale,
         width: spec.width,
         height: spec.height,
-        alt: built.alt,
+        alt: crate::text::limit_chars(&built.alt, 2000).into_owned(),
         series: built.series,
         warnings: ctx.notes.into_vec(),
         plot: built.plot,

@@ -56,7 +56,7 @@ fn num(v: f64) -> Value {
 
 fn series_json(s: &SeriesInfo) -> Value {
     let mut m = Map::new();
-    m.insert("name".into(), json!(s.name));
+    m.insert("name".into(), json!(crate::text::limit_chars(&s.name, 200)));
     m.insert("mark".into(), json!(s.mark));
     m.insert("color".into(), json!(s.color));
     m.insert("axis".into(), json!(s.axis));

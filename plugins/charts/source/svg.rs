@@ -6,7 +6,12 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use crate::num::push_coord;
-use crate::text::{STACK, clean, escape, missing_glyphs};
+use crate::text::{STACK, clean, escape, limit_chars, missing_glyphs};
+
+/// Longest tooltip or title text written into a picture, in characters.
+const TIP_MAX: usize = 300;
+/// Longest description written into a picture, in characters.
+const DESC_MAX: usize = 2000;
 
 /// Paint for one element. Unset fields are left out of the markup.
 #[derive(Debug, Clone, Default)]
@@ -320,7 +325,7 @@ impl Svg {
         let _ = write!(
             self.buf,
             "><title>{}</title></circle>",
-            escape(&clean(title))
+            escape(&clean(&limit_chars(title, TIP_MAX)))
         );
     }
 
@@ -332,7 +337,11 @@ impl Svg {
         attr(&mut self.buf, "width", w);
         attr(&mut self.buf, "height", h);
         paint(&mut self.buf, st);
-        let _ = write!(self.buf, "><title>{}</title></rect>", escape(&clean(title)));
+        let _ = write!(
+            self.buf,
+            "><title>{}</title></rect>",
+            escape(&clean(&limit_chars(title, TIP_MAX)))
+        );
     }
 
     /// A path that carries a `<title>` tooltip.
@@ -342,7 +351,11 @@ impl Svg {
         }
         let _ = write!(self.buf, "<path d=\"{}\"", d.as_str());
         paint(&mut self.buf, st);
-        let _ = write!(self.buf, "><title>{}</title></path>", escape(&clean(title)));
+        let _ = write!(
+            self.buf,
+            "><title>{}</title></path>",
+            escape(&clean(&limit_chars(title, TIP_MAX)))
+        );
     }
 
     /// Text anchored at (x, y), where y is the baseline.
@@ -354,8 +367,13 @@ impl Svg {
         self.missing.extend(missing_glyphs(&text));
         let grouped = st.full.is_some();
         if let Some(full) = st.full {
-            self.missing.extend(missing_glyphs(&clean(full)));
-            let _ = write!(self.buf, "<g><title>{}</title>", escape(&clean(full)));
+            self.missing
+                .extend(missing_glyphs(&clean(&limit_chars(full, TIP_MAX))));
+            let _ = write!(
+                self.buf,
+                "<g><title>{}</title>",
+                escape(&clean(&limit_chars(full, TIP_MAX)))
+            );
         }
         self.buf.push_str("<text");
         attr(&mut self.buf, "x", x);
@@ -449,8 +467,8 @@ impl Svg {
         let _ = write!(
             out,
             "<title id=\"chart-title\">{}</title><desc id=\"chart-desc\">{}</desc>",
-            escape(&clean(title)),
-            escape(&clean(desc))
+            escape(&clean(&limit_chars(title, TIP_MAX))),
+            escape(&clean(&limit_chars(desc, DESC_MAX)))
         );
         out.push_str("<rect");
         attr(&mut out, "x", 0.0);

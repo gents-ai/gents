@@ -20,7 +20,7 @@ pub struct Notes {
 impl Notes {
     /// Adds a warning unless it is already there.
     pub fn add(&mut self, text: impl Into<String>) {
-        let text = text.into();
+        let text = crate::text::limit_chars(&text.into(), 500).into_owned();
         if self.items.contains(&text) {
             return;
         }

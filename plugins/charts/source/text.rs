@@ -106,6 +106,16 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// At most `max` characters of `text`, ending in an ellipsis when it was cut.
+/// Used wherever caller text is repeated outside the picture (tooltips, the
+/// description, warnings), so a huge string cannot multiply the output.
+pub fn limit_chars(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(max) {
+        None => std::borrow::Cow::Borrowed(text),
+        Some((cut, _)) => std::borrow::Cow::Owned(format!("{}\u{2026}", &text[..cut])),
+    }
+}
+
 /// Shortens `text` with a trailing ellipsis until it fits `max_width`.
 /// Returns the text to draw and whether it was shortened.
 pub fn elide(text: &str, max_width: f64, size: f64, bold: bool) -> (String, bool) {
@@ -194,6 +204,19 @@ mod tests {
         );
         assert_eq!(escape("plain"), "plain");
         assert_eq!(escape("</text><script>"), "&lt;/text&gt;&lt;script&gt;");
+    }
+
+    #[test]
+    fn limit_chars_cuts_on_a_character_boundary_and_marks_the_cut() {
+        assert_eq!(limit_chars("short", 10), "short");
+        assert_eq!(limit_chars("exact", 5), "exact");
+        assert_eq!(limit_chars("abcdef", 3), "abc\u{2026}");
+        assert_eq!(
+            limit_chars("\u{e9}\u{e9}\u{e9}\u{e9}", 2),
+            "\u{e9}\u{e9}\u{2026}"
+        );
+        assert_eq!(limit_chars("\u{1F600}\u{1F600}", 1), "\u{1F600}\u{2026}");
+        assert_eq!(limit_chars("", 0), "");
     }
 
     #[test]

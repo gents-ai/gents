@@ -15,15 +15,25 @@ impl fmt::Display for ChartError {
 
 impl std::error::Error for ChartError {}
 
+/// Longest error sentence; caller text inside it is cut beyond this.
+const MAX_SENTENCE: usize = 600;
+
+impl ChartError {
+    /// An error with `message`, cut to a sentence-sized length.
+    pub fn new(message: impl AsRef<str>) -> Self {
+        Self(crate::text::limit_chars(message.as_ref(), MAX_SENTENCE).into_owned())
+    }
+}
+
 impl From<String> for ChartError {
     fn from(message: String) -> Self {
-        Self(message)
+        Self::new(message)
     }
 }
 
 impl From<&str> for ChartError {
     fn from(message: &str) -> Self {
-        Self(message.to_owned())
+        Self::new(message)
     }
 }
 
@@ -32,5 +42,5 @@ pub type Res<T> = Result<T, ChartError>;
 
 /// Fails with `message`.
 pub fn fail<T>(message: impl Into<String>) -> Res<T> {
-    Err(ChartError(message.into()))
+    Err(ChartError::new(message.into()))
 }

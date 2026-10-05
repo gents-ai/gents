@@ -34,6 +34,8 @@ pub mod pie;
 #[cfg(test)]
 mod pie_heat_tests;
 pub mod pipeline;
+#[cfg(test)]
+mod pipeline_tests;
 pub mod raster;
 pub mod reduce;
 pub mod save;
@@ -51,6 +53,8 @@ mod testkit;
 #[cfg(test)]
 mod testutil;
 pub mod text;
+#[cfg(test)]
+mod text_tests;
 
 use spec::Request;
 
