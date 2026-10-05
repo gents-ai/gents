@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 
 import { useDesktopShell, type DesktopShellBridge } from "../../hooks/useDesktopShell";
+import { toast } from "sonner";
 
 export type ShellBridge = DesktopShellBridge & {
   invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -14,7 +15,9 @@ export function useShell(
   bridge: ShellBridge,
   routeSessionId: string | null | undefined,
 ) {
-  const d = useDesktopShell(bridge);
+  /* a failed action is over by the time it is reported: one toast where the
+     person is. The banner is for the client's own state. */
+  const d = useDesktopShell({ reportFailure: toast, ...bridge });
   const api = bridge.api;
   const shellRef = useRef(d);
   shellRef.current = d;
@@ -83,8 +86,6 @@ export function useShell(
       api,
       snapshot: d.snapshot,
       error: d.error,
-      actionError: d.actionError,
-      clearActionError: d.onDismissActionError,
       activityStatus: d.activityStatus,
       nonEmptyContentSendStatus: d.nonEmptyContentSendStatus,
       interruptVisible: d.interruptVisible,

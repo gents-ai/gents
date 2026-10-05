@@ -36,7 +36,7 @@ type ChatActionParams = {
   selectedDeployment: DeploymentView | null;
   deployments: DeploymentView[];
   setDraft: Dispatch<SetStateAction<string>>;
-  setError: Dispatch<SetStateAction<string | null>>;
+  setError: (error: string | null) => void;
   setLocalWorkflow: Dispatch<SetStateAction<ChatWorkflowState>>;
   setOptimisticPendingTurn: Dispatch<SetStateAction<OptimisticPendingTurn | null>>;
   setSending: Dispatch<SetStateAction<boolean>>;

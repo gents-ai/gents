@@ -1,5 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
-
 import type {
   DesktopApiAdapter,
   EventSourceSaveRequest,
@@ -18,7 +16,7 @@ type TaskActionParams = {
   captureComposeIntent: () => number;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  setError: Dispatch<SetStateAction<string | null>>;
+  setError: (error: string | null) => void;
 };
 
 export function createDesktopShellTaskActions({

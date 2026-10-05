@@ -1,5 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
-
 import type {
   AgentConfigSaveRequest,
   DefaultBehaviorSetRequest,
@@ -33,7 +31,7 @@ import { actionFailure, shownFailure } from "./desktopShellRuntime";
 
 type ConfigActionParams = {
   api: DesktopApiAdapter;
-  setError: Dispatch<SetStateAction<string | null>>;
+  setError: (error: string | null) => void;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 

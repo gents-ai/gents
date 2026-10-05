@@ -26,12 +26,15 @@ export type DesktopShellBridge = {
   api: DesktopApiAdapter;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   supportsManagedServer?: boolean;
+  /** shows a failed action to the person, once; the app passes its toast */
+  reportFailure?: (message: string) => void;
 };
 
 export function useDesktopShell({
   api,
   listenToUpdates,
   supportsManagedServer = false,
+  reportFailure,
 }: DesktopShellBridge) {
   /* what the person is looking at: one store, read by actions when they run */
   const [store] = useState(() => createSelectionStore());
@@ -51,8 +54,11 @@ export function useDesktopShell({
   // it happened where the person clicked and is over. Only the client's own
   // state belongs in the banner with Reconnect: the lifecycle, the session
   // reads and the effects that refresh in the background, so a repeated
-  // poll failure does not raise a toast every interval.
-  const [actionError, setActionError] = useState<string | null>(null);
+  // poll failure does not raise a toast every interval. Actions clear an
+  // earlier error with null; a toast has nothing to clear.
+  const setActionError = (message: string | null) => {
+    if (message) reportFailure?.(message);
+  };
   const {
     session,
     sessionLoad,
@@ -300,9 +306,6 @@ export function useDesktopShell({
   function onDismissError() {
     setError(null);
   }
-  function onDismissActionError() {
-    setActionError(null);
-  }
 
   return {
     snapshot,
@@ -317,8 +320,6 @@ export function useDesktopShell({
     sending,
     error,
     onDismissError,
-    actionError,
-    onDismissActionError,
     onRetryStartup,
     incompatibleHome,
     managedServerWait,

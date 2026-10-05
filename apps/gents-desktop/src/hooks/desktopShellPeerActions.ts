@@ -15,7 +15,7 @@ type PeerActionParams = {
   ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
-  setError: Dispatch<SetStateAction<string | null>>;
+  setError: (error: string | null) => void;
   /** the selection, read when an action lands */
   store: SelectionStore;
   selectAgent: (agentDid: string | null) => void;

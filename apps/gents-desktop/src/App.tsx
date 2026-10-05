@@ -110,13 +110,6 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     shell.deployments,
     shell.snapshot?.bootstrap.initAgentDid,
   );
-  /* a failed action is over by the time it is reported: one toast where the
-     person is, then forgotten. The banner is for the client's own state. */
-  useEffect(() => {
-    if (!shell.actionError) return;
-    toast(shell.actionError);
-    shell.clearActionError();
-  }, [shell.actionError, shell.clearActionError]);
   useEffect(() => {
     initTheme();
     applyShellPlatform();
