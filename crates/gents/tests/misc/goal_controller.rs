@@ -358,16 +358,6 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
     .await
 }
 
-async fn boot_goal_background_handoff(
-    db: &TestDb,
-    request_id: &str,
-    entered_path: &std::path::Path,
-    release_path: &std::path::Path,
-) -> (crate::support::accepted_turn::AcceptedTurnRuntime, String) {
-    boot_goal_background_handoff_with_plans(db, request_id, entered_path, release_path, Vec::new())
-        .await
-}
-
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
     request_id: &str,
@@ -1879,14 +1869,32 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
 
 #[tokio::test]
 async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_retry() {
+    use crate::support::streaming_backend::{
+        StreamChunk, StreamPlan, StreamResponse, StreamScript,
+    };
+
+    let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
         let parent = "parent-over-budget";
         let barrier = tempfile::tempdir().unwrap();
         let entered_path = barrier.path().join("entered");
         let release_path = barrier.path().join("release");
-        let (runtime, parent_doc) =
-            boot_goal_background_handoff(&db, parent, &entered_path, &release_path).await;
+        let hold_wrapup = StreamPlan::current_authored_user(
+            objective,
+            vec![StreamResponse::Stream(StreamScript::paused_before(
+                objective,
+                vec![StreamChunk::text("wrapup reached provider")],
+            ))],
+        );
+        let (runtime, parent_doc) = boot_goal_background_handoff_with_plans(
+            &db,
+            parent,
+            &entered_path,
+            &release_path,
+            vec![hold_wrapup],
+        )
+        .await;
         set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
         // The accepted spawn has real provider usage before the failed call
         // below. Retain that usage instead of assuming an empty call history.
@@ -1920,7 +1928,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             db.node.as_ref(),
             db.node_identity.did(),
             SESSION,
-            Some("Respect the budget even when execution fails"),
+            Some(objective),
             Some(GoalStatus::Active),
             Some(Some(10)),
         )
@@ -1931,7 +1939,9 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         // idle session first, and only then does the background process end
         // and publish its completion wake.
         for _ in 0..200 {
-            if goal_children(&db).await.len() == 1 {
+            if goal_children(&db).await.len() == 1
+                && runtime.backend.observed_requests(objective) > 0
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1940,6 +1950,11 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             goal_children(&db).await.len(),
             1,
             "the Goal wrapup is published"
+        );
+        assert_eq!(
+            runtime.backend.observed_requests(objective),
+            1,
+            "the wrapup reached its held provider response"
         );
         std::fs::write(&release_path, b"release").unwrap();
         for _ in 0..200 {
