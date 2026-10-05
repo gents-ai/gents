@@ -93,7 +93,7 @@ function useClientRecovery({
       return;
     if (!lifecycle.clientAutostarts(snapshot) || recovery.autostartAttempted) return;
     recovery.autostartAttempted = true;
-    void lifecycle.onStartClient();
+    void lifecycle.startClient();
   }, [lifecycle, recovery, sending, snapshot, starting]);
 
   useEffect(() => {

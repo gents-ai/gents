@@ -70,10 +70,10 @@ describe("canonical chat submission acceptance", () => {
       const f = fixture(send, false, retry);
       const active =
         first === "send"
-          ? f.actions.submitContent("first")
-          : f.actions.onRetryMessage("predecessor");
-      const duplicateSend = f.actions.submitContent("duplicate");
-      const duplicateRetry = f.actions.onRetryMessage("predecessor");
+          ? f.actions.sendMessage("first")
+          : f.actions.retryMessage("predecessor");
+      const duplicateSend = f.actions.sendMessage("duplicate");
+      const duplicateRetry = f.actions.retryMessage("predecessor");
       expect(send.mock.calls.length + retry.mock.calls.length).toBe(1);
       pending.resolve({ sessionId: "session", requestId: "accepted" });
       await Promise.all([active, duplicateSend, duplicateRetry]);
@@ -138,7 +138,7 @@ describe("canonical chat submission acceptance", () => {
     const send = vi.fn();
     const f = fixture(send, true);
     await expect(
-      f.actions.submitContent("review this", "new-choice"),
+      f.actions.sendMessage("review this", "new-choice"),
     ).resolves.toBeNull();
     expect(send).not.toHaveBeenCalled();
     expect(f.setError).toHaveBeenLastCalledWith("Behavior is unavailable");
@@ -151,7 +151,7 @@ describe("canonical chat submission acceptance", () => {
       behaviorId: "coding",
     };
     const f = fixture(async () => accepted);
-    await expect(f.actions.submitContent("review this")).resolves.toEqual(accepted);
+    await expect(f.actions.sendMessage("review this")).resolves.toEqual(accepted);
     expect(f.pendingTurn()).toEqual(
       expect.objectContaining({
         requestId: "request",
@@ -174,7 +174,7 @@ describe("canonical chat submission acceptance", () => {
     const f = fixture(async () => {
       throw new Error("request rejected");
     });
-    await expect(f.actions.submitContent("review this")).resolves.toBeNull();
+    await expect(f.actions.sendMessage("review this")).resolves.toBeNull();
     expect(f.setError).toHaveBeenLastCalledWith(
       "Couldn’t send the message: request rejected",
     );
@@ -191,7 +191,7 @@ describe("canonical chat submission acceptance", () => {
       behaviorId: string;
     }>();
     const f = fixture(() => pending.promise);
-    const submitted = f.actions.submitContent("review this");
+    const submitted = f.actions.sendMessage("review this");
     f.advanceComposeIntent();
     f.advanceComposeIntent();
     vi.clearAllMocks();
@@ -215,7 +215,7 @@ describe("canonical chat submission acceptance", () => {
   it("does not publish a stale submission failure into the new compose intent", async () => {
     const pending = deferred<never>();
     const f = fixture(() => pending.promise);
-    const submitted = f.actions.submitContent("review this");
+    const submitted = f.actions.sendMessage("review this");
     f.advanceComposeIntent();
     vi.clearAllMocks();
     pending.reject(new Error("old route failed"));
@@ -236,7 +236,7 @@ describe("canonical chat submission acceptance", () => {
       false,
       () => pending.promise,
     );
-    const retried = f.actions.onRetryMessage("failed-request");
+    const retried = f.actions.retryMessage("failed-request");
     f.advanceComposeIntent();
     vi.clearAllMocks();
     pending.resolve({ sessionId: "origin-session", requestId: "retry-request" });
@@ -255,7 +255,7 @@ describe("canonical chat submission acceptance", () => {
       false,
       () => pending.promise,
     );
-    const retried = f.actions.onRetryMessage("failed-request");
+    const retried = f.actions.retryMessage("failed-request");
     f.advanceComposeIntent();
     vi.clearAllMocks();
     pending.reject(new Error("old retry failed"));

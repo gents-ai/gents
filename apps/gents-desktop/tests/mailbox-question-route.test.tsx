@@ -35,10 +35,10 @@ describe("answering a mailbox question", () => {
       sendChatMessage,
     } as unknown as DesktopApiAdapter;
     const { store, actions } = mailbox(api);
-    await actions.onOpenMailboxItem(item.itemId);
+    await actions.openMailboxItem(item.itemId);
     expect(store.getState().mailboxRoute?.itemId).toBe("item-1");
     const answer = { option_ids: ["yes"], free_text: null };
-    await actions.onAnswerMailboxQuestion(item, answer);
+    await actions.answerMailboxQuestion(item, answer);
     expect(sendChatMessage).toHaveBeenCalledWith({
       agentDid: "did:agent",
       behaviorId: "engineer",

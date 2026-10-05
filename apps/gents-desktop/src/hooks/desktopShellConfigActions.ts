@@ -88,15 +88,15 @@ export function createDesktopShellConfigActions({
 
   return {
     changeConfig,
-    onCodexLogin: (agentDid: string): Promise<CodexLoginResult> =>
+    codexLogin: (agentDid: string): Promise<CodexLoginResult> =>
       call("sign in to Codex", () => api.codexLogin(agentDid)),
     /* best-effort abort of a sign-in whose browser was closed; a failure here
        (nothing in flight, say) must never block closing the wizard */
-    onCancelCodexLogin: (): Promise<void> => api.cancelCodexLogin().catch(() => {}),
-    onGrokLogin: (agentDid: string) =>
+    cancelCodexLogin: (): Promise<void> => api.cancelCodexLogin().catch(() => {}),
+    grokLogin: (agentDid: string) =>
       call("sign in to Grok", () => api.grokLogin(agentDid)),
-    onCancelGrokLogin: (): Promise<void> => api.cancelGrokLogin().catch(() => {}),
-    onTestToolService: (
+    cancelGrokLogin: (): Promise<void> => api.cancelGrokLogin().catch(() => {}),
+    testToolService: (
       request: ToolServiceTestRequest,
     ): Promise<ToolServiceTestResult> =>
       call("test the tool service", () => api.testToolService(request)),

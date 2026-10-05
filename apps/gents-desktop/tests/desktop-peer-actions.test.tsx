@@ -63,7 +63,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.onInitLocalRuntime("Local"));
+    await act(async () => result.current.actions.initLocalRuntime("Local"));
 
     expect(result.current.agent).toBe("agent-local");
     expect(result.current.sessionId).toBeNull();
@@ -82,7 +82,7 @@ describe("peer action route ownership", () => {
     );
 
     await expect(
-      act(async () => result.current.actions.onInitLocalRuntime("Local")),
+      act(async () => result.current.actions.initLocalRuntime("Local")),
     ).rejects.toThrow("opening desktop identity key: permission denied");
   });
 
@@ -93,7 +93,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    const completion = result.current.actions.onRemovePeer("peer-a", "agent-a");
+    const completion = result.current.actions.removePeer("peer-a", "agent-a");
     act(() => result.current.route.selectAgent("agent-b"));
     await act(async () => {
       pending.resolve({} as DesktopClientSnapshot);
@@ -109,7 +109,7 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.onRemovePeer("peer-a", "agent-a"));
+    await act(async () => result.current.actions.removePeer("peer-a", "agent-a"));
 
     expect(result.current.agent).toBeNull();
     expect(result.current.sessionId).toBeNull();

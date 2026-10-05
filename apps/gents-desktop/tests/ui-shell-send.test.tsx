@@ -26,7 +26,7 @@ const desktopShell = vi.hoisted(() => ({
   snapshot: null,
   error: null,
   sending: false,
-  submitContent: vi.fn(),
+  sendMessage: vi.fn(),
   session: null,
   sessionLoad: null,
   sessionLoadingStatus: null,
@@ -39,14 +39,14 @@ const desktopShell = vi.hoisted(() => ({
   startNewSession: vi.fn(),
   followRoute: vi.fn(),
   onDismissError: vi.fn(),
-  onRetryStartup: vi.fn(),
-  onDismissMailboxItem: vi.fn(),
-  onOpenMailboxItem: vi.fn(),
-  onRemovePeer: vi.fn(),
-  onRenamePeer: vi.fn(),
+  retryStartup: vi.fn(),
+  dismissMailboxItem: vi.fn(),
+  openMailboxItem: vi.fn(),
+  removePeer: vi.fn(),
+  renamePeer: vi.fn(),
   retrySessionHydration: vi.fn(),
   loadOlderSessionTimeline: vi.fn(),
-  onInitLocalRuntime: vi.fn(),
+  initLocalRuntime: vi.fn(),
 }));
 
 vi.mock("../src/hooks/useDesktopShell", () => ({
@@ -60,7 +60,7 @@ vi.mock("../src/hooks/useDesktopShell", () => ({
       }),
     );
     const sending = useStore(stores.chat, (state) => state.sending);
-    // Keep admission real: a mocked submitContent cannot prove that the adapter
+    // Keep admission real: a mocked sendMessage cannot prove that the adapter
     // and retry share the same synchronous owner.
     const [actions] = useState(() =>
       createDesktopShellChatActions({
@@ -72,8 +72,8 @@ vi.mock("../src/hooks/useDesktopShell", () => ({
         setError: vi.fn(),
       }),
     );
-    desktopShell.submitContent.mockImplementation(actions.submitContent);
-    return { ...desktopShell, sending, onRetryMessage: actions.onRetryMessage };
+    desktopShell.sendMessage.mockImplementation(actions.sendMessage);
+    return { ...desktopShell, sending, onRetryMessage: actions.retryMessage };
   },
 }));
 
@@ -111,7 +111,7 @@ describe("kit shell chat submission", () => {
     });
 
     expect(result.current.sending).toBe(false);
-    expect(desktopShell.submitContent).toHaveBeenCalledWith("review this", "coding");
+    expect(desktopShell.sendMessage).toHaveBeenCalledWith("review this", "coding");
     expect(desktopShell.selectBehavior).not.toHaveBeenCalled();
     expect(desktopShell.refreshSession).not.toHaveBeenCalled();
     expect(desktopShell.refreshSnapshot).not.toHaveBeenCalled();

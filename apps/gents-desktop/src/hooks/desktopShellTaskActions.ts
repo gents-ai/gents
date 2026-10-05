@@ -31,7 +31,7 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function onRunSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
+  async function runSchedule(request: ScheduleRunRequest): Promise<TaskRunResult> {
     const intentGeneration = selection.captureIntent(store);
     setError(null);
     try {
@@ -45,7 +45,7 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function onRunTask(request: TaskRunRequest): Promise<TaskRunResult> {
+  async function runTask(request: TaskRunRequest): Promise<TaskRunResult> {
     const intentGeneration = selection.captureIntent(store);
     setError(null);
     try {
@@ -59,5 +59,5 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  return { onRunSchedule, onRunTask };
+  return { runSchedule, runTask };
 }

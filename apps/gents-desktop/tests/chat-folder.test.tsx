@@ -71,7 +71,7 @@ describe("sending with a chat folder", () => {
       setError: vi.fn(),
     });
     actions.setChatFolder("/work/notes");
-    await actions.submitContent("what is in todo.txt");
+    await actions.sendMessage("what is in todo.txt");
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/work/notes" }),
     );

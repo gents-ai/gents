@@ -84,7 +84,7 @@ function fleet(listed: DeploymentView[]) {
     snapshot: { bootstrap: forgeBootstrap, client: { deployments: listed } },
     deployments: listed,
     refreshSnapshot: vi.fn(async () => undefined),
-    onInitLocalRuntime: vi.fn(async () => {
+    initLocalRuntime: vi.fn(async () => {
       deployments = [...listed, forge];
       return { agentDid: FORGE_DID };
     }),
@@ -120,7 +120,7 @@ describe("Add agent enrollment", () => {
       ).not.toBeInTheDocument();
       expect(within(dialog).getByLabelText("Agent server")).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
-      expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+      expect(shell.initLocalRuntime).not.toHaveBeenCalled();
     },
   );
 
@@ -229,7 +229,7 @@ describe("first-run local agent name", () => {
       snapshot: { bootstrap: snapshotBootstrap },
       deployments: [],
       refreshSnapshot: vi.fn(async () => undefined),
-      onInitLocalRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
+      initLocalRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
     } as unknown as Shell;
     renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
     return { api, shell };
@@ -246,7 +246,7 @@ describe("first-run local agent name", () => {
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
-    await waitFor(() => expect(shell.onInitLocalRuntime).toHaveBeenCalledWith("Forge"));
+    await waitFor(() => expect(shell.initLocalRuntime).toHaveBeenCalledWith("Forge"));
     expect(api.startManagedServer).toHaveBeenCalledWith("Forge", expect.anything());
   });
 
@@ -259,7 +259,7 @@ describe("first-run local agent name", () => {
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
 
-    await waitFor(() => expect(shell.onInitLocalRuntime).toHaveBeenCalledWith("Scout"));
+    await waitFor(() => expect(shell.initLocalRuntime).toHaveBeenCalledWith("Scout"));
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
     expect(await screen.findByText(/Scout is running as/)).toBeInTheDocument();
   });
@@ -278,7 +278,7 @@ describe("first-run local agent name", () => {
         "This computer already has a local agent named Forge, so Scout was not created. Go back to continue with Forge.",
       ),
     ).toBeInTheDocument();
-    expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+    expect(shell.initLocalRuntime).not.toHaveBeenCalled();
     expect(shell.refreshSnapshot).toHaveBeenCalled();
     expect(screen.queryByText(/Saved the local connection/)).not.toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();

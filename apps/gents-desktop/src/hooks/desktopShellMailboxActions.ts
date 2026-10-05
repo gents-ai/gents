@@ -28,7 +28,7 @@ export function createDesktopShellMailboxActions({
   setError,
 }: MailboxActionParams) {
   const store = stores.selection;
-  async function onOpenMailboxItem(itemId: string): Promise<MailboxItemView | null> {
+  async function openMailboxItem(itemId: string): Promise<MailboxItemView | null> {
     selection.advanceIntent(store);
     const captured = selection.captureIntent(store);
     try {
@@ -50,7 +50,7 @@ export function createDesktopShellMailboxActions({
     }
   }
 
-  async function onDismissMailboxItem(itemId: string) {
+  async function dismissMailboxItem(itemId: string) {
     try {
       await dismissMailboxItemAndClearMatchingRoute(
         itemId,
@@ -67,7 +67,7 @@ export function createDesktopShellMailboxActions({
 
   /* The answer is the item's ordinary reply request; the bridge renders its
      content from the question so the runtime reply claim consumes the item. */
-  async function onAnswerMailboxQuestion(
+  async function answerMailboxQuestion(
     item: MailboxItemView,
     answer: MailboxQuestionAnswer,
   ) {
@@ -93,5 +93,5 @@ export function createDesktopShellMailboxActions({
     }
   }
 
-  return { onOpenMailboxItem, onDismissMailboxItem, onAnswerMailboxQuestion };
+  return { openMailboxItem, dismissMailboxItem, answerMailboxQuestion };
 }

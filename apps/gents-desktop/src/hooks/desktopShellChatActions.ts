@@ -68,7 +68,7 @@ export function createDesktopShellChatActions({
     return (first ? fleet.nodes[first] : undefined) ?? null;
   };
 
-  async function submitContent(
+  async function sendMessage(
     content: string,
     behaviorId?: string | null,
   ): Promise<ChatSendResult | null> {
@@ -148,7 +148,7 @@ export function createDesktopShellChatActions({
 
   /** Retry the persisted interactive predecessor through the fenced retry
       API, admitted under the session's own behavior. */
-  async function onRetryMessage(requestId: string) {
+  async function retryMessage(requestId: string) {
     if (submissionInFlight) return;
     const node = selectedNode();
     if (!node) return;
@@ -190,7 +190,7 @@ export function createDesktopShellChatActions({
     }
   }
 
-  async function onRenameSessionTitle(sessionId: string, title: string) {
+  async function renameSession(sessionId: string, title: string) {
     const node = selectedNode();
     if (!node) return;
     setError(null);
@@ -210,5 +210,5 @@ export function createDesktopShellChatActions({
     writeChatFolders(stores.chat, (folders) => withFolder(folders, sessionId, folder));
   }
 
-  return { submitContent, onRetryMessage, onRenameSessionTitle, setChatFolder };
+  return { sendMessage, retryMessage, renameSession, setChatFolder };
 }

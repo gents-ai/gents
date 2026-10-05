@@ -164,7 +164,7 @@ export function createClientLifecycle({
     return pending;
   }
 
-  async function onStartClient() {
+  async function startClient() {
     try {
       await ensureDesktopClientStarted();
     } catch {
@@ -213,7 +213,7 @@ export function createClientLifecycle({
     return pending;
   }
 
-  function onSkipManagedServerWait() {
+  function skipManagedServerWait() {
     if (initializationInFlight) {
       managedServerWaitAbort?.abort();
       return;
@@ -225,7 +225,7 @@ export function createClientLifecycle({
     void refreshSnapshot();
   }
 
-  async function onRestartManagedServer() {
+  async function restartManagedServer() {
     const status = client.getState().managedServerFailure?.status;
     if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
@@ -254,7 +254,7 @@ export function createClientLifecycle({
     }
   }
 
-  async function onRetryStartup() {
+  async function retryStartup() {
     await initializeDesktop();
   }
 
@@ -314,11 +314,11 @@ export function createClientLifecycle({
     refreshSnapshot,
     mutateSnapshot,
     ensureDesktopClientStarted,
-    onStartClient,
+    startClient,
     initializeDesktop,
-    onSkipManagedServerWait,
-    onRestartManagedServer,
-    onRetryStartup,
+    skipManagedServerWait,
+    restartManagedServer,
+    retryStartup,
     restartDesktopClient,
   };
 }

@@ -172,7 +172,7 @@ describe("explicit session selection", () => {
     });
     expect(result.current.selected).toBeNull();
     await act(async () => {
-      await result.current.actions.submitContent("new Setup chat");
+      await result.current.actions.sendMessage("new Setup chat");
     });
     expect(result.current.sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({

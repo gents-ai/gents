@@ -399,7 +399,7 @@ describe("setup start on a home this version cannot open", () => {
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       deployments: [],
       refreshSnapshot: vi.fn(async () => undefined),
-      onInitLocalRuntime: vi.fn(async () => undefined),
+      initLocalRuntime: vi.fn(async () => undefined),
       incompatibleHome: { adopt },
     } as unknown as Shell;
     renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
@@ -411,6 +411,6 @@ describe("setup start on a home this version cannot open", () => {
     await waitFor(() => expect(adopt).toHaveBeenCalledOnce());
     const [error] = adopt.mock.calls[0] as unknown as [BridgeInvokeError];
     expect(error.code).toBe("incompatibleLocalStore");
-    expect(shell.onInitLocalRuntime).not.toHaveBeenCalled();
+    expect(shell.initLocalRuntime).not.toHaveBeenCalled();
   });
 });

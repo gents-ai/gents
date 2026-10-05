@@ -41,7 +41,7 @@ describe("task and schedule async intent ordering", () => {
       sessionId: string;
     }>();
     const f = fixture(() => pending.promise);
-    const running = f.actions.onRunTask({ taskId: "task-a", args: {} });
+    const running = f.actions.runTask({ taskId: "task-a", args: {} });
     f.advanceIntent();
     pending.resolve({ requestId: "request-a", sessionId: "session-a" });
 
@@ -59,7 +59,7 @@ describe("task and schedule async intent ordering", () => {
       async () => null,
       () => pending.promise,
     );
-    const running = f.actions.onRunSchedule({ scheduleId: "schedule-a" });
+    const running = f.actions.runSchedule({ scheduleId: "schedule-a" });
     f.advanceIntent();
     pending.reject(new Error("old schedule failed"));
 
@@ -75,7 +75,7 @@ describe("task and schedule async intent ordering", () => {
       sessionId: "session-current",
     }));
 
-    await f.actions.onRunTask({ taskId: "task-a", args: {} });
+    await f.actions.runTask({ taskId: "task-a", args: {} });
 
     expect(f.store.getState().sessionId).toBeNull();
   });
@@ -87,7 +87,7 @@ describe("task and schedule async intent ordering", () => {
     }));
     f.refreshSnapshot.mockRejectedValueOnce(new Error("observation unavailable"));
 
-    await expect(f.actions.onRunTask({ taskId: "task-a", args: {} })).resolves.toEqual({
+    await expect(f.actions.runTask({ taskId: "task-a", args: {} })).resolves.toEqual({
       requestId: "accepted-request",
       sessionId: "accepted-session",
     });

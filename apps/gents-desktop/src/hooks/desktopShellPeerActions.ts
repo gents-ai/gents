@@ -30,7 +30,7 @@ export function createDesktopShellPeerActions({
   const setStarting = clientSetter(stores.client, "starting");
   /** whether the client runs, as last read */
   const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
-  async function onInitLocalRuntime(label?: string | null) {
+  async function initLocalRuntime(label?: string | null) {
     const clientWasRunning = clientRuns();
     setStarting(true);
     setError(null);
@@ -64,7 +64,7 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onFetchPeerStatus(peerId: string) {
+  async function fetchPeerStatus(peerId: string) {
     setError(null);
     try {
       return await api.fetchPeerStatus(peerId);
@@ -75,7 +75,7 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onRequestStatusEnrollment(serverAddress: string) {
+  async function requestStatusEnrollment(serverAddress: string) {
     setError(null);
     try {
       if (!clientRuns()) {
@@ -91,7 +91,7 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onRemovePeer(peerId: string, agentDid?: string) {
+  async function removePeer(peerId: string, agentDid?: string) {
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.removePeer(peerId));
@@ -106,7 +106,7 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function onRenamePeer(peerId: string, label: string) {
+  async function renamePeer(peerId: string, label: string) {
     setError(null);
     try {
       const next = await mutateSnapshot(() => api.renamePeer(peerId, label));
@@ -119,10 +119,10 @@ export function createDesktopShellPeerActions({
   }
 
   return {
-    onFetchPeerStatus,
-    onRequestStatusEnrollment,
-    onInitLocalRuntime,
-    onRemovePeer,
-    onRenamePeer,
+    fetchPeerStatus,
+    requestStatusEnrollment,
+    initLocalRuntime,
+    removePeer,
+    renamePeer,
   };
 }

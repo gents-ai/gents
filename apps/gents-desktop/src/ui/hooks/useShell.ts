@@ -30,7 +30,7 @@ export function useShell(
 
   const sendMessage = useCallback(
     async (content: string, behaviorId: string | null) => {
-      return d.submitContent(content, behaviorId);
+      return d.sendMessage(content, behaviorId);
     },
     [api, d],
   );
@@ -80,19 +80,19 @@ export function useShell(
       sessionLoad: d.sessionLoad,
       conversationLoading: d.sessionLoadingStatus,
       clearError: d.onDismissError,
-      retryStartup: d.onRetryStartup,
+      retryStartup: d.retryStartup,
       sendMessage,
       captureComposeIntent: d.captureComposeIntent,
       acceptsComposeIntent: d.acceptsComposeIntent,
-      retryMessage: d.onRetryMessage,
-      runTask: d.onRunTask,
-      runSchedule: d.onRunSchedule,
-      dismissMailboxItem: d.onDismissMailboxItem,
-      openMailboxItem: d.onOpenMailboxItem,
-      answerMailboxQuestion: d.onAnswerMailboxQuestion,
+      retryMessage: d.retryMessage,
+      runTask: d.runTask,
+      runSchedule: d.runSchedule,
+      dismissMailboxItem: d.dismissMailboxItem,
+      openMailboxItem: d.openMailboxItem,
+      answerMailboxQuestion: d.answerMailboxQuestion,
       // Putting the armed reply down makes the next message an ordinary one
       // and leaves the item open.
-      clearMailboxCause: d.clearPendingMailboxCause,
+      clearMailboxCause: d.clearMailboxCause,
       mailboxCause: d.pendingMailboxCauseId
         ? {
             itemId: d.pendingMailboxCauseId,
@@ -101,20 +101,20 @@ export function useShell(
           }
         : null,
       behaviorDescriptions,
-      removePeer: d.onRemovePeer,
-      renamePeer: d.onRenamePeer,
+      removePeer: d.removePeer,
+      renamePeer: d.renamePeer,
       retrySessionHydration: d.retrySessionHydration,
       loadOlderSessionTimeline: d.loadOlderSessionTimeline,
       refreshSnapshot: d.refreshSnapshot,
       refreshSession: d.refreshSession,
-      onInitLocalRuntime: d.onInitLocalRuntime,
+      initLocalRuntime: d.initLocalRuntime,
       startupPhase: d.startupPhase,
       incompatibleHome: d.incompatibleHome,
       managedServerWait: d.managedServerWait,
       diagnosticsHint: d.diagnosticsHint,
-      skipManagedServerWait: d.onSkipManagedServerWait,
+      skipManagedServerWait: d.skipManagedServerWait,
       restartManagedServer: d.canRestartManagedServer
-        ? d.onRestartManagedServer
+        ? d.restartManagedServer
         : undefined,
     };
   }, [api, d, sendMessage]);

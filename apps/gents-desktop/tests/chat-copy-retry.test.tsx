@@ -362,7 +362,7 @@ describe("error card retry", () => {
       retryShellProjection: shellProjection,
     });
 
-    actions.onRetryMessage("req-failed");
+    actions.retryMessage("req-failed");
 
     await waitFor(() =>
       expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid),
@@ -408,7 +408,7 @@ describe("error card retry", () => {
       },
       setError,
     );
-    await blocked.onRetryMessage("req-failed");
+    await blocked.retryMessage("req-failed");
     expect(retryRequest).not.toHaveBeenCalled();
     expect(setError).toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
@@ -426,7 +426,7 @@ describe("error card retry", () => {
       },
       setError,
     );
-    await readyRetry.onRetryMessage("req-failed");
+    await readyRetry.retryMessage("req-failed");
     expect(retryRequest).toHaveBeenCalledWith("req-failed", deployment.agentDid);
     expect(setError).not.toHaveBeenCalledWith(
       blockedRetryProjection.nonEmptyContentSendStatus.kind === "disabled"
@@ -461,7 +461,7 @@ describe("error card retry", () => {
       },
     );
 
-    await actions.submitContent("check the upgrade");
+    await actions.sendMessage("check the upgrade");
 
     expect(stores.chat.getState().optimisticPendingTurn).toEqual(
       expect.objectContaining({

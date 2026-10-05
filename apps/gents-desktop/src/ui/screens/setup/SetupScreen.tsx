@@ -649,7 +649,7 @@ export function SetupScreen({
       }
       setPhase("loading-configuration");
       failedPhase = "configuration-error";
-      await shell.onInitLocalRuntime(requestedName);
+      await shell.initLocalRuntime(requestedName);
       setStartupDetails((current) => ({
         ...current,
         configuration: `Saved the local connection to ${requestedName}`,

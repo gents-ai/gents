@@ -48,7 +48,7 @@ export function createShellActions({
     ...route,
     refreshSnapshot,
     ...createDesktopShellMailboxActions({ api, stores, refreshSnapshot, setError }),
-    clearPendingMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
+    clearMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
     ...createDesktopShellPeerActions({
       api,
       stores,

@@ -443,7 +443,7 @@ describe("first-run local agent startup", () => {
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       deployments: [],
       refreshSnapshot: vi.fn(async () => undefined),
-      onInitLocalRuntime: vi.fn(async () => undefined),
+      initLocalRuntime: vi.fn(async () => undefined),
     } as unknown as Shell;
     return {
       api,
@@ -552,7 +552,7 @@ describe("first-run local agent startup", () => {
     ).not.toBeInTheDocument();
 
     run.observe(run.readyStatus());
-    await waitFor(() => expect(run.shell.onInitLocalRuntime).toHaveBeenCalled(), {
+    await waitFor(() => expect(run.shell.initLocalRuntime).toHaveBeenCalled(), {
       timeout: 5_000,
     });
     expect(run.api.startManagedServer).toHaveBeenCalledOnce();
@@ -561,7 +561,7 @@ describe("first-run local agent startup", () => {
 
   it("keeps earlier steps and their results visible when a later step fails", async () => {
     const run = firstRun();
-    (run.shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+    (run.shell.initLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("saved connections could not be written"),
     );
     renderIn(
