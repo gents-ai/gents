@@ -1,0 +1,24 @@
+{
+  "jq": [
+    {
+      "name": "callback, receipt and closure sources are scoped to this pack and correlate by work unit",
+      "expr": "(.config.event_sources[] | select(.event_source_id == \"change-unit-workspace\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-write\") | .correlation_field == \"work_unit_id\" and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-review\") | .source_collection == \"WorkspaceReceipt\" and .workspace_authority == \"readOnly\" and .correlation_field == \"work_unit_id\" and (.filter | contains(\"writer\")) and (.filter | contains(\"change-unit:%\"))) and (.config.event_sources[] | select(.event_source_id == \"change-unit-record\") | .source_collection == \"WorkspaceReceipt\" and .correlation_field == \"work_unit_id\" and (.filter | contains(\"integrator\")) and (.filter | contains(\"change-unit:%\"))) and ([.config.event_sources[] | select(.event_source_id == \"change-unit-integrate\" or .event_source_id == \"change-unit-rejected\") | (.filter | contains(\"change-unit:%\"))] | all)"
+    },
+    {
+      "name": "review cannot accept blocked work and compares native receipt paths",
+      "expr": "(.assets[\"tasks/change_unit_review_task/prompt.md\"] | contains(\"status `blocked` can never be accepted\") and contains(\"every path in the native receipt's `changed_files` to be a member\") and contains(\"implementation's `changed_files` claim to match the native receipt's complete changed-path set exactly\")) and (.config.datastore_tool_surfaces[] | select(.surface_id == \"change-unit-record-io\") | any(.entries.entries[]; .tool_name == \"read_change_unit_review\" and .collection == \"ChangeUnitReview\")) and (.assets[\"tasks/change_unit_record_task/prompt.md\"] | contains(\"review verdict must be `accepted`\") and contains(\"writer receipt id, and seal hash must match the closure\")) and (.assets[\"README.md\"] | contains(\"\\\"status\\\":\\\"ready\\\"\"))"
+    },
+    {
+      "name": "approval persists exact writer receipt and seal",
+      "expr": ".config.datastore_tool_surfaces[] | select(.surface_id == \"change-unit-review-io\") | any(.entries.entries[]; .tool_name == \"write_change_unit_closure\" and (.fields | any(.[]; .name == \"writer_receipt_id\" and .fill.source_field == \"receipt_id\")) and (.fields | any(.[]; .name == \"writer_seal_hash\" and .fill.source_field == \"seal_hash\")))"
+    },
+    {
+      "name": "repository placement path is operator-configurable",
+      "expr": ".config.repository_placements[] | select(.repository_id == \"change-unit-repository\") | (.host_path == (env.GENTS_CHANGE_UNIT_ROOT // \".\") or .host_path == \".\")"
+    },
+    {
+      "name": "integration is acknowledgement-only and serialized",
+      "expr": "(.config.triggers[] | select(.trigger_id == \"change-unit-integrate\") | .concurrency == \"serial\") and (.assets[\"tasks/change_unit_integrate_task/prompt.md\"] | contains(\"host owns serial ApplyDiff integration\") and contains(\"Do not inspect or edit files\"))"
+    }
+  ]
+}
