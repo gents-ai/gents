@@ -320,3 +320,31 @@ fn inline_data_is_borrowed_not_copied() {
         "the raw value points into the request text"
     );
 }
+
+#[test]
+fn fields_a_chart_type_never_reads_are_listed_in_one_note() {
+    let s = req(r#"{"chart":"pie","x_min":1,"y_scale":"log","bins":5,"center":0,"x_label":"a"}"#)
+        .unwrap();
+    assert_eq!(
+        s.notes,
+        ["y_scale, x_min, bins, center, x_label do not apply to a pie chart and were ignored"]
+    );
+    let s = req(r#"{"chart":"bar","x_min":1,"y2_label":"r","bins":3}"#).unwrap();
+    assert_eq!(
+        s.notes,
+        ["y2_label, x_min, bins do not apply to a bar chart and were ignored"]
+    );
+    assert!(
+        req(r#"{"chart":"stacked_area","y2_format":"x"}"#).is_err(),
+        "a bad format is still refused even when it would be ignored"
+    );
+    for ok in [
+        r#"{"chart":"line","x_min":1,"y_min":0,"x_scale":"log","y_scale":"log"}"#,
+        r#"{"chart":"histogram","bins":4,"x_min":0,"y_max":9}"#,
+        r#"{"chart":"heatmap","center":0,"value":"v"}"#,
+        r#"{"chart":"combo","y2_scale":"log","y2_label":"r","y2_format":".0f","line_axis":"left","y_min":0}"#,
+        r#"{"chart":"scatter","x_min":0,"y_max":3}"#,
+    ] {
+        assert!(req(ok).unwrap().notes.is_empty(), "{ok}");
+    }
+}

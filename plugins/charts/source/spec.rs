@@ -593,6 +593,14 @@ impl Request<'_> {
         if self.horizontal.is_some() && kind != Kind::Bar {
             notes.push("horizontal only applies to bar charts and was ignored".into());
         }
+        let unused = self.unused_fields(kind);
+        if !unused.is_empty() {
+            notes.push(format!(
+                "{} do not apply to a {} chart and were ignored",
+                unused.join(", "),
+                kind.name().replace('_', " ")
+            ));
+        }
         let legend = choice(
             "legend",
             self.legend.as_deref(),
@@ -727,6 +735,48 @@ impl Request<'_> {
             save,
             notes,
         })
+    }
+}
+
+impl Request<'_> {
+    /// Fields the caller set that this chart type never reads, in a fixed order.
+    fn unused_fields(&self, kind: Kind) -> Vec<&'static str> {
+        let has_axes = !matches!(kind, Kind::Pie | Kind::Donut);
+        let numeric_x = matches!(
+            kind,
+            Kind::Line
+                | Kind::Area
+                | Kind::StackedArea
+                | Kind::Scatter
+                | Kind::Bubble
+                | Kind::Histogram
+        );
+        let value_axis = !matches!(kind, Kind::Pie | Kind::Donut | Kind::Heatmap);
+        let fields: [(&'static str, bool, bool); 14] = [
+            (
+                "x_scale",
+                self.x_scale.is_some(),
+                numeric_x || kind == Kind::Bar,
+            ),
+            ("y_scale", self.y_scale.is_some(), value_axis),
+            ("y2_scale", self.y2_scale.is_some(), kind == Kind::Combo),
+            ("y2_label", self.y2_label.is_some(), kind == Kind::Combo),
+            ("y2_format", self.y2_format.is_some(), kind == Kind::Combo),
+            ("x_min", self.x_min.is_some(), numeric_x),
+            ("x_max", self.x_max.is_some(), numeric_x),
+            ("y_min", self.y_min.is_some(), value_axis),
+            ("y_max", self.y_max.is_some(), value_axis),
+            ("bins", self.bins.is_some(), kind == Kind::Histogram),
+            ("center", self.center.is_some(), kind == Kind::Heatmap),
+            ("value", self.value.is_some(), kind == Kind::Heatmap),
+            ("line_axis", self.line_axis.is_some(), kind == Kind::Combo),
+            ("x_label", self.x_label.is_some(), has_axes),
+        ];
+        fields
+            .iter()
+            .filter(|(_, set, applies)| *set && !*applies)
+            .map(|(name, _, _)| *name)
+            .collect()
     }
 }
 
