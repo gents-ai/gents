@@ -326,6 +326,9 @@ jobs:
 
       - name: Run PR runtime smoke tests
         if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
+        # Embedded eval homes execute the same DefraDB paths as production.
+        env:
+          RUST_MIN_STACK: 16777216
         run: |
           cargo test -p gents --lib runtime_status::tests::
           cargo test -p gents --lib toolset::tests::read_only_bash
