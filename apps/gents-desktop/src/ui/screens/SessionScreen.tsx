@@ -1290,6 +1290,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
 export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
+  const homeDid = shell.snapshot?.bootstrap.initAgentDid;
   const { draft, setDraft } = shell;
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
@@ -1487,9 +1488,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       {shell.deployments.map((n, i, all) => (
                         <Fragment key={n.agentDid}>
                           {/* a faint line between the local node and the paired ones */}
-                          {i > 0 && isWorkingNode(all[i - 1]!) && !isWorkingNode(n) && (
-                            <DropdownMenuSeparator className="opacity-60" />
-                          )}
+                          {i > 0 &&
+                            isWorkingNode(all[i - 1]!, homeDid) &&
+                            !isWorkingNode(n, homeDid) && (
+                              <DropdownMenuSeparator className="opacity-60" />
+                            )}
                           <DropdownMenuRadioItem
                             value={n.agentDid}
                             disabled={!n.dialSucceeded}
@@ -1501,7 +1504,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                             <span className="min-w-0 flex-1 truncate">
                               {n.agentPrincipal.displayName ?? n.label}
                             </span>
-                            {isWorkingNode(n) && (
+                            {isWorkingNode(n, homeDid) && (
                               <span className="text-xs text-muted-foreground">
                                 local
                               </span>
@@ -1702,6 +1705,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 >
                   <NodeBehaviorStack
                     nodes={shell.deployments}
+                    homeDid={homeDid}
                     nodeDid={session?.agentDid}
                     behaviorId={session?.behaviorId}
                     deployment={deployment}
@@ -1810,6 +1814,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeBehaviorStack
                       nodes={shell.deployments}
+                      homeDid={homeDid}
                       nodeDid={session?.agentDid}
                       behaviorId={session?.behaviorId}
                       deployment={deployment}
@@ -1829,7 +1834,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                         const node = shell.deployments.find(
                           (n) => nodeDidOf(n) === session?.agentDid,
                         );
-                        return node && !isWorkingNode(node)
+                        return node && !isWorkingNode(node, homeDid)
                           ? ` on ${node.agentPrincipal.displayName ?? node.label}`
                           : null;
                       })()}
