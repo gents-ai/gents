@@ -25,7 +25,11 @@ function timelineItemUnchanged(
         previous.requestId === next.requestId &&
         previous.sequence === next.sequence &&
         previous.content === next.content &&
-        previous.timestamp === next.timestamp
+        previous.timestamp === next.timestamp &&
+        previous.reconstruction.state === next.reconstruction.state &&
+        previous.reconstruction.error === next.reconstruction.error &&
+        previous.reconstruction.deniedDependencyDocId ===
+          next.reconstruction.deniedDependencyDocId
       );
     case "assistantMessage":
       return (
@@ -33,7 +37,11 @@ function timelineItemUnchanged(
         previous.sequence === next.sequence &&
         previous.content === next.content &&
         previous.reasoning === next.reasoning &&
-        previous.timestamp === next.timestamp
+        previous.timestamp === next.timestamp &&
+        previous.reconstruction.state === next.reconstruction.state &&
+        previous.reconstruction.error === next.reconstruction.error &&
+        previous.reconstruction.deniedDependencyDocId ===
+          next.reconstruction.deniedDependencyDocId
       );
     case "pendingUserTurn":
       return (

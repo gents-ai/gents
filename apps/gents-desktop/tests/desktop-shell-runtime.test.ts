@@ -279,6 +279,45 @@ function session(
 }
 
 describe("session timeline page merging", () => {
+  it.each(["userMessage", "assistantMessage"] as const)(
+    "updates %s reconstruction when blank content is unchanged",
+    (kind) => {
+      const page = {
+        totalItems: 1,
+        pageItems: 1,
+        hasOlder: false,
+        hasNewer: false,
+        oldestItemKey: "k1",
+        newestItemKey: "k1",
+      };
+      const current = session(["k1"], page);
+      current.timelineItems = [
+        {
+          kind,
+          itemKey: "k1",
+          sequence: 1,
+          content: null,
+          reasoning: null,
+          timestamp: null,
+          reconstruction: { state: "loading" },
+        },
+      ];
+      for (const reconstruction of [
+        { state: "denied" as const, deniedDependencyDocId: "output-1" },
+        { state: "invalid" as const, error: "conflicting closure" },
+        { state: "ready" as const },
+      ]) {
+        const next = {
+          ...current,
+          timelineItems: [{ ...current.timelineItems[0], reconstruction }],
+        } as DesktopSessionSnapshot;
+        const merged = mergeSessionTipSnapshot(current, next);
+        expect(merged.timelineItems[0]).toEqual(next.timelineItems[0]);
+        expect(merged.timelineItems[0]).not.toBe(current.timelineItems[0]);
+      }
+    },
+  );
+
   it("updates the authoritative tip while retaining loaded older rows and identities", () => {
     const current = session(["k1", "k2", "k3", "k4"], {
       totalItems: 5,

@@ -203,34 +203,39 @@ async fn load_page_canonical_dependencies(
     }
 
     let mut closures = Vec::new();
-    for (close_id, agent_did, requester_did) in close_scopes {
-        let close_id_escaped = escape_graphql_string(&close_id);
-        let query = format!(
-            r#"query DesktopExactOutputClosure {{
-  AgentOutputSegment(filter: {{ _docID: {{ _eq: "{close_id_escaped}" }}, {} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
-}}"#,
-            scope_filter(&agent_did, requester_did.as_deref()),
-        );
+    let close_scopes = close_scopes.into_iter().collect::<Vec<_>>();
+    for batch in close_scopes.chunks(32) {
+        let selections = batch.iter().enumerate().map(|(index, (close_id, agent_did, requester_did))| {
+            let close_id = escape_graphql_string(close_id);
+            format!(r#"closure{index}: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{close_id}" }}, {} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#, scope_filter(agent_did, requester_did.as_deref()))
+        }).collect::<Vec<_>>().join("\n");
         let data = access
-            .execute(&query, "exact canonical output closure")
+            .execute(
+                &format!("query DesktopExactOutputClosures {{ {selections} }}"),
+                "exact canonical output closures",
+            )
             .await?;
         query_count += 1;
-        let rows =
-            parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
-        queried_rows = queried_rows.saturating_add(rows.len());
-        match rows.len() {
-            0 => {}
-            1 => {
-                let closure = rows.into_iter().next().expect("one row checked");
-                if closure.doc_id != close_id
-                    || closure.segment.agent_did != agent_did
-                    || closure.segment.requester_did != requester_did
-                {
-                    bail!("exact canonical output closure crossed its authorized scope");
+        for (index, (close_id, agent_did, requester_did)) in batch.iter().enumerate() {
+            let rows =
+                parse_canonical_rows(&data, &format!("closure{index}"), decode_output_segment_row)?;
+            queried_rows = queried_rows.saturating_add(rows.len());
+            match rows.len() {
+                0 => {}
+                1 => {
+                    let closure = rows.into_iter().next().expect("one row checked");
+                    if closure.doc_id != *close_id
+                        || closure.segment.agent_did != *agent_did
+                        || closure.segment.requester_did != *requester_did
+                    {
+                        bail!("exact canonical output closure crossed its authorized scope");
+                    }
+                    closures.push(closure);
                 }
-                closures.push(closure);
+                _ => bail!(
+                    "exact canonical output closure has conflicting physical rows: {close_id}"
+                ),
             }
-            _ => bail!("exact canonical output closure has conflicting physical rows: {close_id}"),
         }
     }
 
@@ -253,35 +258,48 @@ async fn load_page_canonical_dependencies(
     for closure in closures {
         insert_exact_segment(&mut records, closure)?;
     }
-    for (request_scope, expected_sources) in sources_by_request {
-        let request_id = escape_graphql_string(&request_scope.0);
-        let query = format!(
-            r#"query DesktopReferencedOutputSource {{
-  AgentOutputSegment(
-    filter: {{ request_doc_id: {{ _eq: "{request_id}" }}, {} }},
-    order: [{{ ordinal: ASC }}, {{ _docID: ASC }}],
-    limit: {}
-  ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
-}}"#,
-            scope_filter(&request_scope.1, request_scope.2.as_deref()),
-            MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1),
-        );
+    let sources_by_request = sources_by_request.into_iter().collect::<Vec<_>>();
+    for batch in sources_by_request.chunks(8) {
+        let selections = batch
+            .iter()
+            .enumerate()
+            .map(|(index, (request_scope, _))| {
+                let request_id = escape_graphql_string(&request_scope.0);
+                format!(
+                    r#"source{index}: AgentOutputSegment(
+                filter: {{ request_doc_id: {{ _eq: "{request_id}" }}, {} }},
+                order: [{{ ordinal: ASC }}, {{ _docID: ASC }}], limit: {}
+            ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#,
+                    scope_filter(&request_scope.1, request_scope.2.as_deref()),
+                    MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let data = access
-            .execute(&query, "referenced canonical output source")
+            .execute(
+                &format!("query DesktopReferencedOutputSources {{ {selections} }}"),
+                "referenced canonical output sources",
+            )
             .await?;
         query_count += 1;
-        let rows =
-            parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
-        queried_rows = queried_rows.saturating_add(rows.len());
-        if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
-            bail!(
-                "canonical output request {} exceeds bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows",
-                request_scope.0
-            );
-        }
-        for row in rows {
-            if expected_sources.contains(&serde_json::to_string(&row.segment.source)?) {
-                insert_exact_segment(&mut records, row)?;
+        for (index, (request_scope, expected_sources)) in batch.iter().enumerate() {
+            let rows =
+                parse_canonical_rows(&data, &format!("source{index}"), decode_output_segment_row)?;
+            queried_rows = queried_rows.saturating_add(rows.len());
+            if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
+                bail!("canonical output request {} exceeds bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows", request_scope.0);
+            }
+            for row in rows {
+                anyhow::ensure!(
+                    row.segment.request_doc_id == request_scope.0
+                        && row.segment.agent_did == request_scope.1
+                        && row.segment.requester_did == request_scope.2,
+                    "canonical output source crossed its authorized request scope"
+                );
+                if expected_sources.contains(&serde_json::to_string(&row.segment.source)?) {
+                    insert_exact_segment(&mut records, row)?;
+                }
             }
         }
     }

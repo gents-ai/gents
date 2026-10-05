@@ -182,6 +182,17 @@ impl EventSource {
             }
         } else {
             self.durable_ready = false;
+            match &result {
+                Ok(super::super::FireResult::Errored { error }) => {
+                    tracing::warn!(trigger_id = %pending.trigger_id, source_doc_id = %pending.source_doc_id,
+                        %error, "event trigger materialization failed; preserving arrival for retry");
+                }
+                Err(error) => {
+                    tracing::warn!(trigger_id = %pending.trigger_id, source_doc_id = %pending.source_doc_id,
+                        %error, "event trigger acknowledgment channel closed; preserving arrival for retry");
+                }
+                _ => {}
+            }
         }
         self.park_arrival(&pending, refusal);
     }

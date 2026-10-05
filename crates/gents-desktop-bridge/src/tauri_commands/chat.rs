@@ -57,6 +57,7 @@ pub async fn desktop_session_snapshot(
                 None,
                 None,
                 None,
+                None,
                 false,
                 false,
             )
@@ -138,57 +139,97 @@ pub async fn desktop_session_snapshot(
             }
         }
     };
-    let (transcript_page, context_store) = if timeline_before_item_key.is_none() {
-        let context_read = async {
-            let request = {
-                let store = core.store().snapshot();
-                store
-                    .requests
-                    .iter()
-                    .find(|row| {
-                        Some(row.request_id.as_str()) == request_id.as_deref()
-                            && row.session_id.as_deref() == Some(session_id.as_str())
-                            && row.agent_did.as_deref() == agent_did.as_deref()
-                            && row.requester_did.as_deref() == requester_scope.as_deref()
-                    })
-                    .cloned()
-            };
-            let Some(request) = request else {
-                return Ok(None);
-            };
-            match operator_access.as_ref() {
-                Some(access) => {
-                    gents_desktop_core::client::load_session_tip_store_on(access, &request)
-                        .await
-                        .map(Some)
-                }
-                None => gents_desktop_core::client::load_session_tip_store(core.node(), &request)
+    let ownership_read = async {
+        let requests = {
+            let store = core.store().snapshot();
+            store
+                .requests
+                .iter()
+                .filter(|row| {
+                    row.doc_id.is_some()
+                        && row.session_id.as_deref() == Some(session_id.as_str())
+                        && row.agent_did.as_deref() == agent_did.as_deref()
+                        && row.requester_did.as_deref() == requester_scope.as_deref()
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        match operator_access.as_ref() {
+            Some(access) => {
+                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
                     .await
-                    .map(Some),
             }
-        };
-        let (page, context) = tokio::join!(page_read, context_read);
-        let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
-        let context = match context {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop::chat",
-                    session_id,
-                    error = %error,
-                    "session tip query failed; returning the bounded transcript without live ownership evidence"
-                );
-                None
+            None => {
+                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
+                    .await
             }
+        }
+    };
+    let page_and_tip = async {
+        let result = if timeline_before_item_key.is_none() {
+            let context_read = async {
+                let request = {
+                    let store = core.store().snapshot();
+                    store
+                        .requests
+                        .iter()
+                        .find(|row| {
+                            Some(row.request_id.as_str()) == request_id.as_deref()
+                                && row.session_id.as_deref() == Some(session_id.as_str())
+                                && row.agent_did.as_deref() == agent_did.as_deref()
+                                && row.requester_did.as_deref() == requester_scope.as_deref()
+                        })
+                        .cloned()
+                };
+                let Some(request) = request else {
+                    return Ok(None);
+                };
+                match operator_access.as_ref() {
+                    Some(access) => {
+                        gents_desktop_core::client::load_session_tip_store_on(access, &request)
+                            .await
+                            .map(Some)
+                    }
+                    None => {
+                        gents_desktop_core::client::load_session_tip_store(core.node(), &request)
+                            .await
+                            .map(Some)
+                    }
+                }
+            };
+            let (page, context) = tokio::join!(page_read, context_read);
+            let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
+            let context = match context {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "gents_desktop::chat",
+                        session_id,
+                        error = %error,
+                        "session tip query failed; returning the bounded transcript without live ownership evidence"
+                    );
+                    None
+                }
+            };
+            (page, context)
+        } else {
+            (
+                page_read
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))?,
+                None,
+            )
         };
-        (page, context)
-    } else {
-        (
-            page_read
-                .await
-                .map_err(|error| BridgeError::untyped(error.to_string()))?,
-            None,
-        )
+        Ok::<_, BridgeError>(result)
+    };
+    let (page_and_tip, ownership) = tokio::join!(page_and_tip, ownership_read);
+    let (transcript_page, context_store) = page_and_tip?;
+    let prompt_ownership = match ownership {
+        Ok(facts) => Some(facts),
+        Err(error) => {
+            tracing::warn!(session_id, error = %error, "request prompt ownership unavailable; suppressing unproven pending inputs");
+            None
+        }
     };
     let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
     let projection_started = std::time::Instant::now();
@@ -201,6 +242,7 @@ pub async fn desktop_session_snapshot(
         Some(&transcript_page.store),
         Some(&transcript_page.canonical_dependencies),
         context_store.as_ref(),
+        prompt_ownership.as_ref(),
         false,
         timeline_before_item_key.is_none(),
     )
