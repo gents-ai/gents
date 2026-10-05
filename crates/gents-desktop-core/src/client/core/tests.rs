@@ -1122,9 +1122,10 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     let runtime_did = "did:key:runtime";
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-        .await
-        .expect("core");
+    let core =
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
+            .await
+            .expect("core");
     let local: ReplicatedSchema =
         gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
             .await
