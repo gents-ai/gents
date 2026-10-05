@@ -69,7 +69,9 @@ fn encode(value: Option<String>, out: &mut Vec<u8>) {
     }
 }
 
-fn write_csv(w: &mut impl Write, batch: &RecordBatch) -> std::io::Result<()> {
+/// Writes `batch` as CSV rows. A NULL in a one-column file would be a blank line, which a reader
+/// skips, so it is written as an empty string and counted in `blanked`.
+fn write_csv(w: &mut impl Write, batch: &RecordBatch, blanked: &mut u64) -> std::io::Result<()> {
     let mut line = Vec::new();
     for i in 0..batch.num_rows() {
         line.clear();
@@ -77,7 +79,12 @@ fn write_csv(w: &mut impl Write, batch: &RecordBatch) -> std::io::Result<()> {
             if c > 0 {
                 line.push(b',');
             }
-            encode(field(col, i), &mut line);
+            let mut value = field(col, i);
+            if value.is_none() && batch.num_columns() == 1 {
+                *blanked += 1;
+                value = Some(String::new());
+            }
+            encode(value, &mut line);
         }
         line.push(b'\n');
         w.write_all(&line)?;
@@ -181,7 +188,7 @@ async fn write_all(
             ))
         }
     };
-    let mut rows = 0u64;
+    let (mut rows, mut blanked) = (0u64, 0u64);
     while let Some(batch) = stream.next().await {
         let batch = match batch {
             Ok(b) => b,
@@ -195,7 +202,7 @@ async fn write_all(
         let batch = plain(&batch).map_err(|e| Stop::Fail(e.to_string()))?;
         rows += batch.num_rows() as u64;
         match &mut sink {
-            Sink::Csv(w) => write_csv(w, &batch)
+            Sink::Csv(w) => write_csv(w, &batch, &mut blanked)
                 .map_err(|e| Stop::Fail(io_error("cannot write the output file", &e)))?,
             Sink::Parquet(w) => w
                 .write(&batch)
@@ -210,6 +217,12 @@ async fn write_all(
             w.close()
                 .map_err(|e| Stop::Fail(format!("cannot write the output file: {e}")))?;
         }
+    }
+    if blanked > 0 {
+        catalog.warn.once(
+            "blank-nulls",
+            format!("{blanked} NULL values in a one-column file were written as empty strings, because a blank line is not a row"),
+        );
     }
     Ok(rows)
 }

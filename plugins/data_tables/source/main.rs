@@ -11,6 +11,8 @@ mod csvparse;
 mod cursor;
 mod engine;
 mod export;
+#[cfg(test)]
+mod export_tests;
 mod graph;
 mod inline;
 mod input;
@@ -19,7 +21,11 @@ mod json;
 mod names;
 mod ods;
 mod parquet_src;
+#[cfg(test)]
+mod paging_tests;
 mod query;
+#[cfg(test)]
+mod query_tests;
 mod render;
 mod sheet;
 mod table;
@@ -89,5 +95,43 @@ async fn call_async(input: &Input) -> Res<serde_json::Value> {
         Mode::Describe => tables::describe(input, &catalog).await,
         Mode::Query => query::query(input, &catalog).await,
         Mode::Export => export::export(input, &catalog).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_input_is_one_sentence_and_not_a_panic() {
+        for (raw, want) in [
+            ("", "invalid input: EOF while parsing"),
+            ("not json", "invalid input"),
+            ("[1]", "invalid input"),
+            ("{\"mode\": \"drop\"}", "invalid input"),
+            ("{\"unknown\": 1}", "invalid input"),
+            ("{\"path\": 5}", "invalid input"),
+            ("{}", "give path (a data file or a folder of them) or tables (rows as JSON)"),
+            ("{\"mode\": \"query\", \"tables\": {\"t\": [[1]]}}", "sql is required: give the SELECT to run"),
+            ("{\"max_rows\": 0, \"tables\": {\"t\": [[1]]}}", "max_rows must be a whole number from 1 to 100000"),
+        ] {
+            let e = run(raw).unwrap_err();
+            assert!(e.contains(want), "{raw:?}: {e}");
+            assert!(!e.contains('\n'), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_mode_defaults_to_query_with_sql_and_tables_without() {
+        let q: serde_json::Value = serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}, \"sql\": \"SELECT * FROM t\"}").unwrap()).unwrap();
+        assert_eq!(q["rows"], serde_json::json!([[1]]));
+        let t: serde_json::Value = serde_json::from_str(&run("{\"tables\": {\"t\": [[1]]}}").unwrap()).unwrap();
+        assert_eq!(t["tables"][0]["name"], "t");
+    }
+
+    #[test]
+    fn the_host_added_path_original_is_accepted_and_ignored() {
+        let out = run("{\"tables\": {\"t\": [[1]]}, \"path_original\": \"/x\"}").unwrap();
+        assert!(out.contains("\"name\":\"t\""));
     }
 }

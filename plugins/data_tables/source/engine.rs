@@ -6,6 +6,7 @@
 //! and `LIMIT` over one table) keeps the file's row order, and any other shape
 //! (aggregates, joins, `DISTINCT`, windows, set operations) is sorted by all
 //! its output columns, ascending, NULLs last, so a paged read of it is stable.
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, RecordBatch};
@@ -27,7 +28,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement;
-use datafusion::sql::sqlparser::ast::Statement as Ast;
+use datafusion::sql::sqlparser::ast::{Expr as SqlExpr, Statement as Ast, Visit, Visitor};
 
 use crate::Res;
 use crate::catalog::Catalog;
@@ -35,7 +36,9 @@ use crate::checked::{CheckedOps, CheckedSum};
 use crate::table::{BATCH_ROWS, ScanError, TableSource};
 
 /// The longest SQL text accepted.
-pub const MAX_SQL_BYTES: usize = 256 * 1024;
+pub const MAX_SQL_BYTES: usize = 64 * 1024;
+/// The deepest an expression may nest (a chain of 300 additions is 300 deep).
+pub const MAX_EXPR_DEPTH: usize = 256;
 
 /// How the rows of a result are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +82,8 @@ impl Engine {
             .with_information_schema(false)
             .with_collect_statistics(false);
         config.options_mut().sql_parser.enable_ident_normalization = false;
+        config.options_mut().sql_parser.recursion_limit = datafusion::common::config::ConfigNonZeroUsize::try_new(MAX_EXPR_DEPTH)
+            .map_err(|e| format!("the SQL engine could not start: {e}"))?;
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -110,7 +115,7 @@ impl Engine {
             .sql_to_statement(sql, &dialect)
             .map_err(|e| explain(&e))?;
         match &statement {
-            Statement::Statement(s) if matches!(**s, Ast::Query(_)) => {}
+            Statement::Statement(s) if matches!(**s, Ast::Query(_)) => check_depth(s)?,
             Statement::Explain(_) => {}
             _ => {
                 return Err("only SELECT queries are accepted; to save a result as a file use the export mode".into());
@@ -130,6 +135,39 @@ impl Engine {
             .await?
             .execute_stream()
             .await
+    }
+}
+
+/// Measures how deep expressions nest, stopping as soon as one is too deep.
+struct Depth {
+    now: usize,
+    max: usize,
+}
+
+impl Visitor for Depth {
+    type Break = ();
+
+    fn pre_visit_expr(&mut self, _: &SqlExpr) -> ControlFlow<()> {
+        self.now += 1;
+        self.max = self.max.max(self.now);
+        if self.max > MAX_EXPR_DEPTH { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+    }
+
+    fn post_visit_expr(&mut self, _: &SqlExpr) -> ControlFlow<()> {
+        self.now -= 1;
+        ControlFlow::Continue(())
+    }
+}
+
+fn depth_message() -> String {
+    format!("an expression nests more than {MAX_EXPR_DEPTH} levels deep; split it, or use IN (...) for a long list of OR conditions")
+}
+
+fn check_depth(statement: &Ast) -> Res<()> {
+    let mut depth = Depth { now: 0, max: 0 };
+    match statement.visit(&mut depth) {
+        ControlFlow::Break(()) => Err(depth_message()),
+        ControlFlow::Continue(()) => Ok(()),
     }
 }
 
@@ -189,6 +227,10 @@ fn file_order(p: &LogicalPlan) -> bool {
 }
 
 fn order(plan: LogicalPlan) -> Res<Prepared> {
+    // An EXPLAIN is a plan description, not rows to page, and must stay the root of the plan.
+    if matches!(plan, LogicalPlan::Explain(_) | LogicalPlan::Analyze(_)) {
+        return Ok(Prepared { plan, order: Order::File });
+    }
     if user_sorted(&plan) {
         return Ok(Prepared {
             plan,
@@ -260,6 +302,9 @@ pub fn explain(e: &DataFusionError) -> String {
         return "the query needs more memory than this tool may use; narrow it with WHERE or LIMIT, select fewer columns, or aggregate before joining".into();
     }
     let text = root.to_string();
+    if text.contains("RecursionLimitExceeded") {
+        return depth_message();
+    }
     let first = text.lines().next().unwrap_or_default();
     let first = first.replace("datafusion.public.", "");
     let first = first

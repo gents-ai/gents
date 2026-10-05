@@ -204,6 +204,9 @@ fn build(name: &str, v: &Value, warn: &Arc<Warnings>) -> Res<InlineTable> {
             rows.len()
         ));
     }
+    if let Some(r) = rows.iter().position(|r| !r.is_array() && !r.is_object()) {
+        return Err(format!("row {} of inline table {name} must be a list or an object", r + 1));
+    }
     let named: Vec<(String, Option<ColType>)> = match declared_cols {
         Some(c) => c,
         None => match rows.first() {
@@ -328,5 +331,129 @@ impl TableSource for InlineTable {
             let start = i * BATCH_ROWS;
             Ok(batch.slice(start, BATCH_ROWS.min(total - start)))
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::{collect, cols, columns};
+    use serde_json::json;
+
+    fn one(v: Value) -> Result<(InlineTable, Arc<Warnings>), String> {
+        let warn = Warnings::new();
+        let mut t = parse_tables(&v, &warn)?;
+        Ok((t.remove(0).1, warn))
+    }
+
+    #[test]
+    fn positional_rows_get_numbered_columns_and_inferred_types() {
+        let (t, _) = one(json!({"rows": [[1, "a", true, 1.5, null], [2, "b", false, 2, null]]})).unwrap();
+        assert_eq!(columns(&t), cols(&[("column_1", "int64"), ("column_2", "text"), ("column_3", "bool"), ("column_4", "float64"), ("column_5", "text")]));
+        assert_eq!(collect(&t, None).unwrap()[1], vec![json!(2), json!("b"), json!(false), json!(2.0), Value::Null]);
+        assert_eq!(t.row_count(), Some(2));
+    }
+
+    #[test]
+    fn object_rows_name_their_columns_by_first_appearance_and_missing_keys_are_null() {
+        let (t, _) = one(json!({"rows": [{"b": 1, "a": "x"}, {"a": "y", "c": true}]})).unwrap();
+        assert_eq!(columns(&t), cols(&[("b", "int64"), ("a", "text"), ("c", "bool")]));
+        assert_eq!(collect(&t, None).unwrap(), vec![vec![json!(1), json!("x"), Value::Null], vec![Value::Null, json!("y"), json!(true)]]);
+    }
+
+    #[test]
+    fn exact_integers_and_special_floats_come_back_as_they_went_in() {
+        let (t, _) = one(json!({
+            "columns": [{"name": "n", "type": "int64"}, {"name": "x", "type": "float64"}, {"name": "d", "type": "date"}, {"name": "ts", "type": "timestamp"}],
+            "rows": [["9007199254740993", "NaN", "2024-02-29", "2024-02-29T12:30:45.5"], [-5, "-Infinity", null, null], [3, 2, "2024-03-01", "2024-03-01"]]
+        }))
+        .unwrap();
+        let rows = collect(&t, None).unwrap();
+        assert_eq!(rows[0], vec![json!("9007199254740993"), json!("NaN"), json!("2024-02-29"), json!("2024-02-29T12:30:45.500")]);
+        assert_eq!(rows[1], vec![json!(-5), json!("-Infinity"), Value::Null, Value::Null]);
+        assert_eq!(rows[2], vec![json!(3), json!(2.0), json!("2024-03-01"), json!("2024-03-01T00:00:00")]);
+    }
+
+    #[test]
+    fn declared_names_without_types_infer_them_and_unknown_types_are_text() {
+        let (t, _) = one(json!({"columns": ["a", {"name": "b", "type": "geometry"}], "rows": [[1, {"k": 1}], [2, [1, 2]]]})).unwrap();
+        assert_eq!(columns(&t), cols(&[("a", "int64"), ("b", "text")]));
+        assert_eq!(collect(&t, Some(&[1])).unwrap(), vec![vec![json!("{\"k\":1}")], vec![json!("[1,2]")]]);
+    }
+
+    #[test]
+    fn mixed_values_make_text_and_big_integers_stay_exact() {
+        let (t, _) = one(json!({"rows": [[1, 9007199254740993_i64], ["x", 2.5]]})).unwrap();
+        assert_eq!(columns(&t)[0].1, "text");
+        assert_eq!(columns(&t)[1].1, "text");
+        let (t, _) = one(json!({"rows": [[9007199254740993_i64], [1]]})).unwrap();
+        assert_eq!(columns(&t)[0].1, "int64");
+        assert_eq!(collect(&t, None).unwrap()[0], vec![json!("9007199254740993")]);
+    }
+
+    #[test]
+    fn the_accepted_table_forms() {
+        let warn = Warnings::new();
+        for (v, want) in [
+            (json!([{"name": "a", "rows": [[1]]}, {"rows": [[2]]}]), vec!["a", "data2"]),
+            (json!({"name": "solo", "rows": [[1]]}), vec!["solo"]),
+            (json!({"rows": [[1]]}), vec!["data"]),
+            (json!({"x": {"rows": [[1]]}, "y": [[2]]}), vec!["x", "y"]),
+            (json!({"a b": [[1]], "a-b": [[2]]}), vec!["a_b", "a_b_2"]),
+        ] {
+            let got: Vec<String> = parse_tables(&v, &warn).unwrap().into_iter().map(|t| t.0).collect();
+            assert_eq!(got, want, "{v}");
+        }
+        assert!(warn.list().iter().any(|w| w == "inline table a b is named a_b in SQL"), "{:?}", warn.list());
+    }
+
+    #[test]
+    fn bad_tables_are_one_sentence() {
+        let warn = Warnings::new();
+        for (v, want) in [
+            (json!(5), "tables must be a list of tables"),
+            (json!([5]), "inline table data1 must be an object"),
+            (json!({"rows": 5}), "needs a rows list"),
+            (json!({"rows": [5]}), "row 1 of inline table data must be a list or an object"),
+            (json!({"rows": []}), "has no columns"),
+            (json!({"columns": 3, "rows": []}), "columns of inline table data must be a list"),
+            (json!({"columns": [3], "rows": []}), "must be names or objects with a name"),
+            (json!({"columns": [{"type": "int64"}], "rows": []}), "has no name"),
+            (json!({"columns": [{"name": "a", "type": "int64"}], "rows": [["x"]]}), "row 1 of inline table data, column a, does not match its type"),
+            (json!({"columns": [{"name": "a", "type": "date"}], "rows": [["2024-13-45"]]}), "does not match its type"),
+            (json!({"columns": [{"name": "a", "type": "bool"}], "rows": [[1]]}), "does not match its type"),
+        ] {
+            let err = parse_tables(&v, &warn).err().unwrap_or_else(|| panic!("{v} accepted"));
+            assert!(err.contains(want), "{v}: {err}");
+            assert!(!err.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn too_many_rows_or_columns_are_refused_and_the_limit_itself_is_accepted() {
+        let rows: Vec<Value> = vec![json!([1]); MAX_ROWS + 1];
+        let err = parse_tables(&json!({"rows": rows}), &Warnings::new()).err().unwrap();
+        assert!(err.contains("over the 1000000 one inline table may have"), "{err}");
+        let rows: Vec<Value> = vec![json!([1]); MAX_ROWS];
+        assert_eq!(parse_tables(&json!({"rows": rows}), &Warnings::new()).unwrap()[0].1.row_count(), Some(MAX_ROWS as u64));
+        let wide = vec![json!(1); 10_001];
+        let err = parse_tables(&json!({"rows": [wide]}), &Warnings::new()).err().unwrap();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn the_scan_pages_in_batch_sized_slices() {
+        let rows: Vec<Value> = (0..(BATCH_ROWS * 2 + 3)).map(|i| json!([i])).collect();
+        let (t, _) = one(json!({"rows": rows})).unwrap();
+        let sizes: Vec<usize> = t.scan(None).map(|b| b.unwrap().num_rows()).collect();
+        assert_eq!(sizes, vec![BATCH_ROWS, BATCH_ROWS, 3]);
+        assert_eq!(t.scan(Some(&[])).map(|b| b.unwrap().num_rows()).sum::<usize>(), BATCH_ROWS * 2 + 3);
+    }
+
+    #[test]
+    fn the_fingerprint_follows_the_content() {
+        let a = one(json!({"rows": [[1]]})).unwrap().0.fingerprint();
+        assert_eq!(a, one(json!({"rows": [[1]]})).unwrap().0.fingerprint());
+        assert_ne!(a, one(json!({"rows": [[2]]})).unwrap().0.fingerprint());
     }
 }

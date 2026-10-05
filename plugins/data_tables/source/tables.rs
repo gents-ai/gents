@@ -162,7 +162,9 @@ pub fn list(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         .map(|n| ((*n).to_string(), "text".to_string()))
         .collect();
     let (md, _) = markdown(&cols, &rows, usize::MAX);
-    let mut out = json!({"tables": tables, "markdown": md, "warnings": catalog.warn.list()});
+    let mut warnings = catalog.listing.clone();
+    warnings.extend(catalog.warn.list());
+    let mut out = json!({"tables": tables, "markdown": md, "warnings": warnings});
     if (end as usize) < specs.len() {
         out["next"] = json!({"cursor": cursor::encode(fp, end)});
     }
