@@ -281,6 +281,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- Backend lists skip a backend whose `provider_kind` this build does not know,
+  with a warning, instead of failing the whole list (#2122). A newer peer's
+  backend no longer breaks an older node's fleet probe, directory projection,
+  self-config listing or agent runtime snapshot. Behaviors and profiles on
+  such a backend are left out of the directory, and in the agent's runtime
+  they are reported unavailable (not pending). Looking up that backend by ID
+  and `gents config` export still fail, naming the kind. Update older nodes
+  before adding a backend of a new kind.
+
 - Interrupting a thread stops only its foreground turn and in-flight
   foreground calls. Background processes and subagents, including one the
   thread was waiting on, keep running and stay attached; an awaited subagent

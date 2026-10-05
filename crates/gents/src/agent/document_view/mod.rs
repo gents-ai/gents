@@ -48,6 +48,9 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) callback_modules: HashMap<String, DocumentRecord<CallbackModule>>,
     pub(crate) repository_placements: HashMap<String, DocumentRecord<RepositoryPlacement>>,
     pub(crate) backend_observations: HashMap<String, InferenceBackendObservation>,
+    /// Backends whose provider_kind this build does not know, ID to kind. Their
+    /// rows are skipped; behaviors on them resolve as unavailable, not pending.
+    pub(crate) unknown_kind_backends: HashMap<String, String>,
     pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
 }
 
