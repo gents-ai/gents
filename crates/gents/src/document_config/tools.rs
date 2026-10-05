@@ -366,7 +366,7 @@ pub struct AgentTools {
     pub target_ids: Vec<String>,
     /// Exposes agent_new/agent_message over the allowlisted targets. Every
     /// started session is a background tool row; there is no foreground wait,
-    /// workspace inheritance, cascade or cross-principal switch. A target on
+    /// workspace inheritance, cascade or cross-node switch. A target on
     /// another node is admitted there as a Peer request under its ACP.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
