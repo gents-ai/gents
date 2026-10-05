@@ -211,6 +211,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Added
 
+- The Grok pager shows graph runs the model starts with `run_graph` in its
+  Workflows panel and `/workflow runs`, as `workflow_updated` updates read
+  from the canonical run view: stages are phases and stage requests are
+  agents. A run that cannot be read is retried with backoff of at most 30
+  seconds; a missing or unauthorized run ends with one failed update saying
+  observation stopped. Runs started outside the session are not shown. A
+  `run_graph` reply that would exceed the tool result limit leaves out the
+  run's input, then the rest of its view, so the run stays visible.
 - `gents eval watch` shows each trial live while its runner holds the home
   (#2089). Every few seconds the embedded executor reads the trial's home and
   writes a snapshot into its `progress.json` entry: tokens, requests, model

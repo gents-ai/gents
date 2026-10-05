@@ -18,13 +18,16 @@
 //!    submission via [`crate::create_agent_request`], deferred responses until
 //!    terminalization, and interruption via [`gents::interrupt_request`];
 //! 5. [`projection`] owns the bounded, request-id-scoped read-only projection
-//!    of durable rows into fresh Grok `session/update` notification payloads.
+//!    of durable rows into fresh Grok `session/update` notification payloads;
+//! 6. [`graph_runs`] projects the graph runs a session started, found through
+//!    its durable `run_graph` replies, as `workflow_updated`.
 //!
-//! Every projection query runs in-process (`node.execute(&query).await`) with
-//! every interpolated value escaped by
-//! [`gents::graphql::escape_graphql_string`]; no HTTP GraphQL helper and no
-//! stock Grok import is used anywhere in the shim. All diagnostics go through
-//! `tracing` — never `println!`/`eprintln!`.
+//! Every query runs in-process through the
+//! [`gents::graphql::graphql_with_transaction_retry`] and
+//! [`gents::config_client::ConfigAccess`] owners with every interpolated
+//! value escaped by [`gents::graphql::escape_graphql_string`]; no HTTP
+//! GraphQL helper and no stock Grok import is used anywhere in the shim. All
+//! diagnostics go through `tracing` — never `println!`/`eprintln!`.
 
 use std::sync::Arc;
 
@@ -34,6 +37,7 @@ use defra_node::EmbeddedNode;
 pub(crate) mod acp;
 mod binding;
 mod goals;
+mod graph_runs;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;

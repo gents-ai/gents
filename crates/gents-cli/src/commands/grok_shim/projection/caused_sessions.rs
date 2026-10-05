@@ -33,7 +33,9 @@ pub(crate) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
 ///
 /// The optional wire fields (`effective_context_source`, `capability_mode`,
 /// `persona`, `role`, `model`, `resumed_from`, `workflow_run_id`) stay absent:
-/// no durable Gents document carries them. `context_normalized` is always
+/// no durable Gents document carries them (the pager hides a subagent that names
+/// a workflow run it has no `workflow_updated` for; graph runs are projected
+/// by `grok_shim::graph_runs`). `context_normalized` is always
 /// true because every projected window passes through
 /// `effective_context_window_tokens`.
 #[derive(Debug, Clone, PartialEq)]
