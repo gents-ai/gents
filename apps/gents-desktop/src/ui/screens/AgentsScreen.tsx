@@ -45,6 +45,7 @@ import { isLive } from "@/lib/live";
 import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
+import { toastFailure } from "@/lib/failure";
 
 export function AgentsScreen({ shell }: { shell: Shell }) {
   const [adding, setAdding] = useState(false);
@@ -375,9 +376,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                   toast("Peer removed");
                   setRemoving(null);
                 } catch (error) {
-                  toast(
-                    `Remove failed: ${error instanceof Error ? error.message : String(error)}`,
-                  );
+                  toastFailure("remove the peer", error);
                 } finally {
                   setRemovingBusy(false);
                 }

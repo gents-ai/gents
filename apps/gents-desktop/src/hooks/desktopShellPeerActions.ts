@@ -5,6 +5,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { shownFailure } from "./desktopShellRuntime";
 
 type PeerActionParams = {
   api: DesktopApiAdapter;
@@ -58,7 +59,7 @@ export function createDesktopShellPeerActions({
       }
       const message = formatPeerConnectionError(err, "local-runtime");
       setError(message);
-      throw new Error(message);
+      throw shownFailure(new Error(message));
     } finally {
       setStarting(false);
     }
@@ -71,7 +72,7 @@ export function createDesktopShellPeerActions({
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
-      throw new Error(message);
+      throw shownFailure(new Error(message));
     }
   }
 
@@ -87,7 +88,7 @@ export function createDesktopShellPeerActions({
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);
-      throw new Error(message);
+      throw shownFailure(new Error(message));
     }
   }
 
@@ -102,7 +103,7 @@ export function createDesktopShellPeerActions({
     } catch (err) {
       const message = formatPeerConnectionError(err, "remove-peer");
       setError(message);
-      throw new Error(message);
+      throw shownFailure(new Error(message));
     }
   }
 
@@ -114,7 +115,7 @@ export function createDesktopShellPeerActions({
     } catch (err) {
       const message = formatPeerConnectionError(err, "rename-peer");
       setError(message);
-      throw new Error(message);
+      throw shownFailure(new Error(message));
     }
   }
 
