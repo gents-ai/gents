@@ -48,6 +48,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Breaking
 
+- A pack never selects the agent's default behavior. Loading a pack whose
+  `agent_principal` sets `default_behavior_id` (`gents pack install`, `pack
+  check`, `pack scenario`, eval runs) fails and names it; packs ship
+  `"agent_principal": {}`. The user picks the default ("Make default" in the
+  desktop Behaviors panel, or their own `gents config apply` root), and eval
+  and scenario harnesses select the behavior under test.
 - The official packs (`code_review`, `mailbox`, `pipeline`, `security_scan`,
   `lsp_rust`, `grok_tui_port`, `repo_maintenance`, `defending_code`,
   `eval_author`, `prompt_proposer`, `web_deep_research`, `graph_pipeline`,

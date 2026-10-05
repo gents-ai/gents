@@ -422,6 +422,10 @@ fn load_pack_config_with(
         lookup,
         &|_, _, reference| read_pack_sidecar(pack, reference),
     )
+    .and_then(|config| {
+        gents::pack::ensure_pack_leaves_default_unselected(&config)?;
+        Ok(config)
+    })
     .with_context(|| format!("decoding canonical pack config {}", path.display()))
 }
 
@@ -3711,10 +3715,7 @@ fn stage_scenario_pack(
     );
     let mut authored = authored.expect("checked scenario pack configuration");
     super::super::config::binding::rebind_manifest_to_agent(&mut authored, agent_did, true)?;
-    authored
-        .agent_principal
-        .default_behavior_id
-        .get_or_insert_with(|| initialized_default_behavior_id.to_owned());
+    authored.agent_principal.default_behavior_id = Some(initialized_default_behavior_id.to_owned());
     let bindings = distribution
         .metadata
         .inference_slots
@@ -3857,39 +3858,36 @@ mod tests {
     }
 
     #[test]
-    fn scenario_staging_retains_an_authored_default_behavior() {
+    fn scenario_refuses_a_pack_that_selects_the_default_behavior() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
         let authored_pack = tempfile::tempdir().unwrap();
-        for asset in &distribution.metadata.assets {
+        for asset in distribution
+            .metadata
+            .assets
+            .iter()
+            .map(String::as_str)
+            .chain(["manifest.json"])
+        {
             let destination = authored_pack.path().join(asset);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             std::fs::copy(pack.join(asset), destination).unwrap();
         }
+        validate_scenario_defaults(authored_pack.path()).unwrap();
         let config_path = authored_pack.path().join("pack_config.json");
         let mut config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["agent_principal"]["default_behavior_id"] = json!("fixture-worker");
         std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
-        let staged = stage_scenario_pack(
-            authored_pack.path(),
-            &distribution,
-            "did:key:scenario-owner",
-            "default-profile",
-            "did:key:scenario-owner:default",
-        )
-        .unwrap();
-        let (staged_config, report) = crate::desired_state::load_manifest_root(staged.path());
-        assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert_eq!(
-            staged_config
-                .unwrap()
-                .agent_principal
-                .default_behavior_id
-                .as_deref(),
-            Some("fixture-worker"),
+        let error = format!(
+            "{:#}",
+            validate_scenario_defaults(authored_pack.path()).unwrap_err()
+        );
+        assert!(
+            error.contains("must not choose the default behavior"),
+            "{error}"
         );
     }
 

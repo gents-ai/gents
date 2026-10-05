@@ -176,7 +176,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1011,7 +1011,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1127,7 +1127,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1218,7 +1218,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1296,7 +1296,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1390,7 +1390,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
@@ -1489,7 +1489,7 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(
         DesktopPaths::from_root(tempdir.path()),
-        ClientCoreOptions::local_only(),
+        ClientCoreOptions::local_simulated_route(),
     )
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
