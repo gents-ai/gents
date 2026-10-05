@@ -151,9 +151,9 @@ fn a_cursor_is_refused_when_the_query_the_data_or_the_options_changed() {
     let e =
         run(json!({"path": d.s(), "sql": "SELECT * FROM t", "cursor": cursor, "delimiter": ";"}))
             .unwrap_err();
-    assert!(
-        e.contains("different query or the data changed") || e.contains("not valid"),
-        "{e}"
+    assert_eq!(
+        e,
+        "the cursor belongs to a different query or the data changed; start again without a cursor"
     );
     d.put("t.csv", "n,g,pad\n1,1,x\n");
     let e = call("SELECT * FROM t", &cursor).unwrap_err();
@@ -177,33 +177,61 @@ fn a_cursor_may_change_the_page_size_but_not_the_rows_it_continues_from() {
     assert_eq!(next["offset"], 10);
 }
 
+/// Orders JSON values the way the documented rule does: numbers by value, text bytewise,
+/// NULL after everything.
+fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    match (a, b) {
+        (Value::Null, Value::Null) => Equal,
+        (Value::Null, _) => Greater,
+        (_, Value::Null) => Less,
+        (Value::Number(x), Value::Number(y)) => {
+            x.as_f64().partial_cmp(&y.as_f64()).unwrap_or(Equal)
+        }
+        (Value::String(x), Value::String(y)) => x.as_bytes().cmp(y.as_bytes()),
+        other => panic!("columns of mixed kinds: {other:?}"),
+    }
+}
+
+fn row_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    let (a, b) = (a.as_array().unwrap(), b.as_array().unwrap());
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| value_cmp(x, y))
+        .find(|o| o.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
 #[test]
 fn the_unordered_shapes_come_back_in_one_repeatable_order() {
     let d = numbers(300);
     for sql in [
         "SELECT g, count(*) AS c FROM t GROUP BY g",
         "SELECT a.n FROM t a JOIN t b ON a.g = b.g AND b.n < 5",
+        // `pad` is text, empty in every fifth row, and an empty unquoted field is NULL.
         "SELECT DISTINCT pad FROM t",
+        "SELECT pad, g, count(*) AS c FROM t GROUP BY pad, g",
     ] {
         let a = run(json!({"path": d.s(), "sql": sql})).unwrap();
         let b = run(json!({"path": d.s(), "sql": sql})).unwrap();
         assert_eq!(a, b, "{sql}");
         assert_eq!(a["order"], "columns");
-        let first_column: Vec<Value> = rows(&a).iter().map(|r| r[0].clone()).collect();
-        let mut sorted = first_column.clone();
-        sorted.sort_by(|x, y| {
-            x.to_string()
-                .len()
-                .cmp(&y.to_string().len())
-                .then(x.to_string().cmp(&y.to_string()))
-        });
-        if first_column.iter().all(Value::is_number) {
-            let mut nums: Vec<i64> = first_column.iter().map(|v| v.as_i64().unwrap()).collect();
-            let copy = nums.clone();
-            nums.sort();
-            assert_eq!(copy, nums, "{sql}");
-        }
+        // Against a sort done here, column by column, ascending, NULLs last.
+        let mut want = rows(&a);
+        want.sort_by(row_cmp);
+        assert_eq!(rows(&a), want, "{sql}");
     }
+    let r = run(json!({"path": d.s(), "sql": "SELECT DISTINCT pad FROM t"})).unwrap();
+    assert_eq!(
+        rows(&r),
+        [
+            json!(["x"]),
+            json!(["xx"]),
+            json!(["xxx"]),
+            json!(["xxxx"]),
+            json!([null])
+        ]
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -299,27 +327,51 @@ enum Col {
     Date(Vec<Option<u32>>),
 }
 
+/// Whether a result carries no warning about rows that were padded or values that were lost.
+fn nothing_lost(r: &Value) -> bool {
+    r["warnings"].as_array().unwrap().iter().all(|w| {
+        let w = w.as_str().unwrap();
+        !w.contains("lost their extra values") && !w.contains("padded with NULL")
+    })
+}
+
+/// One field the way a careful writer makes it: quoted when it holds any delimiter a reader
+/// may sniff, a quote or a line break.
 fn csv_cell(s: Option<String>) -> String {
     match s {
         None => String::new(),
         Some(s) if s.is_empty() => "\"\"".into(),
-        Some(s) if s.contains([',', '"', '\n', '\r']) => format!("\"{}\"", s.replace('"', "\"\"")),
+        Some(s) if s.contains([',', ';', '|', '\t', '"', '\n', '\r']) => {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        }
         Some(s) => s,
     }
 }
 
+/// Text that is often one of the delimiters a reader sniffs, or made of nothing else.
+fn tricky_text() -> impl Strategy<Value = String> {
+    prop_oneof![
+        3 => "[ -~\t\n\r]{0,10}",
+        2 => prop::sample::select(vec![
+            "a;b", "c;d", "e;f", "a|b", "x\ty", "a,b;c", ";", "|", "\t", ";;;", "a;b;c|d",
+        ])
+        .prop_map(String::from),
+    ]
+}
+
 fn arbitrary_table() -> impl Strategy<Value = Vec<Col>> {
     (1usize..12).prop_flat_map(|n| {
+        // From one column (where a delimiter inside every value is easy to misread) to seven.
         prop::collection::vec(
             prop_oneof![
                 prop::collection::vec(prop::option::of(any::<i64>()), n).prop_map(Col::Int),
                 prop::collection::vec(prop::option::of(-100_000i32..100_000), n)
                     .prop_map(Col::Float),
-                prop::collection::vec(prop::option::of("[ -~\n\r]{0,10}"), n).prop_map(Col::Text),
+                prop::collection::vec(prop::option::of(tricky_text()), n).prop_map(Col::Text),
                 prop::collection::vec(prop::option::of(any::<bool>()), n).prop_map(Col::Bool),
                 prop::collection::vec(prop::option::of(0u32..30_000), n).prop_map(Col::Date),
             ],
-            2..6,
+            1..8,
         )
     })
 }
@@ -341,7 +393,7 @@ fn render_csv(cols: &[Col]) -> String {
         let cells: Vec<String> = cols
             .iter()
             .map(|c| {
-                csv_cell(match c {
+                let cell = match c {
                     Col::Int(v) => v[r].map(|x| x.to_string()),
                     Col::Float(v) => v[r].map(|x| format!("{:.2}", f64::from(x) / 100.0)),
                     Col::Text(v) => v[r].clone(),
@@ -351,6 +403,12 @@ fn render_csv(cols: &[Col]) -> String {
                             .unwrap();
                         date.format("%Y-%m-%d").to_string()
                     }),
+                };
+                // A blank line is no row, so a one-column file cannot hold a NULL.
+                csv_cell(if cols.len() == 1 && cell.is_none() {
+                    Some(String::new())
+                } else {
+                    cell
                 })
             })
             .collect();
@@ -369,14 +427,137 @@ proptest! {
         d.put("t.csv", render_csv(&table));
         let first = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 100_000})).unwrap();
         let exported = run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
+        // Nothing is lost on the way in or out.
+        prop_assert!(nothing_lost(&first), "{:?}", first["warnings"]);
         prop_assert_eq!(exported["rows"].clone(), first["row_count"].clone());
         let second = run(json!({"path": d.s(), "sql": "SELECT * FROM out", "max_rows": 100_000})).unwrap();
         prop_assert_eq!(&second["columns"], &first["columns"]);
         prop_assert_eq!(&second["rows"], &first["rows"]);
+        prop_assert!(nothing_lost(&second), "{:?}", second["warnings"]);
         // And through Parquet.
         run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.parquet"})).unwrap();
         let third = run(json!({"path": d.s(), "sql": "SELECT * FROM out_2", "max_rows": 100_000})).unwrap();
         prop_assert_eq!(&third["columns"], &first["columns"]);
         prop_assert_eq!(&third["rows"], &first["rows"]);
     }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 60, ..ProptestConfig::default() })]
+
+    /// Every text value comes back exactly, however many columns there are and whichever
+    /// delimiters it holds: through the reader, and through an export and the reader again.
+    #[test]
+    fn text_with_delimiters_in_it_survives_a_read_and_an_export_exactly(
+        table in (1usize..6).prop_flat_map(|cols| prop::collection::vec(
+            prop::collection::vec(tricky_text().prop_map(|t| format!("v{t}")), cols),
+            1..8,
+        )),
+        names in any::<bool>(),
+    ) {
+        let width = table[0].len();
+        let header: Vec<String> = (0..width)
+            .map(|i| if names { format!("n{i};x|y") } else { format!("c{i}") })
+            .collect();
+        let mut text = header.iter().map(|h| csv_cell(Some(h.clone()))).collect::<Vec<_>>().join(",") + "\n";
+        for row in &table {
+            text.push_str(&row.iter().map(|v| csv_cell(Some(v.clone()))).collect::<Vec<_>>().join(","));
+            text.push('\n');
+        }
+        let d = Dir::new();
+        d.put("t.csv", &text);
+        let want: Vec<Value> = table.iter().map(|r| json!(r)).collect();
+        let columns = |r: &Value| -> Vec<String> {
+            r["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect()
+        };
+        let first = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 100_000})).unwrap();
+        prop_assert_eq!(rows(&first), want.clone());
+        prop_assert_eq!(columns(&first), header.clone());
+        prop_assert_eq!(&first["warnings"], &json!([]));
+        run(json!({"path": d.s(), "mode": "export", "sql": "SELECT * FROM t", "output": "out.csv"})).unwrap();
+        let second = run(json!({"path": d.s(), "sql": "SELECT * FROM out", "max_rows": 100_000})).unwrap();
+        prop_assert_eq!(rows(&second), want);
+        prop_assert_eq!(columns(&second), header);
+        prop_assert_eq!(&second["warnings"], &json!([]));
+    }
+}
+
+#[test]
+fn a_cursor_is_refused_when_a_byte_in_the_middle_of_a_file_changed_and_its_size_did_not() {
+    let d = numbers(30_000);
+    let before = std::fs::read(d.path().join("t.csv")).unwrap();
+    assert!(before.len() > 128 * 1024, "{}", before.len());
+    let first = run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 10})).unwrap();
+    let cursor = first["next"]["cursor"].as_str().unwrap();
+    let again = |c: &str| {
+        run(json!({"path": d.s(), "sql": "SELECT * FROM t", "max_rows": 10, "cursor": c}))
+    };
+    assert_eq!(again(cursor).unwrap()["offset"], 10);
+    // One digit in the middle becomes another digit: same size, different rows.
+    let mut after = before.clone();
+    let at = after.len() / 2;
+    let digit = after[at..].iter().position(u8::is_ascii_digit).unwrap() + at;
+    after[digit] = if after[digit] == b'7' { b'8' } else { b'7' };
+    assert_eq!(after.len(), before.len());
+    d.put("t.csv", &after);
+    assert_eq!(
+        again(cursor).unwrap_err(),
+        "the cursor belongs to a different query or the data changed; start again without a cursor"
+    );
+}
+
+#[test]
+fn every_page_of_a_chain_has_the_same_column_types_across_the_sample_boundary() {
+    // 100,500 rows; the one text value comes at row 100,300, past the 100,000-row type sample,
+    // so a sampled read says int64 and only a read of the whole column says text.
+    let d = Dir::new();
+    let mut text = String::from("x,y\n");
+    for i in 0..100_500 {
+        let x = if i == 100_300 {
+            "abc".to_string()
+        } else {
+            i.to_string()
+        };
+        text.push_str(&format!("{x},{i}\n"));
+    }
+    d.put("t.csv", text);
+    let sql = "SELECT x, y FROM t";
+    let one_shot = run(json!({"path": d.s(), "sql": sql, "max_rows": 100_000})).unwrap();
+    let mut cursor: Option<String> = None;
+    let (mut pages, mut seen) = (0, 0usize);
+    loop {
+        let mut input = json!({"path": d.s(), "sql": sql, "max_rows": 40_000});
+        if let Some(c) = &cursor {
+            input["cursor"] = json!(c);
+        }
+        let r = run(input).unwrap();
+        // The type of the first page is the type of the last.
+        assert_eq!(
+            r["columns"],
+            json!([{"name": "x", "type": "text"}, {"name": "y", "type": "int64"}]),
+            "page {pages}"
+        );
+        assert!(
+            rows(&r).iter().all(|row| row[0].is_string()),
+            "page {pages}"
+        );
+        // The rows are the ones of the one-shot read, at the right place in it.
+        assert_eq!(rows(&r)[0], json!([seen.to_string(), seen]));
+        seen += rows(&r).len();
+        pages += 1;
+        match r["next"]["cursor"].as_str() {
+            Some(c) => cursor = Some(c.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!((pages, seen), (3, 100_500));
+    assert_eq!(one_shot["columns"][0]["type"], "text");
+    // A page asked for by offset alone, past the odd value, agrees too.
+    let last =
+        run(json!({"path": d.s(), "sql": "SELECT x, y FROM t OFFSET 100299 LIMIT 3"})).unwrap();
+    assert_eq!(
+        last["rows"],
+        json!([["100299", 100299], ["abc", 100300], ["100301", 100301]])
+    );
+    assert_eq!(last["columns"][0]["type"], "text");
 }

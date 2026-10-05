@@ -4,6 +4,7 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+mod bounded;
 mod catalog;
 mod checked;
 mod csv;
@@ -19,6 +20,8 @@ mod hostile_tests;
 mod inline;
 mod input;
 mod json;
+#[cfg(test)]
+mod limits_tests;
 mod names;
 mod ods;
 #[cfg(test)]
@@ -28,6 +31,8 @@ mod query;
 #[cfg(test)]
 mod query_tests;
 mod render;
+#[cfg(test)]
+mod rules_tests;
 mod sheet;
 mod table;
 mod tables;
@@ -86,6 +91,10 @@ pub fn call(input: &Input) -> Res<serde_json::Value> {
 }
 
 async fn call_async(input: &Input) -> Res<serde_json::Value> {
+    // A query may read no table at all (`SELECT 1 + 1`); every other mode needs data to look at.
+    if input.path.is_none() && input.tables.is_none() && input.mode() != Mode::Query {
+        return Err("give path (a data file or a folder of them) or tables (rows as JSON)".into());
+    }
     let catalog = Arc::new(Catalog::discover(
         input.path.as_deref(),
         input.files.as_deref(),

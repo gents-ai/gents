@@ -16,14 +16,26 @@ use crate::catalog::Catalog;
 use crate::cursor;
 use crate::engine::{Engine, Order, Prepared, explain, plain, scan_error};
 use crate::input::Input;
-use crate::render::{markdown, type_name, value_json};
+use crate::render::{cell_json, cut_at, markdown_capped, type_name};
 use crate::table::{Fnv, ScanError};
 
 /// Bytes the SQL engine's operators may hold: well under the plugin's memory limit, which
 /// also covers the decoded rows in flight, the plan and the wasm runtime itself.
 pub const POOL_BYTES: usize = 1024 * 1024 * 1024;
-/// A text value longer than this is cut in a result.
+/// A value (a text, or the JSON of a list or record) longer than this is cut in a result.
 pub const MAX_CELL_BYTES: usize = 64 * 1024;
+/// A row longer than this has its long texts shortened.
+const MAX_ROW_BYTES: usize = 1024 * 1024;
+/// The most bytes the whole result of a call may take: the host's output limit is 4 MiB and
+/// the rest is the Markdown table, the column list and the warnings.
+pub const OUTPUT_BUDGET: usize = 3_500_000;
+/// The most bytes the Markdown table of a page may take.
+const MARKDOWN_BYTES: usize = 256 * 1024;
+
+/// The bytes a row takes in the result, with its separator.
+fn row_len(row: &[Value]) -> usize {
+    serde_json::to_string(row).map_or(0, |s| s.len() + 1)
+}
 
 /// One page of a result.
 pub struct Page {
@@ -63,6 +75,10 @@ pub fn fingerprint(kind: &str, sql: &str, catalog: &Catalog, order: Order) -> u6
         Some(b) => u64::from(b),
     });
     h.num(catalog.opened_fingerprint());
+    // Types read in full differ from sampled ones, so the two are different results.
+    for name in catalog.full_names() {
+        h.text(&name);
+    }
     h.0
 }
 
@@ -83,7 +99,7 @@ async fn read_page(
         .collect();
     let (mut skip, mut bytes) = (offset, 0usize);
     let mut rows: Vec<Vec<Value>> = Vec::new();
-    let (mut cut, mut non_finite, mut big_ints) = (0u64, 0u64, 0u64);
+    let (mut cut, mut non_finite, mut big_ints, mut shortened) = (0u64, 0u64, 0u64, 0u64);
     let mut more = false;
     'outer: while let Some(batch) = stream.next().await {
         let batch = plain(&batch?)?;
@@ -99,17 +115,11 @@ async fn read_page(
                 more = true;
                 break 'outer;
             }
-            let mut row: Vec<Value> = batch.columns().iter().map(|c| value_json(c, i)).collect();
-            for (v, (_, ty)) in row.iter_mut().zip(&columns) {
-                match v {
-                    Value::String(s) if s.len() > MAX_CELL_BYTES => {
-                        let mut at = MAX_CELL_BYTES;
-                        while !s.is_char_boundary(at) {
-                            at -= 1;
-                        }
-                        s.truncate(at);
-                        cut += 1;
-                    }
+            let mut row: Vec<Value> = Vec::with_capacity(columns.len());
+            for (c, (_, ty)) in batch.columns().iter().zip(&columns) {
+                let (v, was_cut) = cell_json(c, i, MAX_CELL_BYTES);
+                match &v {
+                    _ if was_cut => cut += 1,
                     Value::String(s)
                         if ty.starts_with("float")
                             && matches!(s.as_str(), "NaN" | "Infinity" | "-Infinity") =>
@@ -119,16 +129,38 @@ async fn read_page(
                     Value::String(_) if ty == "int64" || ty == "uint64" => big_ints += 1,
                     _ => {}
                 }
+                row.push(v);
             }
-            bytes += serde_json::to_string(&row).map_or(0, |s| s.len() + 1);
+            let mut len = row_len(&row);
+            if len > MAX_ROW_BYTES {
+                // Cells each under the cell cap can still add up past the page: shorten the
+                // long texts evenly so one row always fits.
+                let each = (MAX_ROW_BYTES / columns.len().max(1)).max(256);
+                for v in &mut row {
+                    if let Value::String(s) = v
+                        && s.len() > each
+                    {
+                        s.truncate(cut_at(s, each).len());
+                        shortened += 1;
+                    }
+                }
+                len = row_len(&row);
+            }
+            bytes += len;
             rows.push(row);
         }
     }
     let mut notes = Vec::new();
     if cut > 0 {
         notes.push(format!(
-            "{cut} text values were cut at {} KiB; select SUBSTR ranges to read the rest",
+            "{cut} values were cut at {} KiB; select a part of them (SUBSTR, a list slice or one field) to read the rest",
             MAX_CELL_BYTES / 1024
+        ));
+    }
+    if shortened > 0 {
+        notes.push(format!(
+            "{shortened} long text values were shortened so that a row fits in {} KiB; select fewer columns to read them whole",
+            MAX_ROW_BYTES / 1024
         ));
     }
     if non_finite > 0 {
@@ -150,12 +182,16 @@ async fn read_page(
 }
 
 /// Plans and reads one page of `sql`, planning again with wider type inference when a
-/// table's types turn out to be wrong for rows past its sample.
+/// table's types turn out to be wrong for rows past its sample. With `settle`, a page that has
+/// a next page first reads the sampled tables in full to settle their types, so that every page
+/// of the chain has the same column types; a later page of that chain does the same on seeing
+/// the first page's cursor.
 pub async fn run_page(
     catalog: &Arc<Catalog>,
     kind: &str,
     sql: &str,
     cursor_in: Option<&str>,
+    settle: bool,
     max_rows: usize,
     max_bytes: usize,
 ) -> Res<(Page, u64)> {
@@ -164,11 +200,25 @@ pub async fn run_page(
         let prepared = engine.prepare(sql).await?;
         let fp = fingerprint(kind, sql, catalog, prepared.order);
         let offset = match cursor_in {
-            Some(c) => cursor::decode(c, fp)?,
+            Some(c) => {
+                let (cursor_fp, offset) = cursor::parts(c)?;
+                if cursor_fp != fp {
+                    if settle && catalog.settle() {
+                        continue;
+                    }
+                    return Err(cursor::mismatch());
+                }
+                offset
+            }
             None => 0,
         };
         match read_page(&engine, prepared, offset, max_rows, max_bytes).await {
-            Ok(page) => return Ok((page, fp)),
+            Ok(page) => {
+                if settle && page.more && catalog.settle() {
+                    continue;
+                }
+                return Ok((page, fp));
+            }
             Err(e) => match scan_error(&e) {
                 Some(ScanError::Conflict {
                     table,
@@ -195,11 +245,43 @@ pub async fn query(input: &Input, catalog: &Arc<Catalog>) -> Res<Value> {
         "query",
         sql,
         input.cursor.as_deref(),
+        true,
         input.max_rows()?,
         input.max_bytes()?,
     )
     .await?;
-    Ok(page_json(&page, fp, input.markdown_rows()?, catalog))
+    fit(page, fp, input.markdown_rows()?, catalog)
+}
+
+/// The result object of `page`, shortened (and said so) until the whole of it, rows, Markdown,
+/// columns and warnings, fits in [`OUTPUT_BUDGET`].
+fn fit(mut page: Page, fp: u64, markdown_rows: usize, catalog: &Catalog) -> Res<Value> {
+    let mut trimmed = false;
+    loop {
+        let out = page_json(&page, fp, markdown_rows, catalog);
+        let size = serde_json::to_string(&out).map_or(usize::MAX, |s| s.len());
+        if size <= OUTPUT_BUDGET {
+            return Ok(out);
+        }
+        if page.rows.len() <= 1 {
+            return Err(
+                "the result is too large to return; select fewer columns, or cut long values with SUBSTR".into(),
+            );
+        }
+        // Keep the share of the rows that fits, a tenth less to settle in one or two rounds.
+        let keep = (page.rows.len() / 10 * 9)
+            .min(page.rows.len() * OUTPUT_BUDGET / size)
+            .clamp(1, page.rows.len() - 1);
+        page.rows.truncate(keep);
+        page.more = true;
+        if trimmed {
+            page.notes.pop();
+        }
+        trimmed = true;
+        page.notes.push(format!(
+            "the page was cut to {keep} rows to fit the output limit; read on with next.cursor"
+        ));
+    }
 }
 
 /// The result object of a page.
@@ -209,10 +291,10 @@ pub fn page_json(page: &Page, fp: u64, markdown_rows: usize, catalog: &Catalog) 
         .iter()
         .map(|(n, t)| json!({"name": n, "type": t}))
         .collect();
-    let (mut md, cut) = markdown(&page.columns, &page.rows, markdown_rows);
-    if cut {
+    let (mut md, shown) = markdown_capped(&page.columns, &page.rows, markdown_rows, MARKDOWN_BYTES);
+    if shown < page.rows.len() {
         md.push_str(&format!(
-            "\n\n(the first {markdown_rows} of {} rows of this page; all are in rows)",
+            "\n\n(the first {shown} of {} rows of this page; all are in rows)",
             page.rows.len()
         ));
     }

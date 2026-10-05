@@ -608,7 +608,9 @@ fn long_text_cells_are_cut_and_said() {
     assert_eq!(r["rows"][1][0], "short");
     assert_eq!(
         r["warnings"],
-        json!(["1 text values were cut at 64 KiB; select SUBSTR ranges to read the rest"])
+        json!([
+            "1 values were cut at 64 KiB; select a part of them (SUBSTR, a list slice or one field) to read the rest"
+        ])
     );
 }
 
@@ -705,14 +707,18 @@ fn tables_pages_through_a_large_folder_with_a_cursor() {
     }
     let mut seen = Vec::new();
     let mut cursor: Option<String> = None;
-    let mut pages = 0;
+    // 120 tables list 50, 50 and 20 at a time, with a cursor on the first two pages only.
+    let mut pages: Vec<(usize, bool)> = Vec::new();
     loop {
         let mut input = json!({"path": d.s()});
         if let Some(c) = &cursor {
             input["cursor"] = json!(c);
         }
         let r = run(input).unwrap();
-        pages += 1;
+        pages.push((
+            r["tables"].as_array().unwrap().len(),
+            r["next"]["cursor"].is_string(),
+        ));
         seen.extend(
             r["tables"]
                 .as_array()
@@ -725,7 +731,7 @@ fn tables_pages_through_a_large_folder_with_a_cursor() {
             None => break,
         }
     }
-    assert_eq!(pages, 3);
+    assert_eq!(pages, [(50, true), (50, true), (20, false)]);
     assert_eq!(
         seen,
         (0..120).map(|i| format!("f{i:03}")).collect::<Vec<_>>()

@@ -1,14 +1,16 @@
 //! XLSX workbooks: each worksheet is a table, read as a stream of rows.
 //!
-//! Shared strings and cell formats are read up front (and capped); sheet
-//! XML is streamed. Number cells whose format is a date or time become dates
+//! Opening a workbook reads only its sheet list; the shared strings and cell
+//! formats are read (streamed, and capped) when a sheet is first scanned, so a
+//! folder of large workbooks costs nothing until a query names one. Sheet XML
+//! is streamed. Number cells whose format is a date or time become dates
 //! and timestamps, other numbers are integers when written without a fraction
 //! or exponent. Formula cells read as the value Excel stored; error cells
 //! (`#DIV/0!` and so on) read as NULL, said once in the warnings.
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -41,9 +43,14 @@ pub struct Book {
     pub path: PathBuf,
     /// Its sheets, in workbook order.
     pub sheets: Vec<SheetRef>,
-    strings: Arc<Vec<String>>,
-    date_styles: Arc<Vec<bool>>,
     date1904: bool,
+    shared: OnceLock<Res<Arc<Shared>>>,
+}
+
+/// What every sheet of a workbook reads from the workbook as a whole.
+struct Shared {
+    strings: Vec<String>,
+    date_styles: Vec<bool>,
 }
 
 pub(crate) fn attr(e: &BytesStart<'_>, name: &str) -> Option<String> {
@@ -92,7 +99,7 @@ fn is_date_format(id: u32, code: Option<&str>) -> bool {
 }
 
 impl Book {
-    /// Reads the workbook's sheet list, shared strings and cell formats.
+    /// Reads the workbook's sheet list.
     pub fn open(path: &Path) -> Res<Self> {
         let mut zip = Zip::open(path)?;
         let workbook = zip.read("xl/workbook.xml", SMALL_PART_CAP)?;
@@ -151,27 +158,40 @@ impl Book {
         if sheets.is_empty() {
             return Err(format!("{} has no worksheets to read", path.display()));
         }
-        let strings = if zip.has("xl/sharedStrings.xml") {
-            shared_strings(&mut zip, path)?
-        } else {
-            Vec::new()
-        };
-        let date_styles = if zip.has("xl/styles.xml") {
-            styles(&mut zip, path)?
-        } else {
-            Vec::new()
-        };
         Ok(Self {
             path: path.to_path_buf(),
             sheets,
-            strings: Arc::new(strings),
-            date_styles: Arc::new(date_styles),
             date1904,
+            shared: OnceLock::new(),
         })
+    }
+
+    /// The shared strings and cell formats, read on first use and kept for the call.
+    fn shared(&self) -> Res<Arc<Shared>> {
+        self.shared
+            .get_or_init(|| {
+                let mut zip = Zip::open(&self.path)?;
+                let strings = if zip.has("xl/sharedStrings.xml") {
+                    shared_strings(&mut zip, &self.path)?
+                } else {
+                    Vec::new()
+                };
+                let date_styles = if zip.has("xl/styles.xml") {
+                    styles(&mut zip, &self.path)?
+                } else {
+                    Vec::new()
+                };
+                Ok(Arc::new(Shared {
+                    strings,
+                    date_styles,
+                }))
+            })
+            .clone()
     }
 
     /// A stream over the rows of `sheet`.
     pub fn rows(&self, sheet: &SheetRef, warn: &Arc<Warnings>) -> Res<SheetRows> {
+        let shared = self.shared()?;
         let mut zip = Zip::open(&self.path)?;
         let stream = zip.stream(&sheet.part)?;
         let mut reader = Reader::from_reader(BufReader::with_capacity(128 * 1024, stream));
@@ -180,8 +200,7 @@ impl Book {
             reader,
             buf: Vec::new(),
             path: self.path.clone(),
-            strings: Arc::clone(&self.strings),
-            date_styles: Arc::clone(&self.date_styles),
+            shared,
             date1904: self.date1904,
             warn: Arc::clone(warn),
             done: false,
@@ -190,25 +209,29 @@ impl Book {
 }
 
 fn shared_strings(zip: &mut Zip, path: &Path) -> Res<Vec<String>> {
-    let bytes = zip.read("xl/sharedStrings.xml", SHARED_STRINGS_CAP)?;
-    let mut reader = Reader::from_reader(bytes.as_slice());
+    let stream = zip.stream("xl/sharedStrings.xml")?;
+    let mut reader = Reader::from_reader(BufReader::with_capacity(128 * 1024, stream));
     let (mut out, mut buf) = (Vec::new(), Vec::new());
-    let (mut current, mut in_t, mut in_phonetic) = (String::new(), false, false);
+    let (mut current, mut in_t, mut in_phonetic, mut in_si) = (String::new(), false, false, false);
     let mut total = 0usize;
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                "si" => current.clear(),
+                "si" => {
+                    current.clear();
+                    in_si = true;
+                }
                 "t" if !in_phonetic => in_t = true,
                 "rPh" => in_phonetic = true,
                 _ => {}
             },
             Ok(Event::End(e)) => match e.local_name().as_ref() {
                 "si" => {
-                    total += current.len();
+                    in_si = false;
+                    total += current.len() + std::mem::size_of::<String>();
                     if total as u64 > SHARED_STRINGS_CAP {
                         return Err(format!(
-                            "the shared strings of {} are too large to read",
+                            "the shared strings of {} are too large to read; save the sheet as CSV",
                             path.display()
                         ));
                     }
@@ -232,6 +255,14 @@ fn shared_strings(zip: &mut Zip, path: &Path) -> Res<Vec<String>> {
                         _ => {}
                     }
                 }
+            }
+            // A part cut off inside a string would read the rest as missing values.
+            Ok(Event::Eof) if in_si => {
+                return Err(xml_error(
+                    path,
+                    "the shared strings",
+                    &"it ends inside a string",
+                ));
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(xml_error(path, "the shared strings", &e)),
@@ -327,8 +358,7 @@ struct Rows {
     reader: Reader<BufReader<Box<dyn std::io::Read + Send>>>,
     buf: Vec<u8>,
     path: PathBuf,
-    strings: Arc<Vec<String>>,
-    date_styles: Arc<Vec<bool>>,
+    shared: Arc<Shared>,
     date1904: bool,
     warn: Arc<Warnings>,
     done: bool,
@@ -354,7 +384,7 @@ impl Rows {
                 .trim()
                 .parse::<usize>()
                 .ok()
-                .and_then(|i| self.strings.get(i))
+                .and_then(|i| self.shared.strings.get(i))
             {
                 Some(s) => Cell::Text(s.clone()),
                 None => Cell::Empty,
@@ -391,12 +421,20 @@ impl Rows {
             },
             _ if v.trim().is_empty() => Cell::Empty,
             _ => match number(v) {
-                Some(cell) if self.date_styles.get(c.style).copied().unwrap_or(false) => match cell
+                Some(cell)
+                    if self
+                        .shared
+                        .date_styles
+                        .get(c.style)
+                        .copied()
+                        .unwrap_or(false) =>
                 {
-                    Cell::Int(i) => serial(i as f64, self.date1904),
-                    Cell::Float(f) => serial(f, self.date1904),
-                    other => other,
-                },
+                    match cell {
+                        Cell::Int(i) => serial(i as f64, self.date1904),
+                        Cell::Float(f) => serial(f, self.date1904),
+                        other => other,
+                    }
+                }
                 Some(cell) => cell,
                 None => Cell::Text(v.to_string()),
             },

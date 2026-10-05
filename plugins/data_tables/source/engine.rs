@@ -31,6 +31,7 @@ use datafusion::sql::parser::Statement;
 use datafusion::sql::sqlparser::ast::{Expr as SqlExpr, Statement as Ast, Visit, Visitor};
 
 use crate::Res;
+use crate::bounded::BoundedSizes;
 use crate::catalog::Catalog;
 use crate::checked::{CheckedOps, CheckedSum};
 use crate::table::{BATCH_ROWS, ScanError, TableSource};
@@ -89,6 +90,7 @@ impl Engine {
             .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
+            .with_analyzer_rule(Arc::new(BoundedSizes))
             .with_analyzer_rule(Arc::new(CheckedSum))
             .build();
         let mut ctx = SessionContext::new_with_state(state);
@@ -269,10 +271,13 @@ fn order(plan: LogicalPlan) -> Res<Prepared> {
         .map(|(q, f)| Expr::Column(Column::new(q.cloned(), f.name())).sort(true, false))
         .collect();
     if keys.is_empty() {
-        return Ok(Prepared {
-            plan,
-            order: Order::None,
-        });
+        // At most one row has no order to speak of.
+        let order = if plan.max_rows().is_some_and(|n| n <= 1) {
+            Order::File
+        } else {
+            Order::None
+        };
+        return Ok(Prepared { plan, order });
     }
     let plan = LogicalPlanBuilder::from(plan)
         .sort(keys)
@@ -305,6 +310,8 @@ pub fn explain(e: &DataFusionError) -> String {
     crate::table::scrub(&explain_raw(e))
 }
 
+const NARROW: &str = "the query needs more memory than this tool may use; narrow it with WHERE or LIMIT, select fewer columns, or aggregate before joining";
+
 fn explain_raw(e: &DataFusionError) -> String {
     if let Some(s) = scan_error(e) {
         return s.to_string();
@@ -320,9 +327,16 @@ fn explain_raw(e: &DataFusionError) -> String {
         }
     };
     if matches!(root, DataFusionError::ResourcesExhausted(_)) {
-        return "the query needs more memory than this tool may use; narrow it with WHERE or LIMIT, select fewer columns, or aggregate before joining".into();
+        return NARROW.into();
     }
     let text = root.to_string();
+    if text.contains("memory allocation failed")
+        || text.contains("Range too large to materialize")
+        || text.contains("capacity overflow")
+        || text.contains("exceeded the collection's maximum")
+    {
+        return NARROW.into();
+    }
     if text.contains("RecursionLimitExceeded") {
         return depth_message();
     }

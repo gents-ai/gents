@@ -133,10 +133,11 @@ pub fn set_root(root: &Path) {
     ROOT.with(|r| *r.borrow_mut() = root.to_string_lossy().trim_end_matches('/').to_string());
 }
 
-/// `message` with the bound folder's path cut off the files it names: what a user sees never
-/// carries the machine's own paths.
+/// `message` with the bound folder's path cut off the files it names and raw operating-system
+/// error text put in plain words: what a user sees never carries the machine's own paths or
+/// error numbers.
 pub fn scrub(message: &str) -> String {
-    ROOT.with(|r| {
+    let plain = ROOT.with(|r| {
         let root = r.borrow();
         if root.is_empty() {
             return message.to_string();
@@ -144,7 +145,56 @@ pub fn scrub(message: &str) -> String {
         message
             .replace(&format!("{root}/"), "")
             .replace(root.as_str(), "the folder")
-    })
+    });
+    os_errors(&plain)
+}
+
+/// The words an operating-system error is shown as. The sandbox reports a path it may not
+/// follow (a link out of the folder) as "Operation not permitted" or "Capabilities
+/// insufficient", which says nothing a caller can act on.
+const OS_ERRORS: [(&str, &str); 5] = [
+    ("No such file or directory", "does not exist"),
+    (
+        "Operation not permitted",
+        "a link that leads outside the folder or a file this call may not read",
+    ),
+    (
+        "Permission denied",
+        "a link that leads outside the folder or a file this call may not read",
+    ),
+    (
+        "Capabilities insufficient",
+        "a link that leads outside the folder or a file this call may not read",
+    ),
+    ("Not a directory", "is not a folder"),
+];
+
+/// `message` with each `text (os error N)` replaced by plain words, and any other
+/// ` (os error N)` suffix dropped.
+fn os_errors(message: &str) -> String {
+    const TAG: &str = " (os error ";
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(at) = rest.find(TAG) {
+        let after = &rest[at + TAG.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 || !after[digits..].starts_with(')') {
+            out.push_str(&rest[..at + TAG.len()]);
+            rest = after;
+            continue;
+        }
+        let before = &rest[..at];
+        match OS_ERRORS.iter().find(|(raw, _)| before.ends_with(raw)) {
+            Some((raw, plain)) => {
+                out.push_str(&before[..before.len() - raw.len()]);
+                out.push_str(plain);
+            }
+            None => out.push_str(before),
+        }
+        rest = &after[digits + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// FNV-1a, the cheap stable hash behind fingerprints and cursors.
@@ -177,11 +227,15 @@ impl Fnv {
     }
 }
 
-/// A fingerprint of a file's content that costs two small reads: its size and
-/// its first and last 64 KiB. A change in the middle that keeps the size is not seen.
+/// A fingerprint of a file's content that costs a bounded number of small reads: its size,
+/// its first and last 64 KiB, and 64 evenly spaced 4 KiB blocks between them. A file of up to
+/// 384 KiB is hashed whole; in a larger one an edit that keeps the size and misses every sampled
+/// block is not seen (the clock is left out so the same file always gives the same cursor).
 pub fn file_fingerprint(path: &Path) -> Res<u64> {
     use std::io::{Read, Seek, SeekFrom};
     const EDGE: u64 = 64 * 1024;
+    const BLOCK: u64 = 4096;
+    const BLOCKS: u64 = 64;
     let read_err = |e: std::io::Error| format!("cannot read {}: {e}", path.display());
     let mut f = std::fs::File::open(path).map_err(read_err)?;
     let len = f.metadata().map_err(read_err)?.len();
@@ -199,6 +253,26 @@ pub fn file_fingerprint(path: &Path) -> Res<u64> {
             .map_err(read_err)?;
         f.read_to_end(&mut buf).map_err(read_err)?;
         h.write(&buf);
+    }
+    if len > 2 * EDGE {
+        let span = len - 2 * EDGE;
+        for i in 0..BLOCKS {
+            let at = if span <= BLOCKS * BLOCK {
+                EDGE + i * span.div_ceil(BLOCKS)
+            } else {
+                EDGE + (span - BLOCK) * i / (BLOCKS - 1)
+            };
+            if at >= len - EDGE {
+                break;
+            }
+            buf.clear();
+            f.seek(SeekFrom::Start(at)).map_err(read_err)?;
+            f.by_ref()
+                .take(BLOCK.min(len - EDGE - at))
+                .read_to_end(&mut buf)
+                .map_err(read_err)?;
+            h.write(&buf);
+        }
     }
     Ok(h.0)
 }
@@ -223,8 +297,10 @@ mod tests {
             w.once(&format!("k{i:03}"), format!("m{i}"));
         }
         let list = w.list();
-        assert_eq!(list.len(), MAX_WARNINGS + 1);
-        assert_eq!(list.last().unwrap(), "3 more warnings were left out");
+        // 43 warnings: the first 40 and one line counting the other three.
+        assert_eq!(list.len(), 41);
+        assert_eq!(list[39], "m39");
+        assert_eq!(list[40], "3 more warnings were left out");
     }
 
     #[test]
@@ -237,6 +313,44 @@ mod tests {
         assert_eq!(scrub("/elsewhere/x.csv"), "/elsewhere/x.csv");
         set_root(Path::new(""));
         assert_eq!(scrub("/data/in/a.csv"), "/data/in/a.csv");
+    }
+
+    #[test]
+    fn operating_system_errors_are_plain_words_without_numbers() {
+        for (raw, want) in [
+            (
+                "cannot read link.csv: Operation not permitted (os error 63)",
+                "cannot read link.csv: a link that leads outside the folder or a file this call may not read",
+            ),
+            (
+                "cannot read link.csv: Capabilities insufficient (os error 76)",
+                "cannot read link.csv: a link that leads outside the folder or a file this call may not read",
+            ),
+            (
+                "cannot read x.csv: Permission denied (os error 13)",
+                "cannot read x.csv: a link that leads outside the folder or a file this call may not read",
+            ),
+            (
+                "cannot read gone.csv: No such file or directory (os error 44); the path must be a file",
+                "cannot read gone.csv: does not exist; the path must be a file",
+            ),
+            (
+                "write failed: Broken pipe (os error 32)",
+                "write failed: Broken pipe",
+            ),
+            (
+                "a (os error x) b (os error 5",
+                "a (os error x) b (os error 5",
+            ),
+            ("no numbers here", "no numbers here"),
+        ] {
+            assert_eq!(scrub(raw), want, "{raw}");
+        }
+        // The text the standard library itself gives for these errors is what is matched.
+        for code in [2, 13] {
+            let e = std::io::Error::from_raw_os_error(code);
+            assert!(!scrub(&e.to_string()).contains("os error"), "{e}");
+        }
     }
 
     #[test]
@@ -274,6 +388,30 @@ mod tests {
         std::fs::write(&p, &data).unwrap();
         assert_ne!(base, file_fingerprint(&p).unwrap());
         assert!(file_fingerprint(&dir.join("missing")).is_err());
+        // An edit in the middle of a file that keeps its size changes the fingerprint, in a
+        // file just over the two edges and in one far larger than the sampled blocks.
+        for (size, at) in [
+            (130_000usize, 100_000usize),
+            (300_000, 150_000),
+            (300_000, 65_536),
+            (300_000, 300_000 - 65_537),
+            (10_000_000, 65_536),
+            // The second sampled block of a 10 MB file starts at 65_536 + 9_864_832 / 63 = 222_120,
+            // and the last one ends just before the final 64 KiB.
+            (10_000_000, 222_120),
+            (10_000_000, 10_000_000 - 65_537),
+        ] {
+            let mut data = vec![7u8; size];
+            std::fs::write(&p, &data).unwrap();
+            let before = file_fingerprint(&p).unwrap();
+            data[at] = 9;
+            std::fs::write(&p, &data).unwrap();
+            assert_ne!(
+                before,
+                file_fingerprint(&p).unwrap(),
+                "{size} bytes, edit at {at}"
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

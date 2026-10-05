@@ -43,6 +43,9 @@ impl Book {
     }
 
     /// Lists the sheets of the workbook at `path`.
+    // vertexia: a sheet list needs one streamed pass over content.xml (flat memory, time that
+    // grows with the file), run for every .ods in a folder at listing time; an index kept
+    // beside the file, or a lazy listing, would make a folder of large ODS files free until named.
     pub fn open(path: &Path) -> Res<Self> {
         let mut reader = stream(path)?;
         let (mut sheets, mut buf, mut depth) = (Vec::new(), Vec::new(), 0u32);

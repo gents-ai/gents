@@ -109,55 +109,156 @@ fn int_json(v: i128) -> Value {
     }
 }
 
-/// The JSON value of row `i` of `a`.
+/// How much of one cell may still be turned into JSON. Once it runs out the rest of the cell
+/// (the tail of a text, the later elements of a list) is left unread, so a huge nested value is
+/// never built whole.
+struct Budget {
+    left: usize,
+    cut: bool,
+}
+
+impl Budget {
+    /// Charges up to `n` bytes and returns how many were granted; fewer than `n` marks the
+    /// cell as cut and spends the budget.
+    fn grant(&mut self, n: usize) -> usize {
+        let granted = n.min(self.left);
+        self.left -= granted;
+        self.cut |= granted < n;
+        granted
+    }
+
+    /// Whether the budget is spent, which marks the cell as cut: asked of a cell that has more
+    /// to give.
+    fn spent(&mut self) -> bool {
+        self.cut |= self.left == 0;
+        self.left == 0
+    }
+
+    fn text(&mut self, s: &str) -> Value {
+        let granted = self.grant(s.len());
+        Value::String(cut_at(s, granted).to_string())
+    }
+}
+
+/// `s` cut to at most `n` bytes on a character boundary.
+pub fn cut_at(s: &str, n: usize) -> &str {
+    let mut at = n.min(s.len());
+    while !s.is_char_boundary(at) {
+        at -= 1;
+    }
+    &s[..at]
+}
+
+/// The JSON value of row `i` of `a`, whole.
+#[cfg(test)]
 pub fn value_json(a: &ArrayRef, i: usize) -> Value {
+    value(
+        a,
+        i,
+        &mut Budget {
+            left: usize::MAX,
+            cut: false,
+        },
+    )
+}
+
+/// The JSON value of row `i` of `a` with at most about `cap` bytes of it built. A value over
+/// the cap becomes the first `cap` bytes of its JSON text, as a string, and the flag is true;
+/// a list or record cut this way is never half built.
+pub fn cell_json(a: &ArrayRef, i: usize, cap: usize) -> (Value, bool) {
+    let mut budget = Budget {
+        left: cap,
+        cut: false,
+    };
+    let v = value(a, i, &mut budget);
+    match v {
+        _ if !budget.cut => (v, false),
+        Value::String(_) => (v, true),
+        other => (
+            Value::String(cut_at(&other.to_string(), cap).to_string()),
+            true,
+        ),
+    }
+}
+
+fn value(a: &ArrayRef, i: usize, b: &mut Budget) -> Value {
     if a.is_null(i) {
         return Value::Null;
     }
+    // A number or flag costs the bytes its JSON text takes, and a comma.
+    let mut small = |v: Value| {
+        b.grant(v.to_string().len() + 1);
+        v
+    };
     match a.data_type() {
         DataType::Null => Value::Null,
-        DataType::Boolean => Value::Bool(a.as_boolean().value(i)),
-        DataType::Int8 => json!(a.as_primitive::<Int8Type>().value(i)),
-        DataType::Int16 => json!(a.as_primitive::<Int16Type>().value(i)),
-        DataType::Int32 => json!(a.as_primitive::<Int32Type>().value(i)),
-        DataType::Int64 => int_json(i128::from(a.as_primitive::<Int64Type>().value(i))),
-        DataType::UInt8 => json!(a.as_primitive::<UInt8Type>().value(i)),
-        DataType::UInt16 => json!(a.as_primitive::<UInt16Type>().value(i)),
-        DataType::UInt32 => json!(a.as_primitive::<UInt32Type>().value(i)),
-        DataType::UInt64 => int_json(i128::from(a.as_primitive::<UInt64Type>().value(i))),
-        DataType::Float32 => f32_json(a.as_primitive::<Float32Type>().value(i)),
-        DataType::Float64 => float_json(a.as_primitive::<Float64Type>().value(i)),
-        DataType::Utf8 => json!(a.as_string::<i32>().value(i)),
-        DataType::LargeUtf8 => json!(a.as_string::<i64>().value(i)),
-        DataType::Utf8View => json!(a.as_string_view().value(i)),
-        DataType::Binary => hex(a
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .map_or(&[][..], |b| b.value(i))),
-        DataType::LargeBinary => hex(a
-            .as_any()
-            .downcast_ref::<LargeBinaryArray>()
-            .map_or(&[][..], |b| b.value(i))),
-        DataType::List(_) => list_json(&a.as_list::<i32>().value(i)),
-        DataType::LargeList(_) => list_json(&a.as_list::<i64>().value(i)),
-        DataType::FixedSizeList(..) => list_json(&a.as_fixed_size_list().value(i)),
-        DataType::Struct(_) => struct_json(a.as_struct(), i),
+        DataType::Boolean => small(Value::Bool(a.as_boolean().value(i))),
+        DataType::Int8 => small(json!(a.as_primitive::<Int8Type>().value(i))),
+        DataType::Int16 => small(json!(a.as_primitive::<Int16Type>().value(i))),
+        DataType::Int32 => small(json!(a.as_primitive::<Int32Type>().value(i))),
+        DataType::Int64 => small(int_json(i128::from(a.as_primitive::<Int64Type>().value(i)))),
+        DataType::UInt8 => small(json!(a.as_primitive::<UInt8Type>().value(i))),
+        DataType::UInt16 => small(json!(a.as_primitive::<UInt16Type>().value(i))),
+        DataType::UInt32 => small(json!(a.as_primitive::<UInt32Type>().value(i))),
+        DataType::UInt64 => small(int_json(i128::from(
+            a.as_primitive::<UInt64Type>().value(i),
+        ))),
+        DataType::Float32 => small(f32_json(a.as_primitive::<Float32Type>().value(i))),
+        DataType::Float64 => small(float_json(a.as_primitive::<Float64Type>().value(i))),
+        DataType::Utf8 => b.text(a.as_string::<i32>().value(i)),
+        DataType::LargeUtf8 => b.text(a.as_string::<i64>().value(i)),
+        DataType::Utf8View => b.text(a.as_string_view().value(i)),
+        DataType::Binary => hex_capped(
+            a.as_any()
+                .downcast_ref::<BinaryArray>()
+                .map_or(&[][..], |x| x.value(i)),
+            b,
+        ),
+        DataType::LargeBinary => hex_capped(
+            a.as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .map_or(&[][..], |x| x.value(i)),
+            b,
+        ),
+        DataType::List(_) => list_json(&a.as_list::<i32>().value(i), b),
+        DataType::LargeList(_) => list_json(&a.as_list::<i64>().value(i), b),
+        DataType::FixedSizeList(..) => list_json(&a.as_fixed_size_list().value(i), b),
+        DataType::Struct(_) => struct_json(a.as_struct(), i, b),
         DataType::Dictionary(..) => match a.as_any_dictionary().normalized_keys().get(i) {
-            Some(&k) => value_json(a.as_any_dictionary().values(), k),
+            Some(&k) => value(a.as_any_dictionary().values(), k, b),
             None => Value::Null,
         },
-        _ => shown(a.as_ref(), i),
+        _ => match shown(a.as_ref(), i) {
+            Value::String(s) => b.text(&s),
+            other => other,
+        },
     }
 }
 
-fn list_json(values: &ArrayRef) -> Value {
-    Value::Array((0..values.len()).map(|j| value_json(values, j)).collect())
+fn hex_capped(bytes: &[u8], b: &mut Budget) -> Value {
+    let granted = b.grant(bytes.len().saturating_mul(2));
+    hex(&bytes[..granted / 2])
 }
 
-fn struct_json(s: &StructArray, i: usize) -> Value {
+fn list_json(values: &ArrayRef, b: &mut Budget) -> Value {
+    let mut out = Vec::new();
+    for j in 0..values.len() {
+        if b.spent() {
+            break;
+        }
+        out.push(value(values, j, b));
+    }
+    Value::Array(out)
+}
+
+fn struct_json(s: &StructArray, i: usize, b: &mut Budget) -> Value {
     let mut map = Map::new();
     for (field, column) in s.fields().iter().zip(s.columns()) {
-        map.insert(field.name().clone(), value_json(column, i));
+        if b.spent() {
+            break;
+        }
+        b.grant(field.name().len() + 4);
+        map.insert(field.name().clone(), value(column, i, b));
     }
     Value::Object(map)
 }
@@ -166,18 +267,35 @@ fn struct_json(s: &StructArray, i: usize) -> Value {
 /// A NULL shows as `NULL`, an empty string as an empty cell, `|` is escaped and a line
 /// break shows as `<br>`.
 pub fn markdown(columns: &[(String, String)], rows: &[Vec<Value>], limit: usize) -> (String, bool) {
+    let (md, shown) = markdown_capped(columns, rows, limit, usize::MAX);
+    (md, rows.len() > shown)
+}
+
+/// As [`markdown`], also stopping once the table is `max_bytes` long, and returning how many
+/// rows it shows.
+pub fn markdown_capped(
+    columns: &[(String, String)],
+    rows: &[Vec<Value>],
+    limit: usize,
+    max_bytes: usize,
+) -> (String, usize) {
     if columns.is_empty() {
-        return (String::new(), false);
+        return (String::new(), 0);
     }
     let mut out = String::new();
     let head: Vec<String> = columns.iter().map(|(n, _)| cell_text(n)).collect();
     out.push_str(&format!("| {} |\n", head.join(" | ")));
     out.push_str(&format!("|{}\n", " --- |".repeat(columns.len())));
+    let mut shown = 0;
     for row in rows.iter().take(limit) {
+        if out.len() >= max_bytes {
+            break;
+        }
         let cells: Vec<String> = row.iter().map(|v| cell_text(&value_text(v))).collect();
         out.push_str(&format!("| {} |\n", cells.join(" | ")));
+        shown += 1;
     }
-    (out.trim_end().to_string(), rows.len() > limit)
+    (out.trim_end().to_string(), shown)
 }
 
 fn value_text(v: &Value) -> String {

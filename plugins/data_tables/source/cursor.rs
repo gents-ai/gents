@@ -29,8 +29,8 @@ pub fn encode(fingerprint: u64, offset: u64) -> String {
     )
 }
 
-/// The row offset a cursor names, once it is checked against the request's `fingerprint`.
-pub fn decode(cursor: &str, fingerprint: u64) -> Res<u64> {
+/// The fingerprint and row offset inside a cursor, once its checksum is verified.
+pub fn parts(cursor: &str) -> Res<(u64, u64)> {
     let invalid = || {
         "the cursor is not valid; pass the next.cursor of the previous call back unchanged"
             .to_string()
@@ -51,8 +51,21 @@ pub fn decode(cursor: &str, fingerprint: u64) -> Res<u64> {
     }
     let (fp, offset) = payload.split_once(':').ok_or_else(invalid)?;
     let offset: u64 = offset.parse().map_err(|_| invalid())?;
-    if u64::from_str_radix(fp, 16).map_err(|_| invalid())? != fingerprint {
-        return Err("the cursor belongs to a different query or the data changed; start again without a cursor".into());
+    let fp = u64::from_str_radix(fp, 16).map_err(|_| invalid())?;
+    Ok((fp, offset))
+}
+
+/// Why a cursor's fingerprint does not match the request.
+pub fn mismatch() -> String {
+    "the cursor belongs to a different query or the data changed; start again without a cursor"
+        .into()
+}
+
+/// The row offset a cursor names, once it is checked against the request's `fingerprint`.
+pub fn decode(cursor: &str, fingerprint: u64) -> Res<u64> {
+    let (fp, offset) = parts(cursor)?;
+    if fp != fingerprint {
+        return Err(mismatch());
     }
     Ok(offset)
 }

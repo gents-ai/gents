@@ -296,7 +296,7 @@ async fn describe_one(
         "SELECT {} FROM (SELECT * FROM {tname} LIMIT {sample})",
         select.join(", ")
     );
-    let (stats, _) = run_page(catalog, "describe", &stats_sql, None, 1, 1_000_000).await?;
+    let (stats, _) = run_page(catalog, "describe", &stats_sql, None, false, 1, 1_000_000).await?;
     let row = stats.rows.first().ok_or("the table could not be read")?;
     let at = |name: &str| {
         stats
@@ -349,6 +349,7 @@ async fn describe_one(
         "describe",
         &sample_sql,
         None,
+        false,
         SAMPLE_ROWS_SHOWN,
         1_000_000,
     )

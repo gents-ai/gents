@@ -396,6 +396,44 @@ mod tests {
     }
 
     #[test]
+    fn values_beyond_the_declared_columns_are_left_out_and_said() {
+        // Rows longer than the declared columns.
+        let (t, warn) = one(json!({"columns": ["a"], "rows": [[1, 2], [3, 4], [5]]})).unwrap();
+        assert_eq!(
+            collect(&t, None).unwrap(),
+            vec![vec![json!(1)], vec![json!(3)], vec![json!(5)]]
+        );
+        assert_eq!(
+            warn.list(),
+            [
+                "2 rows of inline table data had values beyond its 1 columns that were left out (first is row 1)"
+            ]
+        );
+        // Object keys that are not declared.
+        let (t, warn) = one(json!({"name": "o", "columns": ["a", "b"], "rows": [{"a": 1, "b": 2}, {"a": 1, "b": 2, "c": 9}]})).unwrap();
+        assert_eq!(
+            collect(&t, None).unwrap(),
+            vec![vec![json!(1), json!(2)], vec![json!(1), json!(2)]]
+        );
+        assert_eq!(
+            warn.list(),
+            [
+                "1 rows of inline table o had values beyond its 2 columns that were left out (first is row 2)"
+            ]
+        );
+        // Nothing is lost, nothing is said: inferred columns cover every key and every position,
+        // and a short row is padded.
+        for v in [
+            json!({"rows": [{"a": 1}, {"a": 1, "c": 9}]}),
+            json!({"rows": [[1], [1, 2, 3]]}),
+            json!({"columns": ["a", "b"], "rows": [[1], [1, 2]]}),
+        ] {
+            let (_, warn) = one(v.clone()).unwrap();
+            assert!(warn.list().is_empty(), "{v}: {:?}", warn.list());
+        }
+    }
+
+    #[test]
     fn object_rows_name_their_columns_by_first_appearance_and_missing_keys_are_null() {
         let (t, _) = one(json!({"rows": [{"b": 1, "a": "x"}, {"a": "y", "c": true}]})).unwrap();
         assert_eq!(

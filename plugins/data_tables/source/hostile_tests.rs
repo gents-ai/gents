@@ -384,3 +384,47 @@ fn paths_that_leave_the_folder_are_refused_end_to_end() {
         );
     }
 }
+
+#[test]
+fn inline_objects_with_endless_distinct_keys_are_refused_fast() {
+    let rows: Vec<Value> = (0..100_000).map(|i| json!({format!("k{i}"): i})).collect();
+    let start = std::time::Instant::now();
+    let e =
+        run(json!({"tables": {"t": {"rows": rows}}, "sql": "SELECT count(*) FROM t"})).unwrap_err();
+    assert_eq!(e, "inline table t is too large; bind a file instead");
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+}
+
+#[test]
+fn ndjson_records_with_unique_keys_are_inferred_in_linear_time() {
+    let d = Dir::new();
+    let mut text = String::new();
+    for i in 0..60_000 {
+        text.push_str(&format!("{{\"k{i}\":{i}}}\n"));
+    }
+    d.put("wide.ndjson", &text);
+    let start = std::time::Instant::now();
+    let e = query(&d, "SELECT count(*) FROM wide").unwrap_err();
+    assert!(
+        e.contains("fields, over the 2000 one table may have"),
+        "{e}"
+    );
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    // The same keys one level down are one struct column: merging them is linear too.
+    let mut nested = String::new();
+    for i in 0..60_000 {
+        nested.push_str(&format!("{{\"o\":{{\"k{i}\":{i}}}}}\n"));
+    }
+    d.put("deep.ndjson", &nested);
+    let start = std::time::Instant::now();
+    let r = d.path().join("deep.ndjson");
+    let t = crate::json::JsonTable::open(
+        &r,
+        "deep",
+        crate::table::Infer::Sample,
+        &crate::table::Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(crate::table::TableSource::schema(&t).fields().len(), 1);
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+}
