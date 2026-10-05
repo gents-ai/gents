@@ -1,0 +1,41 @@
+[workspace]
+
+[package]
+name = "charts"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.92"
+
+[lib]
+name = "charts"
+path = "source/lib.rs"
+
+[[bin]]
+name = "charts"
+path = "source/main.rs"
+
+[[example]]
+name = "gen_fixtures"
+path = "tools/gen_fixtures.rs"
+
+[dependencies]
+base64 = "0.22"
+png = "0.18"
+resvg = { version = "0.47", default-features = false, features = ["text"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+ttf-parser = "0.25"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+sha2 = "0.10"
+
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
