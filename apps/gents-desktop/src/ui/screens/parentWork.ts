@@ -8,7 +8,7 @@ import type {
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
+import { useSelectedDeployment } from "@/hooks/useClient";
 import { behaviorName } from "./behavior";
 import { scopeKey, summariesByScope } from "./workers";
 
@@ -35,11 +35,8 @@ export const NO_PARENT: ParentWork = {
   hasSenders: false,
 };
 
-export function useParentWork(
-  shell: Shell,
-  provenance: SessionProvenanceView | null,
-): ParentWork {
-  const deployment = shell.selectedDeployment;
+export function useParentWork(provenance: SessionProvenanceView | null): ParentWork {
+  const deployment = useSelectedDeployment();
   return useMemo(() => {
     if (!provenance?.startedBy && !provenance?.senders.length) return NO_PARENT;
     const summaries = summariesByScope(deployment?.sessions);

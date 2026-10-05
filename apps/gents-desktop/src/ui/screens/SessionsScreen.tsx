@@ -15,7 +15,6 @@ import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
 import { Age } from "./time";
@@ -23,10 +22,10 @@ import {
   defaultScope,
   knownNodeIds,
   nodesInScope,
-  scopeContextOf,
   sessionsInScope,
   type Scope,
 } from "@/lib/scope";
+import { useHomeDid, useScopeContext } from "@/hooks/useClient";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
 import { useStoredStrings } from "@/lib/stored";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
@@ -46,16 +45,22 @@ import {
   workersOf,
 } from "../hooks/useFleet";
 import type { NodeView } from "../../hooks/fleetStore";
+import {
+  useDeployments,
+  useSelectedAgentDid,
+  useSelectedDeployment,
+} from "@/hooks/useClient";
 
 export function SessionsScreen({
-  shell,
   nodeDid,
 }: {
-  shell: Shell;
   /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
-  const deployment = shell.selectedDeployment;
+  const deployments = useDeployments();
+  const homeDid = useHomeDid();
+  const selectedAgentDid = useSelectedAgentDid();
+  const deployment = useSelectedDeployment();
   const [query, setQuery] = useState<string | null>(null);
   /* the three axes the summary carries: behavior, state, and what started it */
   const [filter, setFilter] = useSessionFilter();
@@ -64,15 +69,14 @@ export function SessionsScreen({
   /* the nodes the list shows: the working node to start, then whatever the
      chips choose; none chosen means every node */
   const fleet = useFleet((s) => s);
-  const ctx = scopeContextOf(shell, fleet);
+  const ctx = useScopeContext();
   /* the nodes as rows draw them, without their lists: the same objects
      while unchanged, so a row whose session did not change skips */
   const nodeList = useMemo(
     () => fleet.nodeKeys.map((key) => fleet.nodes[key]!),
     [fleet.nodeKeys, fleet.nodes],
   );
-  const selectedNode =
-    (shell.selectedAgentDid && fleet.nodes[shell.selectedAgentDid]) || null;
+  const selectedNode = (selectedAgentDid && fleet.nodes[selectedAgentDid]) || null;
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
   const [storedNodeIds, setNodeIds] = useStoredStrings(
     "gents-prototype-sessions-nodes",
@@ -100,7 +104,7 @@ export function SessionsScreen({
   const narrowed =
     Boolean(query) ||
     hasFilter(filter) ||
-    shell.deployments.some((n) => n.sessions.length > 0);
+    fleet.nodeKeys.some((key) => (fleet.sessionsOf[key]?.length ?? 0) > 0);
   /* the session whose latest request spawned this one, by provenance */
   const parentOf = (c: SessionSummary) => parentOfIn(fleet, c);
 
@@ -199,8 +203,8 @@ export function SessionsScreen({
           <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
           <div className="ml-auto flex min-w-0 items-center gap-2">
             <NodeAxis
-              nodes={shell.deployments}
-              homeDid={shell.snapshot?.bootstrap.initAgentDid}
+              nodes={deployments}
+              homeDid={homeDid}
               counts={nodeCounts}
               value={nodeIds}
               onChange={(next) => {
@@ -300,9 +304,8 @@ export function SessionsScreen({
                 delay={row.delay ?? null}
                 parent={parentOf(row.session)}
                 nodes={nodeList}
-                homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                homeDid={homeDid}
                 deployment={selectedNode}
-                description={shell.behaviorDescriptions[row.session.behaviorId ?? ""]}
                 workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
               />
             ),
@@ -347,7 +350,6 @@ const SessionRow = memo(function SessionRow({
   nodes,
   homeDid,
   deployment,
-  description,
   workers,
 }: {
   session: SessionSummary;
@@ -357,7 +359,6 @@ const SessionRow = memo(function SessionRow({
   nodes: readonly NodeView[];
   homeDid: string | null | undefined;
   deployment: NodeView | null;
-  description: string | undefined;
   workers: readonly SessionSummary[];
 }) {
   return (
@@ -436,7 +437,6 @@ const SessionRow = memo(function SessionRow({
           nodeDid={nodeOfSession(session)}
           behaviorId={session.behaviorId}
           deployment={deployment}
-          description={description}
           size={child ? "sm" : "md"}
           workers={workers}
         />

@@ -30,10 +30,12 @@ export function createDesktopShellPeerActions({
   const setStarting = clientSetter(stores.client, "starting");
   /** whether the client runs, as last read */
   const clientRuns = () => Boolean(stores.client.getState().snapshot?.client);
+  /** Provisions the local agent and starts the client on its route. A
+      failure is not reported here: setup shows it in its step log, with a
+      retry. */
   async function initLocalRuntime(label?: string | null) {
     const clientWasRunning = clientRuns();
     setStarting(true);
-    setError(null);
     try {
       if (clientWasRunning) {
         await mutateSnapshot(() => api.shutdownDesktopClient());
@@ -56,9 +58,7 @@ export function createDesktopShellPeerActions({
           // Preserve the provisioning error that caused the rollback.
         }
       }
-      const message = formatPeerConnectionError(err, "local-runtime");
-      setError(message);
-      throw shownFailure(new Error(message));
+      throw new Error(formatPeerConnectionError(err, "local-runtime"));
     } finally {
       setStarting(false);
     }
@@ -106,16 +106,12 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  async function renamePeer(peerId: string, label: string) {
-    setError(null);
-    try {
-      const next = await mutateSnapshot(() => api.renamePeer(peerId, label));
-      return next;
-    } catch (err) {
-      const message = formatPeerConnectionError(err, "rename-peer");
-      setError(message);
-      throw shownFailure(new Error(message));
-    }
+  /** A failure is not reported here: the rename dialog shows it inline and
+      stays open. */
+  function renamePeer(peerId: string, label: string) {
+    return mutateSnapshot(() => api.renamePeer(peerId, label)).catch((err) => {
+      throw new Error(formatPeerConnectionError(err, "rename-peer"));
+    });
   }
 
   return {

@@ -39,12 +39,7 @@ import { useShell, type Shell, type ShellBridge } from "./ui/hooks/useShell";
 import { AppProvider } from "./ui/app/AppContext";
 import { ShellProvider } from "./ui/app/ShellContext";
 import { workingNode } from "./ui/lib/nodes";
-import {
-  defaultScope,
-  mailboxInScope,
-  recentInScope,
-  scopeContextOf,
-} from "./ui/lib/scope";
+import { defaultScope, mailboxInScope, recentInScope } from "./ui/lib/scope";
 import "./ui/screens/surfaces";
 import { isLocalAgent, needsFirstRunSetup } from "./ui/lib/firstRun";
 import {
@@ -62,7 +57,7 @@ import { initTheme } from "./ui/theme";
 
 import "./App.css";
 import { useSelectedSessionValue } from "./ui/hooks/useSelectedSession";
-import { useFleet } from "./ui/hooks/useFleet";
+import { useScopeContext } from "./ui/hooks/useClient";
 import { defaultAgentOf } from "./ui/lib/agents";
 
 function NavBinder({ children }: { children: ReactNode }) {
@@ -132,10 +127,7 @@ function AppBody({
 }) {
   const homeDid = shell.snapshot?.bootstrap.initAgentDid ?? null;
   /* what the rail counts and lists: each node's sessions and mailbox */
-  const railScope = scopeContextOf(
-    shell,
-    useFleet((s) => s),
-  );
+  const railScope = useScopeContext();
   const working = workingNode(shell.deployments, homeDid);
 
   useEffect(() => {
@@ -287,16 +279,10 @@ function AppBody({
             onDismissError={shell.clearError}
             onOpenDbExplorer={openDbExplorer}
           >
-            {route.name === "sessions" && (
-              <SessionsScreen shell={shell} nodeDid={route.nodeDid} />
-            )}
+            {route.name === "sessions" && <SessionsScreen nodeDid={route.nodeDid} />}
             {route.name === "session" && <SessionScreen shell={shell} />}
-            {route.name === "mailbox" && (
-              <MailboxScreen shell={shell} nodeDid={route.nodeDid} />
-            )}
-            {(route.name === "agents" || route.name === "nodes") && (
-              <AgentsScreen shell={shell} />
-            )}
+            {route.name === "mailbox" && <MailboxScreen nodeDid={route.nodeDid} />}
+            {(route.name === "agents" || route.name === "nodes") && <AgentsScreen />}
             {route.name === "agent" && (
               <AgentScreen
                 agentDid={route.agentDid}

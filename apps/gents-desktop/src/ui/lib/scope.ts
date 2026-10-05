@@ -34,22 +34,6 @@ export type ScopeContext = {
   fleet: Pick<FleetState, "sessionsOf" | "mailboxOf">;
 };
 
-/* the context every screen has: the shell's nodes, its selection, its home
-   and the fleet's lists */
-export const scopeContextOf = (
-  shell: {
-    deployments: readonly DeploymentView[];
-    selectedAgentDid: string | null;
-    snapshot: { bootstrap: { initAgentDid?: string | null } } | null;
-  },
-  fleet: ScopeContext["fleet"],
-): ScopeContext => ({
-  nodes: shell.deployments,
-  selectedNodeDid: shell.selectedAgentDid,
-  homeDid: shell.snapshot?.bootstrap.initAgentDid,
-  fleet,
-});
-
 /* the nodes a scope names, in the snapshot's order */
 export function nodesInScope(scope: Scope, ctx: ScopeContext): DeploymentView[] {
   const { nodes } = ctx;

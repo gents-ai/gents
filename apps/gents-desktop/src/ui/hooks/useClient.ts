@@ -1,5 +1,6 @@
 /* What screens read about the client and the selection, by name. Each
    re-renders its caller only when what it returns changes. */
+import { useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
@@ -8,6 +9,8 @@ import type { DeploymentView } from "@source-inc/gents-desktop-client";
 import { folderOf } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
+import type { ScopeContext } from "../lib/scope";
+import { useFleet } from "./useFleet";
 
 const NO_DEPLOYMENTS: DeploymentView[] = [];
 
@@ -107,4 +110,25 @@ export function useStartup() {
 /** How the selected session's last read went. */
 export function useSessionLoad() {
   return useStore(useApp().stores.session, (state) => state.load);
+}
+
+/** What a scope is resolved against: the nodes, the selection, the home,
+    and each node's sessions and mailbox items by key. */
+export function useScopeContext(): ScopeContext {
+  const nodes = useDeployments();
+  const selectedNodeDid = useSelectedAgentDid();
+  const homeDid = useStore(
+    useApp().stores.client,
+    (state) => state.snapshot?.bootstrap.initAgentDid ?? null,
+  );
+  const fleet = useFleet(
+    useShallow((state) => ({
+      sessionsOf: state.sessionsOf,
+      mailboxOf: state.mailboxOf,
+    })),
+  );
+  return useMemo(
+    () => ({ nodes, selectedNodeDid, homeDid, fleet }),
+    [nodes, selectedNodeDid, homeDid, fleet],
+  );
 }

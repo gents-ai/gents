@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopApp } from "../src/hooks/desktopApp";
 import { renderIn, testApp } from "./app-fixture";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -67,42 +68,32 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
 }
 
 function fleet(listed: DeploymentView[]) {
-  let deployments = listed;
   const api = {
     managedServerStatus: vi.fn(async () => status()),
     startManagedServer: vi.fn(async () => status()),
     fetchDesktopSnapshot: vi.fn(async () => ({
       bootstrap: forgeBootstrap,
-      client: { deployments },
+      client: { deployments: listed },
     })),
     requestStatusEnrollment: vi.fn(async (_address: string) => ({
       requestId: "request-1",
     })),
+    initLocalStandardRuntime: vi.fn(),
+    renamePeer: vi.fn(async () => ({
+      bootstrap: forgeBootstrap,
+      client: { deployments: listed },
+    })),
   };
-  const shell = {
+  const app = testApp({
     api,
     snapshot: { bootstrap: forgeBootstrap, client: { deployments: listed } },
-    deployments: listed,
-    refreshSnapshot: vi.fn(async () => undefined),
-    initLocalRuntime: vi.fn(async () => {
-      deployments = [...listed, forge];
-      return { agentDid: FORGE_DID };
-    }),
-  } as unknown as Shell;
-  return {
-    api,
-    shell,
-    lose: () => {
-      deployments = listed;
-    },
-  };
+    reportFailure: toast,
+  });
+  return { api, app };
 }
 
-async function openAddAgent(shell: Shell) {
-  renderIn(
-    testApp({ api: shell.api, snapshot: shell.snapshot }),
-    <AgentsScreen shell={shell} />,
-  );
+async function openAddAgent(app: DesktopApp) {
+  renderIn(app, <AgentsScreen />);
   await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
   return screen.findByRole("dialog");
 }
@@ -113,8 +104,8 @@ describe("Add agent enrollment", () => {
   it.each([[forge], [remote]])(
     "does not offer local reconnect for existing or removed local agents",
     async (listed) => {
-      const { api, shell } = fleet([listed]);
-      const dialog = await openAddAgent(shell);
+      const { api, app } = fleet([listed]);
+      const dialog = await openAddAgent(app);
       expect(
         within(dialog).queryByRole("button", { name: /reconnect/i }),
       ).not.toBeInTheDocument();
@@ -123,15 +114,15 @@ describe("Add agent enrollment", () => {
       ).not.toBeInTheDocument();
       expect(within(dialog).getByLabelText("Agent server")).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
-      expect(shell.initLocalRuntime).not.toHaveBeenCalled();
+      expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     },
   );
 
   it.each(["local-standard", "enrollment"])(
     "hides impossible Remove for the managed agent with source %s",
     async (source) => {
-      const { shell } = fleet([{ ...forge, source }]);
-      render(<AgentsScreen shell={shell} />);
+      const { app } = fleet([{ ...forge, source }]);
+      renderIn(app, <AgentsScreen />);
       await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
       expect(
         await screen.findByRole("menuitem", { name: "Rename" }),
@@ -143,8 +134,8 @@ describe("Add agent enrollment", () => {
   );
 
   it("retains Remove for a remote enrolled peer", async () => {
-    const { shell } = fleet([remote]);
-    render(<AgentsScreen shell={shell} />);
+    const { app } = fleet([remote]);
+    renderIn(app, <AgentsScreen />);
     await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
     expect(
       await screen.findByRole("menuitem", { name: "Remove peer" }),
@@ -152,9 +143,9 @@ describe("Add agent enrollment", () => {
   });
 
   it("retains initial remote enrollment", async () => {
-    const { api, shell } = fleet([forge]);
+    const { api, app } = fleet([forge]);
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
-    const dialog = await openAddAgent(shell);
+    const dialog = await openAddAgent(app);
     await userEvent.type(
       within(dialog).getByLabelText("Agent server"),
       "server.example:9191",
@@ -165,16 +156,14 @@ describe("Add agent enrollment", () => {
     await waitFor(() =>
       expect(api.requestStatusEnrollment).toHaveBeenCalledWith("server.example:9191"),
     );
-    expect(shell.refreshSnapshot).toHaveBeenCalled();
+    expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
   });
 });
 
 describe("renaming a deployment", () => {
   it("renaming a deployment saves its trimmed label", async () => {
-    const { shell } = fleet([remote]);
-    const renamePeer = vi.fn(async () => undefined);
-    Object.assign(shell, { renamePeer });
-    render(<AgentsScreen shell={shell} />);
+    const { api, app } = fleet([remote]);
+    renderIn(app, <AgentsScreen />);
 
     await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
@@ -184,8 +173,8 @@ describe("renaming a deployment", () => {
     await userEvent.type(input, " Edge 2 ");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(renamePeer).toHaveBeenCalledTimes(1));
-    expect(renamePeer).toHaveBeenCalledWith("peer-remote", "Edge 2");
+    await waitFor(() => expect(api.renamePeer).toHaveBeenCalledTimes(1));
+    expect(api.renamePeer).toHaveBeenCalledWith("peer-remote", "Edge 2");
   });
 });
 

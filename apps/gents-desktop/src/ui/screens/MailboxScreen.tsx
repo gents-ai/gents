@@ -45,17 +45,12 @@ import { Input } from "@gents/ui/components/input";
 import { Kbd } from "@gents/ui/components/kbd";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import type { Shell } from "@/hooks/useShell";
 import { href, navigate } from "@/lib/router";
 import { useEffect, useState, type ComponentProps } from "react";
 import { behaviorName } from "./behavior";
-import {
-  defaultScope,
-  knownNodeIds,
-  mailboxInScope,
-  scopeContextOf,
-  type Scope,
-} from "@/lib/scope";
+import { defaultScope, knownNodeIds, mailboxInScope, type Scope } from "@/lib/scope";
+import { useHomeDid, useScopeContext } from "@/hooks/useClient";
+import type { ShellActions } from "@/../hooks/shellActions";
 import { useStoredStrings } from "@/lib/stored";
 import { nodeDidOf } from "@/lib/nodes";
 import { NodeAxis } from "./NodeAxis";
@@ -65,7 +60,8 @@ import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
 import { span, when } from "./time";
-import { useFleet } from "../hooks/useFleet";
+import { useApp } from "@/app/AppContext";
+import { useDeployments, useSelectedDeployment } from "@/hooks/useClient";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 
@@ -109,19 +105,17 @@ const KINDS: Option<string>[] = ["ask", "gate", "failed", "flag", "finished"].ma
 );
 
 export function MailboxScreen({
-  shell,
   nodeDid,
 }: {
-  shell: Shell;
   /** a node named on the route: the list opens narrowed to it */
   nodeDid?: string;
 }) {
+  const deployments = useDeployments();
+  const homeDid = useHomeDid();
+  const { dismissMailboxItem, openMailboxItem } = useApp().actions;
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
-  const ctx = scopeContextOf(
-    shell,
-    useFleet((s) => s),
-  );
+  const ctx = useScopeContext();
   const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
   useEffect(() => {
     if (nodeDid) setNodeIds([nodeDid]);
@@ -133,7 +127,7 @@ export function MailboxScreen({
   };
   const items = mailboxInScope(scope, ctx);
   const nodeCounts = Object.fromEntries(
-    shell.deployments.map((n) => [
+    deployments.map((n) => [
       nodeDidOf(n),
       n.mailboxItems.filter((m) => m.status === "open").length,
     ]),
@@ -178,7 +172,7 @@ export function MailboxScreen({
       /* one at a time: the contract dismisses one item per call, and a
          failure part-way leaves the rest selected rather than lost */
       for (const id of chosen) {
-        await shell.dismissMailboxItem(id);
+        await dismissMailboxItem(id);
         setSelected((current) => {
           const out = new Set(current);
           out.delete(id);
@@ -186,7 +180,7 @@ export function MailboxScreen({
         });
       }
     } catch {
-      /* reported by the shell's action error */
+      /* reported by the action */
     } finally {
       setDismissing(false);
     }
@@ -209,7 +203,7 @@ export function MailboxScreen({
         return;
       if (e.key === "Enter" && one) {
         e.preventDefault();
-        void openItem(one, shell);
+        void openItem(one, openMailboxItem);
       } else if ((e.key === "Backspace" || e.key === "Delete") && !dismissing) {
         e.preventDefault();
         void dismissChosen();
@@ -233,8 +227,8 @@ export function MailboxScreen({
                 className="ml-auto flex min-w-0 items-center gap-0.5 text-muted-foreground"
               >
                 <NodeAxis
-                  nodes={shell.deployments}
-                  homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                  nodes={deployments}
+                  homeDid={homeDid}
                   counts={nodeCounts}
                   value={nodeIds}
                   onChange={(next) => {
@@ -356,7 +350,6 @@ export function MailboxScreen({
                       key={m.itemId}
                       item={m}
                       last={i === groups.length - 1 && j === g.items.length - 1}
-                      shell={shell}
                       now={now}
                       selected={selected.has(m.itemId)}
                       onSelect={(next) => select([m.itemId], next)}
@@ -442,7 +435,7 @@ export function MailboxScreen({
                 </Button>
                 {/* one item chosen: its own action leads, since that is what
                   a person picked it out to do */}
-                {one && <Primary item={one} shell={shell} />}
+                {one && <Primary item={one} />}
               </div>
             </div>
           </div>
@@ -454,19 +447,22 @@ export function MailboxScreen({
 
 function Item({
   item: m,
-  shell,
   now,
   selected,
   onSelect,
   last,
 }: {
   item: MailboxItemView;
-  shell: Shell;
   now: number;
   selected: boolean;
   onSelect: (next: boolean) => void;
   last: boolean;
 }) {
+  const deployments = useDeployments();
+  const homeDid = useHomeDid();
+  const selectedDeployment = useSelectedDeployment();
+  const { answerMailboxQuestion, dismissMailboxItem, openMailboxItem } =
+    useApp().actions;
   const kind = KIND[m.kind] ?? {
     icon: CircleHelp,
     label: m.kind,
@@ -477,7 +473,7 @@ function Item({
     badge: "outline" as BadgeVariant,
   };
   const session = m.sessionId
-    ? shell.selectedDeployment?.sessions.find((s) => s.sessionId === m.sessionId)
+    ? selectedDeployment?.sessions.find((s) => s.sessionId === m.sessionId)
     : undefined;
   /* a kind with its own answer surface renders it; any other item keeps
      the generic reading view */
@@ -488,7 +484,7 @@ function Item({
   const foldable = body.length > FOLD_CHARS || body.split("\n").length > FOLD_LINES;
   const [expanded, setExpanded] = useState(false);
   const Icon = kind.icon;
-  const open = () => openItem(m, shell);
+  const open = () => openItem(m, openMailboxItem);
   const deadline = m.deadlineAt ? Date.parse(m.deadlineAt) : null;
   /* a deadline that has passed is the runtime's to expire, not a state
      to show; a countdown never reads below zero */
@@ -509,8 +505,7 @@ function Item({
   /* the sender's behavior, named on the node that filed the item */
   const behavior = behaviorName(
     m.targetBehaviorId,
-    shell.deployments.find((n) => nodeDidOf(n) === m.agentDid) ??
-      shell.selectedDeployment,
+    deployments.find((n) => nodeDidOf(n) === m.agentDid) ?? selectedDeployment,
   );
   return (
     <li
@@ -575,11 +570,11 @@ function Item({
               to the title's side, the node reaching left */}
           <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
             <NodeBehaviorStack
-              nodes={shell.deployments}
-              homeDid={shell.snapshot?.bootstrap.initAgentDid}
+              nodes={deployments}
+              homeDid={homeDid}
               nodeDid={m.agentDid}
               behaviorId={m.targetBehaviorId}
-              deployment={shell.selectedDeployment}
+              deployment={selectedDeployment}
             />
           </div>
           <span className="col-start-2 row-start-1 flex items-center gap-3 self-center justify-self-end text-xs leading-5 text-muted-foreground md:hidden">
@@ -653,7 +648,7 @@ function Item({
             {question && (
               <QuestionAnswer
                 question={question}
-                onAnswer={(answer) => shell.answerMailboxQuestion(m, answer)}
+                onAnswer={(answer) => answerMailboxQuestion(m, answer)}
               />
             )}
             {m.action === "write_document" && m.expectedCollection && (
@@ -688,7 +683,7 @@ function Item({
         size="sm"
         variant="raised"
         className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
-        onClick={() => shell.dismissMailboxItem(m.itemId)}
+        onClick={() => dismissMailboxItem(m.itemId)}
       >
         <X className="size-3" /> Dismiss
       </Button>
@@ -735,13 +730,16 @@ function extrasOf(m: MailboxItemView): Extra[] {
   return out;
 }
 
-async function openItem(m: MailboxItemView, shell: Shell) {
+async function openItem(
+  m: MailboxItemView,
+  openMailboxItem: ShellActions["openMailboxItem"],
+) {
   if (m.action === "ack") {
     if (m.sessionId) navigate({ name: "session", sessionId: m.sessionId });
     return;
   }
   try {
-    const item = await shell.openMailboxItem(m.itemId);
+    const item = await openMailboxItem(m.itemId);
     if (!item) return;
     navigate(
       item.sessionId
@@ -749,7 +747,7 @@ async function openItem(m: MailboxItemView, shell: Shell) {
         : { name: "session", sessionId: null },
     );
   } catch {
-    /* reported by the shell's action error */
+    /* reported by the action */
   }
 }
 
@@ -765,7 +763,8 @@ const CONTROLS =
 /* the one item's action as a split button: the action itself, and a
    caret for whatever else the item allows, present only when there is
    something to put in it */
-function Primary({ item, shell }: { item: MailboxItemView; shell: Shell }) {
+function Primary({ item }: { item: MailboxItemView }) {
+  const { openMailboxItem } = useApp().actions;
   const extras = extrasOf(item);
   return (
     <ButtonGroup>
@@ -773,7 +772,7 @@ function Primary({ item, shell }: { item: MailboxItemView; shell: Shell }) {
         size="sm"
         variant="outline"
         data-testid="mailbox-selection-open"
-        onClick={() => void openItem(item, shell)}
+        onClick={() => void openItem(item, openMailboxItem)}
       >
         {openLabel(item)} <Kbd className={KEY}>↵</Kbd>
       </Button>

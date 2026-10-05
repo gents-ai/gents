@@ -38,7 +38,6 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import type { Shell } from "@/hooks/useShell";
 import { inferenceIsConfigured, isLocalAgent } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
@@ -46,8 +45,16 @@ import { AgentAvatar } from "./AgentAvatar";
 import { AgentHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
+import { useApp } from "@/app/AppContext";
+import { useDeployments, useHomeDid, useSnapshot } from "@/hooks/useClient";
 
-export function AgentsScreen({ shell }: { shell: Shell }) {
+export function AgentsScreen() {
+  const {
+    api,
+    actions: { removePeer, renamePeer, selectAgent },
+  } = useApp();
+  const deployments = useDeployments();
+  const snapshot = useSnapshot();
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<{
     peerId: string;
@@ -59,21 +66,21 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
     label: string;
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
-  const pending = shell.snapshot?.client?.enrollmentRequests;
-  const homeDid = shell.snapshot?.bootstrap.initAgentDid;
+  const pending = snapshot?.client?.enrollmentRequests;
+  const homeDid = useHomeDid();
   /* the node this machine runs, then the paired ones with the reachable
      first: the dot is the first thing read on a row */
   const groups = [
     {
       key: "local",
       label: "Local node",
-      nodes: shell.deployments.filter((d) => isWorkingNode(d, homeDid)),
+      nodes: deployments.filter((d) => isWorkingNode(d, homeDid)),
       count: false,
     },
     {
       key: "remote",
       label: "Remote nodes",
-      nodes: shell.deployments
+      nodes: deployments
         .filter((d) => !isWorkingNode(d, homeDid))
         .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
       count: true,
@@ -146,7 +153,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 });
                 const check = async () => {
                   try {
-                    const r = (await shell.api.fetchPeerStatus(d.peerId)) as {
+                    const r = (await api.fetchPeerStatus(d.peerId)) as {
                       reachable?: boolean;
                     };
                     toast(
@@ -169,14 +176,14 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                     bottom of every row looking live and doing nothing */}
                     <a
                       href={href({ name: "sessions", nodeDid: d.agentDid })}
-                      onClick={() => shell.selectAgent(d.agentDid)}
+                      onClick={() => selectAgent(d.agentDid)}
                       aria-label={`${name} sessions`}
                       className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
                     >
                       <AgentHoverCard
                         deployment={d}
-                        root={shell.snapshot?.bootstrap.initToolRoot}
-                        ceiling={shell.snapshot?.bootstrap.initToolCeiling}
+                        root={snapshot?.bootstrap.initToolRoot}
+                        ceiling={snapshot?.bootstrap.initToolCeiling}
                       >
                         <span className="block shrink-0">
                           <AgentAvatar name={name} className="size-8" />
@@ -211,7 +218,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                         )}
                       </span>
                     </a>
-                    {isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) &&
+                    {isLocalAgent(d, snapshot?.bootstrap.initAgentDid) &&
                       !inferenceIsConfigured(d) && (
                         <Button
                           size="sm"
@@ -234,7 +241,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                     {waiting > 0 && (
                       <a
                         href={href({ name: "mailbox", nodeDid: d.agentDid })}
-                        onClick={() => shell.selectAgent(d.agentDid)}
+                        onClick={() => selectAgent(d.agentDid)}
                         className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
                       >
@@ -256,10 +263,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                       title="Configure"
                       nativeButton={false}
                       render={
-                        <a
-                          href={config}
-                          onClick={() => shell.selectAgent(d.agentDid)}
-                        />
+                        <a href={config} onClick={() => selectAgent(d.agentDid)} />
                       }
                     >
                       <SlidersHorizontal />
@@ -288,14 +292,14 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                                 })}
                               />
                             }
-                            onClick={() => shell.selectAgent(d.agentDid)}
+                            onClick={() => selectAgent(d.agentDid)}
                           >
                             Open sessions
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             nativeButton={false}
                             render={<a href={config} />}
-                            onClick={() => shell.selectAgent(d.agentDid)}
+                            onClick={() => selectAgent(d.agentDid)}
                           >
                             Configure
                           </DropdownMenuItem>
@@ -310,7 +314,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                             Check peer
                           </DropdownMenuItem>
                         </DropdownMenuGroup>
-                        {!isLocalAgent(d, shell.snapshot?.bootstrap.initAgentDid) && (
+                        {!isLocalAgent(d, snapshot?.bootstrap.initAgentDid) && (
                           <>
                             <DropdownMenuSeparator />
                             <DropdownMenuGroup>
@@ -338,7 +342,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
           </section>
         ))}
       </div>
-      <AddAgentDialog shell={shell} open={adding} onClose={() => setAdding(false)} />
+      <AddAgentDialog open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
         key={renaming?.peerId ?? "none"}
         title="Rename deployment"
@@ -346,7 +350,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
         value={renaming?.label ?? null}
         onSave={async (next) => {
           if (!renaming) return;
-          await shell.renamePeer(renaming.peerId, next);
+          await renamePeer(renaming.peerId, next);
           toast("Renamed");
         }}
         onClose={() => setRenaming(null)}
@@ -372,7 +376,7 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 if (!removing) return;
                 setRemovingBusy(true);
                 try {
-                  await shell.removePeer(removing.peerId, removing.agentDid);
+                  await removePeer(removing.peerId, removing.agentDid);
                   toast("Peer removed");
                   setRemoving(null);
                 } catch (error) {
@@ -391,15 +395,9 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
   );
 }
 
-function AddAgentDialog({
-  shell,
-  open,
-  onClose,
-}: {
-  shell: Shell;
-  open: boolean;
-  onClose: () => void;
-}) {
+function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { api } = useApp();
+  const { refreshSnapshot } = useApp().actions;
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -411,8 +409,8 @@ function AddAgentDialog({
     setBusy(true);
     setError(null);
     try {
-      const r = await shell.api.requestStatusEnrollment(address.trim());
-      await shell.refreshSnapshot();
+      const r = await api.requestStatusEnrollment(address.trim());
+      await refreshSnapshot();
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
       onClose();

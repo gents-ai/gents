@@ -1331,7 +1331,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const deployment = shell.selectedDeployment;
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
-  const parentWork = useParentWork(shell, provenance);
+  const parentWork = useParentWork(provenance);
   /* the composer mounts with the session, not with the screen, so this
      measures from a callback ref rather than an effect that would run once
      while it was still absent. The height goes on the column, not the
