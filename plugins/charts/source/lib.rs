@@ -16,6 +16,8 @@ mod dist_tests;
 pub mod err;
 pub mod format;
 pub mod frame;
+#[cfg(test)]
+mod frame_tests;
 pub mod graph;
 pub mod heatmap;
 pub mod hist;
