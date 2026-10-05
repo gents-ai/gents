@@ -2,15 +2,25 @@
 //! tick generation and a small strftime subset. Pure integer arithmetic: no
 //! time zone database, no clock.
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 
 const DAY: i64 = 86_400;
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 const MONTHS_LONG: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 /// Days since 1970-01-01 of a proleptic Gregorian date.
@@ -99,7 +109,9 @@ fn time_of_day(rest: &str) -> Option<i64> {
                 Some((w, f)) => (w, Some(f)),
                 None => (p, None),
             };
-            let ok = frac.is_none_or(|f| !f.is_empty() && f.len() <= 9 && f.bytes().all(|b| b.is_ascii_digit()));
+            let ok = frac.is_none_or(|f| {
+                !f.is_empty() && f.len() <= 9 && f.bytes().all(|b| b.is_ascii_digit())
+            });
             (digits(whole, 2)?, ok)
         }
     };
@@ -107,20 +119,23 @@ fn time_of_day(rest: &str) -> Option<i64> {
         return None;
     }
     let mut t = i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(sec);
-    if let Some(off) = offset {
-        if !off.eq_ignore_ascii_case("z") {
-            let sign = if off.starts_with('-') { -1 } else { 1 };
-            let body = &off[1..];
-            let (oh, om) = match body.split_once(':') {
-                Some((a, b)) => (digits(a, 2)?, digits(b, 2)?),
-                None if body.len() == 4 => (digits(&body[..2], 2)?, digits(&body[2..], 2)?),
-                None => (digits(body, 2)?, 0),
-            };
-            if oh > 23 || om > 59 {
-                return None;
-            }
-            t -= sign * (i64::from(oh) * 3600 + i64::from(om) * 60);
+    if let Some(off) = offset
+        && !off.eq_ignore_ascii_case("z")
+    {
+        let sign = if off.starts_with('-') { -1 } else { 1 };
+        let body = &off[1..];
+        if !body.is_ascii() {
+            return None;
         }
+        let (oh, om) = match body.split_once(':') {
+            Some((a, b)) => (digits(a, 2)?, digits(b, 2)?),
+            None if body.len() == 4 => (digits(&body[..2], 2)?, digits(&body[2..], 2)?),
+            None => (digits(body, 2)?, 0),
+        };
+        if oh > 23 || om > 59 {
+            return None;
+        }
+        t -= sign * (i64::from(oh) * 3600 + i64::from(om) * 60);
     }
     Some(t)
 }
@@ -137,8 +152,14 @@ pub fn validate_pattern(pattern: &str) -> Res<()> {
         if c == '%' {
             match chars.next() {
                 Some('Y' | 'y' | 'm' | 'd' | 'H' | 'M' | 'S' | 'b' | 'B' | '%') => {}
-                Some(other) => return fail(format!("the date format %{other} is not known; use %Y %m %d %H %M %S %b %B")),
-                None => return fail("the date format ends with a lone %; write %% for a percent sign"),
+                Some(other) => {
+                    return fail(format!(
+                        "the date format %{other} is not known; use %Y %m %d %H %M %S %b %B"
+                    ));
+                }
+                None => {
+                    return fail("the date format ends with a lone %; write %% for a percent sign");
+                }
             }
         }
     }
@@ -360,10 +381,29 @@ mod tests {
     #[test]
     fn impossible_or_malformed_dates_do_not_parse() {
         for bad in [
-            "", "2024", "2024-13-01", "2024-00-10", "2024-02-30", "2023-02-29", "2024-04-31",
-            "2024-1-01", "24-01-01", "2024-01-01T25:00", "2024-01-01T10:60", "2024-01-01T10:00:60",
-            "2024-01-01T10", "2024-01-01Tabc", "0000-01-01", "2024/01/01", "2024-01-01T10:00+25:00",
-            "2024-01-01T10:00:00.", "2024-01-01x", "hello", "2024-01-01-05", "2024-01-01T10:00Zjunk",
+            "",
+            "2024",
+            "2024-13-01",
+            "2024-00-10",
+            "2024-02-30",
+            "2023-02-29",
+            "2024-04-31",
+            "2024-1-01",
+            "24-01-01",
+            "2024-01-01T25:00",
+            "2024-01-01T10:60",
+            "2024-01-01T10:00:60",
+            "2024-01-01T10",
+            "2024-01-01Tabc",
+            "0000-01-01",
+            "2024/01/01",
+            "2024-01-01T10:00+25:00",
+            "2024-01-01T10:00:00.",
+            "2024-01-01T10:00+a\u{e9}a",
+            "2024-01-01x",
+            "hello",
+            "2024-01-01-05",
+            "2024-01-01T10:00Zjunk",
         ] {
             assert_eq!(parse(bad), None, "{bad}");
         }
@@ -384,7 +424,10 @@ mod tests {
         assert_eq!(format(t, "%b %d, %y"), "Mar 05, 24");
         assert_eq!(format(t, "%B %Y 100%%"), "March 2024 100%");
         assert_eq!(format(t, "%q"), "%q");
-        assert_eq!(format(p("1969-12-31T23:59:59Z"), "%Y-%m-%d %H:%M:%S"), "1969-12-31 23:59:59");
+        assert_eq!(
+            format(p("1969-12-31T23:59:59Z"), "%Y-%m-%d %H:%M:%S"),
+            "1969-12-31 23:59:59"
+        );
     }
 
     #[test]

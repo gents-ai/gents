@@ -2,7 +2,7 @@
 //! theme, the canvas size and the warnings so far.
 
 use crate::cols::Notes;
-use crate::palette::{series_color, Theme};
+use crate::palette::{Theme, series_color};
 use crate::spec::Spec;
 
 /// Build state of one chart.
@@ -27,7 +27,13 @@ impl<'a> Ctx<'a> {
         for n in &spec.notes {
             notes.add(n.clone());
         }
-        Self { spec, theme: spec.theme, w: f64::from(spec.width), h: f64::from(spec.height), notes }
+        Self {
+            spec,
+            theme: spec.theme,
+            w: f64::from(spec.width),
+            h: f64::from(spec.height),
+            notes,
+        }
     }
 
     /// Colour of series `i`.

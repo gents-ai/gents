@@ -73,7 +73,7 @@ mod tests {
         assert_eq!(coord(1.25), "1.25");
         assert_eq!(coord(1.005), "1");
         assert_eq!(coord(1.006), "1.01");
-        assert_eq!(coord(-3.14159), "-3.14");
+        assert_eq!(coord(-3.14659), "-3.15");
         assert_eq!(coord(100.0), "100");
         assert_eq!(coord(0.0), "0");
     }

@@ -5,7 +5,7 @@
 
 use std::io::BufRead;
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::table::{Builder, Cell, MAX_CELL_BYTES};
 
 const MAX_FIELDS: usize = 100_000;
@@ -26,7 +26,12 @@ pub fn sniff(head: &[u8]) -> u8 {
             _ => {}
         }
     }
-    counts.iter().rev().max_by_key(|(_, n)| *n).filter(|(_, n)| *n > 0).map_or(b',', |(d, _)| *d)
+    counts
+        .iter()
+        .rev()
+        .max_by_key(|(_, n)| *n)
+        .filter(|(_, n)| *n > 0)
+        .map_or(b',', |(d, _)| *d)
 }
 
 /// Byte-at-a-time record parser: state carries across buffer boundaries, so
@@ -43,7 +48,15 @@ struct Parser {
 
 impl Parser {
     fn new(delim: u8) -> Self {
-        Self { delim, field: Vec::new(), fields: Vec::new(), quoted: false, was_quoted: false, pending_quote: false, any: false }
+        Self {
+            delim,
+            field: Vec::new(),
+            fields: Vec::new(),
+            quoted: false,
+            was_quoted: false,
+            pending_quote: false,
+            any: false,
+        }
     }
 
     fn end_field(&mut self) {
@@ -84,10 +97,14 @@ impl Parser {
             self.field.push(b);
         }
         if self.field.len() > MAX_CELL_BYTES {
-            return fail("a cell is longer than 65536 bytes, so this is not a table; check the file");
+            return fail(
+                "a cell is longer than 65536 bytes, so this is not a table; check the file",
+            );
         }
         if self.fields.len() > MAX_FIELDS {
-            return fail("a row has more than 100000 columns, so this is not a table; check the file");
+            return fail(
+                "a row has more than 100000 columns, so this is not a table; check the file",
+            );
         }
         Ok(false)
     }
@@ -166,11 +183,19 @@ impl Sink<'_> {
 pub fn read<R: BufRead>(mut r: R, builder: &mut Builder) -> Res<()> {
     let io = |e: std::io::Error| format!("the file could not be read: {e}");
     let head = r.fill_buf().map_err(io)?;
-    let skip = if head.starts_with(&[0xef, 0xbb, 0xbf]) { 3 } else { 0 };
+    let skip = if head.starts_with(&[0xef, 0xbb, 0xbf]) {
+        3
+    } else {
+        0
+    };
     let delim = sniff(&head[skip..]);
     r.consume(skip);
     let mut parser = Parser::new(delim);
-    let mut sink = Sink { builder, header_done: false, cells: Vec::new() };
+    let mut sink = Sink {
+        builder,
+        header_done: false,
+        cells: Vec::new(),
+    };
     loop {
         let buf = r.fill_buf().map_err(io)?;
         if buf.is_empty() {
@@ -237,7 +262,10 @@ mod tests {
     fn crlf_endings_bom_and_a_missing_final_newline() {
         let t = load(b"\xef\xbb\xbfa,b\r\n1,2\r\n3,4");
         assert_eq!(t.names, ["a", "b"]);
-        assert_eq!((cell(&t, "b", 0), cell(&t, "b", 1)), ("#2".into(), "#4".into()));
+        assert_eq!(
+            (cell(&t, "b", 0), cell(&t, "b", 1)),
+            ("#2".into(), "#4".into())
+        );
     }
 
     #[test]
@@ -326,7 +354,12 @@ mod tests {
             data.extend_from_slice(b",");
         }
         let mut b = Builder::new(None);
-        assert!(read(&data[..], &mut b).unwrap_err().0.contains("100000 columns"));
+        assert!(
+            read(&data[..], &mut b)
+                .unwrap_err()
+                .0
+                .contains("100000 columns")
+        );
     }
 
     #[test]

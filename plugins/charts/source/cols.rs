@@ -3,10 +3,10 @@
 //! Whatever cannot be used is counted and reported, never turned into zero.
 
 use crate::dates;
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::spec::{Agg, Sort};
-use crate::table::{plain_number, Cell, Table};
+use crate::table::{Cell, Table, plain_number};
 
 const MAX_WARNINGS: usize = 40;
 
@@ -34,7 +34,8 @@ impl Notes {
     /// The warnings, with a closing line when some were left out.
     pub fn into_vec(mut self) -> Vec<String> {
         if self.dropped > 0 {
-            self.items.push(format!("{} more warnings were left out", self.dropped));
+            self.items
+                .push(format!("{} more warnings were left out", self.dropped));
         }
         self.items
     }
@@ -59,9 +60,14 @@ pub fn column(t: &Table, name: &str) -> Res<usize> {
             let shown: Vec<&str> = t.names.iter().take(12).map(String::as_str).collect();
             let more = if t.names.len() > 12 { ", ..." } else { "" };
             if t.names.is_empty() {
-                fail(format!("column {name:?} is not in the data, which has no columns"))
+                fail(format!(
+                    "column {name:?} is not in the data, which has no columns"
+                ))
             } else {
-                fail(format!("column {name:?} is not in the data; the columns are {}{more}", shown.join(", ")))
+                fail(format!(
+                    "column {name:?} is not in the data; the columns are {}{more}",
+                    shown.join(", ")
+                ))
             }
         }
     }
@@ -119,7 +125,10 @@ pub struct Numeric {
 
 /// Reads column `c` as numbers.
 pub fn numeric(t: &Table, c: usize) -> Numeric {
-    let mut n = Numeric { v: Vec::with_capacity(t.rows), ..Numeric::default() };
+    let mut n = Numeric {
+        v: Vec::with_capacity(t.rows),
+        ..Numeric::default()
+    };
     for (row, cell) in t.cols[c].iter().enumerate() {
         match cell {
             Cell::Num(v) => n.v.push(*v),
@@ -150,7 +159,10 @@ fn shorten(s: &str) -> String {
 /// Adds the warnings for empty and non-numeric cells of `name`.
 pub fn report_numeric(notes: &mut Notes, name: &str, n: &Numeric) {
     if n.nulls > 0 {
-        notes.add(format!("column {name:?}: {} empty values are drawn as gaps, not zeros", n.nulls));
+        notes.add(format!(
+            "column {name:?}: {} empty values are drawn as gaps, not zeros",
+            n.nulls
+        ));
     }
     if let Some((row, text)) = &n.first_text {
         notes.add(format!(
@@ -276,7 +288,11 @@ pub fn aggregate(values: &[f64], agg: Agg) -> f64 {
             let mut v = values.to_vec();
             v.sort_by(f64::total_cmp);
             let n = v.len();
-            if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
+            if n % 2 == 1 {
+                v[n / 2]
+            } else {
+                (v[n / 2 - 1] + v[n / 2]) / 2.0
+            }
         }
         Agg::Count => unreachable!("handled above"),
     }
@@ -297,11 +313,26 @@ mod tests {
     fn unknown_columns_list_the_known_ones() {
         let t = table("a,b,c\n1,2,3\n");
         assert_eq!(column(&t, " b ").unwrap(), 1);
-        assert_eq!(column(&t, "z").unwrap_err().0, "column \"z\" is not in the data; the columns are a, b, c");
-        let wide = table(&format!("{}\n{}\n", (0..20).map(|i| format!("c{i}")).collect::<Vec<_>>().join(","), "1,".repeat(19) + "1"));
+        assert_eq!(
+            column(&t, "z").unwrap_err().0,
+            "column \"z\" is not in the data; the columns are a, b, c"
+        );
+        let wide = table(&format!(
+            "{}\n{}\n",
+            (0..20)
+                .map(|i| format!("c{i}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            "1,".repeat(19) + "1"
+        ));
         let e = column(&wide, "zz").unwrap_err().0;
         assert!(e.ends_with("c11, ..."), "{e}");
-        assert!(column(&Table::default(), "x").unwrap_err().0.contains("no columns"));
+        assert!(
+            column(&Table::default(), "x")
+                .unwrap_err()
+                .0
+                .contains("no columns")
+        );
     }
 
     #[test]
@@ -311,7 +342,11 @@ mod tests {
         assert_eq!(kind(&t, 1), ColKind::Time);
         assert_eq!(kind(&t, 2), ColKind::Text);
         assert_eq!(kind(&t, 3), ColKind::Empty);
-        assert_eq!(kind(&t, 4), ColKind::Numeric, "mostly numbers with one stray text is numeric");
+        assert_eq!(
+            kind(&t, 4),
+            ColKind::Numeric,
+            "mostly numbers with one stray text is numeric"
+        );
     }
 
     #[test]
@@ -382,12 +417,24 @@ mod tests {
     fn labels_cover_numbers_text_and_gaps() {
         let t = table("k,z\nnorth,0\n2020,0\n,0\n007,0\n");
         let l = labels(&t, 0);
-        assert_eq!(l, [Some("north".into()), Some("2020".into()), None, Some("007".into())]);
+        assert_eq!(
+            l,
+            [
+                Some("north".into()),
+                Some("2020".into()),
+                None,
+                Some("007".into())
+            ]
+        );
     }
 
     #[test]
     fn distinct_keeps_first_appearance_order() {
-        let l: Vec<Option<String>> = ["b", "a", "b", "c", "a"].iter().map(|s| Some((*s).to_owned())).chain([None]).collect();
+        let l: Vec<Option<String>> = ["b", "a", "b", "c", "a"]
+            .iter()
+            .map(|s| Some((*s).to_owned()))
+            .chain([None])
+            .collect();
         let (names, rows) = distinct(&l);
         assert_eq!(names, ["b", "a", "c"]);
         assert_eq!(rows, [Some(0), Some(1), Some(0), Some(2), Some(1), None]);
@@ -399,10 +446,26 @@ mod tests {
 
     #[test]
     fn label_sorting_is_numeric_for_numbers_chronological_for_dates_and_bytewise_for_text() {
-        assert_eq!(order(&names(&["10", "9", "100"]), &[0.0; 3], Sort::X), [1, 0, 2]);
-        assert_eq!(order(&names(&["2024-03-01", "2023-12-31", "2024-01-15"]), &[0.0; 3], Sort::X), [1, 2, 0]);
-        assert_eq!(order(&names(&["b", "C", "a"]), &[0.0; 3], Sort::X), [1, 2, 0]);
-        assert_eq!(order(&names(&["b", "C", "a"]), &[0.0; 3], Sort::XDesc), [0, 2, 1]);
+        assert_eq!(
+            order(&names(&["10", "9", "100"]), &[0.0; 3], Sort::X),
+            [1, 0, 2]
+        );
+        assert_eq!(
+            order(
+                &names(&["2024-03-01", "2023-12-31", "2024-01-15"]),
+                &[0.0; 3],
+                Sort::X
+            ),
+            [1, 2, 0]
+        );
+        assert_eq!(
+            order(&names(&["b", "C", "a"]), &[0.0; 3], Sort::X),
+            [1, 2, 0]
+        );
+        assert_eq!(
+            order(&names(&["b", "C", "a"]), &[0.0; 3], Sort::XDesc),
+            [0, 2, 1]
+        );
         assert_eq!(order(&names(&["b", "a"]), &[0.0; 2], Sort::None), [0, 1]);
     }
 

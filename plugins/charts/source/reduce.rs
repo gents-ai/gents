@@ -9,7 +9,10 @@
 /// triangle-area rule picks, so a reduced run has at most its share plus two
 /// points.
 pub fn lttb(pts: &[(f64, f64)], threshold: usize) -> Vec<usize> {
-    let finite = pts.iter().filter(|p| !p.1.is_nan() && p.0.is_finite()).count();
+    let finite = pts
+        .iter()
+        .filter(|p| !p.1.is_nan() && p.0.is_finite())
+        .count();
     let threshold = threshold.max(3);
     let mut out = Vec::new();
     let mut i = 0;
@@ -23,7 +26,11 @@ pub fn lttb(pts: &[(f64, f64)], threshold: usize) -> Vec<usize> {
             i += 1;
         }
         let run = &pts[start..i];
-        let share = if finite <= threshold { run.len() } else { (threshold * run.len()).div_ceil(finite).max(3) };
+        let share = if finite <= threshold {
+            run.len()
+        } else {
+            (threshold * run.len()).div_ceil(finite).max(3)
+        };
         if run.len() <= share {
             out.extend(start..i);
         } else {
@@ -42,9 +49,15 @@ fn run_indices(run: &[(f64, f64)], target: usize) -> Vec<usize> {
     let mut prev = 0;
     for b in 0..buckets {
         let (lo, hi) = (edge(b), edge(b + 1));
-        let (nlo, nhi) = if b + 1 < buckets { (hi, edge(b + 2)) } else { (n - 1, n) };
+        let (nlo, nhi) = if b + 1 < buckets {
+            (hi, edge(b + 2))
+        } else {
+            (n - 1, n)
+        };
         let count = (nhi - nlo) as f64;
-        let (sx, sy) = run[nlo..nhi].iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+        let (sx, sy) = run[nlo..nhi]
+            .iter()
+            .fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
         let (ax, ay) = (sx / count, sy / count);
         let (px, py) = run[prev];
         let mut best = lo;
@@ -105,10 +118,25 @@ pub struct Binned {
 /// the extremes stay exact.
 pub fn bin_scatter(pts: &[(f64, f64)], max_out: usize) -> Binned {
     if pts.len() <= max_out {
-        return Binned { bins: pts.iter().map(|p| Bin { x: p.0, y: p.1, n: 1 }).collect(), cell: 0.0, extremes: 0 };
+        return Binned {
+            bins: pts
+                .iter()
+                .map(|p| Bin {
+                    x: p.0,
+                    y: p.1,
+                    n: 1,
+                })
+                .collect(),
+            cell: 0.0,
+            extremes: 0,
+        };
     }
-    let sizes = [2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0, 128.0];
-    let (min_x, min_y) = pts.iter().fold((f64::INFINITY, f64::INFINITY), |m, p| (m.0.min(p.0), m.1.min(p.1)));
+    let sizes = [
+        2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0, 128.0,
+    ];
+    let (min_x, min_y) = pts.iter().fold((f64::INFINITY, f64::INFINITY), |m, p| {
+        (m.0.min(p.0), m.1.min(p.1))
+    });
     let key = |p: &(f64, f64), size: f64| {
         let cx = ((p.0 - min_x) / size).floor() as u64;
         let cy = ((p.1 - min_y) / size).floor() as u64;
@@ -117,7 +145,11 @@ pub fn bin_scatter(pts: &[(f64, f64)], max_out: usize) -> Binned {
     let mut chosen = sizes[sizes.len() - 1];
     let mut keys: Vec<(u64, usize)> = Vec::new();
     for size in sizes {
-        keys = pts.iter().enumerate().map(|(i, p)| (key(p, size), i)).collect();
+        keys = pts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (key(p, size), i))
+            .collect();
         keys.sort_unstable();
         let occupied = 1 + keys.windows(2).filter(|w| w[0].0 != w[1].0).count();
         if occupied <= max_out.saturating_sub(4) {
@@ -136,7 +168,11 @@ pub fn bin_scatter(pts: &[(f64, f64)], max_out: usize) -> Binned {
             j += 1;
         }
         let n = j - i;
-        bins.push(Bin { x: sx / n as f64, y: sy / n as f64, n });
+        bins.push(Bin {
+            x: sx / n as f64,
+            y: sy / n as f64,
+            n,
+        });
         i = j;
     }
     let mut extreme = [0usize; 4];
@@ -159,12 +195,20 @@ pub fn bin_scatter(pts: &[(f64, f64)], max_out: usize) -> Binned {
     let mut extremes = 0;
     for k in extreme {
         if k != last {
-            bins.push(Bin { x: pts[k].0, y: pts[k].1, n: 1 });
+            bins.push(Bin {
+                x: pts[k].0,
+                y: pts[k].1,
+                n: 1,
+            });
             extremes += 1;
             last = k;
         }
     }
-    Binned { bins, cell: chosen, extremes }
+    Binned {
+        bins,
+        cell: chosen,
+        extremes,
+    }
 }
 
 #[cfg(test)]
@@ -224,12 +268,15 @@ mod tests {
     #[test]
     fn gaps_split_runs_and_are_never_drawn() {
         let mut p = series(600, |i| i as f64);
-        for g in 200..260 {
-            p[g].1 = f64::NAN;
+        for point in &mut p[200..260] {
+            point.1 = f64::NAN;
         }
         let k = lttb(&p, 100);
         assert!(k.iter().all(|i| !(200..260).contains(i)));
-        assert!(k.contains(&199) && k.contains(&260), "both ends of the gap survive");
+        assert!(
+            k.contains(&199) && k.contains(&260),
+            "both ends of the gap survive"
+        );
         assert_eq!(k[0], 0);
         assert_eq!(*k.last().unwrap(), 599);
     }
@@ -255,7 +302,15 @@ mod tests {
 
     #[test]
     fn the_triangle_rule_picks_the_corner_of_a_v_shape() {
-        let p = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 10.0), (4.0, 0.0), (5.0, 0.0), (6.0, 0.0)];
+        let p = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (2.0, 0.0),
+            (3.0, 10.0),
+            (4.0, 0.0),
+            (5.0, 0.0),
+            (6.0, 0.0),
+        ];
         assert_eq!(lttb(&p, 3), [0, 3, 6]);
     }
 
@@ -270,36 +325,68 @@ mod tests {
         let pts = [(1.0, 2.0), (3.0, 4.0)];
         let b = bin_scatter(&pts, 10);
         assert_eq!((b.cell, b.extremes), (0.0, 0));
-        assert_eq!(b.bins, [Bin { x: 1.0, y: 2.0, n: 1 }, Bin { x: 3.0, y: 4.0, n: 1 }]);
+        assert_eq!(
+            b.bins,
+            [
+                Bin {
+                    x: 1.0,
+                    y: 2.0,
+                    n: 1
+                },
+                Bin {
+                    x: 3.0,
+                    y: 4.0,
+                    n: 1
+                }
+            ]
+        );
     }
 
     #[test]
     fn dense_scatter_is_grouped_within_the_cap_and_loses_no_point() {
-        let pts: Vec<(f64, f64)> = (0..50_000_u64).map(|i| (((i * 7919) % 800) as f64, ((i * 104_729) % 480) as f64)).collect();
+        let pts: Vec<(f64, f64)> = (0..50_000_u64)
+            .map(|i| (((i * 7919) % 800) as f64, ((i * 104_729) % 480) as f64))
+            .collect();
         let b = bin_scatter(&pts, 3_000);
         assert!(b.cell > 0.0);
         assert!(b.bins.len() <= 3_000, "{}", b.bins.len());
         let cells = &b.bins[..b.bins.len() - b.extremes];
-        assert_eq!(cells.iter().map(|c| c.n).sum::<usize>(), 50_000, "every point is in exactly one cell");
+        assert_eq!(
+            cells.iter().map(|c| c.n).sum::<usize>(),
+            50_000,
+            "every point is in exactly one cell"
+        );
         assert!(b.extremes >= 1 && b.extremes <= 4);
     }
 
     #[test]
     fn the_extreme_points_stay_exact() {
-        let mut pts: Vec<(f64, f64)> = (0..20_000).map(|i| (100.0 + (i % 50) as f64, 100.0 + (i % 37) as f64)).collect();
+        let mut pts: Vec<(f64, f64)> = (0..20_000)
+            .map(|i| (100.0 + (i % 50) as f64, 100.0 + (i % 37) as f64))
+            .collect();
         pts[17] = (-5.0, 130.0);
         pts[9000] = (999.0, 120.0);
         pts[12_345] = (120.0, -33.0);
         pts[19_999] = (110.0, 4_000.0);
         let b = bin_scatter(&pts, 500);
-        for want in [(-5.0, 130.0), (999.0, 120.0), (120.0, -33.0), (110.0, 4_000.0)] {
-            assert!(b.bins.iter().any(|b| b.n == 1 && (b.x, b.y) == want), "{want:?}");
+        for want in [
+            (-5.0, 130.0),
+            (999.0, 120.0),
+            (120.0, -33.0),
+            (110.0, 4_000.0),
+        ] {
+            assert!(
+                b.bins.iter().any(|b| b.n == 1 && (b.x, b.y) == want),
+                "{want:?}"
+            );
         }
     }
 
     #[test]
     fn binning_is_deterministic_and_ordered_by_cell() {
-        let pts: Vec<(f64, f64)> = (0..9_000).map(|i| (((i * 31) % 400) as f64, ((i * 17) % 300) as f64)).collect();
+        let pts: Vec<(f64, f64)> = (0..9_000)
+            .map(|i| (((i * 31) % 400) as f64, ((i * 17) % 300) as f64))
+            .collect();
         assert_eq!(bin_scatter(&pts, 700), bin_scatter(&pts, 700));
     }
 
@@ -307,7 +394,14 @@ mod tests {
     fn identical_points_collapse_into_one_bin() {
         let pts = vec![(5.0, 5.0); 1_000];
         let b = bin_scatter(&pts, 10);
-        assert_eq!(b.bins[0], Bin { x: 5.0, y: 5.0, n: 1_000 });
+        assert_eq!(
+            b.bins[0],
+            Bin {
+                x: 5.0,
+                y: 5.0,
+                n: 1_000
+            }
+        );
         assert!(b.bins.len() <= 5);
     }
 }

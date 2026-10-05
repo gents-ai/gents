@@ -238,6 +238,18 @@ pub struct Laid {
     pub y2: Option<Axis>,
 }
 
+/// 2 as "2nd", 3 as "3rd", 11 as "11th".
+pub fn ordinal(n: usize) -> String {
+    let suffix = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
 fn fit_title(text: &str, avail: f64, sizes: &[f64], bold: bool) -> (String, Option<String>, f64) {
     for s in sizes {
         if width(text, *s, bold) <= avail {
@@ -260,8 +272,16 @@ fn resolve_legend(ctx: &Ctx<'_>, spec: &FrameSpec<'_>) -> Legend {
             } else if spec.auto_legend != Legend::Auto {
                 spec.auto_legend
             } else {
-                let longest = spec.legend.iter().map(|i| width(&i.label, 12.0, false)).fold(0.0, f64::max);
-                if n <= 10 && longest <= 160.0 { Legend::Right } else { Legend::Bottom }
+                let longest = spec
+                    .legend
+                    .iter()
+                    .map(|i| width(&i.label, 12.0, false))
+                    .fold(0.0, f64::max);
+                if n <= 10 && longest <= 160.0 {
+                    Legend::Right
+                } else {
+                    Legend::Bottom
+                }
             }
         }
         explicit => explicit,
@@ -277,7 +297,11 @@ struct LegendBox {
 fn legend_box(items: &[LegendItem], pos: Legend, avail_w: f64, avail_h: f64) -> LegendBox {
     const ROW: f64 = 18.0;
     const MARK: f64 = 18.0;
-    let max_text = if matches!(pos, Legend::Left | Legend::Right) { 190.0 } else { 220.0 };
+    let max_text = if matches!(pos, Legend::Left | Legend::Right) {
+        190.0
+    } else {
+        220.0
+    };
     let shown: Vec<(String, Option<String>, f64)> = items
         .iter()
         .map(|i| {
@@ -300,7 +324,11 @@ fn legend_box(items: &[LegendItem], pos: Legend, avail_w: f64, avail_h: f64) -> 
             x += col_w + 16.0;
         }
         let rows = shown.len().min(per_col);
-        return LegendBox { w: x - 16.0, h: rows as f64 * ROW, items: out };
+        return LegendBox {
+            w: x - 16.0,
+            h: rows as f64 * ROW,
+            items: out,
+        };
     }
     let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
     let mut run = 0.0;
@@ -317,14 +345,25 @@ fn legend_box(items: &[LegendItem], pos: Legend, avail_w: f64, avail_h: f64) -> 
     }
     let mut out = Vec::new();
     for (r, row) in rows.iter().enumerate() {
-        let total: f64 = row.iter().map(|i| shown[*i].2 + MARK).sum::<f64>() + 16.0 * (row.len().saturating_sub(1)) as f64;
+        let total: f64 = row.iter().map(|i| shown[*i].2 + MARK).sum::<f64>()
+            + 16.0 * (row.len().saturating_sub(1)) as f64;
         let mut x = (avail_w - total) / 2.0;
         for i in row {
-            out.push((x, r as f64 * ROW, shown[*i].0.clone(), shown[*i].1.clone(), *i));
+            out.push((
+                x,
+                r as f64 * ROW,
+                shown[*i].0.clone(),
+                shown[*i].1.clone(),
+                *i,
+            ));
             x += shown[*i].2 + MARK + 16.0;
         }
     }
-    LegendBox { w: avail_w, h: rows.len() as f64 * ROW, items: out }
+    LegendBox {
+        w: avail_w,
+        h: rows.len() as f64 * ROW,
+        items: out,
+    }
 }
 
 /// Labels along a band axis: horizontal when they fit, else rotated and
@@ -347,14 +386,13 @@ fn band_x_plan(labels: &[String], slot: f64) -> (f64, usize, f64, Vec<(String, O
     if longest + 8.0 <= slot {
         return (0.0, 1, 15.0, draw(f64::MAX, 1));
     }
-    if slot >= 56.0 {
-        let max_w = slot - 8.0;
-        let shown = draw(max_w, 1);
+    if slot >= 56.0 && longest <= 2.2 * slot {
+        let shown = draw(slot - 8.0, 1);
         return (0.0, 1, 15.0, shown);
     }
     let rot_cap = 150.0;
     let rot_w = longest.min(rot_cap);
-    let height = rot_w * 0.7071 + 10.0;
+    let height = rot_w * std::f64::consts::FRAC_1_SQRT_2 + 10.0;
     let stride = (20.0 / slot.max(1.0)).ceil().max(1.0) as usize;
     (-45.0, stride, height, draw(rot_cap, stride))
 }
@@ -388,13 +426,39 @@ pub fn layout(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>) -> crate::err::Res<Laid> 
 
 /// The layout of a chart with no axes (a pie): title, legend and the plot
 /// rectangle that is left.
-pub fn layout_bare(ctx: &mut Ctx<'_>, legend: &[LegendItem], auto_legend: Legend, extra_right: f64) -> crate::err::Res<Frame> {
-    let empty = |_: usize| Axis { kind: AxisKind::Cont { log: false, d0: 0.0, d1: 1.0, ticks: Vec::new() }, label: None };
-    let spec = FrameSpec { x: &empty, y: &empty, y2: None, legend, extra_right, auto_legend };
+pub fn layout_bare(
+    ctx: &mut Ctx<'_>,
+    legend: &[LegendItem],
+    auto_legend: Legend,
+    extra_right: f64,
+) -> crate::err::Res<Frame> {
+    let empty = |_: usize| Axis {
+        kind: AxisKind::Cont {
+            log: false,
+            d0: 0.0,
+            d1: 1.0,
+            ticks: Vec::new(),
+        },
+        label: None,
+    };
+    let spec = FrameSpec {
+        x: &empty,
+        y: &empty,
+        y2: None,
+        legend,
+        extra_right,
+        auto_legend,
+    };
     Ok(layout(ctx, &spec)?.frame)
 }
 
-fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<&Axis>) -> crate::err::Res<Frame> {
+fn plan(
+    ctx: &mut Ctx<'_>,
+    spec: &FrameSpec<'_>,
+    x: &Axis,
+    y: &Axis,
+    y2: Option<&Axis>,
+) -> crate::err::Res<Frame> {
     let (w, h) = (ctx.w, ctx.h);
     let avail_w = w - 2.0 * PAD;
     let mut title = Vec::new();
@@ -404,7 +468,13 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
         if full.is_some() {
             ctx.notes.add("the title is too long for the image and was shortened; the full text is in the description");
         }
-        title.push(TextLine { text, full, size, bold: true, y: cursor + size * 0.9 });
+        title.push(TextLine {
+            text,
+            full,
+            size,
+            bold: true,
+            y: cursor + size * 0.9,
+        });
         cursor += size + 6.0;
     }
     if let Some(t) = &ctx.spec.subtitle {
@@ -412,7 +482,13 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
         if full.is_some() {
             ctx.notes.add("the subtitle is too long for the image and was shortened; the full text is in the description");
         }
-        title.push(TextLine { text, full, size, bold: false, y: cursor + size * 0.85, });
+        title.push(TextLine {
+            text,
+            full,
+            size,
+            bold: false,
+            y: cursor + size * 0.85,
+        });
         cursor += size + 6.0;
     }
     if !title.is_empty() {
@@ -431,20 +507,44 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
         match pos {
             Legend::Right => {
                 let x0 = right - b.w;
-                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw { x: x0 + dx, y: top + dy, text: t.clone(), full: f.clone(), item: *i }));
+                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw {
+                    x: x0 + dx,
+                    y: top + dy,
+                    text: t.clone(),
+                    full: f.clone(),
+                    item: *i,
+                }));
                 right = x0 - 14.0;
             }
             Legend::Left => {
-                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw { x: left + dx, y: top + dy, text: t.clone(), full: f.clone(), item: *i }));
+                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw {
+                    x: left + dx,
+                    y: top + dy,
+                    text: t.clone(),
+                    full: f.clone(),
+                    item: *i,
+                }));
                 left += b.w + 14.0;
             }
             Legend::Top => {
-                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw { x: PAD + dx, y: top + dy, text: t.clone(), full: f.clone(), item: *i }));
+                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw {
+                    x: PAD + dx,
+                    y: top + dy,
+                    text: t.clone(),
+                    full: f.clone(),
+                    item: *i,
+                }));
                 top += b.h + 8.0;
             }
             _ => {
                 let y0 = bottom - b.h;
-                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw { x: PAD + dx, y: y0 + dy, text: t.clone(), full: f.clone(), item: *i }));
+                legend.extend(b.items.iter().map(|(dx, dy, t, f, i)| LegendDraw {
+                    x: PAD + dx,
+                    y: y0 + dy,
+                    text: t.clone(),
+                    full: f.clone(),
+                    item: *i,
+                }));
                 bottom = y0 - 10.0;
             }
         }
@@ -454,7 +554,11 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     let side_label = |a: &Axis| if a.label.is_some() { 16.0 } else { 0.0 };
     let band_cap = (w * 0.3).min(200.0);
     let label_w = |a: &Axis| -> f64 {
-        let widest = a.labels().iter().map(|l| width(l, TICK_SIZE, false)).fold(0.0, f64::max);
+        let widest = a
+            .labels()
+            .iter()
+            .map(|l| width(l, TICK_SIZE, false))
+            .fold(0.0, f64::max);
         match a.kind {
             AxisKind::Band { .. } => widest.min(band_cap),
             AxisKind::Cont { .. } => widest,
@@ -463,8 +567,20 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     let y_w = label_w(y) + TICK_LEN + 5.0;
     let x_is_band = matches!(x.kind, AxisKind::Band { .. });
     // A numeric x axis centres its end labels on the ticks: leave room for them.
-    let half_first = if x_is_band { 0.0 } else { x.labels().first().map_or(0.0, |l| width(l, TICK_SIZE, false) / 2.0) };
-    let half_last = if x_is_band { 0.0 } else { x.labels().last().map_or(0.0, |l| width(l, TICK_SIZE, false) / 2.0) };
+    let half_first = if x_is_band {
+        0.0
+    } else {
+        x.labels()
+            .first()
+            .map_or(0.0, |l| width(l, TICK_SIZE, false) / 2.0)
+    };
+    let half_last = if x_is_band {
+        0.0
+    } else {
+        x.labels()
+            .last()
+            .map_or(0.0, |l| width(l, TICK_SIZE, false) / 2.0)
+    };
     let mut plot_x = left + side_label(y) + y_w;
     plot_x = plot_x.max(left + half_first);
     if let Some(a2) = y2 {
@@ -491,20 +607,29 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     let plot_y = top + 4.0;
     let plot_h = plot_bottom - plot_y;
     if plot_w < MIN_PLOT || plot_h < MIN_PLOT {
-        return crate::err::fail("the chart is too small for its labels and legend; make it larger, shorten the labels or move the legend");
+        return crate::err::fail(
+            "the chart is too small for its labels and legend; make it larger, shorten the labels or move the legend",
+        );
     }
-    let plot = Rect { x: plot_x, y: plot_y, w: plot_w, h: plot_h };
+    let plot = Rect {
+        x: plot_x,
+        y: plot_y,
+        w: plot_w,
+        h: plot_h,
+    };
 
     // Scales and label placement.
-    let xs = make_scale(x, plot.x, plot.right(), false, plot);
-    let ys = make_scale(y, plot.bottom(), plot.y, true, plot);
+    let xs = make_scale(x, plot.x, plot.right(), false);
+    let ys = make_scale(y, plot.bottom(), plot.y, true);
     let mut x_crowded = false;
     let mut y_crowded = false;
 
     let mut x_draw = Vec::new();
     match (&x.kind, &xs) {
         (AxisKind::Cont { .. }, AxisScale::Cont(s)) => {
-            let AxisKind::Cont { ticks, .. } = &x.kind else { unreachable!() };
+            let AxisKind::Cont { ticks, .. } = &x.kind else {
+                unreachable!()
+            };
             let mut prev_end = f64::NEG_INFINITY;
             for (t, (text, _)) in ticks.iter().zip(&x_labels) {
                 let pos = s.map(t.value);
@@ -513,7 +638,11 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
                     x_crowded = true;
                 }
                 prev_end = pos + wd / 2.0;
-                x_draw.push(LabelDraw { pos, text: text.clone(), full: None });
+                x_draw.push(LabelDraw {
+                    pos,
+                    text: text.clone(),
+                    full: None,
+                });
             }
         }
         (AxisKind::Band { labels }, AxisScale::Band(b)) => {
@@ -521,17 +650,25 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
             let mut shown = x_labels.iter();
             for i in (0..n).step_by(stride) {
                 if let Some((text, full)) = shown.next() {
-                    x_draw.push(LabelDraw { pos: b.center(i), text: text.clone(), full: full.clone() });
+                    x_draw.push(LabelDraw {
+                        pos: b.center(i),
+                        text: text.clone(),
+                        full: full.clone(),
+                    });
                 }
             }
             if stride > 1 {
-                ctx.notes.add(format!("only every {stride}th of {n} category labels is shown so they do not overlap; all values are drawn"));
+                ctx.notes.add(format!("only every {} of {n} category labels is shown so they do not overlap; all values are drawn", ordinal(stride)));
             }
         }
         _ => {}
     }
     let mut y_draw = Vec::new();
-    let place_y = |a: &Axis, s: &AxisScale, crowded: &mut bool, notes: &mut crate::cols::Notes| -> Vec<LabelDraw> {
+    let place_y = |a: &Axis,
+                   s: &AxisScale,
+                   crowded: &mut bool,
+                   notes: &mut crate::cols::Notes|
+     -> Vec<LabelDraw> {
         let mut out = Vec::new();
         match (&a.kind, s) {
             (AxisKind::Cont { ticks, .. }, AxisScale::Cont(sc)) => {
@@ -542,7 +679,11 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
                         *crowded = true;
                     }
                     prev = pos;
-                    out.push(LabelDraw { pos, text: t.label.clone(), full: None });
+                    out.push(LabelDraw {
+                        pos,
+                        text: t.label.clone(),
+                        full: None,
+                    });
                 }
             }
             (AxisKind::Band { labels }, AxisScale::Band(b)) => {
@@ -551,10 +692,14 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
                 let stride = (14.0 / slot.max(1.0)).ceil().max(1.0) as usize;
                 for i in (0..n).step_by(stride) {
                     let (t, cut) = elide(&labels[i], band_cap, TICK_SIZE, false);
-                    out.push(LabelDraw { pos: b.center(i), text: t, full: cut.then(|| labels[i].clone()) });
+                    out.push(LabelDraw {
+                        pos: b.center(i),
+                        text: t,
+                        full: cut.then(|| labels[i].clone()),
+                    });
                 }
                 if stride > 1 {
-                    notes.add(format!("only every {stride}th of {n} category labels is shown so they do not overlap; all values are drawn"));
+                    notes.add(format!("only every {} of {n} category labels is shown so they do not overlap; all values are drawn", ordinal(stride)));
                 }
             }
             _ => {}
@@ -564,18 +709,26 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     y_draw.extend(place_y(y, &ys, &mut y_crowded, &mut ctx.notes));
     let y2_layout = match y2 {
         Some(a2) => {
-            let s2 = make_scale(a2, plot.bottom(), plot.y, true, plot);
+            let s2 = make_scale(a2, plot.bottom(), plot.y, true);
             let mut c = false;
             let labels = place_y(a2, &s2, &mut c, &mut ctx.notes);
             y_crowded |= c;
-            Some(AxisLayout { scale: s2, labels, rotate: 0.0, grid: Vec::new(), title: a2.label.clone() })
+            Some(AxisLayout {
+                scale: s2,
+                labels,
+                rotate: 0.0,
+                grid: Vec::new(),
+                title: a2.label.clone(),
+            })
         }
         None => None,
     };
 
     let grid_of = |a: &Axis, s: &AxisScale| -> Vec<f64> {
         match (&a.kind, s) {
-            (AxisKind::Cont { ticks, .. }, AxisScale::Cont(sc)) => ticks.iter().map(|t| sc.map(t.value)).collect(),
+            (AxisKind::Cont { ticks, .. }, AxisScale::Cont(sc)) => {
+                ticks.iter().map(|t| sc.map(t.value)).collect()
+            }
             _ => Vec::new(),
         }
     };
@@ -584,8 +737,20 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     let x_title_y = bottom - 4.0;
     Ok(Frame {
         plot,
-        x: AxisLayout { scale: xs, labels: x_draw, rotate, grid: x_grid, title: x.label.clone() },
-        y: AxisLayout { scale: ys, labels: y_draw, rotate: 0.0, grid: y_grid, title: y.label.clone() },
+        x: AxisLayout {
+            scale: xs,
+            labels: x_draw,
+            rotate,
+            grid: x_grid,
+            title: x.label.clone(),
+        },
+        y: AxisLayout {
+            scale: ys,
+            labels: y_draw,
+            rotate: 0.0,
+            grid: y_grid,
+            title: y.label.clone(),
+        },
         y2: y2_layout,
         title,
         legend,
@@ -595,14 +760,22 @@ fn plan(ctx: &mut Ctx<'_>, spec: &FrameSpec<'_>, x: &Axis, y: &Axis, y2: Option<
     })
 }
 
-fn make_scale(a: &Axis, from: f64, to: f64, vertical_up: bool, plot: Rect) -> AxisScale {
-    let _ = (vertical_up, plot);
+/// The scale of `a` from pixel `from` to pixel `to`. On a vertical axis
+/// (`vertical`) a category axis lists its first category at the top.
+fn make_scale(a: &Axis, from: f64, to: f64, vertical: bool) -> AxisScale {
     match &a.kind {
-        AxisKind::Cont { log, d0, d1, .. } => AxisScale::Cont(if *log { Scale::log(*d0, *d1, from, to) } else { Scale::linear(*d0, *d1, from, to) }),
+        AxisKind::Cont { log, d0, d1, .. } => AxisScale::Cont(if *log {
+            Scale::log(*d0, *d1, from, to)
+        } else {
+            Scale::linear(*d0, *d1, from, to)
+        }),
         AxisKind::Band { labels } => {
-            // A band axis on the vertical side lists its first category at the top.
-            let (r0, r1) = if vertical_up { (to, from) } else { (from, to) };
-            AxisScale::Band(Band { n: labels.len(), r0, r1 })
+            let (r0, r1) = if vertical { (to, from) } else { (from, to) };
+            AxisScale::Band(Band {
+                n: labels.len(),
+                r0,
+                r1,
+            })
         }
     }
 }
@@ -610,7 +783,11 @@ fn make_scale(a: &Axis, from: f64, to: f64, vertical_up: bool, plot: Rect) -> Ax
 /// Draws the title and subtitle.
 pub fn draw_title(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame) {
     for line in &f.title {
-        let fill = if line.bold { ctx.theme.fg } else { ctx.theme.muted };
+        let fill = if line.bold {
+            ctx.theme.fg
+        } else {
+            ctx.theme.muted
+        };
         let mut st = TextStyle::new(line.size, fill);
         if line.bold {
             st = st.bold();
@@ -626,10 +803,19 @@ pub fn draw_title(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame) {
 pub fn draw_grid(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame) {
     let st = Style::stroke(ctx.theme.grid, 1.0);
     let p = f.plot;
-    for y in &f.y.grid {
+    // A gridline on the frame itself would double the axis line.
+    for y in
+        f.y.grid
+            .iter()
+            .filter(|y| (**y - p.bottom()).abs() > 1.0 && (**y - p.y).abs() > 1.0)
+    {
         svg.line(p.x, y.round() + 0.5, p.right(), y.round() + 0.5, &st);
     }
-    for x in &f.x.grid {
+    for x in
+        f.x.grid
+            .iter()
+            .filter(|x| (**x - p.x).abs() > 1.0 && (**x - p.right()).abs() > 1.0)
+    {
         svg.line(x.round() + 0.5, p.y, x.round() + 0.5, p.bottom(), &st);
     }
 }
@@ -672,7 +858,12 @@ pub fn draw_axes(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame) {
         for l in &a2.labels {
             let py = l.pos.round() + 0.5;
             svg.line(p.right(), py, p.right() + TICK_LEN, py, &line);
-            svg.text(p.right() + TICK_LEN + 4.0, l.pos + 4.0, &l.text, &TextStyle::new(TICK_SIZE, muted));
+            svg.text(
+                p.right() + TICK_LEN + 4.0,
+                l.pos + 4.0,
+                &l.text,
+                &TextStyle::new(TICK_SIZE, muted),
+            );
         }
     }
     // Titles.
@@ -686,25 +877,37 @@ pub fn draw_axes(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame) {
     }
     if let Some(t) = &f.y.title {
         let (text, cut) = elide(t, p.h, LABEL_SIZE, false);
-        let mut st = TextStyle::new(LABEL_SIZE, ctx.theme.fg).anchor(Anchor::Middle).rotate(-90.0);
+        let mut st = TextStyle::new(LABEL_SIZE, ctx.theme.fg)
+            .anchor(Anchor::Middle)
+            .rotate(-90.0);
         if cut {
             st = st.full(t);
         }
-        let label_w = f.y.labels.iter().map(|l| width(&l.text, TICK_SIZE, false)).fold(0.0, f64::max);
+        let label_w =
+            f.y.labels
+                .iter()
+                .map(|l| width(&l.text, TICK_SIZE, false))
+                .fold(0.0, f64::max);
         let bx = p.x - TICK_LEN - 5.0 - label_w - 5.0;
         svg.text(bx, p.y + p.h / 2.0, &text, &st);
     }
-    if let Some(a2) = &f.y2 {
-        if let Some(t) = &a2.title {
-            let (text, cut) = elide(t, p.h, LABEL_SIZE, false);
-            let mut st = TextStyle::new(LABEL_SIZE, ctx.theme.fg).anchor(Anchor::Middle).rotate(90.0);
-            if cut {
-                st = st.full(t);
-            }
-            let label_w = a2.labels.iter().map(|l| width(&l.text, TICK_SIZE, false)).fold(0.0, f64::max);
-            let bx = p.right() + TICK_LEN + 5.0 + label_w + 5.0;
-            svg.text(bx, p.y + p.h / 2.0, &text, &st);
+    if let Some(a2) = &f.y2
+        && let Some(t) = &a2.title
+    {
+        let (text, cut) = elide(t, p.h, LABEL_SIZE, false);
+        let mut st = TextStyle::new(LABEL_SIZE, ctx.theme.fg)
+            .anchor(Anchor::Middle)
+            .rotate(90.0);
+        if cut {
+            st = st.full(t);
         }
+        let label_w = a2
+            .labels
+            .iter()
+            .map(|l| width(&l.text, TICK_SIZE, false))
+            .fold(0.0, f64::max);
+        let bx = p.right() + TICK_LEN + 5.0 + label_w + 5.0;
+        svg.text(bx, p.y + p.h / 2.0, &text, &st);
     }
 }
 
@@ -715,7 +918,13 @@ pub fn draw_legend(svg: &mut Svg, ctx: &Ctx<'_>, f: &Frame, items: &[LegendItem]
         let (x, y) = (d.x, d.y);
         match item.swatch {
             Swatch::Box => svg.rect(x, y + 3.0, 12.0, 12.0, &Style::fill(&item.color)),
-            Swatch::Line => svg.line(x, y + 9.0, x + 14.0, y + 9.0, &Style::stroke(&item.color, 2.5)),
+            Swatch::Line => svg.line(
+                x,
+                y + 9.0,
+                x + 14.0,
+                y + 9.0,
+                &Style::stroke(&item.color, 2.5),
+            ),
             Swatch::Dot => svg.circle(x + 7.0, y + 9.0, 5.0, &Style::fill(&item.color)),
         }
         let mut st = TextStyle::new(12.0, ctx.theme.fg);

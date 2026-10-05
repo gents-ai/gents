@@ -34,9 +34,9 @@ pub mod spec;
 pub mod stats;
 pub mod svg;
 pub mod table;
-pub mod text;
 #[cfg(test)]
 mod testutil;
+pub mod text;
 
 use spec::Request;
 
@@ -56,7 +56,9 @@ pub(crate) fn request_error(e: &serde_json::Error) -> String {
     let msg = msg.split(" at line ").next().unwrap_or(&msg);
     if let Some(rest) = msg.strip_prefix("unknown field `") {
         let name = rest.split('`').next().unwrap_or(rest);
-        return format!("the field {name:?} is not known; check the field names in the tool description");
+        return format!(
+            "the field {name:?} is not known; check the field names in the tool description"
+        );
     }
     if e.is_eof() {
         return "the request ends early; it looks truncated".into();

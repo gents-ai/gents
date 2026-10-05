@@ -6,14 +6,16 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::load::resolve;
 
 fn describe(name: &str, e: &std::io::Error) -> String {
     use std::io::ErrorKind::{NotFound, PermissionDenied, ReadOnlyFilesystem};
     match e.kind() {
         PermissionDenied | ReadOnlyFilesystem => {
-            format!("{name} cannot be written because the folder is read-only; allow write access to it and try again")
+            format!(
+                "{name} cannot be written because the folder is read-only; allow write access to it and try again"
+            )
         }
         NotFound => format!("{name} cannot be written because its folder does not exist"),
         _ => format!("{name} cannot be written: {e}"),
@@ -33,7 +35,10 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> Res<()> {
         return fail(format!("{name} is not a file name"));
     };
     std::fs::create_dir_all(parent).map_err(|e| describe(name, &e))?;
-    let file = target.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let file = target
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = parent.join(format!(".{file}.tmp"));
     let result = std::fs::File::create(&tmp)
         .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
@@ -56,7 +61,10 @@ mod tests {
         write(d.path(), "chart.svg", b"one").unwrap();
         write(d.path(), "chart.svg", b"two!").unwrap();
         assert_eq!(std::fs::read(d.path().join("chart.svg")).unwrap(), b"two!");
-        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let left: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(left.len(), 1, "no temporary file is left: {left:?}");
     }
 
@@ -64,7 +72,10 @@ mod tests {
     fn missing_folders_on_the_way_are_created() {
         let d = TempDir::new();
         write(d.path(), "out/charts/a.png", b"x").unwrap();
-        assert_eq!(std::fs::read(d.path().join("out/charts/a.png")).unwrap(), b"x");
+        assert_eq!(
+            std::fs::read(d.path().join("out/charts/a.png")).unwrap(),
+            b"x"
+        );
     }
 
     #[test]
@@ -72,7 +83,13 @@ mod tests {
         let d = TempDir::new();
         let outer = d.path().join("inner");
         std::fs::create_dir(&outer).unwrap();
-        for bad in ["../escape.svg", "/tmp/escape.svg", "a/../../escape.svg", "a\\b.svg", ""] {
+        for bad in [
+            "../escape.svg",
+            "/tmp/escape.svg",
+            "a/../../escape.svg",
+            "a\\b.svg",
+            "",
+        ] {
             assert!(write(&outer, bad, b"x").is_err(), "{bad:?}");
         }
         assert!(!d.path().join("escape.svg").exists());
@@ -82,9 +99,19 @@ mod tests {
     fn a_folder_or_a_file_in_place_of_the_bound_folder_is_refused() {
         let d = TempDir::new();
         let f = d.write("data.csv", b"a\n1\n");
-        assert!(write(&f, "chart.svg", b"x").unwrap_err().0.contains("give the folder in path"));
+        assert!(
+            write(&f, "chart.svg", b"x")
+                .unwrap_err()
+                .0
+                .contains("give the folder in path")
+        );
         std::fs::create_dir(d.path().join("chart.svg")).unwrap();
-        assert!(write(d.path(), "chart.svg", b"x").unwrap_err().0.contains("is a folder"));
+        assert!(
+            write(d.path(), "chart.svg", b"x")
+                .unwrap_err()
+                .0
+                .contains("is a folder")
+        );
     }
 
     #[cfg(unix)]
@@ -93,9 +120,20 @@ mod tests {
         let d = TempDir::new();
         let outside = TempDir::new();
         std::os::unix::fs::symlink(outside.path(), d.path().join("link")).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("target.svg"), d.path().join("evil.svg")).unwrap();
-        assert!(write(d.path(), "link/chart.svg", b"x").unwrap_err().0.contains("symbolic link"));
-        assert!(write(d.path(), "evil.svg", b"x").unwrap_err().0.contains("symbolic link"));
+        std::os::unix::fs::symlink(outside.path().join("target.svg"), d.path().join("evil.svg"))
+            .unwrap();
+        assert!(
+            write(d.path(), "link/chart.svg", b"x")
+                .unwrap_err()
+                .0
+                .contains("symbolic link")
+        );
+        assert!(
+            write(d.path(), "evil.svg", b"x")
+                .unwrap_err()
+                .0
+                .contains("symbolic link")
+        );
         assert!(!outside.path().join("chart.svg").exists());
         assert!(!outside.path().join("target.svg").exists());
     }
@@ -110,7 +148,10 @@ mod tests {
         std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         // Running as the owner of the folder with write access overridden (root) can succeed.
         if let Err(e) = result {
-            assert!(e.0.contains("read-only") || e.0.contains("cannot be written"), "{e}");
+            assert!(
+                e.0.contains("read-only") || e.0.contains("cannot be written"),
+                "{e}"
+            );
             assert!(!d.path().join(".chart.svg.tmp").exists());
         }
     }

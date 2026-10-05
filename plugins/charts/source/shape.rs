@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use crate::cols::{self, ColKind, Numeric};
 use crate::ctx::Ctx;
-use crate::err::{fail, Res};
-use crate::spec::{Agg, ScaleKind, Sort, MAX_CATEGORIES, MAX_SERIES};
+use crate::err::{Res, fail};
+use crate::spec::{Agg, MAX_CATEGORIES, MAX_SERIES, ScaleKind, Sort};
 use crate::table::Table;
 
 /// What the x column holds.
@@ -45,6 +45,9 @@ pub struct XData {
     pub v: Vec<f64>,
     /// Category labels in drawing order (empty unless `kind` is `Cat`).
     pub cats: Vec<String>,
+    /// True when every x is a whole number from 1000 to 2999, which reads as
+    /// a year and is written without a thousands separator.
+    pub years: bool,
 }
 
 /// The rows of one series.
@@ -80,7 +83,12 @@ fn x_column(ctx: &Ctx<'_>, t: &Table) -> Res<usize> {
 
 /// Columns to use as values: the named ones, else every numeric column not
 /// used for something else.
-pub fn value_columns(ctx: &mut Ctx<'_>, t: &Table, named: &[String], skip: &[usize]) -> Res<Vec<usize>> {
+pub fn value_columns(
+    ctx: &mut Ctx<'_>,
+    t: &Table,
+    named: &[String],
+    skip: &[usize],
+) -> Res<Vec<usize>> {
     if !named.is_empty() {
         return named.iter().map(|n| cols::column(t, n)).collect();
     }
@@ -91,16 +99,30 @@ pub fn value_columns(ctx: &mut Ctx<'_>, t: &Table, named: &[String], skip: &[usi
         return fail("no column of numbers to draw; name the value column in y");
     }
     if found.len() > MAX_SERIES {
-        ctx.notes.add(format!("the data has {} numeric columns; only the first {MAX_SERIES} are drawn", found.len()));
+        ctx.notes.add(format!(
+            "the data has {} numeric columns; only the first {MAX_SERIES} are drawn",
+            found.len()
+        ));
         found.truncate(MAX_SERIES);
     }
     Ok(found)
 }
 
 /// Resolves the x column, the series and the value columns of a chart.
-pub fn resolve(ctx: &mut Ctx<'_>, t: &Table, policy: XPolicy, named_y: &[String], extra_skip: &[usize]) -> Res<Resolved> {
+pub fn resolve(
+    ctx: &mut Ctx<'_>,
+    t: &Table,
+    policy: XPolicy,
+    named_y: &[String],
+    extra_skip: &[usize],
+) -> Res<Resolved> {
     let xc = x_column(ctx, t)?;
-    let series_col = ctx.spec.series.as_deref().map(|n| cols::column(t, n)).transpose()?;
+    let series_col = ctx
+        .spec
+        .series
+        .as_deref()
+        .map(|n| cols::column(t, n))
+        .transpose()?;
     let mut skip = vec![xc];
     skip.extend(series_col);
     skip.extend(extra_skip);
@@ -127,23 +149,47 @@ pub fn resolve(ctx: &mut Ctx<'_>, t: &Table, policy: XPolicy, named_y: &[String]
                 }
             }
             if unlabeled > 0 {
-                ctx.notes.add(format!("{unlabeled} rows have no value in column {:?} and are not drawn", t.names[sc]));
+                ctx.notes.add(format!(
+                    "{unlabeled} rows have no value in column {:?} and are not drawn",
+                    t.names[sc]
+                ));
             }
             if names.len() > MAX_SERIES {
-                ctx.notes.add(format!("column {:?} has {} values; only the first {MAX_SERIES} series are drawn", t.names[sc], names.len()));
+                ctx.notes.add(format!(
+                    "column {:?} has {} values; only the first {MAX_SERIES} series are drawn",
+                    t.names[sc],
+                    names.len()
+                ));
             }
             for (name, rows) in names.into_iter().zip(per).take(MAX_SERIES) {
-                groups.push(Group { name, col: yc, rows: Some(rows) });
+                groups.push(Group {
+                    name,
+                    col: yc,
+                    rows: Some(rows),
+                });
             }
         }
         None => {
-            y_name = if ycols.len() == 1 { t.names[ycols[0]].clone() } else { String::new() };
+            y_name = if ycols.len() == 1 {
+                t.names[ycols[0]].clone()
+            } else {
+                String::new()
+            };
             for yc in ycols {
-                groups.push(Group { name: t.names[yc].clone(), col: yc, rows: None });
+                groups.push(Group {
+                    name: t.names[yc].clone(),
+                    col: yc,
+                    rows: None,
+                });
             }
         }
     }
-    let mut r = Resolved { x, groups, y_name, nums: HashMap::new() };
+    let mut r = Resolved {
+        x,
+        groups,
+        y_name,
+        nums: HashMap::new(),
+    };
     let cols_used: Vec<usize> = r.groups.iter().map(|g| g.col).collect();
     for c in cols_used {
         r.ensure_numeric(ctx, t, c);
@@ -158,13 +204,16 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
     let name = t.names[xc].clone();
     let detected = cols::kind(t, xc);
     if detected == ColKind::Empty {
-        return fail(format!("column {name:?} has no values; name a column that holds the x values"));
+        return fail(format!(
+            "column {name:?} has no values; name a column that holds the x values"
+        ));
     }
     let scale = ctx.spec.x_scale;
     let kind = match (policy, scale) {
         (XPolicy::Cat, s) => {
             if !matches!(s, ScaleKind::Auto | ScaleKind::Category) {
-                ctx.notes.add("x_scale is ignored for this chart type: its x axis lists categories");
+                ctx.notes
+                    .add("x_scale is ignored for this chart type: its x axis lists categories");
             }
             XKind::Cat
         }
@@ -178,39 +227,76 @@ fn build_x(ctx: &mut Ctx<'_>, t: &Table, xc: usize, policy: XPolicy) -> Res<XDat
         },
     };
     if policy == XPolicy::Cont && kind == XKind::Cat {
-        return fail(format!("this chart needs numbers or dates on x, but column {name:?} holds text; use a bar chart for categories"));
+        return fail(format!(
+            "this chart needs numbers or dates on x, but column {name:?} holds text; use a bar chart for categories"
+        ));
     }
     match kind {
         XKind::Num => {
             if detected == ColKind::Time || detected == ColKind::Text {
-                return fail(format!("x_scale needs numbers but column {name:?} holds {}", if detected == ColKind::Time { "dates" } else { "text" }));
+                return fail(format!(
+                    "x_scale needs numbers but column {name:?} holds {}",
+                    if detected == ColKind::Time {
+                        "dates"
+                    } else {
+                        "text"
+                    }
+                ));
             }
             let n = cols::numeric(t, xc);
             let bad = n.nulls + n.text;
             if bad > 0 {
                 ctx.notes.add(format!("column {name:?}: {bad} values are empty or not numbers; those rows are not drawn"));
             }
-            Ok(XData { kind, name, v: n.v, cats: Vec::new() })
+            let years = crate::common::years_like(&n.v);
+            Ok(XData {
+                kind,
+                name,
+                v: n.v,
+                cats: Vec::new(),
+                years,
+            })
         }
         XKind::Time => match cols::times(t, xc) {
             Some(v) => {
                 let bad = v.iter().filter(|x| x.is_nan()).count();
                 if bad > 0 {
-                    ctx.notes.add(format!("column {name:?}: {bad} values are empty; those rows are not drawn"));
+                    ctx.notes.add(format!(
+                        "column {name:?}: {bad} values are empty; those rows are not drawn"
+                    ));
                 }
-                Ok(XData { kind, name, v, cats: Vec::new() })
+                Ok(XData {
+                    kind,
+                    name,
+                    v,
+                    cats: Vec::new(),
+                    years: false,
+                })
             }
-            None => fail(format!("x_scale is time but column {name:?} does not hold dates; use dates like 2024-01-31 or 2024-01-31T10:00:00Z")),
+            None => fail(format!(
+                "x_scale is time but column {name:?} does not hold dates; use dates like 2024-01-31 or 2024-01-31T10:00:00Z"
+            )),
         },
         XKind::Cat => {
             let labels = cols::labels(t, xc);
             let (cats, idx) = cols::distinct(&labels);
             let missing = idx.iter().filter(|i| i.is_none()).count();
             if missing > 0 {
-                ctx.notes.add(format!("column {name:?}: {missing} rows have no value and are not drawn"));
+                ctx.notes.add(format!(
+                    "column {name:?}: {missing} rows have no value and are not drawn"
+                ));
             }
-            let v = idx.iter().map(|i| i.map_or(f64::NAN, |i| i as f64)).collect();
-            Ok(XData { kind, name, v, cats })
+            let v = idx
+                .iter()
+                .map(|i| i.map_or(f64::NAN, |i| i as f64))
+                .collect();
+            Ok(XData {
+                kind,
+                name,
+                v,
+                cats,
+                years: false,
+            })
         }
     }
 }
@@ -273,7 +359,11 @@ impl Resolved {
             ctx.notes.add(format!(
                 "there are {} categories; only the first {keep} {} are drawn",
                 order.len(),
-                if ctx.spec.sort == Sort::None { "in data order" } else { "in the chosen order" }
+                if ctx.spec.sort == Sort::None {
+                    "in data order"
+                } else {
+                    "in the chosen order"
+                }
             ));
         }
         let mut new_index = vec![f64::NAN; n];
@@ -285,7 +375,11 @@ impl Resolved {
                 *v = new_index[*v as usize];
             }
         }
-        self.x.cats = order.iter().take(keep).map(|i| self.x.cats[*i].clone()).collect();
+        self.x.cats = order
+            .iter()
+            .take(keep)
+            .map(|i| self.x.cats[*i].clone())
+            .collect();
     }
 
     /// For category charts: the aggregate of each series at each category,
@@ -325,7 +419,10 @@ mod tests {
     }
 
     fn spec(json: &str) -> crate::spec::Spec {
-        serde_json::from_str::<Request>(json).unwrap().resolve().unwrap()
+        serde_json::from_str::<Request>(json)
+            .unwrap()
+            .resolve()
+            .unwrap()
     }
 
     fn resolve_with(json: &str, csv: &str, policy: XPolicy) -> (Res<Resolved>, Vec<String>) {
@@ -346,35 +443,65 @@ mod tests {
         assert!(n.is_empty(), "{n:?}");
         assert_eq!(r.x.kind, XKind::Cat);
         assert_eq!(r.x.cats, ["Jan", "Feb", "Mar"]);
-        assert_eq!(r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(r.points(&r.groups[1], 3), [(0.0, 10.0), (1.0, 20.0), (2.0, 30.0)]);
+        assert_eq!(
+            r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(
+            r.points(&r.groups[1], 3),
+            [(0.0, 10.0), (1.0, 20.0), (2.0, 30.0)]
+        );
     }
 
     #[test]
     fn named_columns_select_and_order_the_series() {
-        let (r, _) = resolve_with(r#"{"chart":"line","x":"month","y":["b","a"]}"#, WIDE, XPolicy::Auto);
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x":"month","y":["b","a"]}"#,
+            WIDE,
+            XPolicy::Auto,
+        );
         let r = r.unwrap();
-        assert_eq!(r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        assert_eq!(
+            r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            ["b", "a"]
+        );
         assert_eq!(r.y_name, "");
     }
 
     #[test]
     fn long_data_makes_one_series_per_label_with_its_own_rows() {
         let csv = "m,region,v\n1,N,5\n2,N,6\n1,S,7\n2,S,8\n3,S,9\n";
-        let (r, _) = resolve_with(r#"{"chart":"line","x":"m","y":"v","series":"region"}"#, csv, XPolicy::Auto);
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x":"m","y":"v","series":"region"}"#,
+            csv,
+            XPolicy::Auto,
+        );
         let r = r.unwrap();
         assert_eq!(r.x.kind, XKind::Num);
-        assert_eq!(r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["N", "S"]);
+        assert_eq!(
+            r.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            ["N", "S"]
+        );
         assert_eq!(r.points(&r.groups[0], 5), [(1.0, 5.0), (2.0, 6.0)]);
-        assert_eq!(r.points(&r.groups[1], 5), [(1.0, 7.0), (2.0, 8.0), (3.0, 9.0)]);
+        assert_eq!(
+            r.points(&r.groups[1], 5),
+            [(1.0, 7.0), (2.0, 8.0), (3.0, 9.0)]
+        );
         assert_eq!(r.y_name, "v");
     }
 
     #[test]
     fn series_with_several_value_columns_is_refused() {
         let csv = "m,region,v,w\n1,N,5,1\n";
-        let (r, _) = resolve_with(r#"{"chart":"line","x":"m","y":["v","w"],"series":"region"}"#, csv, XPolicy::Auto);
-        assert_eq!(r.unwrap_err().0, "with series, give exactly one value column in y");
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x":"m","y":["v","w"],"series":"region"}"#,
+            csv,
+            XPolicy::Auto,
+        );
+        assert_eq!(
+            r.unwrap_err().0,
+            "with series, give exactly one value column in y"
+        );
     }
 
     #[test]
@@ -382,11 +509,19 @@ mod tests {
         let csv = "d,v\n2024-01-01,1\n2024-01-02,2\n";
         let (r, _) = resolve_with(r#"{"chart":"line"}"#, csv, XPolicy::Auto);
         assert_eq!(r.unwrap().x.kind, XKind::Time);
-        let (r, _) = resolve_with(r#"{"chart":"line","x_scale":"category"}"#, csv, XPolicy::Auto);
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x_scale":"category"}"#,
+            csv,
+            XPolicy::Auto,
+        );
         assert_eq!(r.unwrap().x.kind, XKind::Cat);
         let (r, _) = resolve_with(r#"{"chart":"line","x_scale":"linear"}"#, csv, XPolicy::Auto);
         assert!(r.unwrap_err().0.contains("holds dates"));
-        let (r, _) = resolve_with(r#"{"chart":"line","x_scale":"time"}"#, "d,v\nabc,1\n", XPolicy::Auto);
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x_scale":"time"}"#,
+            "d,v\nabc,1\n",
+            XPolicy::Auto,
+        );
         assert!(r.unwrap_err().0.contains("does not hold dates"));
     }
 
@@ -399,7 +534,11 @@ mod tests {
 
     #[test]
     fn a_category_policy_reads_numbers_as_labels_and_says_when_x_scale_is_ignored() {
-        let (r, n) = resolve_with(r#"{"chart":"bar","x_scale":"log"}"#, "year,v\n2020,1\n2021,2\n", XPolicy::Cat);
+        let (r, n) = resolve_with(
+            r#"{"chart":"bar","x_scale":"log"}"#,
+            "year,v\n2020,1\n2021,2\n",
+            XPolicy::Cat,
+        );
         let r = r.unwrap();
         assert_eq!(r.x.cats, ["2020", "2021"]);
         assert!(n.iter().any(|w| w.contains("x_scale is ignored")), "{n:?}");
@@ -411,7 +550,11 @@ mod tests {
         let (r, n) = resolve_with(r#"{"chart":"line"}"#, csv, XPolicy::Auto);
         let r = r.unwrap();
         assert_eq!(r.points(&r.groups[0], 5).len(), 3);
-        assert!(n.iter().any(|w| w.contains("2 values are empty or not numbers; those rows are not drawn")), "{n:?}");
+        assert!(
+            n.iter()
+                .any(|w| w.contains("2 values are empty or not numbers; those rows are not drawn")),
+            "{n:?}"
+        );
     }
 
     #[test]
@@ -428,8 +571,16 @@ mod tests {
     #[test]
     fn missing_columns_and_empty_x_are_named() {
         let (r, _) = resolve_with(r#"{"chart":"line","x":"nope"}"#, WIDE, XPolicy::Auto);
-        assert!(r.unwrap_err().0.contains("column \"nope\" is not in the data"));
-        let (r, _) = resolve_with(r#"{"chart":"line","x":"e","y":"v"}"#, "e,v\n,1\n,2\n", XPolicy::Auto);
+        assert!(
+            r.unwrap_err()
+                .0
+                .contains("column \"nope\" is not in the data")
+        );
+        let (r, _) = resolve_with(
+            r#"{"chart":"line","x":"e","y":"v"}"#,
+            "e,v\n,1\n,2\n",
+            XPolicy::Auto,
+        );
         assert!(r.unwrap_err().0.contains("has no values"));
         let (r, _) = resolve_with(r#"{"chart":"line"}"#, "a,b\nx,y\n", XPolicy::Auto);
         assert!(r.unwrap_err().0.contains("no column of numbers"));
@@ -439,7 +590,11 @@ mod tests {
     fn categories_follow_the_sort_option_and_are_renumbered() {
         let csv = "k,v\nb,1\na,9\nc,5\n";
         let cats = |sort: &str| {
-            let (r, _) = resolve_with(&format!(r#"{{"chart":"bar","sort":"{sort}"}}"#), csv, XPolicy::Cat);
+            let (r, _) = resolve_with(
+                &format!(r#"{{"chart":"bar","sort":"{sort}"}}"#),
+                csv,
+                XPolicy::Cat,
+            );
             let r = r.unwrap();
             (r.x.cats.clone(), r.x.v.clone())
         };
@@ -449,7 +604,11 @@ mod tests {
         assert_eq!(cats("value").0, ["b", "c", "a"]);
         let (names, v) = cats("value_desc");
         assert_eq!(names, ["a", "c", "b"]);
-        assert_eq!(v, [2.0, 0.0, 1.0], "rows are renumbered to the new positions");
+        assert_eq!(
+            v,
+            [2.0, 0.0, 1.0],
+            "rows are renumbered to the new positions"
+        );
     }
 
     #[test]
@@ -462,7 +621,11 @@ mod tests {
         let r = r.unwrap();
         assert_eq!(r.x.cats.len(), MAX_CATEGORIES);
         assert_eq!(r.x.v.iter().filter(|v| v.is_nan()).count(), 50);
-        assert!(n.iter().any(|w| w.contains("there are 150 categories; only the first 100 in data order")), "{n:?}");
+        assert!(
+            n.iter()
+                .any(|w| w.contains("there are 150 categories; only the first 100 in data order")),
+            "{n:?}"
+        );
     }
 
     #[test]
@@ -471,9 +634,16 @@ mod tests {
         for i in 0..30 {
             csv.push_str(&format!("1,s{i:02},{i}\n"));
         }
-        let (r, n) = resolve_with(r#"{"chart":"line","x":"x","y":"v","series":"s"}"#, &csv, XPolicy::Auto);
+        let (r, n) = resolve_with(
+            r#"{"chart":"line","x":"x","y":"v","series":"s"}"#,
+            &csv,
+            XPolicy::Auto,
+        );
         assert_eq!(r.unwrap().groups.len(), MAX_SERIES);
-        assert!(n.iter().any(|w| w.contains("only the first 24 series")), "{n:?}");
+        assert!(
+            n.iter().any(|w| w.contains("only the first 24 series")),
+            "{n:?}"
+        );
     }
 
     #[test]
@@ -488,6 +658,9 @@ mod tests {
         let csv2 = "k,a,b\nx,1,\ny,,2\n";
         let (r2, _) = resolve_with(r#"{"chart":"bar"}"#, csv2, XPolicy::Cat);
         let g = r2.unwrap().grid(&table(csv2), Agg::Sum);
-        assert!(g[0][1].is_nan() && g[1][0].is_nan(), "a series with no value at a category has a gap, not zero");
+        assert!(
+            g[0][1].is_nan() && g[1][0].is_nan(),
+            "a series with no value at a category has a gap, not zero"
+        );
     }
 }

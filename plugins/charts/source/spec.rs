@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::dates;
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::format::{self, NumFormat};
 use crate::palette::{self, Theme};
 
@@ -440,7 +440,13 @@ fn scale_of(field: &str, value: Option<&str>, allow_time: bool) -> Res<ScaleKind
         field,
         value,
         ScaleKind::Auto,
-        &[("auto", ScaleKind::Auto), ("linear", ScaleKind::Linear), ("log", ScaleKind::Log), ("time", ScaleKind::Time), ("category", ScaleKind::Category)],
+        &[
+            ("auto", ScaleKind::Auto),
+            ("linear", ScaleKind::Linear),
+            ("log", ScaleKind::Log),
+            ("time", ScaleKind::Time),
+            ("category", ScaleKind::Category),
+        ],
     )?;
     if !allow_time && matches!(v, ScaleKind::Time | ScaleKind::Category) {
         return fail(format!("{field} can be auto, linear or log"));
@@ -449,7 +455,9 @@ fn scale_of(field: &str, value: Option<&str>, allow_time: bool) -> Res<ScaleKind
 }
 
 fn clean_text(v: Option<String>) -> Option<String> {
-    v.map(|s| crate::text::clean(&s)).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    v.map(|s| crate::text::clean(&s))
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 /// An axis label: `Some("")` means the caller asked for no label.
@@ -474,15 +482,20 @@ fn check_x_format(f: &str) -> Res<()> {
 pub fn save_name(name: &str, ext: &str) -> Res<String> {
     let n = name.trim();
     let last = n.rsplit('/').next().unwrap_or(n);
-    let ok_ext = last.len() > ext.len() + 1 && last.to_ascii_lowercase().ends_with(&format!(".{ext}"));
+    let ok_ext =
+        last.len() > ext.len() + 1 && last.to_ascii_lowercase().ends_with(&format!(".{ext}"));
     if !ok_ext {
         return fail(format!("save file {name:?} needs a name ending in .{ext}"));
     }
     if n.contains(['\0', '\\']) || n.starts_with('/') || n.as_bytes().get(1) == Some(&b':') {
-        return fail(format!("save file {name:?} must be a relative path inside the folder"));
+        return fail(format!(
+            "save file {name:?} must be a relative path inside the folder"
+        ));
     }
     if n.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
-        return fail(format!("save file {name:?} must stay inside the folder: no empty parts, . or .."));
+        return fail(format!(
+            "save file {name:?} must stay inside the folder: no empty parts, . or .."
+        ));
     }
     if n.len() > 200 {
         return fail("save file names are limited to 200 characters");
@@ -502,49 +515,78 @@ impl Request<'_> {
             _ => 480,
         });
         if !(MIN_WIDTH..=MAX_SIDE).contains(&width) {
-            return fail(format!("width must be between {MIN_WIDTH} and {MAX_SIDE} pixels"));
+            return fail(format!(
+                "width must be between {MIN_WIDTH} and {MAX_SIDE} pixels"
+            ));
         }
         if !(MIN_HEIGHT..=MAX_SIDE).contains(&height) {
-            return fail(format!("height must be between {MIN_HEIGHT} and {MAX_SIDE} pixels"));
+            return fail(format!(
+                "height must be between {MIN_HEIGHT} and {MAX_SIDE} pixels"
+            ));
         }
         let scale = self.scale.unwrap_or(1.0);
         if !(0.5..=4.0).contains(&scale) {
             return fail("scale must be between 0.5 and 4");
         }
-        let pixels = (f64::from(width) * scale).round() as u64 * (f64::from(height) * scale).round() as u64;
+        let pixels =
+            (f64::from(width) * scale).round() as u64 * (f64::from(height) * scale).round() as u64;
         if pixels > MAX_PIXELS {
             return fail(format!(
                 "the image would be {pixels} pixels, over the limit of {MAX_PIXELS}; lower width, height or scale"
             ));
         }
-        for (name, v) in [("x_min", self.x_min), ("x_max", self.x_max), ("y_min", self.y_min), ("y_max", self.y_max), ("center", self.center)] {
+        for (name, v) in [
+            ("x_min", self.x_min),
+            ("x_max", self.x_max),
+            ("y_min", self.y_min),
+            ("y_max", self.y_max),
+            ("center", self.center),
+        ] {
             if v.is_some_and(|v| !v.is_finite()) {
                 return fail(format!("{name} must be a finite number"));
             }
         }
-        if let (Some(a), Some(b)) = (self.y_min, self.y_max) {
-            if a >= b {
-                return fail("y_min must be below y_max");
-            }
+        if let (Some(a), Some(b)) = (self.y_min, self.y_max)
+            && a >= b
+        {
+            return fail("y_min must be below y_max");
         }
-        if let (Some(a), Some(b)) = (self.x_min, self.x_max) {
-            if a >= b {
-                return fail("x_min must be below x_max");
-            }
+        if let (Some(a), Some(b)) = (self.x_min, self.x_max)
+            && a >= b
+        {
+            return fail("x_min must be below x_max");
         }
         let agg = choice(
             "agg",
             self.agg.as_deref(),
             Agg::Sum,
-            &[("sum", Agg::Sum), ("mean", Agg::Mean), ("count", Agg::Count), ("min", Agg::Min), ("max", Agg::Max), ("median", Agg::Median)],
+            &[
+                ("sum", Agg::Sum),
+                ("mean", Agg::Mean),
+                ("count", Agg::Count),
+                ("min", Agg::Min),
+                ("max", Agg::Max),
+                ("median", Agg::Median),
+            ],
         )?;
         let sort = choice(
             "sort",
             self.sort.as_deref(),
             Sort::None,
-            &[("none", Sort::None), ("x", Sort::X), ("x_desc", Sort::XDesc), ("value", Sort::Value), ("value_desc", Sort::ValueDesc)],
+            &[
+                ("none", Sort::None),
+                ("x", Sort::X),
+                ("x_desc", Sort::XDesc),
+                ("value", Sort::Value),
+                ("value_desc", Sort::ValueDesc),
+            ],
         )?;
-        let stack = choice("stack", self.stack.as_deref(), false, &[("grouped", false), ("stacked", true)])?;
+        let stack = choice(
+            "stack",
+            self.stack.as_deref(),
+            false,
+            &[("grouped", false), ("stacked", true)],
+        )?;
         if self.stack.is_some() && kind != Kind::Bar {
             notes.push("stack only applies to bar charts and was ignored".into());
         }
@@ -555,18 +597,51 @@ impl Request<'_> {
             "legend",
             self.legend.as_deref(),
             Legend::Auto,
-            &[("auto", Legend::Auto), ("none", Legend::None), ("right", Legend::Right), ("bottom", Legend::Bottom), ("top", Legend::Top), ("left", Legend::Left)],
+            &[
+                ("auto", Legend::Auto),
+                ("none", Legend::None),
+                ("right", Legend::Right),
+                ("bottom", Legend::Bottom),
+                ("top", Legend::Top),
+                ("left", Legend::Left),
+            ],
         )?;
-        let output = choice("output", self.output.as_deref(), Output::Both, &[("both", Output::Both), ("svg", Output::Svg), ("png", Output::Png)])?;
+        let output = choice(
+            "output",
+            self.output.as_deref(),
+            Output::Both,
+            &[
+                ("both", Output::Both),
+                ("svg", Output::Svg),
+                ("png", Output::Png),
+            ],
+        )?;
         let theme = palette::theme(self.theme.as_deref().unwrap_or("light"))?;
         let colors = self.colors.as_deref().map(palette::custom).transpose()?;
-        let line_right = choice("line_axis", self.line_axis.as_deref(), true, &[("right", true), ("left", false)])?;
+        let line_right = choice(
+            "line_axis",
+            self.line_axis.as_deref(),
+            true,
+            &[("right", true), ("left", false)],
+        )?;
         let bins = match &self.bins {
             None => Bins::Auto,
             Some(BinsArg::Text(t)) if t.trim() == "auto" => Bins::Auto,
-            Some(BinsArg::Text(t)) if t.trim().parse::<usize>().is_ok_and(|n| (1..=MAX_BINS).contains(&n)) => Bins::Count(t.trim().parse().unwrap_or(1)),
-            Some(BinsArg::Count(n)) if (1..=MAX_BINS as u32).contains(n) => Bins::Count(*n as usize),
-            Some(_) => return fail(format!("bins must be \"auto\" or a whole number from 1 to {MAX_BINS}")),
+            Some(BinsArg::Text(t))
+                if t.trim()
+                    .parse::<usize>()
+                    .is_ok_and(|n| (1..=MAX_BINS).contains(&n)) =>
+            {
+                Bins::Count(t.trim().parse().unwrap_or(1))
+            }
+            Some(BinsArg::Count(n)) if (1..=MAX_BINS as u32).contains(n) => {
+                Bins::Count(*n as usize)
+            }
+            Some(_) => {
+                return fail(format!(
+                    "bins must be \"auto\" or a whole number from 1 to {MAX_BINS}"
+                ));
+            }
         };
         let x_scale = scale_of("x_scale", self.x_scale.as_deref(), true)?;
         let y_log = scale_of("y_scale", self.y_scale.as_deref(), false)? == ScaleKind::Log;
@@ -578,7 +653,10 @@ impl Request<'_> {
                 if b.is_empty() || b.contains(['\0', '\\']) || b.ends_with('/') {
                     return fail("save needs a file name like \"chart\"");
                 }
-                Some(SaveSpec { svg: Some(save_name(&format!("{b}.svg"), "svg")?), png: Some(save_name(&format!("{b}.png"), "png")?) })
+                Some(SaveSpec {
+                    svg: Some(save_name(&format!("{b}.svg"), "svg")?),
+                    png: Some(save_name(&format!("{b}.png"), "png")?),
+                })
             }
             Some(SaveArg::Files { svg, png }) => {
                 if svg.is_none() && png.is_none() {
@@ -595,7 +673,9 @@ impl Request<'_> {
         let mut line = self.line.clone().map(Names::into_vec).unwrap_or_default();
         line.retain(|c| !c.trim().is_empty());
         if y.len() + line.len() > MAX_SERIES {
-            return fail(format!("at most {MAX_SERIES} value columns can be drawn; name fewer in y"));
+            return fail(format!(
+                "at most {MAX_SERIES} value columns can be drawn; name fewer in y"
+            ));
         }
         if !line.is_empty() && kind != Kind::Combo {
             notes.push("line only applies to combo charts and was ignored".into());
@@ -616,7 +696,8 @@ impl Request<'_> {
             agg_given: self.agg.is_some(),
             sort,
             stacked: stack_override.unwrap_or(stack) && kind == Kind::Bar,
-            horizontal: (horizontal_override || self.horizontal.unwrap_or(false)) && kind == Kind::Bar,
+            horizontal: (horizontal_override || self.horizontal.unwrap_or(false))
+                && kind == Kind::Bar,
             bins,
             title: clean_text(self.title.clone()),
             subtitle: clean_text(self.subtitle.clone()),
@@ -673,7 +754,12 @@ impl Spec {
         add(&self.series);
         add(&self.size);
         add(&self.value);
-        out.extend(self.y.iter().chain(self.line.iter()).map(|c| c.trim().to_owned()));
+        out.extend(
+            self.y
+                .iter()
+                .chain(self.line.iter())
+                .map(|c| c.trim().to_owned()),
+        );
         out.sort();
         out.dedup();
         Some(out)
@@ -685,15 +771,22 @@ mod tests {
     use super::*;
 
     fn req(json: &str) -> Res<Spec> {
-        let r: Request = serde_json::from_str(json).map_err(|e| crate::err::ChartError(e.to_string()))?;
+        let r: Request =
+            serde_json::from_str(json).map_err(|e| crate::err::ChartError(e.to_string()))?;
         r.resolve()
     }
 
     #[test]
     fn a_minimal_request_gets_the_defaults() {
         let s = req(r#"{"chart":"line"}"#).unwrap();
-        assert_eq!((s.kind, s.width, s.height, s.scale), (Kind::Line, 800, 480, 1.0));
-        assert_eq!((s.agg, s.sort, s.legend, s.output), (Agg::Sum, Sort::None, Legend::Auto, Output::Both));
+        assert_eq!(
+            (s.kind, s.width, s.height, s.scale),
+            (Kind::Line, 800, 480, 1.0)
+        );
+        assert_eq!(
+            (s.agg, s.sort, s.legend, s.output),
+            (Agg::Sum, Sort::None, Legend::Auto, Output::Both)
+        );
         assert!(!s.theme.dark && !s.stacked && !s.horizontal && !s.y_log);
         assert_eq!(s.bins, Bins::Auto);
     }
@@ -717,8 +810,27 @@ mod tests {
 
     #[test]
     fn every_chart_type_name_resolves_and_round_trips_its_name() {
-        for name in ["line", "area", "stacked_area", "bar", "scatter", "bubble", "histogram", "box", "pie", "donut", "heatmap", "combo"] {
-            assert_eq!(req(&format!(r#"{{"chart":"{name}"}}"#)).unwrap().kind.name(), name);
+        for name in [
+            "line",
+            "area",
+            "stacked_area",
+            "bar",
+            "scatter",
+            "bubble",
+            "histogram",
+            "box",
+            "pie",
+            "donut",
+            "heatmap",
+            "combo",
+        ] {
+            assert_eq!(
+                req(&format!(r#"{{"chart":"{name}"}}"#))
+                    .unwrap()
+                    .kind
+                    .name(),
+                name
+            );
         }
     }
 
@@ -726,7 +838,10 @@ mod tests {
     fn missing_and_unknown_chart_types_are_refused() {
         assert!(req("{}").unwrap_err().0.starts_with("chart is required"));
         let e = req(r#"{"chart":"radar"}"#).unwrap_err().0;
-        assert!(e.contains("\"radar\" is not known") && e.contains("combo"), "{e}");
+        assert!(
+            e.contains("\"radar\" is not known") && e.contains("combo"),
+            "{e}"
+        );
     }
 
     #[test]
@@ -738,13 +853,28 @@ mod tests {
     #[test]
     fn size_limits_are_enforced_with_the_numbers() {
         for (json, needle) in [
-            (r#"{"chart":"line","width":100}"#, "width must be between 200 and 4096"),
+            (
+                r#"{"chart":"line","width":100}"#,
+                "width must be between 200 and 4096",
+            ),
             (r#"{"chart":"line","width":5000}"#, "width must be between"),
-            (r#"{"chart":"line","height":100}"#, "height must be between 150 and 4096"),
-            (r#"{"chart":"line","scale":0.1}"#, "scale must be between 0.5 and 4"),
+            (
+                r#"{"chart":"line","height":100}"#,
+                "height must be between 150 and 4096",
+            ),
+            (
+                r#"{"chart":"line","scale":0.1}"#,
+                "scale must be between 0.5 and 4",
+            ),
             (r#"{"chart":"line","scale":9}"#, "scale must be between"),
-            (r#"{"chart":"line","width":4096,"height":4096}"#, "over the limit of 16000000"),
-            (r#"{"chart":"line","width":3000,"height":2000,"scale":2}"#, "pixels"),
+            (
+                r#"{"chart":"line","width":4096,"height":4096}"#,
+                "over the limit of 16000000",
+            ),
+            (
+                r#"{"chart":"line","width":3000,"height":2000,"scale":2}"#,
+                "pixels",
+            ),
         ] {
             let e = req(json).unwrap_err().0;
             assert!(e.contains(needle), "{json}: {e}");
@@ -773,41 +903,74 @@ mod tests {
 
     #[test]
     fn bounds_must_be_ordered_and_finite() {
-        assert!(req(r#"{"chart":"line","y_min":5,"y_max":5}"#).unwrap_err().0.contains("y_min must be below y_max"));
-        assert!(req(r#"{"chart":"line","x_min":9,"x_max":1}"#).unwrap_err().0.contains("x_min must be below x_max"));
+        assert!(
+            req(r#"{"chart":"line","y_min":5,"y_max":5}"#)
+                .unwrap_err()
+                .0
+                .contains("y_min must be below y_max")
+        );
+        assert!(
+            req(r#"{"chart":"line","x_min":9,"x_max":1}"#)
+                .unwrap_err()
+                .0
+                .contains("x_min must be below x_max")
+        );
         assert!(req(r#"{"chart":"line","y_min":1e999}"#).is_err());
         assert!(req(r#"{"chart":"line","y_min":0,"y_max":10}"#).is_ok());
     }
 
     #[test]
     fn bins_accept_auto_or_a_count_in_range() {
-        assert_eq!(req(r#"{"chart":"histogram","bins":"auto"}"#).unwrap().bins, Bins::Auto);
-        assert_eq!(req(r#"{"chart":"histogram","bins":12}"#).unwrap().bins, Bins::Count(12));
-        assert_eq!(req(r#"{"chart":"histogram","bins":"12"}"#).unwrap().bins, Bins::Count(12), "a graph record carries bins as text");
+        assert_eq!(
+            req(r#"{"chart":"histogram","bins":"auto"}"#).unwrap().bins,
+            Bins::Auto
+        );
+        assert_eq!(
+            req(r#"{"chart":"histogram","bins":12}"#).unwrap().bins,
+            Bins::Count(12)
+        );
+        assert_eq!(
+            req(r#"{"chart":"histogram","bins":"12"}"#).unwrap().bins,
+            Bins::Count(12),
+            "a graph record carries bins as text"
+        );
         for bad in [r#""many""#, r#""0""#, r#""201""#, "0", "201", "-1", "2.5"] {
-            assert!(req(&format!(r#"{{"chart":"histogram","bins":{bad}}}"#)).is_err(), "{bad}");
+            assert!(
+                req(&format!(r#"{{"chart":"histogram","bins":{bad}}}"#)).is_err(),
+                "{bad}"
+            );
         }
     }
 
     #[test]
     fn y_may_be_a_name_or_a_list_and_blank_names_drop_out() {
         assert_eq!(req(r#"{"chart":"line","y":"a"}"#).unwrap().y, ["a"]);
-        assert_eq!(req(r#"{"chart":"line","y":["a","","b"]}"#).unwrap().y, ["a", "b"]);
+        assert_eq!(
+            req(r#"{"chart":"line","y":["a","","b"]}"#).unwrap().y,
+            ["a", "b"]
+        );
         let many: Vec<String> = (0..25).map(|i| format!("c{i}")).collect();
-        let e = req(&format!(r#"{{"chart":"line","y":{}}}"#, serde_json::to_string(&many).unwrap())).unwrap_err().0;
+        let e = req(&format!(
+            r#"{{"chart":"line","y":{}}}"#,
+            serde_json::to_string(&many).unwrap()
+        ))
+        .unwrap_err()
+        .0;
         assert!(e.contains("at most 24"), "{e}");
     }
 
     #[test]
     fn options_that_do_not_apply_are_noted_not_silently_dropped() {
-        let s = req(r#"{"chart":"line","stack":"stacked","horizontal":true,"line":["a"]}"#).unwrap();
+        let s =
+            req(r#"{"chart":"line","stack":"stacked","horizontal":true,"line":["a"]}"#).unwrap();
         assert_eq!(s.notes.len(), 3, "{:?}", s.notes);
         assert!(!s.stacked && !s.horizontal && s.line.is_empty());
     }
 
     #[test]
     fn text_fields_are_cleaned_and_empty_ones_dropped() {
-        let s = req("{\"chart\":\"line\",\"title\":\"  Sales\\nQ1 \",\"subtitle\":\"   \"}").unwrap();
+        let s =
+            req("{\"chart\":\"line\",\"title\":\"  Sales\\nQ1 \",\"subtitle\":\"   \"}").unwrap();
         assert_eq!(s.title.as_deref(), Some("Sales Q1"));
         assert_eq!(s.subtitle, None);
     }
@@ -818,8 +981,18 @@ mod tests {
         assert!(s.y_format.is_some() && s.format.is_some());
         let s = req(r#"{"chart":"line","format":",.0f","y_format":".1%"}"#).unwrap();
         assert_eq!(s.y_format.unwrap().kind, crate::format::Kind::Percent);
-        assert!(req(r#"{"chart":"line","y_format":"zz"}"#).unwrap_err().0.contains("not understood"));
-        assert!(req(r#"{"chart":"line","x_format":"%q"}"#).unwrap_err().0.contains("%q"));
+        assert!(
+            req(r#"{"chart":"line","y_format":"zz"}"#)
+                .unwrap_err()
+                .0
+                .contains("not understood")
+        );
+        assert!(
+            req(r#"{"chart":"line","x_format":"%q"}"#)
+                .unwrap_err()
+                .0
+                .contains("%q")
+        );
         assert!(req(r#"{"chart":"line","x_format":"%Y-%m"}"#).is_ok());
         assert!(req(r#"{"chart":"line","x_format":".0%"}"#).is_ok());
     }
@@ -833,11 +1006,31 @@ mod tests {
 
     #[test]
     fn save_names_must_be_relative_with_the_right_extension() {
-        let s = req(r#"{"chart":"line","save":"out/chart"}"#).unwrap().save.unwrap();
-        assert_eq!((s.svg.as_deref(), s.png.as_deref()), (Some("out/chart.svg"), Some("out/chart.png")));
-        let s = req(r#"{"chart":"line","save":{"png":"a.PNG"}}"#).unwrap().save.unwrap();
+        let s = req(r#"{"chart":"line","save":"out/chart"}"#)
+            .unwrap()
+            .save
+            .unwrap();
+        assert_eq!(
+            (s.svg.as_deref(), s.png.as_deref()),
+            (Some("out/chart.svg"), Some("out/chart.png"))
+        );
+        let s = req(r#"{"chart":"line","save":{"png":"a.PNG"}}"#)
+            .unwrap()
+            .save
+            .unwrap();
         assert_eq!((s.svg, s.png.as_deref()), (None, Some("a.PNG")));
-        for bad in ["../a.svg", "/a.svg", "a/../b.svg", "a\\b.svg", "a.txt", ".svg", "a//b.svg", "./a.svg", "C:/a.svg", "a/.svg"] {
+        for bad in [
+            "../a.svg",
+            "/a.svg",
+            "a/../b.svg",
+            "a\\b.svg",
+            "a.txt",
+            ".svg",
+            "a//b.svg",
+            "./a.svg",
+            "C:/a.svg",
+            "a/.svg",
+        ] {
             let e = save_name(bad, "svg").unwrap_err().0;
             assert!(e.contains("save file"), "{bad}: {e}");
         }
@@ -851,11 +1044,36 @@ mod tests {
     fn needed_columns_are_listed_only_when_the_request_is_complete() {
         let s = req(r#"{"chart":"line","x":"m","y":["a","b"],"series":"r"}"#).unwrap();
         assert_eq!(s.needed_columns().unwrap(), ["a", "b", "m", "r"]);
-        assert_eq!(req(r#"{"chart":"line","x":"m"}"#).unwrap().needed_columns(), None);
-        assert_eq!(req(r#"{"chart":"histogram","x":"v"}"#).unwrap().needed_columns().unwrap(), ["v"]);
-        assert_eq!(req(r#"{"chart":"box","y":"v","x":"g"}"#).unwrap().needed_columns().unwrap(), ["g", "v"]);
-        assert_eq!(req(r#"{"chart":"heatmap","x":"a","y":"b"}"#).unwrap().needed_columns(), None);
-        assert!(req(r#"{"chart":"heatmap","x":"a","y":"b","value":"c"}"#).unwrap().needed_columns().is_some());
+        assert_eq!(
+            req(r#"{"chart":"line","x":"m"}"#).unwrap().needed_columns(),
+            None
+        );
+        assert_eq!(
+            req(r#"{"chart":"histogram","x":"v"}"#)
+                .unwrap()
+                .needed_columns()
+                .unwrap(),
+            ["v"]
+        );
+        assert_eq!(
+            req(r#"{"chart":"box","y":"v","x":"g"}"#)
+                .unwrap()
+                .needed_columns()
+                .unwrap(),
+            ["g", "v"]
+        );
+        assert_eq!(
+            req(r#"{"chart":"heatmap","x":"a","y":"b"}"#)
+                .unwrap()
+                .needed_columns(),
+            None
+        );
+        assert!(
+            req(r#"{"chart":"heatmap","x":"a","y":"b","value":"c"}"#)
+                .unwrap()
+                .needed_columns()
+                .is_some()
+        );
         assert_eq!(req(r#"{"chart":"pie"}"#).unwrap().needed_columns(), None);
     }
 
@@ -867,6 +1085,9 @@ mod tests {
         assert_eq!(raw, r#"{"columns":["a"],"rows":[[1]]}"#);
         let start = json.as_ptr() as usize;
         let at = raw.as_ptr() as usize;
-        assert!(at >= start && at < start + json.len(), "the raw value points into the request text");
+        assert!(
+            at >= start && at < start + json.len(),
+            "the raw value points into the request text"
+        );
     }
 }

@@ -2,8 +2,8 @@
 //! calendar ticks and category slots.
 
 use crate::dates;
-use crate::err::{fail, Res};
-use crate::format::{axis_format, tick_labels, NumFormat};
+use crate::err::{Res, fail};
+use crate::format::{NumFormat, axis_format, tick_labels};
 use crate::frame::{Axis, AxisKind, Tick};
 use crate::scale::{log_ticks, nice_ticks};
 
@@ -32,7 +32,12 @@ fn within(v: f64, lo: f64, hi: f64) -> bool {
 }
 
 /// A numeric axis for `spec` with about `target` ticks.
-pub fn numeric(spec: NumSpec, target: usize, fmt: Option<&NumFormat>, label: Option<String>) -> Axis {
+pub fn numeric(
+    spec: NumSpec,
+    target: usize,
+    fmt: Option<&NumFormat>,
+    label: Option<String>,
+) -> Axis {
     let (mut lo, mut hi) = (spec.min, spec.max);
     if !lo.is_finite() || !hi.is_finite() {
         (lo, hi) = (0.0, 1.0);
@@ -54,11 +59,27 @@ pub fn numeric(spec: NumSpec, target: usize, fmt: Option<&NumFormat>, label: Opt
     if spec.log {
         let t = log_ticks(lo.max(f64::MIN_POSITIVE), hi.max(lo.max(f64::MIN_POSITIVE)));
         let (d0, d1) = if user { (lo, hi) } else { (t.lo, t.hi) };
-        let values: Vec<f64> = t.values.into_iter().filter(|v| within(*v, d0, d1)).collect();
+        let values: Vec<f64> = t
+            .values
+            .into_iter()
+            .filter(|v| within(*v, d0, d1))
+            .collect();
         let f = axis_format(fmt, &values, 0);
         let labels = tick_labels(&f, &values, 0);
-        let ticks = values.into_iter().zip(labels).map(|(value, label)| Tick { value, label }).collect();
-        return Axis { kind: AxisKind::Cont { log: true, d0, d1, ticks }, label };
+        let ticks = values
+            .into_iter()
+            .zip(labels)
+            .map(|(value, label)| Tick { value, label })
+            .collect();
+        return Axis {
+            kind: AxisKind::Cont {
+                log: true,
+                d0,
+                d1,
+                ticks,
+            },
+            label,
+        };
     }
     if lo == hi {
         let pad = if lo == 0.0 { 1.0 } else { lo.abs() * 0.1 };
@@ -66,16 +87,45 @@ pub fn numeric(spec: NumSpec, target: usize, fmt: Option<&NumFormat>, label: Opt
         hi += pad;
     }
     let t = nice_ticks(lo, hi, target);
-    let (d0, d1) = if user || !spec.nice { (lo, hi) } else { (t.values[0], t.values[t.values.len() - 1]) };
-    let values: Vec<f64> = t.values.iter().copied().filter(|v| within(*v, d0, d1)).collect();
+    let (d0, d1) = if user || !spec.nice {
+        (lo, hi)
+    } else {
+        (t.values[0], t.values[t.values.len() - 1])
+    };
+    let values: Vec<f64> = t
+        .values
+        .iter()
+        .copied()
+        .filter(|v| within(*v, d0, d1))
+        .collect();
     let f = axis_format(fmt, &values, t.decimals);
     let labels = tick_labels(&f, &values, t.decimals);
-    let ticks = values.into_iter().zip(labels).map(|(value, label)| Tick { value, label }).collect();
-    Axis { kind: AxisKind::Cont { log: false, d0, d1, ticks }, label }
+    let ticks = values
+        .into_iter()
+        .zip(labels)
+        .map(|(value, label)| Tick { value, label })
+        .collect();
+    Axis {
+        kind: AxisKind::Cont {
+            log: false,
+            d0,
+            d1,
+            ticks,
+        },
+        label,
+    }
 }
 
 /// A calendar axis over `[min, max]` epoch seconds.
-pub fn time(min: f64, max: f64, user_min: Option<f64>, user_max: Option<f64>, target: usize, pattern: Option<&str>, label: Option<String>) -> Axis {
+pub fn time(
+    min: f64,
+    max: f64,
+    user_min: Option<f64>,
+    user_max: Option<f64>,
+    target: usize,
+    pattern: Option<&str>,
+    label: Option<String>,
+) -> Axis {
     let mut lo = user_min.unwrap_or(min);
     let mut hi = user_max.unwrap_or(max);
     if lo >= hi {
@@ -88,19 +138,37 @@ pub fn time(min: f64, max: f64, user_min: Option<f64>, user_max: Option<f64>, ta
         .iter()
         .zip(&t.labels)
         .filter(|(v, _)| within(**v, lo, hi))
-        .map(|(v, l)| Tick { value: *v, label: l.clone() })
+        .map(|(v, l)| Tick {
+            value: *v,
+            label: l.clone(),
+        })
         .collect();
-    Axis { kind: AxisKind::Cont { log: false, d0: lo, d1: hi, ticks }, label }
+    Axis {
+        kind: AxisKind::Cont {
+            log: false,
+            d0: lo,
+            d1: hi,
+            ticks,
+        },
+        label,
+    }
 }
 
 /// A category axis.
 pub fn band(labels: Vec<String>, label: Option<String>) -> Axis {
-    Axis { kind: AxisKind::Band { labels }, label }
+    Axis {
+        kind: AxisKind::Band { labels },
+        label,
+    }
 }
 
 /// Refuses non-positive values on a logarithmic axis, naming the column and
 /// the first offender.
-pub fn require_positive(axis: &str, column: &str, values: impl IntoIterator<Item = f64>) -> Res<()> {
+pub fn require_positive(
+    axis: &str,
+    column: &str,
+    values: impl IntoIterator<Item = f64>,
+) -> Res<()> {
     let mut bad = 0usize;
     let mut first = None;
     for (i, v) in values.into_iter().enumerate() {
@@ -123,12 +191,24 @@ mod tests {
     use super::*;
 
     fn spec(min: f64, max: f64) -> NumSpec {
-        NumSpec { min, max, user_min: None, user_max: None, zero: false, nice: true, log: false }
+        NumSpec {
+            min,
+            max,
+            user_min: None,
+            user_max: None,
+            zero: false,
+            nice: true,
+            log: false,
+        }
     }
 
     fn cont(a: &Axis) -> (f64, f64, Vec<(f64, String)>) {
         match &a.kind {
-            AxisKind::Cont { d0, d1, ticks, .. } => (*d0, *d1, ticks.iter().map(|t| (t.value, t.label.clone())).collect()),
+            AxisKind::Cont { d0, d1, ticks, .. } => (
+                *d0,
+                *d1,
+                ticks.iter().map(|t| (t.value, t.label.clone())).collect(),
+            ),
             AxisKind::Band { .. } => panic!("band"),
         }
     }
@@ -186,10 +266,16 @@ mod tests {
     #[test]
     fn labels_follow_the_automatic_format_and_a_custom_one() {
         let (_, _, t) = cont(&numeric(spec(0.0, 1.0), 5, None, None));
-        assert_eq!(t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"]);
+        assert_eq!(
+            t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(),
+            ["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"]
+        );
         let f = crate::format::parse("{.0%}").unwrap();
         let (_, _, t) = cont(&numeric(spec(0.0, 1.0), 5, Some(&f), None));
-        assert_eq!(t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["0%", "20%", "40%", "60%", "80%", "100%"]);
+        assert_eq!(
+            t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(),
+            ["0%", "20%", "40%", "60%", "80%", "100%"]
+        );
         let (_, _, t) = cont(&numeric(spec(0.0, 3e6), 3, None, None));
         assert!(t.iter().any(|x| x.1 == "2M"), "{t:?}");
     }
@@ -201,7 +287,10 @@ mod tests {
         let a = numeric(s, 5, None, Some("n".into()));
         let (d0, d1, t) = cont(&a);
         assert_eq!((d0, d1), (1.0, 1e6));
-        assert_eq!(t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["1", "10", "100", "1k", "10k", "100k", "1M"]);
+        assert_eq!(
+            t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(),
+            ["1", "10", "100", "1k", "10k", "100k", "1M"]
+        );
         assert!(matches!(a.kind, AxisKind::Cont { log: true, .. }));
         assert_eq!(a.label.as_deref(), Some("n"));
     }
@@ -245,14 +334,23 @@ mod tests {
     #[test]
     fn a_band_axis_keeps_its_labels() {
         let a = band(vec!["a".into(), "b".into()], Some("k".into()));
-        assert_eq!(a.kind, AxisKind::Band { labels: vec!["a".into(), "b".into()] });
+        assert_eq!(
+            a.kind,
+            AxisKind::Band {
+                labels: vec!["a".into(), "b".into()]
+            }
+        );
     }
 
     #[test]
     fn a_log_axis_refuses_non_positive_values_and_names_the_first() {
         assert!(require_positive("y", "v", [1.0, 2.0, f64::NAN]).is_ok());
         let e = require_positive("y", "v", [3.0, 0.0, -4.0]).unwrap_err().0;
-        assert!(e.contains("column \"v\" has 2 values at or below zero") && e.contains("first is 0 in row 2"), "{e}");
+        assert!(
+            e.contains("column \"v\" has 2 values at or below zero")
+                && e.contains("first is 0 in row 2"),
+            "{e}"
+        );
         assert!(e.contains("linear axis"));
     }
 }

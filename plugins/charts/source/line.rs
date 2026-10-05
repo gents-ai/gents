@@ -1,9 +1,9 @@
 //! Line, area and stacked area charts.
 
-use crate::common::{self, extremes, intro, label_or, Built, SeriesInfo};
 use crate::cols;
+use crate::common::{self, Built, SeriesInfo, YRange, extremes, intro, label_or};
 use crate::ctx::Ctx;
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::format::compact;
 use crate::frame::{self, FrameSpec, Laid, LegendItem, Swatch};
 use crate::marks::{area_path, draw_lines, split_runs};
@@ -53,7 +53,9 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let kind = spec.kind;
     let r = shape::resolve(ctx, t, XPolicy::Auto, &spec.y, &[])?;
     if spec.y_log && kind != Kind::Line {
-        return fail("a logarithmic y axis works for line charts; use a linear axis for area charts");
+        return fail(
+            "a logarithmic y axis works for line charts; use a linear axis for area charts",
+        );
     }
     if r.x.kind == XKind::Num && spec.x_scale == crate::spec::ScaleKind::Log {
         let xs: Vec<f64> = r.x.v.iter().copied().filter(|v| !v.is_nan()).collect();
@@ -63,7 +65,12 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let mut data: Vec<Vec<(f64, f64)>> = if r.x.kind == XKind::Cat {
         r.grid(t, spec.agg)
             .into_iter()
-            .map(|row| row.into_iter().enumerate().map(|(i, v)| (i as f64, v)).collect())
+            .map(|row| {
+                row.into_iter()
+                    .enumerate()
+                    .map(|(i, v)| (i as f64, v))
+                    .collect()
+            })
             .collect()
     } else {
         r.groups
@@ -90,13 +97,20 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 *d = collapse(d, spec.agg);
             }
         }
-        aligned_x = if r.x.kind == XKind::Cat { (0..r.x.cats.len()).map(|i| i as f64).collect() } else { union_x(&data) };
+        aligned_x = if r.x.kind == XKind::Cat {
+            (0..r.x.cats.len()).map(|i| i as f64).collect()
+        } else {
+            union_x(&data)
+        };
         let matrix: Vec<Vec<f64>> = data
             .iter()
             .map(|d| {
                 aligned_x
                     .iter()
-                    .map(|x| d.binary_search_by(|p| p.0.total_cmp(x)).map_or(f64::NAN, |i| d[i].1))
+                    .map(|x| {
+                        d.binary_search_by(|p| p.0.total_cmp(x))
+                            .map_or(f64::NAN, |i| d[i].1)
+                    })
                     .collect()
             })
             .collect();
@@ -112,10 +126,15 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let x_extent = if r.x.kind == XKind::Cat {
         (0.0, 1.0)
     } else {
-        common::range(data.iter().flat_map(|d| d.iter().map(|p| p.0))).ok_or("there are no points to draw")?
+        common::range(data.iter().flat_map(|d| d.iter().map(|p| p.0)))
+            .ok_or("there are no points to draw")?
     };
     let y_extent = if kind == Kind::StackedArea {
-        common::range(layers.iter().flat_map(|l| l.lo.iter().chain(&l.hi).copied()))
+        common::range(
+            layers
+                .iter()
+                .flat_map(|l| l.lo.iter().chain(&l.hi).copied()),
+        )
     } else {
         common::range(data.iter().flat_map(|d| d.iter().map(|p| p.1)))
     }
@@ -127,24 +146,51 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         .map(|(i, n)| LegendItem {
             label: n.clone(),
             color: ctx.color(i),
-            swatch: if kind == Kind::Line { Swatch::Line } else { Swatch::Box },
+            swatch: if kind == Kind::Line {
+                Swatch::Line
+            } else {
+                Swatch::Box
+            },
         })
         .collect();
     let y_label = label_or(&spec.y_label, &r.y_name);
     let zero = kind != Kind::Line;
     let xf = |target: usize| common::x_axis(spec, &r.x, x_extent, target, false);
-    let yf = |target: usize| common::y_axis(spec, y_extent, zero, spec.y_log, 0.04, target, spec.y_format.as_ref(), y_label.clone());
+    let yf = |target: usize| {
+        common::y_axis(
+            spec,
+            YRange {
+                extent: y_extent,
+                zero,
+                log: spec.y_log,
+                pad: 0.04,
+            },
+            target,
+            spec.y_format.as_ref(),
+            y_label.clone(),
+        )
+    };
     let Laid { frame, x, y, .. } = frame::layout(
         ctx,
-        &FrameSpec { x: &xf, y: &yf, y2: None, legend: &legend, extra_right: 0.0, auto_legend: crate::spec::Legend::Auto },
+        &FrameSpec {
+            x: &xf,
+            y: &yf,
+            y2: None,
+            legend: &legend,
+            extra_right: 0.0,
+            auto_legend: crate::spec::Legend::Auto,
+        },
     )?;
 
     let mut svg = Svg::new(ctx.w, ctx.h, ctx.theme.bg);
     frame::draw_title(&mut svg, ctx, &frame);
     frame::draw_grid(&mut svg, ctx, &frame);
     let p = frame.plot;
-    let clip = (spec.y_min.is_some() || spec.y_max.is_some() || spec.x_min.is_some() || spec.x_max.is_some())
-        .then(|| svg.clip_rect(p.x, p.y, p.w, p.h));
+    let clip = (spec.y_min.is_some()
+        || spec.y_max.is_some()
+        || spec.x_min.is_some()
+        || spec.x_max.is_some())
+    .then(|| svg.clip_rect(p.x, p.y, p.w, p.h));
     if let Some(c) = &clip {
         svg.open_group(c);
     }
@@ -160,8 +206,16 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     if kind == Kind::StackedArea {
         for (i, layer) in layers.iter().enumerate() {
             let color = ctx.color(i);
-            let top: Vec<(f64, f64)> = aligned_x.iter().zip(&layer.hi).map(|(x, y)| (fx(*x), fy(*y))).collect();
-            let bottom: Vec<(f64, f64)> = aligned_x.iter().zip(&layer.lo).map(|(x, y)| (fx(*x), fy(*y))).collect();
+            let top: Vec<(f64, f64)> = aligned_x
+                .iter()
+                .zip(&layer.hi)
+                .map(|(x, y)| (fx(*x), fy(*y)))
+                .collect();
+            let bottom: Vec<(f64, f64)> = aligned_x
+                .iter()
+                .zip(&layer.lo)
+                .map(|(x, y)| (fx(*x), fy(*y)))
+                .collect();
             let mut d = crate::svg::PathData::new();
             for (k, q) in top.iter().enumerate() {
                 if k == 0 {
@@ -174,7 +228,12 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 d.line_to(q.0, q.1);
             }
             d.close();
-            svg.path(&d, &Style::fill(&color).fill_alpha(0.85).outlined(ctx.theme.bg, 1.0));
+            svg.path(
+                &d,
+                &Style::fill(&color)
+                    .fill_alpha(0.85)
+                    .outlined(ctx.theme.bg, 1.0),
+            );
             let ys: Vec<(f64, f64)> = data[i].clone();
             let (min, max) = common::range(ys.iter().map(|p| p.1)).unzip();
             info.push(SeriesInfo {
@@ -193,8 +252,16 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
         }
     } else {
         for (i, d) in data.iter_mut().enumerate() {
-            let s = S { name: names[i].clone(), color: ctx.color(i), pts: std::mem::take(d) };
-            let px: Vec<(f64, f64)> = s.pts.iter().map(|q| (fx(q.0), if q.1.is_nan() { f64::NAN } else { fy(q.1) })).collect();
+            let s = S {
+                name: names[i].clone(),
+                color: ctx.color(i),
+                pts: std::mem::take(d),
+            };
+            let px: Vec<(f64, f64)> = s
+                .pts
+                .iter()
+                .map(|q| (fx(q.0), if q.1.is_nan() { f64::NAN } else { fy(q.1) }))
+                .collect();
             let finite = px.iter().filter(|q| !q.1.is_nan()).count();
             let keep: Vec<usize> = if finite > MAX_LINE_POINTS {
                 lttb(&px, MAX_LINE_POINTS)
@@ -211,15 +278,29 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             let runs = split_runs(&px, &keep);
             if kind == Kind::Area {
                 for run in &runs {
-                    svg.path(&area_path(run, base), &Style::fill(&s.color).fill_alpha(0.28));
+                    svg.path(
+                        &area_path(run, base),
+                        &Style::fill(&s.color).fill_alpha(0.28),
+                    );
                 }
             }
             draw_lines(&mut svg, &runs, &s.color, 2.0);
             if finite <= 50 {
                 for (q, orig) in px.iter().zip(&s.pts) {
                     if !q.1.is_nan() {
-                        let tip = format!("{}: {}, {}", s.name, common::x_text(&r.x, orig.0), compact(orig.1));
-                        svg.circle_titled(q.0, q.1, 3.0, &Style::fill(&s.color).outlined(ctx.theme.bg, 1.0), &tip);
+                        let tip = format!(
+                            "{}: {}, {}",
+                            s.name,
+                            common::x_text(&r.x, orig.0),
+                            compact(orig.1)
+                        );
+                        svg.circle_titled(
+                            q.0,
+                            q.1,
+                            3.0,
+                            &Style::fill(&s.color).outlined(ctx.theme.bg, 1.0),
+                            &tip,
+                        );
                     }
                 }
             }
@@ -255,13 +336,29 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     let mut alt = intro(kind_name, spec.title.as_deref());
     alt.push(' ');
     let x_range = match r.x.kind {
-        XKind::Cat => (r.x.cats.first().cloned().unwrap_or_default(), r.x.cats.last().cloned().unwrap_or_default()),
-        _ => (common::x_text(&r.x, x_extent.0), common::x_text(&r.x, x_extent.1)),
+        XKind::Cat => (
+            r.x.cats.first().cloned().unwrap_or_default(),
+            r.x.cats.last().cloned().unwrap_or_default(),
+        ),
+        _ => (
+            common::x_text(&r.x, x_extent.0),
+            common::x_text(&r.x, x_extent.1),
+        ),
     };
-    alt.push_str(&common::axis_sentence("X", x.label.as_deref(), &x_range.0, &x_range.1));
+    alt.push_str(&common::axis_sentence(
+        "X",
+        x.label.as_deref(),
+        &x_range.0,
+        &x_range.1,
+    ));
     if let Some((d0, d1)) = y.domain() {
         alt.push(' ');
-        alt.push_str(&common::axis_sentence("Y", y.label.as_deref(), &compact(d0), &compact(d1)));
+        alt.push_str(&common::axis_sentence(
+            "Y",
+            y.label.as_deref(),
+            &compact(d0),
+            &compact(d1),
+        ));
     }
     alt.push_str(&format!(" {} series.", info.len()));
     for (s, ext) in info.iter().zip(&summaries).take(8) {
@@ -281,5 +378,10 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
     if info.len() > 8 {
         alt.push_str(&format!(" And {} more series.", info.len() - 8));
     }
-    Ok(Built { svg, series: info, alt })
+    Ok(Built {
+        svg,
+        series: info,
+        alt,
+        plot: frame.plot,
+    })
 }

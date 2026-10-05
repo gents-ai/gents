@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use crate::num::push_coord;
-use crate::text::{clean, escape, missing_glyphs, STACK};
+use crate::text::{STACK, clean, escape, missing_glyphs};
 
 /// Paint for one element. Unset fields are left out of the markup.
 #[derive(Debug, Clone, Default)]
@@ -30,12 +30,20 @@ pub struct Style<'a> {
 impl<'a> Style<'a> {
     /// A filled shape.
     pub fn fill(color: &'a str) -> Self {
-        Self { fill: Some(color), ..Self::default() }
+        Self {
+            fill: Some(color),
+            ..Self::default()
+        }
     }
 
     /// A stroked outline with no fill.
     pub fn stroke(color: &'a str, width: f64) -> Self {
-        Self { fill: Some("none"), stroke: Some(color), stroke_width: width, ..Self::default() }
+        Self {
+            fill: Some("none"),
+            stroke: Some(color),
+            stroke_width: width,
+            ..Self::default()
+        }
     }
 
     /// The same style with a fill opacity.
@@ -95,7 +103,14 @@ pub struct TextStyle<'a> {
 impl<'a> TextStyle<'a> {
     /// Regular text of `size` in `fill`, starting at x.
     pub fn new(size: f64, fill: &'a str) -> Self {
-        Self { size, bold: false, anchor: Anchor::Start, fill, rotate: 0.0, full: None }
+        Self {
+            size,
+            bold: false,
+            anchor: Anchor::Start,
+            fill,
+            rotate: 0.0,
+            full: None,
+        }
     }
 
     /// The same style, bold.
@@ -302,7 +317,11 @@ impl Svg {
         attr(&mut self.buf, "cy", cy);
         attr(&mut self.buf, "r", r);
         paint(&mut self.buf, st);
-        let _ = write!(self.buf, "><title>{}</title></circle>", escape(&clean(title)));
+        let _ = write!(
+            self.buf,
+            "><title>{}</title></circle>",
+            escape(&clean(title))
+        );
     }
 
     /// A rectangle that carries a `<title>` tooltip.
@@ -368,7 +387,11 @@ impl Svg {
 
     /// Opens a group with raw, already-safe attributes.
     pub fn open_group(&mut self, attrs: &str) {
-        let _ = write!(self.buf, "<g{}{attrs}>", if attrs.is_empty() { "" } else { " " });
+        let _ = write!(
+            self.buf,
+            "<g{}{attrs}>",
+            if attrs.is_empty() { "" } else { " " }
+        );
     }
 
     /// Closes the last group.
@@ -463,20 +486,31 @@ mod tests {
     #[test]
     fn shapes_write_fixed_attribute_order_and_trimmed_numbers() {
         let s = doc(|s| {
-            s.line(1.0, 2.5, 3.0, 4.0, &Style::stroke("#000", 1.5).dashed("4 3"));
+            s.line(
+                1.0,
+                2.5,
+                3.0,
+                4.0,
+                &Style::stroke("#000", 1.5).dashed("4 3"),
+            );
             s.circle(5.0, 6.0, 2.0, &Style::fill("red").fill_alpha(0.5));
         });
         assert!(s.contains(
             "<line x1=\"1\" y1=\"2.5\" x2=\"3\" y2=\"4\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.5\" stroke-dasharray=\"4 3\"/>"
         ));
-        assert!(s.contains("<circle cx=\"5\" cy=\"6\" r=\"2\" fill=\"red\" fill-opacity=\"0.5\"/>"));
+        assert!(
+            s.contains("<circle cx=\"5\" cy=\"6\" r=\"2\" fill=\"red\" fill-opacity=\"0.5\"/>")
+        );
     }
 
     #[test]
     fn paths_join_commands_and_skip_when_empty() {
         let mut p = PathData::new();
         assert!(p.is_empty());
-        p.move_to(0.0, 0.0).line_to(10.0, 5.5).arc_to(3.0, true, false, 1.0, 2.0).close();
+        p.move_to(0.0, 0.0)
+            .line_to(10.0, 5.5)
+            .arc_to(3.0, true, false, 1.0, 2.0)
+            .close();
         assert_eq!(p.as_str(), "M 0,0 L 10,5.5 A 3,3 0 1 0 1,2 Z");
         let s = doc(|s| {
             s.path(&PathData::new(), &Style::fill("red"));
@@ -488,7 +522,12 @@ mod tests {
     #[test]
     fn text_is_escaped_and_cannot_inject_markup() {
         let s = doc(|s| {
-            s.text(1.0, 2.0, "</text><script>alert(1)</script>&\"'", &TextStyle::new(12.0, "#000"));
+            s.text(
+                1.0,
+                2.0,
+                "</text><script>alert(1)</script>&\"'",
+                &TextStyle::new(12.0, "#000"),
+            );
         });
         assert!(!s.contains("<script"));
         assert_eq!(s.matches("</text>").count(), 1);
@@ -497,7 +536,9 @@ mod tests {
 
     #[test]
     fn titles_and_descriptions_are_escaped_too() {
-        let s = Svg::new(10.0, 10.0, "#fff").finish("</title><x/>", "a & b").0;
+        let s = Svg::new(10.0, 10.0, "#fff")
+            .finish("</title><x/>", "a & b")
+            .0;
         assert!(s.contains("&lt;/title&gt;&lt;x/&gt;"));
         assert!(s.contains("a &amp; b"));
         assert_eq!(s.matches("<title").count(), 1);
@@ -506,7 +547,14 @@ mod tests {
     #[test]
     fn a_shortened_text_carries_its_full_text_as_a_tooltip() {
         let s = doc(|s| {
-            s.text(5.0, 6.0, "Long\u{2026}", &TextStyle::new(11.0, "#111").anchor(Anchor::End).full("Long label <b>"));
+            s.text(
+                5.0,
+                6.0,
+                "Long\u{2026}",
+                &TextStyle::new(11.0, "#111")
+                    .anchor(Anchor::End)
+                    .full("Long label <b>"),
+            );
         });
         assert!(s.contains("<g><title>Long label &lt;b&gt;</title><text x=\"5\" y=\"6\" font-size=\"11\" text-anchor=\"end\" fill=\"#111\">Long\u{2026}</text></g>"));
     }
@@ -531,7 +579,12 @@ mod tests {
     fn missing_glyphs_are_collected_from_every_text() {
         let mut s = Svg::new(10.0, 10.0, "#fff");
         s.text(0.0, 0.0, "\u{6c49}", &TextStyle::new(10.0, "#000"));
-        s.text(0.0, 0.0, "a", &TextStyle::new(10.0, "#000").full("\u{1F600}"));
+        s.text(
+            0.0,
+            0.0,
+            "a",
+            &TextStyle::new(10.0, "#000").full("\u{1F600}"),
+        );
         let (_, missing) = s.finish("t", "d");
         assert_eq!(missing.len(), 2);
     }

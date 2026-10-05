@@ -54,20 +54,51 @@ pub fn box_stats(values: &[f64]) -> Option<BoxStats> {
     let iqr = q3 - q1;
     let (lo_fence, hi_fence) = (q1 - 1.5 * iqr, q3 + 1.5 * iqr);
     let whisker_lo = v.iter().copied().find(|x| *x >= lo_fence).unwrap_or(q1);
-    let whisker_hi = v.iter().rev().copied().find(|x| *x <= hi_fence).unwrap_or(q3);
-    let outliers = v.iter().copied().filter(|x| *x < whisker_lo || *x > whisker_hi).collect();
-    Some(BoxStats { n: v.len(), min: v[0], q1, median, q3, max: v[v.len() - 1], whisker_lo, whisker_hi, outliers })
+    let whisker_hi = v
+        .iter()
+        .rev()
+        .copied()
+        .find(|x| *x <= hi_fence)
+        .unwrap_or(q3);
+    let outliers = v
+        .iter()
+        .copied()
+        .filter(|x| *x < whisker_lo || *x > whisker_hi)
+        .collect();
+    Some(BoxStats {
+        n: v.len(),
+        min: v[0],
+        q1,
+        median,
+        q3,
+        max: v[v.len() - 1],
+        whisker_lo,
+        whisker_hi,
+        outliers,
+    })
 }
 
 /// Bin edges for `n` values spanning `[min, max]`. An exact count gives that
 /// many equal bins; `auto` gives round edges, about as many bins as Sturges'
 /// rule suggests (between 5 and 40).
 pub fn bin_edges(min: f64, max: f64, n: usize, bins: Bins) -> Vec<f64> {
-    let (lo, hi) = if min == max { (min - 0.5, max + 0.5) } else { (min, max) };
+    let (lo, hi) = if min == max {
+        (min - 0.5, max + 0.5)
+    } else {
+        (min, max)
+    };
     match bins {
         Bins::Count(k) => {
             let k = k.clamp(1, MAX_BINS);
-            (0..=k).map(|i| if i == k { hi } else { lo + (hi - lo) * i as f64 / k as f64 }).collect()
+            (0..=k)
+                .map(|i| {
+                    if i == k {
+                        hi
+                    } else {
+                        lo + (hi - lo) * i as f64 / k as f64
+                    }
+                })
+                .collect()
         }
         Bins::Auto => {
             let sturges = (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize + 1;
@@ -98,7 +129,10 @@ pub fn histogram(values: &[f64], edges: &[f64]) -> Vec<u64> {
         if v.is_nan() || *v < edges[0] || *v > edges[bins] {
             continue;
         }
-        let i = edges.partition_point(|e| *e <= *v).saturating_sub(1).min(bins - 1);
+        let i = edges
+            .partition_point(|e| *e <= *v)
+            .saturating_sub(1)
+            .min(bins - 1);
         counts[i] += 1;
     }
     counts
@@ -123,7 +157,10 @@ pub fn stack(series: &[Vec<f64>]) -> Vec<Layer> {
     series
         .iter()
         .map(|s| {
-            let mut layer = Layer { lo: vec![0.0; n], hi: vec![0.0; n] };
+            let mut layer = Layer {
+                lo: vec![0.0; n],
+                hi: vec![0.0; n],
+            };
             for (i, v) in s.iter().enumerate() {
                 let v = if v.is_nan() { 0.0 } else { *v };
                 let base = if v >= 0.0 { &mut pos[i] } else { &mut neg[i] };
@@ -152,7 +189,11 @@ pub fn pie_angles(values: &[f64]) -> Vec<(f64, f64)> {
         .map(|(i, v)| {
             let start = run / total * 360.0;
             run += v;
-            let end = if i == last { 360.0 } else { run / total * 360.0 };
+            let end = if i == last {
+                360.0
+            } else {
+                run / total * 360.0
+            };
             (start, end)
         })
         .collect()
@@ -184,7 +225,10 @@ mod tests {
     fn box_statistics_for_a_textbook_sample() {
         // 1..=9: q1 = 3, median = 5, q3 = 7, iqr = 4, fences -3 and 13.
         let b = box_stats(&[9.0, 1.0, 5.0, 3.0, 7.0, 2.0, 8.0, 4.0, 6.0]).unwrap();
-        assert_eq!((b.n, b.min, b.q1, b.median, b.q3, b.max), (9, 1.0, 3.0, 5.0, 7.0, 9.0));
+        assert_eq!(
+            (b.n, b.min, b.q1, b.median, b.q3, b.max),
+            (9, 1.0, 3.0, 5.0, 7.0, 9.0)
+        );
         assert_eq!((b.whisker_lo, b.whisker_hi), (1.0, 9.0));
         assert!(b.outliers.is_empty());
     }
@@ -212,7 +256,10 @@ mod tests {
     #[test]
     fn box_statistics_of_one_value_and_of_equal_values() {
         let b = box_stats(&[4.0]).unwrap();
-        assert_eq!((b.q1, b.median, b.q3, b.whisker_lo, b.whisker_hi), (4.0, 4.0, 4.0, 4.0, 4.0));
+        assert_eq!(
+            (b.q1, b.median, b.q3, b.whisker_lo, b.whisker_hi),
+            (4.0, 4.0, 4.0, 4.0, 4.0)
+        );
         let b = box_stats(&[2.0; 6]).unwrap();
         assert!(b.outliers.is_empty() && b.whisker_lo == 2.0 && b.whisker_hi == 2.0);
         assert_eq!(box_stats(&[]), None);
@@ -269,7 +316,11 @@ mod tests {
 
     #[test]
     fn stacking_adds_layers_from_zero_and_the_top_is_the_column_sum() {
-        let s = [vec![1.0, 2.0, 3.0], vec![4.0, 0.0, 1.0], vec![2.0, 2.0, 2.0]];
+        let s = [
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 0.0, 1.0],
+            vec![2.0, 2.0, 2.0],
+        ];
         let l = stack(&s);
         assert_eq!(l[0].lo, [0.0; 3]);
         assert_eq!(l[0].hi, [1.0, 2.0, 3.0]);
@@ -305,7 +356,10 @@ mod tests {
     fn pie_angles_of_thirds_do_not_drift() {
         let a = pie_angles(&[1.0, 1.0, 1.0]);
         assert_eq!(a[2].1, 360.0);
-        assert!(a.windows(2).all(|w| w[0].1 == w[1].0), "slices touch exactly");
+        assert!(
+            a.windows(2).all(|w| w[0].1 == w[1].0),
+            "slices touch exactly"
+        );
         assert!((a[0].1 - 120.0).abs() < 1e-12);
     }
 

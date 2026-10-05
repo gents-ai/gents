@@ -188,7 +188,10 @@ mod tests {
 
     #[test]
     fn escape_neutralises_every_markup_character() {
-        assert_eq!(escape("<a href=\"x\">&'"), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
+        assert_eq!(
+            escape("<a href=\"x\">&'"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&#39;"
+        );
         assert_eq!(escape("plain"), "plain");
         assert_eq!(escape("</text><script>"), "&lt;/text&gt;&lt;script&gt;");
     }
@@ -216,7 +219,12 @@ mod tests {
 
     #[test]
     fn elide_does_not_split_a_multibyte_character() {
-        let (t, _) = elide("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", 30.0, 12.0, false);
+        let (t, _) = elide(
+            "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+            30.0,
+            12.0,
+            false,
+        );
         assert!(t.chars().all(|c| c == '\u{e9}' || c == '\u{2026}'));
     }
 }

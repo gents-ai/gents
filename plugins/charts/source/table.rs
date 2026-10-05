@@ -186,12 +186,20 @@ impl Builder {
 
     /// A builder with explicit bounds.
     pub fn with_limits(keep: Option<Vec<String>>, max_rows: usize, max_bytes: usize) -> Self {
-        Self { table: Table::default(), keep, slots: Vec::new(), max_rows, max_bytes }
+        Self {
+            table: Table::default(),
+            keep,
+            slots: Vec::new(),
+            max_rows,
+            max_bytes,
+        }
     }
 
     /// True when a column of this name would be kept.
     pub fn wants(&self, name: &str) -> bool {
-        self.keep.as_ref().is_none_or(|k| k.iter().any(|n| n == name.trim()))
+        self.keep
+            .as_ref()
+            .is_none_or(|k| k.iter().any(|n| n == name.trim()))
     }
 
     fn column(&mut self, name: &str) -> Option<usize> {
@@ -249,7 +257,11 @@ impl Builder {
     /// keep an identifier like `007` as text.
     pub fn text_cell(&mut self, raw: &str) -> Cell {
         let t = raw.trim();
-        if t.is_empty() || ["null", "na", "n/a", "nan", "none"].iter().any(|m| t.eq_ignore_ascii_case(m)) {
+        if t.is_empty()
+            || ["null", "na", "n/a", "nan", "none"]
+                .iter()
+                .any(|m| t.eq_ignore_ascii_case(m))
+        {
             return Cell::Null;
         }
         match plain_number(t) {
@@ -260,7 +272,11 @@ impl Builder {
 
     /// A number cell; non-finite numbers become null.
     pub fn num_cell(&self, v: f64) -> Cell {
-        if v.is_finite() { Cell::Num(v) } else { Cell::Null }
+        if v.is_finite() {
+            Cell::Num(v)
+        } else {
+            Cell::Null
+        }
     }
 
     /// Records a value that was a list or an object.
@@ -321,7 +337,12 @@ mod tests {
         let mut b = Builder::new(Some(vec!["b".into(), "d".into()]));
         b.set_header(&["a".into(), "b".into(), "c".into(), "d".into()]);
         for i in 0..3 {
-            let cells = vec![Cell::Num(1.0), Cell::Num(f64::from(i)), Cell::Num(9.0), Cell::Null];
+            let cells = vec![
+                Cell::Num(1.0),
+                Cell::Num(f64::from(i)),
+                Cell::Num(9.0),
+                Cell::Null,
+            ];
             b.push_positional(&cells);
         }
         let t = b.finish();
@@ -346,7 +367,10 @@ mod tests {
     fn records_grow_columns_and_backfill_earlier_rows() {
         let mut b = Builder::new(None);
         b.push_record(vec![("a".into(), Cell::Num(1.0))]);
-        b.push_record(vec![("a".into(), Cell::Num(2.0)), ("b".into(), Cell::Num(5.0))]);
+        b.push_record(vec![
+            ("a".into(), Cell::Num(2.0)),
+            ("b".into(), Cell::Num(5.0)),
+        ]);
         b.push_record(vec![("b".into(), Cell::Num(6.0))]);
         let t = b.finish();
         assert_eq!(t.names, ["a", "b"]);
@@ -368,10 +392,24 @@ mod tests {
 
     #[test]
     fn plain_numbers_parse_and_everything_else_stays_text() {
-        for (t, v) in [("0", 0.0), ("12", 12.0), ("-3.5", -3.5), ("+4", 4.0), (".5", 0.5), ("5.", 5.0), ("1e3", 1000.0), ("2.5E-2", 0.025), ("0.75", 0.75), ("-0", -0.0)] {
+        for (t, v) in [
+            ("0", 0.0),
+            ("12", 12.0),
+            ("-3.5", -3.5),
+            ("+4", 4.0),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("1e3", 1000.0),
+            ("2.5E-2", 0.025),
+            ("0.75", 0.75),
+            ("-0", -0.0),
+        ] {
             assert_eq!(plain_number(t), Some(v), "{t}");
         }
-        for t in ["", "-", ".", "e5", "007", "1,234", "1_000", "0x10", "inf", "nan", "1e", "1e+", "12abc", "1.2.3", " 1", "--1", "1e999", "$5", "5%"] {
+        for t in [
+            "", "-", ".", "e5", "007", "1,234", "1_000", "0x10", "inf", "nan", "1e", "1e+",
+            "12abc", "1.2.3", " 1", "--1", "1e999", "$5", "5%",
+        ] {
             assert_eq!(plain_number(t), None, "{t}");
         }
     }

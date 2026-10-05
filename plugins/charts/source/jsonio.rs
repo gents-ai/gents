@@ -10,10 +10,10 @@
 use std::fmt;
 use std::io::{BufRead, Read};
 
-use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
+use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::table::{Builder, Cell, MAX_CELL_BYTES};
 
 const STOP: &str = "the row limit was reached";
@@ -54,7 +54,9 @@ impl<'de> Visitor<'de> for CellSeed<'_> {
 
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Cell, E> {
         if v.len() > MAX_CELL_BYTES {
-            return Err(E::custom("a cell is longer than 65536 bytes, so this is not a table; check the file"));
+            return Err(E::custom(
+                "a cell is longer than 65536 bytes, so this is not a table; check the file",
+            ));
         }
         Ok(self.0.text_cell(v))
     }
@@ -137,7 +139,9 @@ impl<'de> Visitor<'de> for Row<'_> {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
         if self.0.header_len() == 0 {
-            return Err(A::Error::custom("the rows are lists, so the data also needs its columns before the rows"));
+            return Err(A::Error::custom(
+                "the rows are lists, so the data also needs its columns before the rows",
+            ));
         }
         let mut cells = Vec::with_capacity(self.0.header_len());
         let mut pos = 0;
@@ -222,7 +226,8 @@ impl<'de> serde::Deserialize<'de> for Name {
                         map.next_value::<IgnoredAny>()?;
                     }
                 }
-                name.map(Name).ok_or_else(|| A::Error::custom("a column object needs a name"))
+                name.map(Name)
+                    .ok_or_else(|| A::Error::custom("a column object needs a name"))
             }
         }
         d.deserialize_any(V)
@@ -286,7 +291,10 @@ impl<'de> Visitor<'de> for Root<'_> {
                     map.next_value_seed(Rows(self.builder))?;
                 }
                 k if WRAPPERS.contains(&k) && !found => {
-                    map.next_value_seed(Root { builder: self.builder, nested: true })?;
+                    map.next_value_seed(Root {
+                        builder: self.builder,
+                        nested: true,
+                    })?;
                     found = true;
                 }
                 _ => {
@@ -295,7 +303,9 @@ impl<'de> Visitor<'de> for Root<'_> {
             }
         }
         if !found && !self.nested {
-            return Err(A::Error::custom("the data object has no rows; send {\"columns\": [...], \"rows\": [[...]]} or a list of objects"));
+            return Err(A::Error::custom(
+                "the data object has no rows; send {\"columns\": [...], \"rows\": [[...]]} or a list of objects",
+            ));
         }
         Ok(())
     }
@@ -327,7 +337,13 @@ impl<'de> Visitor<'de> for Root<'_> {
 
 impl Root<'_> {
     fn lenient<E: serde::de::Error>(&self, what: &str) -> Result<(), E> {
-        if self.nested { Ok(()) } else { Err(E::custom(format!("the data is {what}, not rows; send a list of objects or columns and rows"))) }
+        if self.nested {
+            Ok(())
+        } else {
+            Err(E::custom(format!(
+                "the data is {what}, not rows; send a list of objects or columns and rows"
+            )))
+        }
     }
 }
 
@@ -343,7 +359,11 @@ fn sentence(e: &serde_json::Error, builder: &Builder) -> Option<String> {
     if text.contains("recursion limit") {
         return Some("the JSON data is nested too deeply to be a table".into());
     }
-    Some(format!("the JSON data cannot be read as rows: {text} (line {}, column {})", e.line(), e.column()))
+    Some(format!(
+        "the JSON data cannot be read as rows: {text} (line {}, column {})",
+        e.line(),
+        e.column()
+    ))
 }
 
 /// Reads one JSON document from `text`.
@@ -358,20 +378,31 @@ pub fn read_reader<R: Read>(r: R, builder: &mut Builder) -> Res<()> {
     run(&mut de, builder)
 }
 
-fn run<'de, R: serde_json::de::Read<'de>>(de: &mut serde_json::Deserializer<R>, builder: &mut Builder) -> Res<()> {
-    let first = Root { builder, nested: false }.deserialize(&mut *de);
+fn run<'de, R: serde_json::de::Read<'de>>(
+    de: &mut serde_json::Deserializer<R>,
+    builder: &mut Builder,
+) -> Res<()> {
+    let first = Root {
+        builder,
+        nested: false,
+    }
+    .deserialize(&mut *de);
     match first {
         Ok(()) => {}
-        Err(e) => return match sentence(&e, builder) {
-            Some(s) => fail(s),
-            None => Ok(()),
-        },
+        Err(e) => {
+            return match sentence(&e, builder) {
+                Some(s) => fail(s),
+                None => Ok(()),
+            };
+        }
     }
     if let Err(e) = de.end() {
         return if e.is_eof() {
             Ok(())
         } else {
-            fail("the file holds more than one JSON value; for one row per line name it with a .jsonl extension")
+            fail(
+                "the file holds more than one JSON value; for one row per line name it with a .jsonl extension",
+            )
         };
     }
     Ok(())
@@ -407,7 +438,10 @@ pub fn read_lines<R: BufRead>(mut r: R, builder: &mut Builder) -> Res<()> {
         }
         let mut de = serde_json::Deserializer::from_str(text);
         if let Err(e) = Row(builder).deserialize(&mut de).and_then(|()| de.end()) {
-            return fail(format!("line {number} is not a JSON object: {}", e.to_string().split(" at line ").next().unwrap_or("invalid")));
+            return fail(format!(
+                "line {number} is not a JSON object: {}",
+                e.to_string().split(" at line ").next().unwrap_or("invalid")
+            ));
         }
     }
 }
@@ -448,7 +482,8 @@ mod tests {
 
     #[test]
     fn columns_and_rows_with_list_rows() {
-        let t = load(r#"{"columns":["month","sales"],"rows":[["Jan",10],["Feb",12.5],["Mar",null]]}"#);
+        let t =
+            load(r#"{"columns":["month","sales"],"rows":[["Jan",10],["Feb",12.5],["Mar",null]]}"#);
         assert_eq!(t.names, ["month", "sales"]);
         assert_eq!(t.rows, 3);
         assert_eq!(cell(&t, "month", 2), "Mar");
@@ -465,7 +500,8 @@ mod tests {
 
     #[test]
     fn extra_keys_next_to_columns_and_rows_are_ignored() {
-        let t = load(r#"{"columns":["a"],"rows":[[1],[2]],"next":{"cursor":"x"},"warnings":["w"]}"#);
+        let t =
+            load(r#"{"columns":["a"],"rows":[[1],[2]],"next":{"cursor":"x"},"warnings":["w"]}"#);
         assert_eq!(t.rows, 2);
     }
 
@@ -509,7 +545,10 @@ mod tests {
         read_str(r#"[{"a":1,"b":2,"c":[1]},{"a":3,"b":4}]"#, &mut b).unwrap();
         let t = b.finish();
         assert_eq!(t.names, ["b"]);
-        assert_eq!(t.nested, 0, "an unwanted column is skipped without being read as a value");
+        assert_eq!(
+            t.nested, 0,
+            "an unwanted column is skipped without being read as a value"
+        );
         let mut b = Builder::new(Some(vec!["b".into()]));
         read_str(r#"{"columns":["a","b"],"rows":[[1,2],[3,4]]}"#, &mut b).unwrap();
         assert_eq!(b.finish().cols[0], [Cell::Num(2.0), Cell::Num(4.0)]);
@@ -605,7 +644,11 @@ mod tests {
     #[test]
     fn json_lines_read_one_object_per_line() {
         let mut b = Builder::new(None);
-        read_lines("{\"a\":1}\n\n{\"a\":2,\"b\":\"x\"}\r\n{\"a\":3}".as_bytes(), &mut b).unwrap();
+        read_lines(
+            "{\"a\":1}\n\n{\"a\":2,\"b\":\"x\"}\r\n{\"a\":3}".as_bytes(),
+            &mut b,
+        )
+        .unwrap();
         let t = b.finish();
         assert_eq!(t.rows, 3);
         assert_eq!(cell(&t, "b", 1), "x");
@@ -617,7 +660,12 @@ mod tests {
         let e = read_lines("{\"a\":1}\n{\"a\":\n".as_bytes(), &mut b).unwrap_err();
         assert!(e.0.starts_with("line 2 "), "{e}");
         let mut b = Builder::new(None);
-        assert!(read_lines(&b"\xff\n"[..], &mut b).unwrap_err().0.contains("line 1"));
+        assert!(
+            read_lines(&b"\xff\n"[..], &mut b)
+                .unwrap_err()
+                .0
+                .contains("line 1")
+        );
         let mut b = Builder::new(None);
         assert!(read_lines(&b"{\"a\":1} {\"a\":2}\n"[..], &mut b).is_err());
     }

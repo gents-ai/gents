@@ -7,7 +7,7 @@
 //! `f` fixed, `d` whole numbers, `%` percent (the value times 100), `s` SI
 //! prefix (k, M, G), `e` scientific. Everything is plain decimal arithmetic.
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 use crate::num::{floor_log10, pow10};
 
 /// How the number itself is written.
@@ -47,27 +47,51 @@ pub struct NumFormat {
 impl NumFormat {
     /// The automatic format: plain with the decimals the axis needs.
     pub fn auto() -> Self {
-        Self { prefix: String::new(), suffix: String::new(), group: true, digits: None, trim: false, kind: Kind::Auto }
+        Self {
+            prefix: String::new(),
+            suffix: String::new(),
+            group: true,
+            digits: None,
+            trim: false,
+            kind: Kind::Auto,
+        }
     }
 }
 
 /// Parses a pattern; the error is the sentence to show.
 pub fn parse(pattern: &str) -> Res<NumFormat> {
-    let bad = || fail(format!("format {pattern:?} is not understood; examples are \",.2f\", \"$,.0f\", \".1%\", \"~s\" and \"{{,.0f}} units\""));
+    let bad = || {
+        fail(format!(
+            "format {pattern:?} is not understood; examples are \",.2f\", \"$,.0f\", \".1%\", \"~s\" and \"{{,.0f}} units\""
+        ))
+    };
     if pattern.chars().count() > 64 {
         return bad();
     }
     let (prefix, spec, suffix) = match pattern.find('{') {
         Some(open) => {
-            let Some(close) = pattern[open..].find('}') else { return bad() };
-            (&pattern[..open], &pattern[open + 1..open + close], &pattern[open + close + 1..])
+            let Some(close) = pattern[open..].find('}') else {
+                return bad();
+            };
+            (
+                &pattern[..open],
+                &pattern[open + 1..open + close],
+                &pattern[open + close + 1..],
+            )
         }
         None => ("", pattern, ""),
     };
     if prefix.contains('}') || suffix.contains(['{', '}']) {
         return bad();
     }
-    let mut f = NumFormat { prefix: prefix.into(), suffix: suffix.into(), group: false, digits: None, trim: false, kind: Kind::Auto };
+    let mut f = NumFormat {
+        prefix: prefix.into(),
+        suffix: suffix.into(),
+        group: false,
+        digits: None,
+        trim: false,
+        kind: Kind::Auto,
+    };
     let mut rest = spec;
     if let Some(r) = rest.strip_prefix(',') {
         f.group = true;
@@ -106,7 +130,7 @@ fn group_thousands(int_part: &str) -> String {
     let n = int_part.len();
     let mut out = String::with_capacity(n + n / 3);
     for (i, c) in int_part.chars().enumerate() {
-        if i > 0 && (n - i) % 3 == 0 {
+        if i > 0 && (n - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -144,7 +168,9 @@ fn fixed(v: f64, decimals: usize, group: bool, trim: bool) -> String {
     body
 }
 
-const SI: [&str; 17] = ["y", "z", "a", "f", "p", "n", "\u{b5}", "m", "", "k", "M", "G", "T", "P", "E", "Z", "Y"];
+const SI: [&str; 17] = [
+    "y", "z", "a", "f", "p", "n", "\u{b5}", "m", "", "k", "M", "G", "T", "P", "E", "Z", "Y",
+];
 
 fn si(v: f64, digits: Option<usize>, trim: bool) -> String {
     if v == 0.0 {
@@ -152,9 +178,23 @@ fn si(v: f64, digits: Option<usize>, trim: bool) -> String {
     }
     let a = v.abs();
     let mut e3 = (floor_log10(a).div_euclid(3) * 3).clamp(-24, 24);
-    let scale = |e3: i32| if e3 >= 0 { a / pow10(e3) } else { a * pow10(-e3) };
+    let scale = |e3: i32| {
+        if e3 >= 0 {
+            a / pow10(e3)
+        } else {
+            a * pow10(-e3)
+        }
+    };
     let mut scaled = scale(e3);
-    let decimals = |s: f64| digits.unwrap_or(if s >= 100.0 { 0 } else if s >= 10.0 { 1 } else { 2 });
+    let decimals = |s: f64| {
+        digits.unwrap_or(if s >= 100.0 {
+            0
+        } else if s >= 10.0 {
+            1
+        } else {
+            2
+        })
+    };
     let mut text = format!("{:.*}", decimals(scaled), scaled);
     if text.parse::<f64>().is_ok_and(|r| r >= 1000.0) && e3 < 24 {
         e3 += 3;
@@ -176,22 +216,29 @@ impl NumFormat {
             return String::new();
         }
         let body = match self.kind {
-            Kind::Auto | Kind::Fixed => fixed(v, self.digits.unwrap_or(auto_decimals), self.group, self.trim),
+            Kind::Auto | Kind::Fixed => fixed(
+                v,
+                self.digits.unwrap_or(auto_decimals),
+                self.group,
+                self.trim,
+            ),
             Kind::Whole => fixed(v, 0, self.group, false),
             Kind::Percent => {
-                let d = self.digits.unwrap_or_else(|| auto_decimals.saturating_sub(2));
+                let d = self
+                    .digits
+                    .unwrap_or_else(|| auto_decimals.saturating_sub(2));
                 format!("{}%", fixed(v * 100.0, d, self.group, self.trim))
             }
             Kind::Si => si(v, self.digits, self.trim),
             Kind::Sci => {
                 let d = self.digits.unwrap_or(2);
                 let mut s = format!("{:.*e}", d, v);
-                if self.trim {
-                    if let Some((m, e)) = s.split_once('e') {
-                        let mut m = m.to_owned();
-                        trim_zeros(&mut m);
-                        s = format!("{m}e{e}");
-                    }
+                if self.trim
+                    && let Some((m, e)) = s.split_once('e')
+                {
+                    let mut m = m.to_owned();
+                    trim_zeros(&mut m);
+                    s = format!("{m}e{e}");
                 }
                 s
             }
@@ -258,7 +305,7 @@ mod tests {
     #[test]
     fn fixed_decimals_with_and_without_separators() {
         assert_eq!(f(",.2f", 1234567.891), "1,234,567.89");
-        assert_eq!(f(".1f", 3.14159), "3.1");
+        assert_eq!(f(".1f", 3.14659), "3.1");
         assert_eq!(f(",.0f", 999.5), "1,000");
         assert_eq!(f(".3f", 2.0), "2.000");
         assert_eq!(f(".3~f", 2.5), "2.5");
@@ -322,7 +369,17 @@ mod tests {
 
     #[test]
     fn bad_patterns_are_refused_with_one_sentence() {
-        for p in [",.2x", "{,.2f", ".13f", ".f1", "f}", "{.2f}{x}", "abc", "..2f", &"x".repeat(70)] {
+        for p in [
+            ",.2x",
+            "{,.2f",
+            ".13f",
+            ".f1",
+            "f}",
+            "{.2f}{x}",
+            "abc",
+            "..2f",
+            &"x".repeat(70),
+        ] {
             let e = parse(p).unwrap_err().0;
             assert!(e.contains("is not understood"), "{p}: {e}");
         }
@@ -337,13 +394,25 @@ mod tests {
     #[test]
     fn the_automatic_axis_format_follows_the_magnitude() {
         let small = axis_format(None, &[0.0, 20.0, 40.0], 0);
-        assert_eq!(tick_labels(&small, &[0.0, 20.0, 40.0], 0), ["0", "20", "40"]);
+        assert_eq!(
+            tick_labels(&small, &[0.0, 20.0, 40.0], 0),
+            ["0", "20", "40"]
+        );
         let thousands = axis_format(None, &[0.0, 5000.0, 10000.0], 0);
-        assert_eq!(tick_labels(&thousands, &[0.0, 5000.0, 10000.0], 0), ["0", "5,000", "10,000"]);
+        assert_eq!(
+            tick_labels(&thousands, &[0.0, 5000.0, 10000.0], 0),
+            ["0", "5,000", "10,000"]
+        );
         let millions = axis_format(None, &[0.0, 1.5e6, 3e6], 0);
-        assert_eq!(tick_labels(&millions, &[0.0, 1.5e6, 3e6], 0), ["0", "1.5M", "3M"]);
+        assert_eq!(
+            tick_labels(&millions, &[0.0, 1.5e6, 3e6], 0),
+            ["0", "1.5M", "3M"]
+        );
         let fine = axis_format(None, &[0.0, 0.25, 0.5], 2);
-        assert_eq!(tick_labels(&fine, &[0.0, 0.25, 0.5], 2), ["0.00", "0.25", "0.50"]);
+        assert_eq!(
+            tick_labels(&fine, &[0.0, 0.25, 0.5], 2),
+            ["0.00", "0.25", "0.50"]
+        );
         let tiny = axis_format(None, &[0.0, 2e-8], 8);
         assert_eq!(tick_labels(&tiny, &[0.0, 2e-8], 8), ["0e0", "2e-8"]);
     }
@@ -352,7 +421,10 @@ mod tests {
     fn a_user_format_overrides_the_automatic_one() {
         let user = parse("{.0%}").unwrap();
         let fmt = axis_format(Some(&user), &[0.0, 0.5, 1.0], 1);
-        assert_eq!(tick_labels(&fmt, &[0.0, 0.5, 1.0], 1), ["0%", "50%", "100%"]);
+        assert_eq!(
+            tick_labels(&fmt, &[0.0, 0.5, 1.0], 1),
+            ["0%", "50%", "100%"]
+        );
     }
 
     #[test]

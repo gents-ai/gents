@@ -7,7 +7,7 @@ use std::f64::consts::{FRAC_PI_2, LN_2, PI};
 
 /// Natural logarithm of a positive finite `x`; NaN otherwise.
 pub fn ln(x: f64) -> f64 {
-    if !(x > 0.0) || !x.is_finite() {
+    if x.is_nan() || x <= 0.0 || !x.is_finite() {
         return f64::NAN;
     }
     let mut bits = x.to_bits();
@@ -89,10 +89,22 @@ mod tests {
         let mut x = 1e-300_f64;
         while x < 1e300 {
             let (a, b) = (ln(x), x.ln());
-            assert!((a - b).abs() <= 1e-13 * b.abs().max(1.0), "ln({x}) = {a}, expected {b}");
+            assert!(
+                (a - b).abs() <= 1e-13 * b.abs().max(1.0),
+                "ln({x}) = {a}, expected {b}"
+            );
             x *= 3.7;
         }
-        for x in [0.5, 1.0, 2.0, 10.0, 0.1, 1.5, 1.4142135623730951, 1.4142135623730954] {
+        for x in [
+            0.5,
+            1.0,
+            2.0,
+            10.0,
+            0.1,
+            1.5,
+            std::f64::consts::SQRT_2,
+            1.4142135623730954,
+        ] {
             assert!((ln(x) - x.ln()).abs() < 1e-14, "{x}");
         }
         assert_eq!(ln(1.0), 0.0);

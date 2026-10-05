@@ -24,6 +24,8 @@ pub fn nice_ticks(min: f64, max: f64, target: usize) -> Ticks {
     if !lo.is_finite() || !hi.is_finite() {
         (lo, hi) = (0.0, 1.0);
     }
+    const LIMIT: f64 = 1e300;
+    (lo, hi) = (lo.clamp(-LIMIT, LIMIT), hi.clamp(-LIMIT, LIMIT));
     if lo > hi {
         std::mem::swap(&mut lo, &mut hi);
     }
@@ -32,11 +34,18 @@ pub fn nice_ticks(min: f64, max: f64, target: usize) -> Ticks {
         lo -= pad;
         hi += pad;
     }
+    // A span this small cannot be divided into ticks without leaving the
+    // range of exact powers of ten, so it is widened to the smallest span that can.
+    const MIN_SPAN: f64 = 1e-290;
+    if hi - lo < MIN_SPAN {
+        let mid = lo / 2.0 + hi / 2.0;
+        (lo, hi) = (mid - MIN_SPAN / 2.0, mid + MIN_SPAN / 2.0);
+    }
     let target = target.clamp(2, 50) as f64;
     let raw = (hi - lo) / target;
     let k = floor_log10(raw);
     let m = raw / pow10(k);
-    let mult: i64 = if m <= 1.414_213_562_373_095_1 {
+    let mult: i64 = if m <= std::f64::consts::SQRT_2 {
         1
     } else if m <= 3.162_277_660_168_379_5 {
         2
@@ -45,12 +54,26 @@ pub fn nice_ticks(min: f64, max: f64, target: usize) -> Ticks {
     } else {
         10
     };
-    let step = if k >= 0 { mult as f64 * pow10(k) } else { mult as f64 / pow10(-k) };
+    let step = if k >= 0 {
+        mult as f64 * pow10(k)
+    } else {
+        mult as f64 / pow10(-k)
+    };
     let first = (lo / step + NICE_EPS).floor() as i64;
     let last = (hi / step - NICE_EPS).ceil() as i64;
-    let at = |i: i64| if k >= 0 { i as f64 * (mult as f64 * pow10(k)) } else { (i * mult) as f64 / pow10(-k) };
+    let at = |i: i64| {
+        if k >= 0 {
+            i as f64 * (mult as f64 * pow10(k))
+        } else {
+            (i * mult) as f64 / pow10(-k)
+        }
+    };
     let values = (first..=last).map(at).collect();
-    Ticks { values, step, decimals: if k < 0 { (-k) as usize } else { 0 } }
+    Ticks {
+        values,
+        step,
+        decimals: if k < 0 { (-k) as usize } else { 0 },
+    }
 }
 
 /// Decade ticks for a logarithmic axis.
@@ -97,7 +120,11 @@ pub fn log_ticks(min: f64, max: f64) -> LogTicks {
         exps.reverse();
         values.extend(exps.into_iter().map(pow10));
     }
-    LogTicks { values, lo: pow10(lo_e), hi: pow10(hi_e) }
+    LogTicks {
+        values,
+        lo: pow10(lo_e),
+        hi: pow10(hi_e),
+    }
 }
 
 /// A continuous scale from a data domain to a pixel range.
@@ -118,12 +145,24 @@ pub struct Scale {
 impl Scale {
     /// A linear scale.
     pub fn linear(d0: f64, d1: f64, r0: f64, r1: f64) -> Self {
-        Self { d0, d1, r0, r1, log: false }
+        Self {
+            d0,
+            d1,
+            r0,
+            r1,
+            log: false,
+        }
     }
 
     /// A logarithmic scale over a positive domain.
     pub fn log(d0: f64, d1: f64, r0: f64, r1: f64) -> Self {
-        Self { d0, d1, r0, r1, log: true }
+        Self {
+            d0,
+            d1,
+            r0,
+            r1,
+            log: true,
+        }
     }
 
     /// Pixel position of `v`; not clamped.
@@ -141,7 +180,11 @@ impl Scale {
 
     /// True when `v` lies inside the domain, ends included.
     pub fn contains(&self, v: f64) -> bool {
-        let (a, b) = if self.d0 <= self.d1 { (self.d0, self.d1) } else { (self.d1, self.d0) };
+        let (a, b) = if self.d0 <= self.d1 {
+            (self.d0, self.d1)
+        } else {
+            (self.d1, self.d0)
+        };
         v >= a && v <= b
     }
 }
@@ -244,10 +287,38 @@ mod tests {
     }
 
     #[test]
+    fn astronomically_large_ranges_still_give_finite_ticks() {
+        for (lo, hi) in [
+            (-1e308, 1e308),
+            (0.0, f64::MAX),
+            (-f64::MAX, f64::MAX),
+            (1e-320, 5e-320),
+            (1e299, 1e300),
+        ] {
+            let t = nice_ticks(lo, hi, 5);
+            assert!(
+                t.values.len() >= 2 && t.values.len() < 100,
+                "{lo} {hi}: {}",
+                t.values.len()
+            );
+            assert!(
+                t.values.iter().all(|v| v.is_finite()),
+                "{lo} {hi}: {:?}",
+                t.values
+            );
+            assert!(t.values.windows(2).all(|w| w[0] < w[1]), "{lo} {hi}");
+        }
+    }
+
+    #[test]
     fn tick_count_tracks_the_target() {
         for target in 2..=12 {
             let t = nice_ticks(0.0, 137.0, target);
-            assert!(t.values.len() >= 2 && t.values.len() <= 2 * target + 2, "{target}: {}", t.values.len());
+            assert!(
+                t.values.len() >= 2 && t.values.len() <= 2 * target + 2,
+                "{target}: {}",
+                t.values.len()
+            );
         }
     }
 
@@ -317,14 +388,30 @@ mod tests {
 
     #[test]
     fn band_slots_tile_the_range() {
-        let b = Band { n: 4, r0: 100.0, r1: 500.0 };
+        let b = Band {
+            n: 4,
+            r0: 100.0,
+            r1: 500.0,
+        };
         assert_eq!(b.step(), 100.0);
         assert_eq!(b.start(0), 100.0);
         assert_eq!(b.center(0), 150.0);
         assert_eq!(b.center(3), 450.0);
         assert_eq!(b.start(4), 500.0);
-        let down = Band { n: 2, r0: 200.0, r1: 0.0 };
+        let down = Band {
+            n: 2,
+            r0: 200.0,
+            r1: 0.0,
+        };
         assert_eq!(down.center(0), 150.0);
-        assert_eq!(Band { n: 0, r0: 0.0, r1: 10.0 }.step(), 10.0);
+        assert_eq!(
+            Band {
+                n: 0,
+                r0: 0.0,
+                r1: 10.0
+            }
+            .step(),
+            10.0
+        );
     }
 }

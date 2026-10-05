@@ -82,14 +82,27 @@ mod tests {
     fn a_gap_splits_a_series_into_runs() {
         let pts = [(0.0, 1.0), (1.0, 2.0), (2.0, N), (3.0, 4.0), (4.0, 5.0)];
         let runs = split_runs(&pts, &[0, 1, 2, 3, 4]);
-        assert_eq!(runs, [vec![(0.0, 1.0), (1.0, 2.0)], vec![(3.0, 4.0), (4.0, 5.0)]]);
+        assert_eq!(
+            runs,
+            [vec![(0.0, 1.0), (1.0, 2.0)], vec![(3.0, 4.0), (4.0, 5.0)]]
+        );
     }
 
     #[test]
     fn a_reduced_series_still_breaks_where_the_data_has_a_gap() {
-        let pts = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, N), (4.0, 5.0), (5.0, 6.0)];
+        let pts = [
+            (0.0, 1.0),
+            (1.0, 2.0),
+            (2.0, 3.0),
+            (3.0, N),
+            (4.0, 5.0),
+            (5.0, 6.0),
+        ];
         let runs = split_runs(&pts, &[0, 2, 4, 5]);
-        assert_eq!(runs, [vec![(0.0, 1.0), (2.0, 3.0)], vec![(4.0, 5.0), (5.0, 6.0)]]);
+        assert_eq!(
+            runs,
+            [vec![(0.0, 1.0), (2.0, 3.0)], vec![(4.0, 5.0), (5.0, 6.0)]]
+        );
     }
 
     #[test]
@@ -110,14 +123,22 @@ mod tests {
     fn line_and_area_paths_have_the_expected_commands() {
         let run = [(1.0, 5.0), (2.0, 3.0), (3.0, 4.0)];
         assert_eq!(line_path(&run).as_str(), "M 1,5 L 2,3 L 3,4");
-        assert_eq!(area_path(&run, 10.0).as_str(), "M 1,10 L 1,5 L 2,3 L 3,4 L 3,10 Z");
+        assert_eq!(
+            area_path(&run, 10.0).as_str(),
+            "M 1,10 L 1,5 L 2,3 L 3,4 L 3,10 Z"
+        );
         assert!(area_path(&[], 10.0).is_empty());
     }
 
     #[test]
     fn a_single_point_is_drawn_as_a_dot_not_a_line() {
         let mut s = Svg::new(50.0, 50.0, "#fff");
-        draw_lines(&mut s, &[vec![(5.0, 5.0)], vec![(1.0, 1.0), (9.0, 9.0)]], "#f00", 2.0);
+        draw_lines(
+            &mut s,
+            &[vec![(5.0, 5.0)], vec![(1.0, 1.0), (9.0, 9.0)]],
+            "#f00",
+            2.0,
+        );
         let out = s.finish("t", "d").0;
         assert_eq!(out.matches("<circle").count(), 1);
         assert_eq!(out.matches("<path").count(), 1);

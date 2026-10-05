@@ -3,7 +3,7 @@
 //! heatmaps. Every function is integer or basic float arithmetic, so a colour
 //! is the same string on every platform.
 
-use crate::err::{fail, Res};
+use crate::err::{Res, fail};
 
 /// An sRGB colour.
 pub type Rgb = (u8, u8, u8);
@@ -110,7 +110,11 @@ pub fn parse_hex(text: &str) -> Option<Rgb> {
             let d = |i: usize| byte(&digits[i..=i]).map(|v| v * 17);
             Some((d(0)?, d(1)?, d(2)?))
         }
-        6 => Some((byte(&digits[0..2])?, byte(&digits[2..4])?, byte(&digits[4..6])?)),
+        6 => Some((
+            byte(&digits[0..2])?,
+            byte(&digits[2..4])?,
+            byte(&digits[4..6])?,
+        )),
         _ => None,
     }
 }
@@ -124,13 +128,16 @@ pub fn custom(colors: &[String]) -> Res<Vec<String>> {
         .iter()
         .map(|c| match parse_hex(c.trim()) {
             Some(rgb) => Ok(hex(rgb)),
-            None => fail(format!("colors entry {c:?} is not a hex colour like \"#1f77b4\"")),
+            None => fail(format!(
+                "colors entry {c:?} is not a hex colour like \"#1f77b4\""
+            )),
         })
         .collect()
 }
 
 fn mix(from: Rgb, to: Rgb, percent: u32) -> Rgb {
-    let m = |a: u8, b: u8| ((u32::from(a) * (100 - percent) + u32::from(b) * percent + 50) / 100) as u8;
+    let m =
+        |a: u8, b: u8| ((u32::from(a) * (100 - percent) + u32::from(b) * percent + 50) / 100) as u8;
     (m(from.0, to.0), m(from.1, to.1), m(from.2, to.2))
 }
 
@@ -140,7 +147,11 @@ pub fn series_color(index: usize, theme: &Theme, custom: Option<&[String]>) -> S
     if let Some(list) = custom {
         return list[index % list.len()].clone();
     }
-    let base = if theme.dark { &SERIES_DARK } else { &SERIES_LIGHT };
+    let base = if theme.dark {
+        &SERIES_DARK
+    } else {
+        &SERIES_LIGHT
+    };
     let rgb = parse_hex(base[index % 8]).unwrap_or((0, 0, 0));
     match (index / 8) % 3 {
         0 => hex(rgb),
@@ -166,7 +177,14 @@ pub fn sequential(t: f64) -> Rgb {
 
 /// Diverging ramp (blue to red, neutral in the middle) at `t` in 0..=1.
 pub fn diverging(t: f64, theme: &Theme) -> Rgb {
-    ramp(if theme.dark { &DIVERGING_DARK } else { &DIVERGING_LIGHT }, t)
+    ramp(
+        if theme.dark {
+            &DIVERGING_DARK
+        } else {
+            &DIVERGING_LIGHT
+        },
+        t,
+    )
 }
 
 /// Black or white, whichever reads better on `rgb`.
@@ -184,7 +202,15 @@ mod tests {
         assert_eq!(hex((0, 114, 178)), "#0072b2");
         assert_eq!(parse_hex("#0072B2"), Some((0, 114, 178)));
         assert_eq!(parse_hex("#fa0"), Some((255, 170, 0)));
-        for bad in ["", "0072b2", "#12", "#12345", "#gggggg", "#1234567", "#\u{e9}\u{e9}\u{e9}"] {
+        for bad in [
+            "",
+            "0072b2",
+            "#12",
+            "#12345",
+            "#gggggg",
+            "#1234567",
+            "#\u{e9}\u{e9}\u{e9}",
+        ] {
             assert_eq!(parse_hex(bad), None, "{bad}");
         }
     }
@@ -193,7 +219,10 @@ mod tests {
     fn themes_are_found_by_name_and_unknown_names_fail_with_a_sentence() {
         assert!(!theme("light").unwrap().dark);
         assert!(theme("dark").unwrap().dark);
-        assert_eq!(theme("blue").unwrap_err().0, "theme \"blue\" is not known; use light or dark");
+        assert_eq!(
+            theme("blue").unwrap_err().0,
+            "theme \"blue\" is not known; use light or dark"
+        );
     }
 
     #[test]
