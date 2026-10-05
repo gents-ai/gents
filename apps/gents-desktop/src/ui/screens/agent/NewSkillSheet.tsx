@@ -20,8 +20,8 @@ import {
   SheetTitle,
 } from "@gents/ui/components/sheet";
 import { Textarea } from "@gents/ui/components/textarea";
-import type { Shell } from "@/hooks/useShell";
 import { newId } from "./draft";
+import { useApp } from "@/app/AppContext";
 
 const slug = (s: string) =>
   s
@@ -31,16 +31,15 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, "");
 
 export function NewSkillSheet({
-  shell,
   deployment,
   open,
   onClose,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   open: boolean;
   onClose: (skillId: string | null) => void;
 }) {
+  const { changeConfig } = useApp().actions;
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -65,20 +64,18 @@ export function NewSkillSheet({
     setError(null);
     const skillId = newId("skill");
     try {
-      await shell.applyConfig((api) =>
-        api.saveSkillConfig({
-          document: {
-            skill_id: skillId,
-            agent_did: deployment.agentDid,
-            name: slug(name) || skillId,
-            description: description.trim() || null,
-            instructions: instructions.trim(),
-            tool_refs: null,
-            display_name: name.trim(),
-            enabled: true,
-          },
-        }),
-      );
+      await changeConfig("saveSkillConfig", {
+        document: {
+          skill_id: skillId,
+          agent_did: deployment.agentDid,
+          name: slug(name) || skillId,
+          description: description.trim() || null,
+          instructions: instructions.trim(),
+          tool_refs: null,
+          display_name: name.trim(),
+          enabled: true,
+        },
+      });
       reset();
       onClose(skillId);
     } catch (e) {

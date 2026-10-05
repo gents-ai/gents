@@ -1,33 +1,44 @@
 import type {
-  AgentConfigSaveRequest,
-  DefaultBehaviorSetRequest,
-  BackendSaveRequest,
-  ConfigComponentsPatchRequest,
-  ConfigComponentsApplyRequest,
-  ContextDeleteRequest,
-  BehaviorSaveRequest,
   CodexLoginResult,
   DesktopApiAdapter,
-  InferenceProbeResult,
-  InferenceProfileSaveRequest,
-  SkillDeleteRequest,
-  SkillSaveRequest,
-  ToolsSaveRequest,
-  ToolServiceSaveRequest,
+  DesktopClientSnapshot,
   ToolServiceTestRequest,
   ToolServiceTestResult,
-  TaskDeleteRequest,
-  ScheduleDeleteRequest,
-  EventSourceDeleteRequest,
-  TriggerDeleteRequest,
-  BackendDeleteRequest,
-  InferenceProfileDeleteRequest,
-  ToolsDeleteRequest,
-  ToolServiceDeleteRequest,
-  BehaviorDeleteRequest,
 } from "@source-inc/gents-desktop-client";
 
 import { actionFailure, shownFailure } from "./desktopShellRuntime";
+
+/** Each configuration change the bridge takes, as a failure names it. */
+const CHANGES = {
+  saveAgentConfig: "save the agent",
+  setDefaultBehavior: "set the default behavior",
+  saveBehaviorConfig: "save the behavior",
+  deleteBehaviorConfig: "delete the behavior",
+  saveSkillConfig: "save the skill",
+  deleteSkillConfig: "delete the skill",
+  deleteContextConfig: "delete the context",
+  saveTaskConfig: "save the task",
+  deleteTaskConfig: "delete the task",
+  saveScheduleConfig: "save the schedule",
+  deleteScheduleConfig: "delete the schedule",
+  saveTriggerConfig: "save the trigger",
+  deleteTriggerConfig: "delete the trigger",
+  saveEventSourceConfig: "save the event source",
+  deleteEventSourceConfig: "delete the event source",
+  saveBackendConfig: "save the backend",
+  deleteBackendConfig: "delete the backend",
+  saveInferenceProfileConfig: "save the inference profile",
+  deleteInferenceProfileConfig: "delete the inference profile",
+  saveToolsConfig: "save the tools",
+  deleteToolsConfig: "delete the tools",
+  saveToolServiceConfig: "save the tool service",
+  deleteToolServiceConfig: "delete the tool service",
+  patchConfigComponents: "save the configuration",
+  applyConfigComponents: "apply the configuration",
+} as const satisfies Partial<Record<keyof DesktopApiAdapter, string>>;
+
+export type ConfigChange = keyof typeof CHANGES;
+export type ConfigRequest<K extends ConfigChange> = Parameters<DesktopApiAdapter[K]>[0];
 
 type ConfigActionParams = {
   api: DesktopApiAdapter;
@@ -40,15 +51,23 @@ export function createDesktopShellConfigActions({
   setError,
   mutateSnapshot,
 }: ConfigActionParams) {
-  /** A configuration change: a fresh read once it lands, and one report if
-      it fails, naming what failed. The caller still sees the failure, to keep
-      what the person typed. */
-  async function change<T>(label: string, run: () => Promise<T>) {
+  /**
+   * A configuration change: the bridge's write, then a fresh read once it
+   * lands, and one report naming what failed. The caller still sees the
+   * failure, to keep what the person typed.
+   */
+  async function changeConfig<K extends ConfigChange>(
+    change: K,
+    request: ConfigRequest<K>,
+  ): Promise<DesktopClientSnapshot> {
+    const write = api[change] as (
+      request: ConfigRequest<K>,
+    ) => Promise<DesktopClientSnapshot>;
     setError(null);
     try {
-      return await mutateSnapshot(run);
+      return await mutateSnapshot(() => write(request));
     } catch (error) {
-      setError(actionFailure(label, error));
+      setError(actionFailure(CHANGES[change], error));
       throw shownFailure(error);
     }
   }
@@ -65,54 +84,7 @@ export function createDesktopShellConfigActions({
   }
 
   return {
-    onSaveAgentConfig: (request: AgentConfigSaveRequest) =>
-      change("save the agent", () => api.saveAgentConfig(request)),
-    onSetDefaultBehavior: (request: DefaultBehaviorSetRequest) =>
-      change("set the default behavior", () => api.setDefaultBehavior(request)),
-    onSaveBehaviorConfig: (request: BehaviorSaveRequest) =>
-      change("save the behavior", () => api.saveBehaviorConfig(request)),
-    onSaveSkillConfig: (request: SkillSaveRequest) =>
-      change("save the skill", () => api.saveSkillConfig(request)),
-    onDeleteSkillConfig: (request: SkillDeleteRequest) =>
-      change("delete the skill", () => api.deleteSkillConfig(request)),
-    onDeleteContextConfig: (request: ContextDeleteRequest) =>
-      change("delete the context", () => api.deleteContextConfig(request)),
-    onDeleteTaskConfig: (request: TaskDeleteRequest) =>
-      change("delete the task", () => api.deleteTaskConfig(request)),
-    onDeleteScheduleConfig: (request: ScheduleDeleteRequest) =>
-      change("delete the schedule", () => api.deleteScheduleConfig(request)),
-    onDeleteEventSourceConfig: (request: EventSourceDeleteRequest) =>
-      change("delete the event source", () => api.deleteEventSourceConfig(request)),
-    onDeleteTriggerConfig: (request: TriggerDeleteRequest) =>
-      change("delete the trigger", () => api.deleteTriggerConfig(request)),
-    onDeleteBackendConfig: (request: BackendDeleteRequest) =>
-      change("delete the backend", () => api.deleteBackendConfig(request)),
-    onDeleteInferenceProfileConfig: (request: InferenceProfileDeleteRequest) =>
-      change("delete the inference profile", () =>
-        api.deleteInferenceProfileConfig(request),
-      ),
-    onDeleteToolsConfig: (request: ToolsDeleteRequest) =>
-      change("delete the tools", () => api.deleteToolsConfig(request)),
-    onDeleteToolServiceConfig: (request: ToolServiceDeleteRequest) =>
-      change("delete the tool service", () => api.deleteToolServiceConfig(request)),
-    onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) =>
-      change("delete the behavior", () => api.deleteBehaviorConfig(request)),
-    onSaveBackendConfig: (request: BackendSaveRequest) =>
-      change("save the backend", () => api.saveBackendConfig(request)),
-    onPatchConfigComponents: (request: ConfigComponentsPatchRequest) =>
-      change("save the configuration", () => api.patchConfigComponents(request)),
-    onApplyConfigComponents: (request: ConfigComponentsApplyRequest) =>
-      change("apply the configuration", () => api.applyConfigComponents(request)),
-    onSaveInferenceProfileConfig: (request: InferenceProfileSaveRequest) =>
-      change("save the inference profile", () =>
-        api.saveInferenceProfileConfig(request),
-      ),
-    onSaveToolsConfig: (request: ToolsSaveRequest) =>
-      change("save the tools", () => api.saveToolsConfig(request)),
-    onSaveToolServiceConfig: (request: ToolServiceSaveRequest) =>
-      change("save the tool service", () => api.saveToolServiceConfig(request)),
-    onProbeInferenceEndpoint: (endpoint: string): Promise<InferenceProbeResult> =>
-      api.probeInferenceEndpoint(endpoint),
+    changeConfig,
     onCodexLogin: (agentDid: string): Promise<CodexLoginResult> =>
       call("sign in to Codex", () => api.codexLogin(agentDid)),
     /* best-effort abort of a sign-in whose browser was closed; a failure here

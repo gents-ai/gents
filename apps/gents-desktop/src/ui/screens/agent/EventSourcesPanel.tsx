@@ -1,6 +1,5 @@
 import type { DeploymentView, EventSource } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   ChoiceRow,
@@ -22,19 +21,19 @@ import {
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { useApp } from "@/app/AppContext";
 
 export function EventSourceEditor({
-  shell,
   deployment,
   source,
   embedded = false,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   source: EventSource;
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -96,30 +95,28 @@ export function EventSourceEditor({
       throw new Error("Grouped events require an expected count or timeout");
     if (expectedCount != null && minCount != null && minCount > expectedCount)
       throw new Error("Minimum count cannot exceed expected count");
-    await shell.applyConfig((api) =>
-      api.saveEventSourceConfig({
-        document: {
-          ...source,
-          display_name: next.displayName.trim() || null,
-          source_collection: sourceCollection,
-          event_kind: eventKind,
-          filter,
-          correlation_field: correlationField,
-          group: grouped
-            ? {
-                expected_count:
-                  expectedCount ??
-                  (expectedCountField ? { source_field: expectedCountField } : null),
-                timeout_secs: timeoutSecs,
-                min_count: minCount,
-              }
-            : null,
-          workspace_authority: (next.workspaceAuthority || null) as
-            "readOnly" | "readWrite" | "integrate" | null,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveEventSourceConfig", {
+      document: {
+        ...source,
+        display_name: next.displayName.trim() || null,
+        source_collection: sourceCollection,
+        event_kind: eventKind,
+        filter,
+        correlation_field: correlationField,
+        group: grouped
+          ? {
+              expected_count:
+                expectedCount ??
+                (expectedCountField ? { source_field: expectedCountField } : null),
+              timeout_secs: timeoutSecs,
+              min_count: minCount,
+            }
+          : null,
+        workspace_authority: (next.workspaceAuthority || null) as
+          "readOnly" | "readWrite" | "integrate" | null,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const id = (f: string) => `${source.event_source_id}-${f}`;
   return (
@@ -243,12 +240,10 @@ export function EventSourceEditor({
           )}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteEventSourceConfig({
-                eventSourceId: source.event_source_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteEventSourceConfig", {
+              eventSourceId: source.event_source_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -257,14 +252,13 @@ export function EventSourceEditor({
 }
 
 export function EventSourcesPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -286,26 +280,22 @@ export function EventSourcesPanel({
             id={s.event_source_id}
             onDuplicate={async () => {
               const event_source_id = newId("evsrc");
-              await shell.applyConfig((api) =>
-                api.saveEventSourceConfig({
-                  document: {
-                    ...s,
-                    event_source_id,
-                    display_name: `${s.display_name ?? s.event_source_id} copy`,
-                    created_at: null,
-                    updated_at: null,
-                  },
-                }),
-              );
+              await changeConfig("saveEventSourceConfig", {
+                document: {
+                  ...s,
+                  event_source_id,
+                  display_name: `${s.display_name ?? s.event_source_id} copy`,
+                  created_at: null,
+                  updated_at: null,
+                },
+              });
               return event_source_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteEventSourceConfig({
-                  eventSourceId: s.event_source_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteEventSourceConfig", {
+                eventSourceId: s.event_source_id,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "event-source", s.event_source_id)}
           />
@@ -315,17 +305,15 @@ export function EventSourcesPanel({
       empty="No event sources. A trigger binds a task to a reusable source."
       onCreate={async () => {
         const event_source_id = newId("evsrc");
-        await shell.applyConfig((api) =>
-          api.saveEventSourceConfig({
-            document: {
-              agent_did: deployment.agentDid,
-              event_source_id,
-              display_name: "New event source",
-              source_collection: "AgentRequest",
-              event_kind: "created",
-            },
-          }),
-        );
+        await changeConfig("saveEventSourceConfig", {
+          document: {
+            agent_did: deployment.agentDid,
+            event_source_id,
+            display_name: "New event source",
+            source_collection: "AgentRequest",
+            event_kind: "created",
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -338,7 +326,6 @@ export function EventSourcesPanel({
         return (
           <EventSourceEditor
             key={source.event_source_id}
-            shell={shell}
             deployment={deployment}
             source={source}
           />

@@ -85,6 +85,7 @@ import {
   validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+import { useApp } from "@/app/AppContext";
 
 type Step = "welcome" | "starting" | "inference";
 
@@ -374,6 +375,7 @@ export function SetupScreen({
   /* a catalog row was chosen, so the form is that provider's inputs only */
   provider?: ProviderId;
 }) {
+  const { changeConfig } = useApp().actions;
   const [step, setStep] = useState<Step>(initialStep);
   const allowLocal = supportsLocalManagedServer();
   const api = shell.api;
@@ -557,12 +559,10 @@ export function SetupScreen({
     const nextDeployment = next.client?.deployments[0];
     const steward = nextDeployment ? setupStewardPatches(nextDeployment) : [];
     if (steward.length && nextDeployment) {
-      await shell.applyConfig((configApi) =>
-        configApi.patchConfigComponents({
-          agentDid: nextDeployment.agentDid,
-          patches: steward,
-        }),
-      );
+      await changeConfig("patchConfigComponents", {
+        agentDid: nextDeployment.agentDid,
+        patches: steward,
+      });
     } else {
       await shell.refreshSnapshot();
     }
@@ -923,9 +923,7 @@ export function SetupScreen({
       recommendation: selectedRecommendation,
       settings,
     });
-    await shell.applyConfig((configApi) =>
-      configApi.applyConfigComponents({ document: plan.document }),
-    );
+    await changeConfig("applyConfigComponents", { document: plan.document });
     // Discovery ran before the backend existed. Running it again publishes the
     // advertised catalog onto the persisted backend. It stays off the save path;
     // the runtime prober publishes subscription catalogs if it fails.

@@ -18,6 +18,7 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { toastFailure } from "@/lib/failure";
+import { useApp } from "@/app/AppContext";
 
 function cadenceLabel(s: Schedule) {
   return s.cadence.kind === "cron"
@@ -37,6 +38,7 @@ export function ScheduleEditor({
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -67,16 +69,14 @@ export function ScheduleEditor({
             ...validateCronSchedule(next.expression, next.timezone),
             missed_run_policy: "latest_only" as const,
           };
-    await shell.applyConfig((api) =>
-      api.saveScheduleConfig({
-        document: {
-          ...schedule,
-          display_name: next.displayName.trim() || null,
-          cadence,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveScheduleConfig", {
+      document: {
+        ...schedule,
+        display_name: next.displayName.trim() || null,
+        cadence,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -193,12 +193,10 @@ export function ScheduleEditor({
           warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteScheduleConfig({
-                scheduleId: schedule.schedule_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteScheduleConfig", {
+              scheduleId: schedule.schedule_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -215,6 +213,7 @@ export function SchedulesPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -236,26 +235,22 @@ export function SchedulesPanel({
             id={s.schedule_id}
             onDuplicate={async () => {
               const schedule_id = newId("sched");
-              await shell.applyConfig((api) =>
-                api.saveScheduleConfig({
-                  document: {
-                    ...s,
-                    schedule_id,
-                    display_name: `${s.display_name ?? s.schedule_id} copy`,
-                    created_at: null,
-                    updated_at: null,
-                  },
-                }),
-              );
+              await changeConfig("saveScheduleConfig", {
+                document: {
+                  ...s,
+                  schedule_id,
+                  display_name: `${s.display_name ?? s.schedule_id} copy`,
+                  created_at: null,
+                  updated_at: null,
+                },
+              });
               return schedule_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteScheduleConfig({
-                  scheduleId: s.schedule_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteScheduleConfig", {
+                scheduleId: s.schedule_id,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
           />
@@ -265,16 +260,14 @@ export function SchedulesPanel({
       empty="No schedules. A trigger binds a task to a schedule."
       onCreate={async () => {
         const schedule_id = newId("sched");
-        await shell.applyConfig((api) =>
-          api.saveScheduleConfig({
-            document: {
-              agent_did: deployment.agentDid,
-              schedule_id,
-              display_name: "New schedule",
-              cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
-            },
-          }),
-        );
+        await changeConfig("saveScheduleConfig", {
+          document: {
+            agent_did: deployment.agentDid,
+            schedule_id,
+            display_name: "New schedule",
+            cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,

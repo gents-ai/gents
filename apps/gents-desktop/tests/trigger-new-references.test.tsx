@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
@@ -16,11 +17,11 @@ function harness() {
     saveScheduleConfig: vi.fn().mockResolvedValue({}),
     saveEventSourceConfig: vi.fn().mockResolvedValue({}),
   };
-  const shell = {
-    api,
-    applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-  } as unknown as Shell;
-  render(<TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />);
+  const shell = { api } as unknown as Shell;
+  renderIn(
+    testApp({ api }),
+    <TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />,
+  );
   return api;
 }
 

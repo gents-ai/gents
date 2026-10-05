@@ -32,6 +32,7 @@ import { Switch } from "@gents/ui/components/switch";
 import { ExternalLink, Plus } from "lucide-react";
 import { toastFailure } from "@/lib/failure";
 import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
@@ -48,6 +49,7 @@ export function TaskEditor({
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -76,27 +78,25 @@ export function TaskEditor({
     }
     const hooks = hooksFromDraft(n.hooks);
     if (typeof hooks === "string") return Promise.reject(new Error(hooks));
-    return shell.applyConfig((api) =>
-      api.saveTaskConfig({
-        document: {
-          agent_did: deployment.agentDid,
-          task_id: task.taskId,
-          display_name: n.name.trim() || task.taskId,
-          description: n.description || null,
-          behavior_id: n.behaviorId,
-          prompt_template: n.promptTemplate,
-          emit_outcome: n.emitOutcome,
-          goal_objective_template: n.goalObjectiveTemplate || null,
-          goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
-            min: 1,
-          }),
-          enabled: n.enabled,
-          output_schema_ref: n.outputSchemaRef || null,
-          hooks: hooks.length ? hooks : null,
-          tags: n.tags.length ? n.tags : null,
-        },
-      }),
-    );
+    return changeConfig("saveTaskConfig", {
+      document: {
+        agent_did: deployment.agentDid,
+        task_id: task.taskId,
+        display_name: n.name.trim() || task.taskId,
+        description: n.description || null,
+        behavior_id: n.behaviorId,
+        prompt_template: n.promptTemplate,
+        emit_outcome: n.emitOutcome,
+        goal_objective_template: n.goalObjectiveTemplate || null,
+        goal_token_budget: optionalInteger("Goal token budget", n.goalTokenBudget, {
+          min: 1,
+        }),
+        enabled: n.enabled,
+        output_schema_ref: n.outputSchemaRef || null,
+        hooks: hooks.length ? hooks : null,
+        tags: n.tags.length ? n.tags : null,
+      },
+    });
   });
   /* the New behavior dialog's resolver while it is open */
   const [newBehavior, setNewBehavior] = useState<((id: string | null) => void) | null>(
@@ -304,11 +304,9 @@ export function TaskEditor({
                   aria-label={`${tr.config.display_name ?? tr.config.trigger_id} enabled`}
                   checked={tr.config.enabled !== false}
                   onCheckedChange={(next) =>
-                    void shell.applyConfig((api) =>
-                      api.saveTriggerConfig({
-                        document: { ...tr.config, enabled: next },
-                      }),
-                    )
+                    void changeConfig("saveTriggerConfig", {
+                      document: { ...tr.config, enabled: next },
+                    })
                   }
                 />
                 <Button
@@ -326,7 +324,6 @@ export function TaskEditor({
       </Group>
       <NewAutomationDialog
         key={adding ?? "closed"}
-        shell={shell}
         deployment={deployment}
         open={adding !== null}
         onOpenChange={(open) => {
@@ -413,12 +410,10 @@ export function TaskEditor({
           warning={dependentsWarning(deployment, "task", task.taskId)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteTaskConfig({
-                taskId: task.taskId,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteTaskConfig", {
+              taskId: task.taskId,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -470,6 +465,7 @@ export function TasksPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -479,7 +475,6 @@ export function TasksPanel({
   return (
     <>
       <NewAutomationDialog
-        shell={shell}
         deployment={deployment}
         open={creating}
         onOpenChange={setCreating}
@@ -507,32 +502,26 @@ export function TasksPanel({
                 enabled={{
                   checked: t.enabled !== false,
                   onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.saveTaskConfig({
-                        document: { ...taskDocument(deployment, t), enabled },
-                      }),
-                    ),
+                    changeConfig("saveTaskConfig", {
+                      document: { ...taskDocument(deployment, t), enabled },
+                    }),
                 }}
                 onDuplicate={async () => {
                   const task_id = newId("task");
-                  await shell.applyConfig((api) =>
-                    api.saveTaskConfig({
-                      document: {
-                        ...taskDocument(deployment, t),
-                        task_id,
-                        display_name: `${t.name ?? t.taskId} copy`,
-                      },
-                    }),
-                  );
+                  await changeConfig("saveTaskConfig", {
+                    document: {
+                      ...taskDocument(deployment, t),
+                      task_id,
+                      display_name: `${t.name ?? t.taskId} copy`,
+                    },
+                  });
                   return task_id;
                 }}
                 onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteTaskConfig({
-                      taskId: t.taskId,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
+                  changeConfig("deleteTaskConfig", {
+                    taskId: t.taskId,
+                    agentDid: deployment.agentDid,
+                  })
                 }
                 warning={dependentsWarning(deployment, "task", t.taskId)}
               />

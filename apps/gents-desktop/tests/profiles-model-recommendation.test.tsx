@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 import type {
   DesktopApiAdapter,
@@ -33,12 +34,9 @@ function recommendation(context: number): InferenceModelRecommendation {
   };
 }
 
+/* the shell a profile editor still reads, and an app over the same api */
 function shellWith(api: Record<string, ReturnType<typeof vi.fn>>) {
-  return {
-    api: api as unknown as DesktopApiAdapter,
-    applyConfig: (operation: (adapter: DesktopApiAdapter) => Promise<unknown>) =>
-      operation(api as unknown as DesktopApiAdapter),
-  } as unknown as Shell;
+  return { api: api as unknown as DesktopApiAdapter } as unknown as Shell;
 }
 
 const settleLookup = () =>
@@ -70,7 +68,8 @@ describe("profile model recommendation ownership", () => {
           : profile,
       ),
     };
-    const view = render(
+    const view = renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shell} deployment={deploymentA} item="profile-a" />,
     );
     await settleLookup();
@@ -94,7 +93,8 @@ describe("profile model recommendation ownership", () => {
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
     const shell = shellWith(api);
-    const view = render(
+    const view = renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
     );
     expect(await screen.findByLabelText("Context window")).toBeVisible();
@@ -121,7 +121,8 @@ describe("profile model recommendation ownership", () => {
       getInferenceBackendRecommendation: vi.fn().mockResolvedValue(recommendation(100)),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
+    renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
     );
     await waitFor(() =>
@@ -148,7 +149,8 @@ describe("profile model recommendation ownership", () => {
         .mockResolvedValue(recommendation(200_000)),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
+    renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
     );
     const context = await screen.findByLabelText("Context window");
@@ -186,7 +188,8 @@ describe("profile model recommendation ownership", () => {
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
     const shell = shellWith(api);
-    const view = render(
+    const view = renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
     );
     const context = await screen.findByLabelText("Context window");
@@ -219,7 +222,8 @@ describe("profile model recommendation ownership", () => {
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
     const shell = shellWith(api);
-    const view = render(
+    const view = renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shell} deployment={fixture} item="profile-a" />,
     );
     expect(await screen.findByLabelText("Context window")).toHaveValue(131072);
@@ -262,7 +266,8 @@ describe("profile model recommendation ownership", () => {
         } as never,
       ],
     };
-    render(
+    renderIn(
+      testApp({ api }),
       <ProfilesPanel
         shell={shellWith(api)}
         deployment={advancedOnly}
@@ -306,7 +311,8 @@ describe("profile model recommendation ownership", () => {
       getInferenceBackendRecommendation: vi.fn().mockResolvedValue(unadvertised),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
+    renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shellWith(api)} deployment={fixture} item="profile-a" />,
     );
     const context = await screen.findByLabelText("Context window");
@@ -361,7 +367,8 @@ describe("profile model recommendation ownership", () => {
       }),
       getInferenceSetupCatalog: vi.fn().mockResolvedValue({ executionDefaults: {} }),
     };
-    render(
+    renderIn(
+      testApp({ api }),
       <ProfilesPanel shell={shellWith(api)} deployment={maxOnly} item="profile-a" />,
     );
     const context = await screen.findByLabelText("Context window");

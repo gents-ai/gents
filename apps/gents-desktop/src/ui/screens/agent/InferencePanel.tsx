@@ -62,6 +62,7 @@ import {
 import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
 import { RenameDialog } from "../AgentsScreen";
+import { useApp } from "@/app/AppContext";
 
 export function backendSave(
   agentDid: string,
@@ -639,6 +640,7 @@ export function BackendEditor({
   /* in a sheet beside another page: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -709,12 +711,10 @@ export function BackendEditor({
       tags: next.tags.length ? next.tags : null,
     };
     if (auth) changes.auth = auth;
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
-        agentDid: deployment.agentDid,
-        patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
-      }),
-    );
+    await changeConfig("patchConfigComponents", {
+      agentDid: deployment.agentDid,
+      patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
+    });
   });
   const [probe, setProbe] = useState<string | null>(null);
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
@@ -895,19 +895,16 @@ export function BackendEditor({
                   size="sm"
                   variant="quiet"
                   onClick={() =>
-                    shell
-                      .applyConfig((api) =>
-                        api.patchConfigComponents({
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: backend.backendId,
-                              changes: { auth: { kind: "unauthenticated" } },
-                            },
-                          ],
-                        }),
-                      )
+                    changeConfig("patchConfigComponents", {
+                      agentDid: deployment.agentDid,
+                      patches: [
+                        {
+                          collection: "InferenceBackend",
+                          id: backend.backendId,
+                          changes: { auth: { kind: "unauthenticated" } },
+                        },
+                      ],
+                    })
                       .then(() => toast("Stored key cleared"))
                       .catch((error) =>
                         toast(
@@ -1041,12 +1038,10 @@ export function BackendEditor({
           warning={dependentsWarning(deployment, "backend", backend.backendId)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteBackendConfig({
-                backendId: backend.backendId,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteBackendConfig", {
+              backendId: backend.backendId,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -1121,6 +1116,7 @@ export function InferencePanel({
   /* profiles whose backend no longer exists, listed after the backends */
   orphans?: ListRow[];
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -1241,30 +1237,26 @@ export function InferencePanel({
                   enabled={{
                     checked: b.enabled !== false,
                     onChange: (enabled) =>
-                      shell.applyConfig((api) =>
-                        api.patchConfigComponents({
-                          agentDid: deployment.agentDid,
-                          patches: [
-                            {
-                              collection: "InferenceBackend",
-                              id: b.backendId,
-                              changes: { enabled },
-                            },
-                          ],
-                        }),
-                      ),
+                      changeConfig("patchConfigComponents", {
+                        agentDid: deployment.agentDid,
+                        patches: [
+                          {
+                            collection: "InferenceBackend",
+                            id: b.backendId,
+                            changes: { enabled },
+                          },
+                        ],
+                      }),
                   }}
                   /* an added account's backend goes with Remove account */
                   onDelete={
                     b.accountRef && stored
                       ? undefined
                       : () =>
-                          shell.applyConfig((api) =>
-                            api.deleteBackendConfig({
-                              backendId: b.backendId,
-                              agentDid: deployment.agentDid,
-                            }),
-                          )
+                          changeConfig("deleteBackendConfig", {
+                            backendId: b.backendId,
+                            agentDid: deployment.agentDid,
+                          })
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}
                 >

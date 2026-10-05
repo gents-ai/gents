@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
@@ -98,7 +99,7 @@ function fleet(listed: DeploymentView[]) {
 }
 
 async function openAddAgent(shell: Shell) {
-  render(<AgentsScreen shell={shell} />);
+  renderIn(testApp({ api: shell.api }), <AgentsScreen shell={shell} />);
   await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
   return screen.findByRole("dialog");
 }
@@ -227,12 +228,10 @@ describe("first-run local agent name", () => {
       api,
       snapshot: { bootstrap: snapshotBootstrap },
       deployments: [],
-      applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-        run(api as unknown as DesktopApiAdapter),
       refreshSnapshot: vi.fn(async () => undefined),
       onInitLocalRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
     } as unknown as Shell;
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
     return { api, shell };
   }
 

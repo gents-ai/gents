@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { Shell } from "../src/ui/hooks/useShell";
 import { TaskEditor } from "../src/ui/screens/agent/TasksPanel";
 import { TriggerEditor } from "../src/ui/screens/agent/TriggersPanel";
@@ -14,16 +15,16 @@ const harness = () => {
     saveTaskConfig: vi.fn().mockResolvedValue({}),
     saveTriggerConfig: vi.fn().mockResolvedValue({}),
   };
-  const shell = {
-    applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-  } as unknown as Shell;
-  return { api, shell };
+  const app = testApp({ api });
+  const shell = {} as unknown as Shell;
+  return { api, shell, app };
 };
 
 describe("durable delivery editors", () => {
   it("opts a Task into outcomes without adding a Goal budget", async () => {
-    const { api, shell } = harness();
-    render(
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
       <TaskEditor shell={shell} deployment={deployment} task={deployment.tasks[0]} />,
     );
     await userEvent.click(screen.getByRole("switch", { name: "Emit outcome" }));
@@ -36,7 +37,7 @@ describe("durable delivery editors", () => {
   });
 
   it("saves queued serial with the existing-session template", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     const user = userEvent.setup();
     const trigger = {
       ...deployment.triggers[0],
@@ -45,7 +46,10 @@ describe("durable delivery editors", () => {
         session_id_template: "{{ doc.lead_session_id }}",
       },
     };
-    render(<TriggerEditor shell={shell} deployment={deployment} trigger={trigger} />);
+    renderIn(
+      app,
+      <TriggerEditor shell={shell} deployment={deployment} trigger={trigger} />,
+    );
     expect(screen.getByLabelText("Existing session template")).toHaveValue(
       "{{ doc.lead_session_id }}",
     );

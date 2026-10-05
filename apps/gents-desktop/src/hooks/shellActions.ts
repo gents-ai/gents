@@ -62,7 +62,6 @@ export function createShellActions({
     ...createDesktopShellTaskActions({
       api,
       store: stores.selection,
-      mutateSnapshot,
       refreshSnapshot,
       setError,
     }),

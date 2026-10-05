@@ -37,6 +37,7 @@ import { ScheduleEditor } from "./SchedulesPanel";
 import { EventSourceEditor } from "./EventSourcesPanel";
 import { RowMenu } from "./RowMenu";
 import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 const SECTION = "triggers";
 const when = (iso: string | null | undefined) =>
@@ -54,6 +55,7 @@ export function TriggerEditor({
   /* in a sheet beside a task: no Danger zone */
   embedded?: boolean;
 }) {
+  const { changeConfig } = useApp().actions;
   const cfg = trigger.config;
   const base = {
     name: "agent" as const,
@@ -119,21 +121,19 @@ export function TriggerEditor({
           : { kind: "event", event_source_id: next.sourceId },
       tags: next.tags.length ? next.tags : null,
     };
-    await shell.applyConfig((api) =>
-      /* anything drafted from the fields lands with the trigger, in one
-         transaction, or not at all */
-      newTask || newSchedule || newEvent
-        ? api.applyConfigComponents({
-            document: {
-              agent_principal: { agent_did: deployment.agentDid },
-              ...(newTask ? { tasks: [newTask] } : {}),
-              ...(newSchedule ? { schedules: [newSchedule] } : {}),
-              ...(newEvent ? { event_sources: [newEvent] } : {}),
-              triggers: [document],
-            },
-          })
-        : api.saveTriggerConfig({ document }),
-    );
+    /* anything drafted from the fields lands with the trigger, in one
+       transaction, or not at all */
+    if (newTask || newSchedule || newEvent)
+      await changeConfig("applyConfigComponents", {
+        document: {
+          agent_principal: { agent_did: deployment.agentDid },
+          ...(newTask ? { tasks: [newTask] } : {}),
+          ...(newSchedule ? { schedules: [newSchedule] } : {}),
+          ...(newEvent ? { event_sources: [newEvent] } : {}),
+          triggers: [document],
+        },
+      });
+    else await changeConfig("saveTriggerConfig", { document });
     setPending({});
   });
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
@@ -212,7 +212,6 @@ export function TriggerEditor({
         {besideSource && (
           <EventSourceEditor
             key={besideSource.event_source_id}
-            shell={shell}
             deployment={deployment}
             source={besideSource}
             embedded
@@ -429,12 +428,10 @@ export function TriggerEditor({
           label={cfg.display_name ?? cfg.trigger_id}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteTriggerConfig({
-                triggerId: cfg.trigger_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteTriggerConfig", {
+              triggerId: cfg.trigger_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -451,6 +448,7 @@ export function TriggersPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -460,7 +458,6 @@ export function TriggersPanel({
   return (
     <>
       <NewAutomationDialog
-        shell={shell}
         deployment={deployment}
         open={creating}
         onOpenChange={setCreating}
@@ -495,33 +492,29 @@ export function TriggersPanel({
                 enabled={{
                   checked: t.config.enabled !== false,
                   onChange: (enabled) =>
-                    shell.applyConfig((api) =>
-                      api.saveTriggerConfig({ document: { ...t.config, enabled } }),
-                    ),
+                    changeConfig("saveTriggerConfig", {
+                      document: { ...t.config, enabled },
+                    }),
                 }}
                 onDuplicate={async () => {
                   const trigger_id = newId("trig");
-                  await shell.applyConfig((api) =>
-                    api.saveTriggerConfig({
-                      document: {
-                        ...t.config,
-                        trigger_id,
-                        display_name: `${t.config.display_name ?? t.config.trigger_id} copy`,
-                        enabled: false,
-                        created_at: null,
-                        updated_at: null,
-                      },
-                    }),
-                  );
+                  await changeConfig("saveTriggerConfig", {
+                    document: {
+                      ...t.config,
+                      trigger_id,
+                      display_name: `${t.config.display_name ?? t.config.trigger_id} copy`,
+                      enabled: false,
+                      created_at: null,
+                      updated_at: null,
+                    },
+                  });
                   return trigger_id;
                 }}
                 onDelete={() =>
-                  shell.applyConfig((api) =>
-                    api.deleteTriggerConfig({
-                      triggerId: t.config.trigger_id,
-                      agentDid: deployment.agentDid,
-                    }),
-                  )
+                  changeConfig("deleteTriggerConfig", {
+                    triggerId: t.config.trigger_id,
+                    agentDid: deployment.agentDid,
+                  })
                 }
               />
             ),

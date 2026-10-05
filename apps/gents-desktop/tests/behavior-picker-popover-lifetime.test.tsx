@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 
 const popoverControl = vi.hoisted(() => ({
@@ -107,7 +108,7 @@ function Harness({ showPicker = true }: { showPicker?: boolean }) {
 describe("BehaviorPicker popover lifetime", () => {
   it("releases an active picker removed while sync is pending", async () => {
     const user = userEvent.setup();
-    const view = render(<Harness />);
+    const view = renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     expect(
@@ -129,7 +130,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("opens the create sheet only after the picker has closed", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -150,7 +151,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("lets a popover opened during the picker's exit take the turn from create", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -169,7 +170,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("withdraws a pending create when the picker is reopened during its exit", async () => {
     const user = userEvent.setup();
-    render(<Harness />);
+    renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: "Behavior" }));
     await screen.findByRole("dialog", { name: "Choose behavior" });
@@ -188,7 +189,7 @@ describe("BehaviorPicker popover lifetime", () => {
 
   it("cancels a pending picker when its chosen behavior disappears", async () => {
     const user = userEvent.setup();
-    const view = render(<Harness />);
+    const view = renderIn(testApp(), <Harness />);
 
     await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
     expect(

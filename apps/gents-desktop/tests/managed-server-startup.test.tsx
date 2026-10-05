@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 import type {
   DesktopApiAdapter,
@@ -441,8 +442,6 @@ describe("first-run local agent startup", () => {
       api,
       snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
       deployments: [],
-      applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-        run(api as unknown as DesktopApiAdapter),
       refreshSnapshot: vi.fn(async () => undefined),
       onInitLocalRuntime: vi.fn(async () => undefined),
     } as unknown as Shell;
@@ -479,7 +478,10 @@ describe("first-run local agent startup", () => {
 
   it("waits for macOS approval and a slow boot, then keeps the step log readable", async () => {
     const run = firstRun();
-    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    renderIn(
+      testApp({ api: run.api }),
+      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+    );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
 
@@ -523,7 +525,10 @@ describe("first-run local agent startup", () => {
 
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
     const run = firstRun();
-    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    renderIn(
+      testApp({ api: run.api }),
+      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+    );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
@@ -559,7 +564,10 @@ describe("first-run local agent startup", () => {
     (run.shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("saved connections could not be written"),
     );
-    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    renderIn(
+      testApp({ api: run.api }),
+      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+    );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);
@@ -581,7 +589,10 @@ describe("first-run local agent startup", () => {
 
   it("pauses on the completed step log before moving on by itself", async () => {
     const run = firstRun();
-    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    renderIn(
+      testApp({ api: run.api }),
+      <SetupScreen shell={run.shell} onDone={vi.fn()} />,
+    );
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
     await userEvent.click(next);

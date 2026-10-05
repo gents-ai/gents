@@ -20,6 +20,7 @@ import { newId, optionalInteger, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { useApp } from "@/app/AppContext";
 
 function Editor({
   shell,
@@ -30,6 +31,7 @@ function Editor({
   deployment: DeploymentView;
   service: ToolServiceRegistry;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -67,23 +69,21 @@ function Editor({
   };
   const d = useDraft(saved, async (next) => {
     const endpoint = validatedEndpoint(next);
-    await shell.applyConfig((api) =>
-      api.saveToolServiceConfig({
-        document: {
-          ...service,
-          display_name: next.displayName.trim() || null,
-          description: next.description.trim() || null,
-          hostname: endpoint.hostname,
-          tailscale_ip: endpoint.tailscaleIp,
-          lan_ip: endpoint.lanIp,
-          mcp_port: endpoint.mcpPort,
-          mcp_path: endpoint.mcpPath,
-          send_agent_did: next.sendAgentDid,
-          enabled: next.enabled,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveToolServiceConfig", {
+      document: {
+        ...service,
+        display_name: next.displayName.trim() || null,
+        description: next.description.trim() || null,
+        hostname: endpoint.hostname,
+        tailscale_ip: endpoint.tailscaleIp,
+        lan_ip: endpoint.lanIp,
+        mcp_port: endpoint.mcpPort,
+        mcp_path: endpoint.mcpPath,
+        send_agent_did: next.sendAgentDid,
+        enabled: next.enabled,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const test = async () => {
     try {
@@ -204,12 +204,10 @@ function Editor({
         warning={dependentsWarning(deployment, "tool-service", service.service_id)}
         base={base}
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteToolServiceConfig({
-              serviceId: service.service_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteToolServiceConfig", {
+            serviceId: service.service_id,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -225,6 +223,7 @@ export function ToolServicesPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -244,12 +243,10 @@ export function ToolServicesPanel({
             base={base}
             id={s.service_id}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteToolServiceConfig({
-                  serviceId: s.service_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteToolServiceConfig", {
+                serviceId: s.service_id,
+                agentDid: deployment.agentDid,
+              })
             }
           />
         ),
@@ -258,18 +255,16 @@ export function ToolServicesPanel({
       empty="No remote tools. Add an MCP connection, then select its tools in a Tools document."
       onCreate={async () => {
         const service_id = newId("mcp");
-        await shell.applyConfig((api) =>
-          api.saveToolServiceConfig({
-            document: {
-              service_id,
-              agent_did: deployment.agentDid,
-              display_name: "New service",
-              hostname: "127.0.0.1",
-              mcp_port: 3333,
-              enabled: false,
-            },
-          }),
-        );
+        await changeConfig("saveToolServiceConfig", {
+          document: {
+            service_id,
+            agent_did: deployment.agentDid,
+            display_name: "New service",
+            hostname: "127.0.0.1",
+            mcp_port: 3333,
+            enabled: false,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,

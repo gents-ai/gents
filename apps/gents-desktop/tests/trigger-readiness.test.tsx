@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
@@ -40,12 +41,9 @@ describe("trigger readiness", () => {
     const ready = withReadiness([
       { state: "ready", behaviorId: "default" },
     ] as DeploymentView["behaviorReadiness"]["behaviors"]);
-    render(
-      <TriggersPanel
-        shell={{ applyConfig: vi.fn() } as unknown as Shell}
-        deployment={ready}
-        item="trigger-a"
-      />,
+    renderIn(
+      testApp(),
+      <TriggersPanel shell={{} as Shell} deployment={ready} item="trigger-a" />,
     );
     expect(screen.queryByText("Ready")).toBeNull();
     /* nothing to say is said with nothing, not an empty line */

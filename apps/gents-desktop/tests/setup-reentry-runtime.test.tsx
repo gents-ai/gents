@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopApp } from "../src/hooks/desktopApp";
+import { renderIn, testApp } from "./app-fixture";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
@@ -112,27 +114,29 @@ function harness() {
     cancelClaudeLogin: vi.fn().mockResolvedValue(undefined),
     retrySaveProviderAccount: vi.fn(),
   };
+  const app = testApp({ api });
   const shell = {
     api: api as unknown as DesktopApiAdapter,
     snapshot: { bootstrap, client: { deployments: [deployment] } },
     deployments: [deployment],
     selectedDeployment: deployment,
     refreshSnapshot: vi.fn().mockResolvedValue(undefined),
-    applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-      run(api as unknown as DesktopApiAdapter),
   } as unknown as Shell;
-  return { api, shell };
+  return { api, shell, app };
 }
 
-function reenter(shell: Shell) {
-  return render(<SetupScreen shell={shell} initialStep="inference" onDone={vi.fn()} />);
+function reenter(shell: Shell, app: DesktopApp) {
+  return renderIn(
+    app,
+    <SetupScreen shell={shell} initialStep="inference" onDone={vi.fn()} />,
+  );
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe("setup re-entry at the provider step", () => {
   it("starts the stopped managed runtime and waits for readiness before sign-in", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     let started = false;
     api.managedServerStatus.mockImplementation(async () =>
       started ? status({ state: "running", pairingReady: true }) : status(),
@@ -141,7 +145,7 @@ describe("setup re-entry at the provider step", () => {
       started = true;
       return status({ state: "running" });
     });
-    reenter(shell);
+    reenter(shell, app);
 
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
     expect(api.startManagedServer).toHaveBeenCalledTimes(1);
@@ -150,7 +154,7 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("shows macOS approval guidance on re-entry and continues once Gents is allowed", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.openManagedServerLoginItems = vi.fn().mockResolvedValue(undefined);
     let approved = false;
     api.managedServerStatus.mockImplementation(async () =>
@@ -158,7 +162,7 @@ describe("setup re-entry at the provider step", () => {
         ? status({ state: "running", pairingReady: true })
         : status({ state: "stopped", approvalRequired: true }),
     );
-    reenter(shell);
+    reenter(shell, app);
 
     const wait = await screen.findByTestId("setup-managed-server-wait");
     expect(wait).toHaveTextContent("Login Items & Extensions");
@@ -175,14 +179,14 @@ describe("setup re-entry at the provider step", () => {
   it("waits past the pairing bound for a runtime that is still booting", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const { api, shell } = harness();
+      const { api, shell, app } = harness();
       let booting = true;
       api.managedServerStatus.mockImplementation(async () =>
         booting
           ? status({ state: "starting" })
           : status({ state: "running", pairingReady: true }),
       );
-      reenter(shell);
+      reenter(shell, app);
       await screen.findByTestId("setup-managed-server-wait");
       await vi.advanceTimersByTimeAsync(45_000);
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -199,20 +203,20 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("does not restart a runtime that is already serving", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(
       status({ state: "running", pairingReady: true }),
     );
-    reenter(shell);
+    reenter(shell, app);
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
     expect(api.startManagedServer).not.toHaveBeenCalled();
   });
 
   it("refuses to offer OAuth when the runtime cannot be started, without leaking internals", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(status({ state: "failed" }));
     api.startManagedServer.mockRejectedValue(new Error(RAW_FAILURE));
-    reenter(shell);
+    reenter(shell, app);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/local agent is not running/i);
@@ -230,24 +234,24 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("shows the bridge's reason when starting the runtime fails", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(status({ state: "stopped" }));
     api.startManagedServer.mockRejectedValue(
       new Error(
         "the native Gents service keeps exiting before it publishes runtime readiness: it exited with code 78 (restarted 3 times)",
       ),
     );
-    reenter(shell);
+    reenter(shell, app);
     expect(await screen.findByRole("alert")).toHaveTextContent("exited with code 78");
   });
 
   it("keeps a completed sign-in whose save failed and retries the save without OAuth", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(
       status({ state: "running", pairingReady: true }),
     );
     holdFailedSignIn(api);
-    reenter(shell);
+    reenter(shell, app);
     const user = userEvent.setup();
 
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
@@ -274,18 +278,18 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("offers Retry save again after leaving and re-entering setup", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(
       status({ state: "running", pairingReady: true }),
     );
     holdFailedSignIn(api);
-    const first = reenter(shell);
+    const first = reenter(shell, app);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
     first.unmount();
 
-    reenter(shell);
+    reenter(shell, app);
     await user.click(await screen.findByRole("button", { name: "Retry save" }));
     expect(await screen.findByText("Account connected")).toBeVisible();
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
@@ -296,11 +300,11 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("shows a held sign-in on re-entry while the runtime is still down", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(status({ state: "failed" }));
     api.startManagedServer.mockRejectedValue(new Error(RAW_FAILURE));
     api.listProviderAccounts.mockResolvedValue([{ ...account, pendingSave: true }]);
-    reenter(shell);
+    reenter(shell, app);
 
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
     expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
@@ -308,7 +312,7 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("offers Retry save in the fixed-provider form opened from a catalog row", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.managedServerStatus.mockResolvedValue(
       status({ state: "running", pairingReady: true }),
     );
@@ -320,7 +324,8 @@ describe("setup re-entry at the provider step", () => {
       held = false;
       return account;
     });
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -353,10 +358,11 @@ describe("setup re-entry at the provider step", () => {
   });
 
   it("skips the runtime gate for a remote agent", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     const remote = { ...deployment, agentDid: "did:key:zRemote", source: "enrolled" };
     (shell as unknown as { deployments: unknown[] }).deployments = [remote];
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"

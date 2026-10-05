@@ -27,7 +27,7 @@ describe("a failed action", () => {
     /* the bridge rejects with a plain string */
     const { created, setError } = actions(() => Promise.reject("skill name taken"));
     const failure = await created
-      .onSaveSkillConfig({} as never)
+      .changeConfig("saveSkillConfig", {} as never)
       .catch((error: unknown) => error);
 
     expect(setError).toHaveBeenLastCalledWith(

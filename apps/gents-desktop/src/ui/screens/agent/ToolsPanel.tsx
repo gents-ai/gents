@@ -25,6 +25,7 @@ import {
 } from "./ToolGroupControls";
 import { RowMenu } from "./RowMenu";
 import { useCallback, useState } from "react";
+import { useApp } from "@/app/AppContext";
 
 /* the document a draft starts from: read-only files, no commands */
 export function newToolsDocument(deployment: DeploymentView): Tools {
@@ -51,6 +52,7 @@ export function ToolsEditor({
   /* a new document that exists only here until Save */
   draft?: { onSaved: (toolsId: string) => void; onCancel: () => void };
 }) {
+  const { changeConfig } = useApp().actions;
   const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
   const [controlsGeneration, setControlsGeneration] = useState(0);
   const reportInvalidLimit = useCallback((id: string, label: string | null) => {
@@ -271,17 +273,15 @@ export function ToolsEditor({
         },
       };
       if (next.pendingTargets.length) {
-        await shell.applyConfig((api) =>
-          api.applyConfigComponents({
-            document: {
-              agent_principal: { agent_did: deployment.agentDid },
-              tools: [document],
-              subagent_targets: next.pendingTargets,
-            },
-          }),
-        );
+        await changeConfig("applyConfigComponents", {
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            tools: [document],
+            subagent_targets: next.pendingTargets,
+          },
+        });
       } else {
-        await shell.applyConfig((api) => api.saveToolsConfig({ document }));
+        await changeConfig("saveToolsConfig", { document });
       }
     },
     { isNew: draftMode !== undefined },
@@ -430,12 +430,10 @@ export function ToolsEditor({
           warning={dependentsWarning(deployment, "tools", tools.tools_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteToolsConfig({
-                toolsId: tools.tools_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteToolsConfig", {
+              toolsId: tools.tools_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -452,6 +450,7 @@ export function ToolsPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -473,24 +472,20 @@ export function ToolsPanel({
             id={t.tools_id}
             onDuplicate={async () => {
               const tools_id = newId("tools");
-              await shell.applyConfig((api) =>
-                api.saveToolsConfig({
-                  document: {
-                    ...t,
-                    tools_id,
-                    display_name: `${t.display_name ?? t.tools_id} copy`,
-                  },
-                }),
-              );
+              await changeConfig("saveToolsConfig", {
+                document: {
+                  ...t,
+                  tools_id,
+                  display_name: `${t.display_name ?? t.tools_id} copy`,
+                },
+              });
               return tools_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteToolsConfig({
-                  toolsId: t.tools_id,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteToolsConfig", {
+                toolsId: t.tools_id,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "tools", t.tools_id)}
           />
@@ -500,17 +495,15 @@ export function ToolsPanel({
       empty="No Tools documents. A behavior reaches tools only through its context."
       onCreate={async () => {
         const tools_id = newId("tools");
-        await shell.applyConfig((api) =>
-          api.saveToolsConfig({
-            document: {
-              tools_id,
-              agent_did: deployment.agentDid,
-              display_name: "New tools",
-              host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
-              tags: null,
-            },
-          }),
-        );
+        await changeConfig("saveToolsConfig", {
+          document: {
+            tools_id,
+            agent_did: deployment.agentDid,
+            display_name: "New tools",
+            host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
+            tags: null,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,

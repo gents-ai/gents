@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { Shell } from "../src/ui/hooks/useShell";
@@ -92,13 +93,10 @@ function harness() {
     fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
   };
   const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
+  const app = testApp({ api });
   const shell = {
     api: api as unknown as DesktopApiAdapter,
     snapshot: { bootstrap },
-    saveAgentConfig: api.saveAgentConfig,
-    saveBehaviorConfig: api.saveBehaviorConfig,
-    applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) =>
-      run(api as unknown as DesktopApiAdapter),
     refreshSnapshot,
     runTask: async (request: Parameters<typeof api.runTask>[0]) => {
       const result = await api.runTask(request);
@@ -113,7 +111,7 @@ function harness() {
     captureComposeIntent: () => 0,
     acceptsComposeIntent: (captured: number) => captured === 0,
   } as unknown as Shell;
-  return { api, shell };
+  return { api, shell, app };
 }
 
 async function replace(label: string, value: string) {
@@ -134,8 +132,8 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
   it("continues an existing local Gents home instead of creating a new identity", async () => {
-    const { shell } = harness();
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    const { shell, app } = harness();
+    renderIn(app, <SetupScreen shell={shell} onDone={vi.fn()} />);
     expect(
       screen.getByText("Continue the agent already on this computer."),
     ).toBeVisible();
@@ -146,7 +144,7 @@ describe("configuration panels", () => {
   });
 
   it("clears a prior agent sign-in while the next account lookup fails", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       contractVersion: 1,
       defaultsVersion: "test",
@@ -178,7 +176,8 @@ describe("configuration panels", () => {
         },
       ])
       .mockRejectedValueOnce(new Error("agent B lookup failed"));
-    const view = render(
+    const view = renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -200,7 +199,7 @@ describe("configuration panels", () => {
   });
 
   it("uses advertised context bounds when reopening a profile with a smaller saved override", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceBackendRecommendation.mockResolvedValue({
       defaultsVersion: "fixture",
       summary: "",
@@ -234,7 +233,10 @@ describe("configuration panels", () => {
         ],
       })),
     };
-    render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+    renderIn(
+      app,
+      <ProfilesPanel shell={shell} deployment={configured} item="profile-a" />,
+    );
     await waitFor(() =>
       expect(api.getInferenceBackendRecommendation).toHaveBeenCalledWith(
         expect.objectContaining({ contextWindow: 272000, maxContextWindow: 872000 }),
@@ -258,7 +260,7 @@ describe("configuration panels", () => {
   it.each([false, true])(
     "does not backfill Grok sampling on rename (existing sampling=%s)",
     async (existingSampling) => {
-      const { api, shell } = harness();
+      const { api, shell, app } = harness();
       api.getInferenceBackendRecommendation.mockResolvedValue({
         defaultsVersion: "fixture",
         summary: "",
@@ -290,7 +292,10 @@ describe("configuration panels", () => {
             ]
           : [],
       };
-      render(<ProfilesPanel shell={shell} deployment={configured} item="profile-a" />);
+      renderIn(
+        app,
+        <ProfilesPanel shell={shell} deployment={configured} item="profile-a" />,
+      );
       await waitFor(() =>
         expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
       );
@@ -313,8 +318,9 @@ describe("configuration panels", () => {
   );
 
   it("does not starve model defaults while equivalent snapshots refresh", async () => {
-    const { api, shell } = harness();
-    const view = render(
+    const { api, shell, app } = harness();
+    const view = renderIn(
+      app,
       <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
     );
     for (let refresh = 0; refresh < 5; refresh++) {
@@ -337,7 +343,7 @@ describe("configuration panels", () => {
   });
 
   it("refreshes subscription catalogs with authenticated discovery and hides credential IDs", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         provider: "xai-oauth",
@@ -354,7 +360,8 @@ describe("configuration panels", () => {
       reachable: true,
       models: [{ advertised: { model_name: "grok-4.6" } }],
     });
-    render(
+    renderIn(
+      app,
       <InferencePanel
         shell={shell}
         item="backend-a"
@@ -397,14 +404,15 @@ describe("configuration panels", () => {
   });
 
   it("discards subscription discovery when the edited connection changes", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     let resolveDiscovery!: (value: unknown) => void;
     api.discoverInferenceModels = vi.fn().mockReturnValue(
       new Promise((resolve) => {
         resolveDiscovery = resolve;
       }),
     );
-    render(
+    renderIn(
+      app,
       <InferencePanel
         shell={shell}
         item="backend-a"
@@ -472,12 +480,12 @@ describe("configuration panels", () => {
     });
 
     it("never borrows another account for a backend in the list", async () => {
-      const { api, shell } = harness();
+      const { api, shell, app } = harness();
       api.listProviderAccounts.mockResolvedValue([
         claudeAccount("cred-original", null, "original-identity", false),
         claudeAccount("cred-2", "acct-2", "second-identity"),
       ]);
-      render(<InferencePanel shell={shell} deployment={claudeDeployment} />);
+      renderIn(app, <InferencePanel shell={shell} deployment={claudeDeployment} />);
       expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
       expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
       expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
@@ -488,12 +496,13 @@ describe("configuration panels", () => {
       ["claude-2", "cred-2", "second-identity"],
     ] as const) {
       it(`shows and disconnects the account ${item} references`, async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue([
           claudeAccount("cred-original", null, "original-identity"),
           claudeAccount("cred-2", "acct-2", "second-identity"),
         ]);
-        render(
+        renderIn(
+          app,
           <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
         );
         expect(await screen.findByText(identity)).toBeVisible();
@@ -512,9 +521,10 @@ describe("configuration panels", () => {
       ["claude", { kind: "principal_oauth" }],
     ] as const) {
       it(`saving ${item} keeps its account reference`, async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue([]);
-        render(
+        renderIn(
+          app,
           <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
         );
         const user = await replace("Name", `${item} edited`);
@@ -526,11 +536,12 @@ describe("configuration panels", () => {
     }
 
     it("says a backend's account is not on this node and offers no reconnect", async () => {
-      const { api, shell } = harness();
+      const { api, shell, app } = harness();
       api.listProviderAccounts.mockResolvedValue([
         claudeAccount("cred-original", null, "original-identity"),
       ]);
-      render(
+      renderIn(
+        app,
         <InferencePanel shell={shell} deployment={claudeDeployment} item="claude-3" />,
       );
       expect(await screen.findByText(/account not on this node/)).toBeVisible();
@@ -598,7 +609,7 @@ describe("configuration panels", () => {
       ];
 
       it("clears another agent's accounts and ignores its late response", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         let oldRead: (views: typeof accounts) => void = () => {};
         let newRead: (views: typeof accounts) => void = () => {};
         api.listProviderAccounts
@@ -621,7 +632,7 @@ describe("configuration panels", () => {
       });
 
       it("keeps the latest reload when a snapshot read fails later", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         let oldFailure: (error: Error) => void = () => {};
         let newRead: (views: typeof accounts) => void = () => {};
         api.listProviderAccounts
@@ -645,9 +656,9 @@ describe("configuration panels", () => {
       });
 
       it("draws each row's label and state", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        renderIn(app, <InferencePanel shell={shell} deployment={rowsDeployment} />);
         const claude = "Anthropic / Claude (subscription)";
         const grok = "Grok (subscription)";
         const chatgpt = "ChatGPT / Codex (subscription)";
@@ -667,9 +678,10 @@ describe("configuration panels", () => {
       });
 
       it("opens a lapsed token's row as connected, with its label", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        render(
+        renderIn(
+          app,
           <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
         );
         expect(await screen.findByText("Connected")).toBeVisible();
@@ -680,7 +692,7 @@ describe("configuration panels", () => {
       });
 
       it("offers Add another on every subscription row", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
         api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
           providers: [
@@ -689,7 +701,7 @@ describe("configuration panels", () => {
             { id: "grok", displayName: "Grok" },
           ],
         });
-        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        renderIn(app, <InferencePanel shell={shell} deployment={rowsDeployment} />);
         const user = userEvent.setup();
         for (const [row, item] of [
           ["Claude", "Add another Anthropic"],
@@ -705,9 +717,10 @@ describe("configuration panels", () => {
       });
 
       it("opens a disabled account's row with its identity and Reconnect", async () => {
-        const { api, shell } = harness();
+        const { api, shell, app } = harness();
         api.listProviderAccounts.mockResolvedValue(accounts);
-        render(
+        renderIn(
+          app,
           <InferencePanel shell={shell} deployment={rowsDeployment} item="grok-side" />,
         );
         expect(await screen.findByText("Disabled")).toBeVisible();
@@ -736,11 +749,12 @@ describe("configuration panels", () => {
           ],
         };
         const setup = (item?: string) => {
-          const { api, shell } = harness();
+          const { api, shell, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           api.renameProviderAccount = vi.fn().mockResolvedValue(undefined);
           api.removeProviderAccount = vi.fn().mockResolvedValue(undefined);
-          render(
+          renderIn(
+            app,
             <InferencePanel shell={shell} deployment={usedDeployment} item={item} />,
           );
           return { api, user: userEvent.setup() };
@@ -938,10 +952,11 @@ describe("configuration panels", () => {
           view_("grok-side", { windows: [window("5h", 50)] }),
         ];
         const setup = (item?: string) => {
-          const { api, shell } = harness();
+          const { api, shell, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           api.readProviderUsage = vi.fn().mockResolvedValue(usage());
-          const view = render(
+          const view = renderIn(
+            app,
             <InferencePanel shell={shell} deployment={rowsDeployment} item={item} />,
           );
           return { api, shell, view, user: userEvent.setup() };
@@ -981,14 +996,15 @@ describe("configuration panels", () => {
         });
 
         it("keeps a Refresh result over an open read that lands later", async () => {
-          const { api, shell } = harness();
+          const { api, shell, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
           let land: (views: unknown) => void = () => {};
           api.readProviderUsage = vi
             .fn()
             .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
             .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
-          render(
+          renderIn(
+            app,
             <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
           );
           const user = userEvent.setup();
@@ -1086,9 +1102,10 @@ describe("configuration panels", () => {
           ],
         };
         const editProfileOn = (backendId: string) => {
-          const { api, shell } = harness();
+          const { api, shell, app } = harness();
           api.listProviderAccounts.mockResolvedValue(accounts);
-          render(
+          renderIn(
+            app,
             <ProfileEditor
               shell={shell}
               deployment={pickDeployment}
@@ -1151,7 +1168,7 @@ describe("configuration panels", () => {
         });
 
         it("a new profile sheet drafts from the accounts loaded before it opens", async () => {
-          const { api, shell } = harness();
+          const { api, shell, app } = harness();
           api.listProviderAccounts.mockResolvedValue(personalOff);
           const sheet = (open: boolean) => (
             <ProfileSheet
@@ -1161,7 +1178,7 @@ describe("configuration panels", () => {
               onClose={vi.fn()}
             />
           );
-          const view = render(sheet(false));
+          const view = renderIn(app, sheet(false));
           await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalled());
           await act(async () => {});
           view.rerender(sheet(true));
@@ -1181,7 +1198,7 @@ describe("configuration panels", () => {
   });
 
   it("does not treat a disabled subscription credential as signed in", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         provider: "xai-oauth",
@@ -1189,7 +1206,8 @@ describe("configuration panels", () => {
         credentialId: "disabled-credential",
       },
     ]);
-    render(
+    renderIn(
+      app,
       <InferencePanel
         shell={shell}
         deployment={{
@@ -1207,11 +1225,12 @@ describe("configuration panels", () => {
   });
 
   it("says off for a switched-off backend whose account is signed in", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
     ]);
-    render(
+    renderIn(
+      app,
       <InferencePanel
         shell={shell}
         deployment={{
@@ -1231,7 +1250,7 @@ describe("configuration panels", () => {
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       executionDefaults: {
         maxTurns: 250,
@@ -1242,7 +1261,10 @@ describe("configuration panels", () => {
         deadlineSecs: 86400,
       },
     });
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    renderIn(
+      app,
+      <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
+    );
     await waitFor(() => expect(screen.getByLabelText("Max turns")).toHaveValue("250"));
     await replace("Max turns", "200");
     expect(screen.getByLabelText("Max turns")).toHaveValue("200");
@@ -1253,7 +1275,7 @@ describe("configuration panels", () => {
   });
 
   it("keeps a profile whose backend is gone on the Providers page", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
     const orphan = {
       ...deployment.inferenceProfiles[0]!,
@@ -1261,7 +1283,8 @@ describe("configuration panels", () => {
       display_name: "Orphaned profile",
       backend_id: "backend-deleted",
     };
-    render(
+    renderIn(
+      app,
       <ProfilesPanel
         shell={shell}
         deployment={{
@@ -1275,12 +1298,12 @@ describe("configuration panels", () => {
   });
 
   it("says when the provider catalog cannot be read and reads it again on Retry", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi
       .fn()
       .mockRejectedValueOnce(new Error("catalog offline"))
       .mockResolvedValueOnce({ providers: [] });
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    renderIn(app, <InferencePanel shell={shell} deployment={deployment} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("catalog offline");
     await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
@@ -1288,7 +1311,7 @@ describe("configuration panels", () => {
   });
 
   it("opens shared provider setup without eagerly creating a blank backend", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
       providers: [
         {
@@ -1308,7 +1331,7 @@ describe("configuration panels", () => {
         },
       ],
     });
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    renderIn(app, <InferencePanel shell={shell} deployment={deployment} />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New backend" }));
     await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
@@ -1319,8 +1342,8 @@ describe("configuration panels", () => {
   });
 
   it("requires the agent identity fields and saves editable principal tags", async () => {
-    const { api, shell } = harness();
-    render(<AgentPanel shell={shell} deployment={deployment} />);
+    const { api, shell, app } = harness();
+    renderIn(app, <AgentPanel shell={shell} deployment={deployment} />);
     expectFields(["Display name", "Default behavior", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
@@ -1344,8 +1367,11 @@ describe("configuration panels", () => {
   });
 
   it("validates and saves every behavior-owned setting without changing Setup", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />,
+    );
     expectFields([
       "Display name",
       "Description",
@@ -1362,8 +1388,8 @@ describe("configuration panels", () => {
   });
 
   it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, shell, app } = harness();
+    renderIn(app, <BehaviorsPanel shell={shell} deployment={deployment} />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New behavior" }));
@@ -1388,12 +1414,13 @@ describe("configuration panels", () => {
   });
 
   it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("bridge offline"))
       .mockResolvedValueOnce({});
     const onSaved = vi.fn();
-    render(
+    renderIn(
+      app,
       <BehaviorEditor
         shell={shell}
         deployment={deployment}
@@ -1418,7 +1445,7 @@ describe("configuration panels", () => {
   });
 
   it("creates a prefilled new profile as it stands, and closes only on success", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("write refused"))
       .mockResolvedValueOnce({});
@@ -1429,7 +1456,8 @@ describe("configuration panels", () => {
       model_name: deployment.inferenceProfiles[0]!.model_name,
       backend_id: deployment.inferenceProfiles[0]!.backend_id,
     };
-    render(
+    renderIn(
+      app,
       <ProfileEditor
         shell={shell}
         deployment={deployment}
@@ -1462,8 +1490,8 @@ describe("configuration panels", () => {
   });
 
   it("turns a behavior on or off from its row with a patch of enabled alone", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, shell, app } = harness();
+    renderIn(app, <BehaviorsPanel shell={shell} deployment={deployment} />);
     const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
     const toggle = screen.getAllByRole("switch", {
       name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
@@ -1485,8 +1513,8 @@ describe("configuration panels", () => {
   });
 
   it("makes a behavior the agent's default from its row menu", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, shell, app } = harness();
+    renderIn(app, <BehaviorsPanel shell={shell} deployment={deployment} />);
     const user = userEvent.setup();
     const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
     await user.click(
@@ -1511,8 +1539,11 @@ describe("configuration panels", () => {
     });
 
     it("makes a disabled behavior the default and enables it in one call", async () => {
-      const { api, shell } = harness();
-      render(<BehaviorsPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const { api, shell, app } = harness();
+      renderIn(
+        app,
+        <BehaviorsPanel shell={shell} deployment={withOps({ enabled: false })} />,
+      );
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
       const item = await screen.findByRole("menuitem", { name: /^Make default/ });
@@ -1529,8 +1560,9 @@ describe("configuration panels", () => {
     });
 
     it("offers Default to a disabled behavior with no instructions", async () => {
-      const { api, shell } = harness();
-      render(
+      const { api, shell, app } = harness();
+      renderIn(
+        app,
         <BehaviorsPanel
           shell={shell}
           deployment={withOps({ enabled: false, contextId: null })}
@@ -1550,8 +1582,8 @@ describe("configuration panels", () => {
     });
 
     it("refuses to turn off the current default and explains why", async () => {
-      const { api, shell } = harness();
-      render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+      const { api, shell, app } = harness();
+      renderIn(app, <BehaviorsPanel shell={shell} deployment={deployment} />);
       const toggle = screen.getAllByRole("switch", { name: "Default is enabled" })[0]!;
       expect(toggle).toHaveAttribute("aria-disabled", "true");
       expect(toggle).toHaveAttribute(
@@ -1567,8 +1599,11 @@ describe("configuration panels", () => {
     });
 
     it("sets a new agent default in one call before saving the other fields", async () => {
-      const { api, shell } = harness();
-      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const { api, shell, app } = harness();
+      renderIn(
+        app,
+        <AgentPanel shell={shell} deployment={withOps({ enabled: false })} />,
+      );
       const user = userEvent.setup();
       await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
@@ -1585,13 +1620,16 @@ describe("configuration panels", () => {
     });
 
     it("shows the publication refusal when a default cannot be set", async () => {
-      const { api, shell } = harness();
+      const { api, shell, app } = harness();
       api.setDefaultBehavior.mockRejectedValue(
         new Error(
           'AgentBehavior ops field context_id references missing AgentContext "gone"',
         ),
       );
-      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      renderIn(
+        app,
+        <AgentPanel shell={shell} deployment={withOps({ enabled: false })} />,
+      );
       const user = userEvent.setup();
       await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
@@ -1604,8 +1642,11 @@ describe("configuration panels", () => {
   });
 
   it("patches only the changed context field and the behavior in one call", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />,
+    );
     const user = userEvent.setup();
     const prompt = screen.getByLabelText("System prompt");
     await user.clear(prompt);
@@ -1626,9 +1667,12 @@ describe("configuration panels", () => {
   });
 
   it("says when the runtime's execution defaults cannot be read", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockRejectedValue(new Error("no catalog"));
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    renderIn(
+      app,
+      <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
+    );
     expect(
       await screen.findByText(
         /Couldn’t read the runtime’s execution defaults: no catalog/,
@@ -1637,7 +1681,7 @@ describe("configuration panels", () => {
   });
 
   it("creates an automation off when the bridge says its behavior cannot run", async () => {
-    const { shell } = harness();
+    const { shell, app } = harness();
     const blocked = {
       ...deployment,
       behaviorReadiness: {
@@ -1652,7 +1696,7 @@ describe("configuration panels", () => {
         ],
       },
     } as typeof deployment;
-    render(<TasksPanel shell={shell} deployment={blocked} item="task-a" />);
+    renderIn(app, <TasksPanel shell={shell} deployment={blocked} item="task-a" />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Schedule" }));
     const dialog = await screen.findByRole("dialog", { name: "When it runs" });
@@ -1662,7 +1706,7 @@ describe("configuration panels", () => {
   });
 
   it("coalesces repeated create activation while the operator write is pending", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     let finish: (() => void) | undefined;
     api.saveSkillConfig.mockImplementation(
       () =>
@@ -1670,7 +1714,7 @@ describe("configuration panels", () => {
           finish = resolve;
         }),
     );
-    render(<SkillsPanel shell={shell} deployment={deployment} />);
+    renderIn(app, <SkillsPanel deployment={deployment} />);
     const button = screen.getByRole("button", { name: "New skill" });
 
     act(() => {
@@ -1687,8 +1731,11 @@ describe("configuration panels", () => {
   });
 
   it("uses the real context delete command and never a replacement-list apply", async () => {
-    const { api, shell } = harness();
-    render(<ContextsPanel shell={shell} deployment={deployment} item="context-b" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <ContextsPanel shell={shell} deployment={deployment} item="context-b" />,
+    );
     expectFields([
       "Display name",
       "Description",
@@ -1720,8 +1767,8 @@ describe("configuration panels", () => {
   });
 
   it("creates only the new behavior's context and represents empty lists as null", async () => {
-    const { api, shell } = harness();
-    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const { api, shell, app } = harness();
+    renderIn(app, <BehaviorsPanel shell={shell} deployment={deployment} />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New behavior" }));
@@ -1737,8 +1784,11 @@ describe("configuration panels", () => {
   });
 
   it("rejects invalid backend endpoints and capacity before writing", async () => {
-    const { api, shell } = harness();
-    render(<InferencePanel shell={shell} deployment={deployment} item="backend-a" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <InferencePanel shell={shell} deployment={deployment} item="backend-a" />,
+    );
     expectFields([
       "Name",
       "Provider kind",
@@ -1763,7 +1813,7 @@ describe("configuration panels", () => {
   });
 
   it("requires an inline second action before disconnecting a subscription", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.listProviderAccounts.mockResolvedValue([
       {
         credentialId: "credential-a",
@@ -1784,7 +1834,8 @@ describe("configuration panels", () => {
           : backend,
       ),
     };
-    render(
+    renderIn(
+      app,
       <InferencePanel
         shell={shell}
         deployment={subscriptionDeployment}
@@ -1807,8 +1858,11 @@ describe("configuration panels", () => {
   });
 
   it("validates model-supported profile defaults and execution settings", async () => {
-    const { api, shell } = harness();
-    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
+    );
     await screen.findByLabelText("Temperature");
     expect(screen.queryByText("Gents recommends balanced sampling.")).toBeNull();
     const user = userEvent.setup();
@@ -1842,8 +1896,8 @@ describe("configuration panels", () => {
   });
 
   it("rejects relative roots and malformed advanced tool configuration", async () => {
-    const { api, shell } = harness();
-    render(<ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
+    const { api, shell, app } = harness();
+    renderIn(app, <ToolsPanel shell={shell} deployment={deployment} item="tools-a" />);
     expectFields([
       "Display name",
       "Workspace root",
@@ -1861,8 +1915,9 @@ describe("configuration panels", () => {
   });
 
   it("validates and tests the complete MCP service address", async () => {
-    const { api, shell } = harness();
-    render(
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
       <ToolServicesPanel shell={shell} deployment={deployment} item="service-a" />,
     );
     expectFields([
@@ -1892,8 +1947,8 @@ describe("configuration panels", () => {
   });
 
   it("preserves and validates skill interface metadata", async () => {
-    const { api, shell } = harness();
-    render(<SkillsPanel shell={shell} deployment={deployment} item="skill-a" />);
+    const { api, shell, app } = harness();
+    renderIn(app, <SkillsPanel deployment={deployment} item="skill-a" />);
     expectFields([
       "Name",
       "Display name",
@@ -1913,8 +1968,8 @@ describe("configuration panels", () => {
   });
 
   it("validates task prompts, goal budgets, hooks, and manual-run args", async () => {
-    const { api, shell } = harness();
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const { api, shell, app } = harness();
+    renderIn(app, <TasksPanel shell={shell} deployment={deployment} item="task-a" />);
     expectFields([
       "Name",
       "Behavior",
@@ -1937,11 +1992,11 @@ describe("configuration panels", () => {
   });
 
   it("adds a schedule to a task only on Create, as one apply with the trigger off", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     api.applyConfigComponents
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce({});
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    renderIn(app, <TasksPanel shell={shell} deployment={deployment} item="task-a" />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "Schedule" }));
@@ -1975,8 +2030,8 @@ describe("configuration panels", () => {
   });
 
   it("asks which collection an event watches instead of defaulting to requests", async () => {
-    const { api, shell } = harness();
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const { api, shell, app } = harness();
+    renderIn(app, <TasksPanel shell={shell} deployment={deployment} item="task-a" />);
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "Event" }));
@@ -2007,7 +2062,7 @@ describe("configuration panels", () => {
   });
 
   it("does not publish a task result after the user changes compose intent", async () => {
-    const { shell } = harness();
+    const { shell, app } = harness();
     let generation = 0;
     let resolve!: (result: { requestId: string; sessionId: string }) => void;
     const pending = new Promise<{ requestId: string; sessionId: string }>((next) => {
@@ -2018,7 +2073,7 @@ describe("configuration panels", () => {
       captureComposeIntent: () => generation,
       acceptsComposeIntent: (captured: number) => captured === generation,
     });
-    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    renderIn(app, <TasksPanel shell={shell} deployment={deployment} item="task-a" />);
 
     await act(async () => {
       screen.getByRole("button", { name: "Run task" }).click();
@@ -2040,8 +2095,11 @@ describe("configuration panels", () => {
   });
 
   it("preserves interval cadence and rejects non-positive intervals", async () => {
-    const { api, shell } = harness();
-    render(<SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />,
+    );
     expectFields(["Display name", "Cadence", "Interval seconds", "Tags"]);
     const user = await replace("Interval seconds", "0");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -2062,8 +2120,11 @@ describe("configuration panels", () => {
   });
 
   it("runs a configured schedule through the typed bridge command", async () => {
-    const { api, shell } = harness();
-    render(<SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />);
+    const { api, shell, app } = harness();
+    renderIn(
+      app,
+      <SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />,
+    );
 
     await userEvent
       .setup()
@@ -2078,8 +2139,8 @@ describe("configuration panels", () => {
   });
 
   it("validates grouped event invariants before persistence", async () => {
-    const { api, shell } = harness();
-    render(<EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />);
+    const { api, shell, app } = harness();
+    renderIn(app, <EventSourcesPanel deployment={deployment} item="source-a" />);
     expectFields([
       "Display name",
       "Source collection",
@@ -2102,8 +2163,11 @@ describe("configuration panels", () => {
   });
 
   it("shows every trigger field and requires existing task/source references", () => {
-    const { shell } = harness();
-    render(<TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />);
+    const { shell, app } = harness();
+    renderIn(
+      app,
+      <TriggersPanel shell={shell} deployment={deployment} item="trigger-a" />,
+    );
     expectFields([
       "Display name",
       "Description",
@@ -2172,9 +2236,7 @@ describe("configuration panels", () => {
         method: "saveToolServiceConfig",
       },
       {
-        renderPanel: (shell) => (
-          <SkillsPanel shell={shell} deployment={deployment} item="skill-a" />
-        ),
+        renderPanel: (shell) => <SkillsPanel deployment={deployment} item="skill-a" />,
         field: "Display name",
         value: "Skill edited",
         method: "saveSkillConfig",
@@ -2189,7 +2251,7 @@ describe("configuration panels", () => {
       },
       {
         renderPanel: (shell) => (
-          <EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />
+          <EventSourcesPanel deployment={deployment} item="source-a" />
         ),
         field: "Display name",
         value: "Source edited",
@@ -2207,8 +2269,8 @@ describe("configuration panels", () => {
 
     for (const testCase of cases) {
       it(testCase.value, async () => {
-        const { api, shell } = harness();
-        const view = render(testCase.renderPanel(shell));
+        const { api, shell, app } = harness();
+        const view = renderIn(app, testCase.renderPanel(shell));
         if (testCase.method === "applyConfigComponents") {
           await screen.findByLabelText("Temperature");
         }
@@ -2231,26 +2293,19 @@ describe("configuration panels", () => {
 
   it("names the documents a delete leaves without their reference", async () => {
     const user = userEvent.setup();
+    const { shell, app } = harness();
     const cases: Array<[React.ReactElement, RegExp]> = [
       [
-        <ProfilesPanel
-          shell={harness().shell}
-          deployment={deployment}
-          item="profile-a"
-        />,
+        <ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />,
         /Used by \d+ behaviors?; they lose this reference\./,
       ],
       [
-        <SchedulesPanel
-          shell={harness().shell}
-          deployment={deployment}
-          item="timer-a"
-        />,
+        <SchedulesPanel shell={shell} deployment={deployment} item="timer-a" />,
         /Used by 1 trigger; they lose this reference\./,
       ],
     ];
     for (const [panel, warning] of cases) {
-      const view = render(panel);
+      const view = renderIn(app, panel);
       await user.click(
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
@@ -2260,9 +2315,9 @@ describe("configuration panels", () => {
   });
 
   it("asks for the name before a list row's delete runs", async () => {
-    const { api, shell } = harness();
+    const { api, shell, app } = harness();
     const user = userEvent.setup();
-    render(<TasksPanel shell={shell} deployment={deployment} />);
+    renderIn(app, <TasksPanel shell={shell} deployment={deployment} />);
     const name = deployment.tasks[0]!.name ?? deployment.tasks[0]!.taskId;
     await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
@@ -2323,9 +2378,7 @@ describe("configuration panels", () => {
         request: { serviceId: "service-a", agentDid: deployment.agentDid },
       },
       {
-        renderPanel: (shell) => (
-          <SkillsPanel shell={shell} deployment={deployment} item="skill-a" />
-        ),
+        renderPanel: (shell) => <SkillsPanel deployment={deployment} item="skill-a" />,
         method: "deleteSkillConfig",
         request: { skillId: "skill-a", agentDid: deployment.agentDid },
       },
@@ -2345,7 +2398,7 @@ describe("configuration panels", () => {
       },
       {
         renderPanel: (shell) => (
-          <EventSourcesPanel shell={shell} deployment={deployment} item="source-a" />
+          <EventSourcesPanel deployment={deployment} item="source-a" />
         ),
         method: "deleteEventSourceConfig",
         request: { eventSourceId: "source-a", agentDid: deployment.agentDid },
@@ -2360,8 +2413,8 @@ describe("configuration panels", () => {
     ];
 
     for (const testCase of cases) {
-      const { api, shell } = harness();
-      const view = render(testCase.renderPanel(shell));
+      const { api, shell, app } = harness();
+      const view = renderIn(app, testCase.renderPanel(shell));
       const user = userEvent.setup();
       await user.click(
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,

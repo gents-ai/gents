@@ -8,6 +8,7 @@ import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
 import { saveDefault } from "./BehaviorsPanel";
+import { useApp } from "@/app/AppContext";
 
 export function AgentPanel({
   shell,
@@ -16,6 +17,7 @@ export function AgentPanel({
   shell: Shell;
   deployment: DeploymentView;
 }) {
+  const { changeConfig } = useApp().actions;
   const agent = deployment.agentPrincipal;
   const behaviors = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
@@ -36,8 +38,8 @@ export function AgentPanel({
       /* a new default lands with its enablement first; the principal's other
          fields then save against an already valid default */
       if (next.defaultBehaviorId !== agent.defaultBehaviorId)
-        await saveDefault(shell, deployment, next.defaultBehaviorId);
-      await shell.saveAgentConfig({
+        await saveDefault(changeConfig, deployment, next.defaultBehaviorId);
+      await changeConfig("saveAgentConfig", {
         document: {
           agent_did: agent.agentDid,
           display_name: next.displayName.trim(),

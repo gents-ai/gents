@@ -59,8 +59,8 @@ describe("desktop snapshot publication", () => {
     await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
     const actions = configActions(api, lifecycle.mutateSnapshot);
 
-    const older = actions.onSaveBackendConfig({} as BackendSaveRequest);
-    const newer = actions.onSaveBackendConfig({} as BackendSaveRequest);
+    const older = actions.changeConfig("saveBackendConfig", {} as BackendSaveRequest);
+    const newer = actions.changeConfig("saveBackendConfig", {} as BackendSaveRequest);
     const newerPayload = snapshot("newer-stale-payload");
     let newerResult: DesktopClientSnapshot | undefined;
     secondSave.resolve(newerPayload);
@@ -93,7 +93,10 @@ describe("desktop snapshot publication", () => {
     const actions = configActions(api, lifecycle.mutateSnapshot);
 
     const reading = lifecycle.refreshSnapshot();
-    const mutation = actions.onSaveBackendConfig({} as BackendSaveRequest);
+    const mutation = actions.changeConfig(
+      "saveBackendConfig",
+      {} as BackendSaveRequest,
+    );
     failedSave.reject(new Error("write rejected"));
     await expect(mutation).rejects.toThrow("write rejected");
 

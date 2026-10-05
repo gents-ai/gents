@@ -45,12 +45,12 @@ import {
   SelectValue,
 } from "@gents/ui/components/select";
 import { Textarea } from "@gents/ui/components/textarea";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
 import { defaultAgentOf } from "@/lib/agents";
 import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 const NEW = "new:";
 export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -106,7 +106,6 @@ function Choice({
 }
 
 export function NewAutomationDialog({
-  shell,
   deployment,
   open,
   onOpenChange,
@@ -115,7 +114,6 @@ export function NewAutomationDialog({
   initialKind,
   onCreated,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -127,6 +125,7 @@ export function NewAutomationDialog({
   /* the new trigger's id, for a caller that stays on its page */
   onCreated?: (triggerId: string) => void;
 }) {
+  const { changeConfig } = useApp().actions;
   const defaultBehavior =
     defaultAgentOf(deployment)?.behaviorId ?? deployment.behaviors[0]?.behaviorId ?? "";
   const [name, setName] = useState("");
@@ -276,17 +275,15 @@ export function NewAutomationDialog({
           enabled: enable && !behaviorOff,
           concurrency: "serial",
         });
-      await shell.applyConfig((api) =>
-        api.applyConfigComponents({
-          document: {
-            agent_principal: { agent_did },
-            ...(schedules.length ? { schedules } : {}),
-            ...(eventSources.length ? { event_sources: eventSources } : {}),
-            ...(tasks.length ? { tasks } : {}),
-            ...(triggers.length ? { triggers } : {}),
-          },
-        }),
-      );
+      await changeConfig("applyConfigComponents", {
+        document: {
+          agent_principal: { agent_did },
+          ...(schedules.length ? { schedules } : {}),
+          ...(eventSources.length ? { event_sources: eventSources } : {}),
+          ...(tasks.length ? { tasks } : {}),
+          ...(triggers.length ? { triggers } : {}),
+        },
+      });
       close(false);
       if (onCreated && source) onCreated(trigger_id);
       else

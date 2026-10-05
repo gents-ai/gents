@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { render } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 
 import type {
   DesktopApiAdapter,
@@ -39,13 +40,16 @@ export function testApp({
   deployments,
   session,
   selection,
+  reportFailure,
 }: {
   api?: object;
+  /** where a failed action is shown; the app passes its toast */
+  reportFailure?: (message: string) => void;
   deployments?: unknown[];
   session?: DesktopSessionSnapshot | null;
   selection?: Partial<SelectionState>;
 } = {}): DesktopApp {
-  const app = createDesktopApp({ api: api as DesktopApiAdapter });
+  const app = createDesktopApp({ api: api as DesktopApiAdapter, reportFailure });
   if (deployments) publish(app, deployments);
   app.stores.selection.setState({
     ...(session
@@ -62,4 +66,9 @@ export function withApp(app: DesktopApp) {
   return function AppWrapper({ children }: { children: ReactNode }) {
     return <AppProvider value={app}>{children}</AppProvider>;
   };
+}
+
+/** Renders `ui` under `app`; a rerender stays under it. */
+export function renderIn(app: DesktopApp, ui: ReactElement) {
+  return render(ui, { wrapper: withApp(app) });
 }

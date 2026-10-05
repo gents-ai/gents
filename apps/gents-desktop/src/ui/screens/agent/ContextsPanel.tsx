@@ -24,6 +24,7 @@ import { Group } from "./rows";
 import { contextOrigin, forgetContextOrigins } from "./contextOrigin";
 import { RowMenu } from "./RowMenu";
 import { agentOf } from "@/lib/agents";
+import { useApp } from "@/app/AppContext";
 
 /* a context's detail names this many of its behaviors, then counts the rest */
 const USERS_SHOWN = 8;
@@ -39,6 +40,7 @@ function Editor({
   context: AgentContext;
   after?: Route;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -66,26 +68,24 @@ function Editor({
       (skillId) => !deployment.skills.some((row) => row.skillId === skillId),
     );
     if (missingSkill) throw new Error(`Unknown skill ID: ${missingSkill}`);
-    await shell.applyConfig((api) =>
-      api.patchConfigComponents({
-        agentDid: deployment.agentDid,
-        patches: [
-          {
-            collection: "AgentContext",
-            id: context.context_id,
-            changes: {
-              display_name: next.displayName || null,
-              description: next.description || null,
-              system_prompt: next.systemPrompt || null,
-              tools_id: next.toolsId || null,
-              compaction_id: next.compactionId || null,
-              skill_ids: skillIds.length ? skillIds : null,
-              tags: next.tags.length ? next.tags : null,
-            },
+    await changeConfig("patchConfigComponents", {
+      agentDid: deployment.agentDid,
+      patches: [
+        {
+          collection: "AgentContext",
+          id: context.context_id,
+          changes: {
+            display_name: next.displayName || null,
+            description: next.description || null,
+            system_prompt: next.systemPrompt || null,
+            tools_id: next.toolsId || null,
+            compaction_id: next.compactionId || null,
+            skill_ids: skillIds.length ? skillIds : null,
+            tags: next.tags.length ? next.tags : null,
           },
-        ],
-      }),
-    );
+        },
+      ],
+    });
   });
   const id = (f: string) => `${context.context_id}-${f}`;
   const users = deployment.behaviors.filter((b) => b.contextId === context.context_id);
@@ -252,12 +252,10 @@ function Editor({
               : `${users.length} behaviors use it and will be left without a context.`
         }
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteContextConfig({
-              contextId: context.context_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteContextConfig", {
+            contextId: context.context_id,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -273,6 +271,7 @@ export function ContextsPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -335,12 +334,10 @@ export function ContextsPanel({
               base={base}
               id={c.context_id}
               onDelete={() =>
-                shell.applyConfig((api) =>
-                  api.deleteContextConfig({
-                    contextId: c.context_id,
-                    agentDid: deployment.agentDid,
-                  }),
-                )
+                changeConfig("deleteContextConfig", {
+                  contextId: c.context_id,
+                  agentDid: deployment.agentDid,
+                })
               }
               warning={dependentsWarning(deployment, "context", c.context_id)}
             />

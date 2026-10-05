@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 import {
   BridgeInvokeError,
@@ -401,7 +402,7 @@ describe("setup start on a home this version cannot open", () => {
       onInitLocalRuntime: vi.fn(async () => undefined),
       incompatibleHome: { adopt },
     } as unknown as Shell;
-    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    renderIn(testApp({ api }), <SetupScreen shell={shell} onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");
     await waitFor(() => expect(next).toBeEnabled());
 

@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
@@ -34,15 +35,15 @@ function setup(
     "applyConfigComponents",
   ] as const)
     vi.spyOn(api, name);
+  const app = testApp({ api });
   const shell = {
     api,
     snapshot: null,
     deployments: [],
     selectedDeployment: null,
     refreshSnapshot: vi.fn().mockResolvedValue(undefined),
-    applyConfig: (run: (bridge: DesktopApiAdapter) => Promise<unknown>) => run(api),
   } as unknown as Shell;
-  return { api, shell };
+  return { api, shell, app };
 }
 
 const login = (api: DesktopApiAdapter, provider: ProviderId) =>
@@ -58,8 +59,9 @@ describe("setup provider sign-in", () => {
   it.each(["openai", "anthropic", "grok"] as const)(
     "starts the %s sign-in when its add-backend form opens",
     async (provider) => {
-      const { api, shell } = setup();
-      render(
+      const { api, shell, app } = setup();
+      renderIn(
+        app,
         <SetupScreen
           shell={shell}
           initialStep="inference"
@@ -77,8 +79,9 @@ describe("setup provider sign-in", () => {
   );
 
   it("starts sign-in for a chosen provider, not for the preselected one", async () => {
-    const { api, shell } = setup();
-    render(
+    const { api, shell, app } = setup();
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -96,8 +99,9 @@ describe("setup provider sign-in", () => {
   });
 
   it("starts sign-in when the preselected provider is chosen", async () => {
-    const { api, shell } = setup();
-    render(
+    const { api, shell, app } = setup();
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -112,7 +116,7 @@ describe("setup provider sign-in", () => {
 
   it("keeps a choice made before the account lookup resolves, once", async () => {
     let resolveAccounts: (accounts: []) => void = () => {};
-    const { api, shell } = setup({
+    const { api, shell, app } = setup({
       listProviderAccounts: vi.fn(
         () => new Promise<[]>((resolve) => (resolveAccounts = resolve)),
       ),
@@ -122,7 +126,8 @@ describe("setup provider sign-in", () => {
     vi.mocked(api.claudeLogin).mockImplementation(
       () => new Promise((_, reject) => (rejectLogin = reject)),
     );
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -145,12 +150,13 @@ describe("setup provider sign-in", () => {
 
   it("starts sign-in for the preselected provider chosen during the account lookup", async () => {
     let resolveAccounts: (accounts: []) => void = () => {};
-    const { api, shell } = setup({
+    const { api, shell, app } = setup({
       listProviderAccounts: vi.fn(
         () => new Promise<[]>((resolve) => (resolveAccounts = resolve)),
       ),
     });
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -166,8 +172,9 @@ describe("setup provider sign-in", () => {
   });
 
   it("starts sign-in when the OAuth connection method is chosen", async () => {
-    const { api, shell } = setup();
-    render(
+    const { api, shell, app } = setup();
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -188,10 +195,11 @@ describe("setup provider sign-in", () => {
   });
 
   it("leaves sign-in to a click when the account lookup fails", async () => {
-    const { api, shell } = setup({
+    const { api, shell, app } = setup({
       listProviderAccounts: vi.fn().mockRejectedValue(new Error("runtime not serving")),
     });
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -208,7 +216,7 @@ describe("setup provider sign-in", () => {
   });
 
   it("does not sign in again to a provider that is already connected", async () => {
-    const { api, shell } = setup({
+    const { api, shell, app } = setup({
       listProviderAccounts: vi.fn().mockResolvedValue([
         {
           credentialId: "credential-claude",
@@ -223,7 +231,8 @@ describe("setup provider sign-in", () => {
         },
       ]),
     });
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -281,12 +290,13 @@ describe("add another account", () => {
     provider: keyof typeof KIND,
     overrides: Partial<DesktopApiAdapter> = {},
   ) {
-    const { api, shell } = setup({
+    const { api, shell, app } = setup({
       listProviderAccounts: vi.fn().mockResolvedValue([stored(KIND[provider])]),
       ...overrides,
     });
     const onDone = vi.fn();
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"
@@ -439,7 +449,7 @@ describe("setup save", () => {
       dangerouslyOverwrite: false,
       reset: false,
     });
-    const { api, shell } = setup(
+    const { api, shell, app } = setup(
       {
         async applyConfigComponents(request) {
           appliedAt = Date.now();
@@ -470,7 +480,8 @@ describe("setup save", () => {
       harness,
     );
     const onDone = vi.fn();
-    render(
+    renderIn(
+      app,
       <SetupScreen
         shell={shell}
         initialStep="inference"

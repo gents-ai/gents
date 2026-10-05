@@ -3,7 +3,6 @@
    dependencies, saved through SkillSaveRequest. */
 import { dependentsWarning } from "./dependents";
 import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
-import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
   AreaRow,
@@ -19,16 +18,16 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
+import { useApp } from "@/app/AppContext";
 
 function SkillEditor({
-  shell,
   deployment,
   skill,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   skill: SkillView;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -54,24 +53,22 @@ function SkillEditor({
         throw new Error("Interface JSON must be valid JSON");
       }
     }
-    await shell.applyConfig((api) =>
-      api.saveSkillConfig({
-        document: {
-          skill_id: skill.skillId,
-          agent_did: deployment.agentDid,
-          name: next.name.trim(),
-          description: next.description || null,
-          instructions: next.instructions,
-          source_directory: next.sourceDirectory || null,
-          tool_refs: next.toolRefs.length ? next.toolRefs : null,
-          display_name: next.displayName || null,
-          interface_json: next.interfaceJson || null,
-          enabled: next.enabled,
-          created_at: skill.createdAt,
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
-    );
+    await changeConfig("saveSkillConfig", {
+      document: {
+        skill_id: skill.skillId,
+        agent_did: deployment.agentDid,
+        name: next.name.trim(),
+        description: next.description || null,
+        instructions: next.instructions,
+        source_directory: next.sourceDirectory || null,
+        tool_refs: next.toolRefs.length ? next.toolRefs : null,
+        display_name: next.displayName || null,
+        interface_json: next.interfaceJson || null,
+        enabled: next.enabled,
+        created_at: skill.createdAt,
+        tags: next.tags.length ? next.tags : null,
+      },
+    });
   });
   const id = (f: string) => `${skill.skillId}-${f}`;
   return (
@@ -168,12 +165,10 @@ function SkillEditor({
         warning={dependentsWarning(deployment, "skill", skill.skillId)}
         base={base}
         onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteSkillConfig({
-              skillId: skill.skillId,
-              agentDid: deployment.agentDid,
-            }),
-          )
+          changeConfig("deleteSkillConfig", {
+            skillId: skill.skillId,
+            agentDid: deployment.agentDid,
+          })
         }
       />
     </>
@@ -199,14 +194,13 @@ function skillDocument(deployment: DeploymentView, s: SkillView) {
 }
 
 export function SkillsPanel({
-  shell,
   deployment,
   item,
 }: {
-  shell: Shell;
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -229,34 +223,28 @@ export function SkillsPanel({
             enabled={{
               checked: s.enabled !== false,
               onChange: (enabled) =>
-                shell.applyConfig((api) =>
-                  api.saveSkillConfig({
-                    document: { ...skillDocument(deployment, s), enabled },
-                  }),
-                ),
+                changeConfig("saveSkillConfig", {
+                  document: { ...skillDocument(deployment, s), enabled },
+                }),
             }}
             onDuplicate={async () => {
               const skill_id = newId("skill");
-              await shell.applyConfig((api) =>
-                api.saveSkillConfig({
-                  document: {
-                    ...skillDocument(deployment, s),
-                    skill_id,
-                    name: `${s.name ?? s.skillId}-copy`,
-                    display_name: `${s.displayName ?? s.name ?? s.skillId} copy`,
-                    created_at: null,
-                  },
-                }),
-              );
+              await changeConfig("saveSkillConfig", {
+                document: {
+                  ...skillDocument(deployment, s),
+                  skill_id,
+                  name: `${s.name ?? s.skillId}-copy`,
+                  display_name: `${s.displayName ?? s.name ?? s.skillId} copy`,
+                  created_at: null,
+                },
+              });
               return skill_id;
             }}
             onDelete={() =>
-              shell.applyConfig((api) =>
-                api.deleteSkillConfig({
-                  skillId: s.skillId,
-                  agentDid: deployment.agentDid,
-                }),
-              )
+              changeConfig("deleteSkillConfig", {
+                skillId: s.skillId,
+                agentDid: deployment.agentDid,
+              })
             }
             warning={dependentsWarning(deployment, "skill", s.skillId)}
           />
@@ -266,20 +254,18 @@ export function SkillsPanel({
       empty="No skills yet. A skill is instructions and tool references a behavior can load by name."
       onCreate={async () => {
         const skillId = newId("skill");
-        await shell.applyConfig((api) =>
-          api.saveSkillConfig({
-            document: {
-              skill_id: skillId,
-              agent_did: deployment.agentDid,
-              name: "New skill",
-              description: null,
-              instructions: "",
-              tool_refs: null,
-              display_name: null,
-              enabled: false,
-            },
-          }),
-        );
+        await changeConfig("saveSkillConfig", {
+          document: {
+            skill_id: skillId,
+            agent_did: deployment.agentDid,
+            name: "New skill",
+            description: null,
+            instructions: "",
+            tool_refs: null,
+            display_name: null,
+            enabled: false,
+          },
+        });
         navigate({
           name: "agent",
           agentDid: deployment.agentDid,
@@ -290,12 +276,7 @@ export function SkillsPanel({
       detail={(id) => {
         const skill = deployment.skills.find((s) => s.skillId === id)!;
         return (
-          <SkillEditor
-            key={skill.skillId}
-            shell={shell}
-            deployment={deployment}
-            skill={skill}
-          />
+          <SkillEditor key={skill.skillId} deployment={deployment} skill={skill} />
         );
       }}
     />

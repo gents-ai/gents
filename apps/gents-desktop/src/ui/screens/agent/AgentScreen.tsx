@@ -161,9 +161,7 @@ export function AgentScreen({
           {section === "contexts" && (
             <ContextsPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === "skills" && (
-            <SkillsPanel shell={shell} deployment={deployment} item={item} />
-          )}
+          {section === "skills" && <SkillsPanel deployment={deployment} item={item} />}
           {section === "inference" && (
             <InferencePanel shell={shell} deployment={deployment} item={item} />
           )}
@@ -183,7 +181,7 @@ export function AgentScreen({
             <SchedulesPanel shell={shell} deployment={deployment} item={item} />
           )}
           {section === "event-sources" && (
-            <EventSourcesPanel shell={shell} deployment={deployment} item={item} />
+            <EventSourcesPanel deployment={deployment} item={item} />
           )}
           {(section === "automations" || section === "triggers") && (
             <TriggersPanel shell={shell} deployment={deployment} item={item} />

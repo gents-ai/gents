@@ -5,6 +5,7 @@
    then crashed on the Providers page. */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderIn, testApp } from "./app-fixture";
 import type { InferenceBackend } from "@source-inc/gents-desktop-client";
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
@@ -61,11 +62,9 @@ describe("harness backends keep the bridge's contract", () => {
     const api = harness.adapter;
     await api.saveBackendConfig({ document: backendDocument("backend-saved") });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = {
-      api,
-      applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-    } as unknown as Shell;
-    render(
+    const shell = { api } as unknown as Shell;
+    renderIn(
+      testApp({ api }),
       <InferencePanel shell={shell} deployment={deployment} item="backend-saved" />,
     );
     expect(screen.getByRole("textbox", { name: "Tags" })).toBeInTheDocument();
@@ -90,11 +89,11 @@ describe("harness backends keep the bridge's contract", () => {
       },
     });
     const deployment = (await api.fetchDesktopSnapshot()).client!.deployments[0]!;
-    const shell = {
-      api,
-      applyConfig: (run: (bridge: typeof api) => Promise<unknown>) => run(api),
-    } as unknown as Shell;
-    render(<InferencePanel shell={shell} deployment={deployment} />);
+    const shell = { api } as unknown as Shell;
+    renderIn(
+      testApp({ api }),
+      <InferencePanel shell={shell} deployment={deployment} />,
+    );
     const meta = screen.getByText(/Anthropic API key · key from ANTHROPIC_API_KEY/);
     expect(meta.textContent).not.toMatch(/signed in/);
   });

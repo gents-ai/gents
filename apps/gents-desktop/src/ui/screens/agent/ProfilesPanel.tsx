@@ -38,6 +38,7 @@ import {
   validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+import { useApp } from "@/app/AppContext";
 
 /* behaviors named in Used by before the rest are counted */
 const USERS_SHOWN = 3;
@@ -124,6 +125,7 @@ export function ProfileEditor({
   /* a new profile that exists only here until Create */
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -392,16 +394,14 @@ export function ProfileEditor({
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
         : null;
-      await shell.applyConfig((api) =>
-        api.applyConfigComponents({
-          document: {
-            agent_principal: { agent_did: deployment.agentDid },
-            inference_profiles: [nextProfile],
-            ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
-            ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
-          },
-        }),
-      );
+      await changeConfig("applyConfigComponents", {
+        document: {
+          agent_principal: { agent_did: deployment.agentDid },
+          inference_profiles: [nextProfile],
+          ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
+          ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
+        },
+      });
     },
     { isNew: draftMode !== undefined },
   );
@@ -911,12 +911,10 @@ export function ProfileEditor({
           warning={dependentsWarning(deployment, "profile", profile.profile_id)}
           base={base}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteInferenceProfileConfig({
-                profileId: profile.profile_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteInferenceProfileConfig", {
+              profileId: profile.profile_id,
+              agentDid: deployment.agentDid,
+            })
           }
         />
       )}
@@ -962,6 +960,7 @@ export function ProfilesPanel({
   deployment: DeploymentView;
   item?: string;
 }) {
+  const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
@@ -991,24 +990,20 @@ export function ProfilesPanel({
           id={p.profile_id}
           onDuplicate={async () => {
             const profile_id = newId("profile");
-            await shell.applyConfig((api) =>
-              api.saveInferenceProfileConfig({
-                document: {
-                  ...p,
-                  profile_id,
-                  display_name: `${p.display_name ?? p.profile_id} copy`,
-                },
-              }),
-            );
+            await changeConfig("saveInferenceProfileConfig", {
+              document: {
+                ...p,
+                profile_id,
+                display_name: `${p.display_name ?? p.profile_id} copy`,
+              },
+            });
             return profile_id;
           }}
           onDelete={() =>
-            shell.applyConfig((api) =>
-              api.deleteInferenceProfileConfig({
-                profileId: p.profile_id,
-                agentDid: deployment.agentDid,
-              }),
-            )
+            changeConfig("deleteInferenceProfileConfig", {
+              profileId: p.profile_id,
+              agentDid: deployment.agentDid,
+            })
           }
           warning={dependentsWarning(deployment, "profile", p.profile_id)}
         />

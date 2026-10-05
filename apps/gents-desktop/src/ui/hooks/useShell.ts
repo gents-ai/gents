@@ -2,8 +2,6 @@
    keep calling shell.api / applyConfig / saveBehaviorConfig. */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
-
 import { useDesktopShell, type DesktopShellBridge } from "../../hooks/useDesktopShell";
 import { toast } from "sonner";
 
@@ -29,42 +27,6 @@ export function useShell(
   useEffect(() => {
     if (routeSessionId) shellRef.current.followRoute(routeSessionId, true);
   }, [routeSessionId, d.deployments]);
-
-  const configApi = useMemo(
-    () => ({
-      applyConfigComponents: d.onApplyConfigComponents,
-      deleteBackendConfig: d.onDeleteBackendConfig,
-      deleteBehaviorConfig: d.onDeleteBehaviorConfig,
-      deleteContextConfig: d.onDeleteContextConfig,
-      deleteEventSourceConfig: d.onDeleteEventSourceConfig,
-      deleteInferenceProfileConfig: d.onDeleteInferenceProfileConfig,
-      deleteScheduleConfig: d.onDeleteScheduleConfig,
-      deleteSkillConfig: d.onDeleteSkillConfig,
-      deleteTaskConfig: d.onDeleteTaskConfig,
-      deleteToolsConfig: d.onDeleteToolsConfig,
-      deleteToolServiceConfig: d.onDeleteToolServiceConfig,
-      deleteTriggerConfig: d.onDeleteTriggerConfig,
-      patchConfigComponents: d.onPatchConfigComponents,
-      saveAgentConfig: d.onSaveAgentConfig,
-      saveBackendConfig: d.onSaveBackendConfig,
-      saveBehaviorConfig: d.onSaveBehaviorConfig,
-      setDefaultBehavior: d.onSetDefaultBehavior,
-      saveEventSourceConfig: d.onSaveEventSourceConfig,
-      saveInferenceProfileConfig: d.onSaveInferenceProfileConfig,
-      saveScheduleConfig: d.onSaveScheduleConfig,
-      saveSkillConfig: d.onSaveSkillConfig,
-      saveTaskConfig: d.onSaveTaskConfig,
-      saveToolsConfig: d.onSaveToolsConfig,
-      saveToolServiceConfig: d.onSaveToolServiceConfig,
-      saveTriggerConfig: d.onSaveTriggerConfig,
-    }),
-    [d],
-  );
-
-  const applyConfig = useCallback(
-    (run: (api: typeof configApi) => Promise<DesktopClientSnapshot>) => run(configApi),
-    [configApi],
-  );
 
   const sendMessage = useCallback(
     async (content: string, behaviorId: string | null) => {
@@ -138,13 +100,9 @@ export function useShell(
             sessionId: d.selectedSessionId,
           }
         : null,
-      saveAgentConfig: d.onSaveAgentConfig,
-      saveBehaviorConfig: d.onSaveBehaviorConfig,
-      deleteBehaviorConfig: d.onDeleteBehaviorConfig,
       behaviorDescriptions,
       removePeer: d.onRemovePeer,
       renamePeer: d.onRenamePeer,
-      applyConfig,
       retrySessionHydration: d.retrySessionHydration,
       loadOlderSessionTimeline: d.loadOlderSessionTimeline,
       refreshSnapshot: d.refreshSnapshot,
@@ -159,7 +117,7 @@ export function useShell(
         ? d.onRestartManagedServer
         : undefined,
     };
-  }, [api, applyConfig, d, sendMessage]);
+  }, [api, d, sendMessage]);
 }
 
 export type Shell = ReturnType<typeof useShell>;
