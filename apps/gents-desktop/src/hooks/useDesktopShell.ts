@@ -53,7 +53,9 @@ export function useDesktopShell({
     selection: createSelectionStore(),
     session: createSessionStore(),
     fleet: createFleetStore(),
-    client: createClientStore(),
+    client: createClientStore(
+      supportsManagedServer ? "checking-managed-server" : "loading-configuration",
+    ),
     chat: createChatStore(),
   }));
   /* the projection as the stores hold it now, for an action or a read */

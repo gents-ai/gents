@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
+import { useStore } from "zustand";
 
 import {
   BridgeInvokeError,
@@ -7,9 +8,12 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
+import type { ClientState, ClientStore } from "./clientStore";
 
 type IncompatibleHomeOptions = {
   api: DesktopApiAdapter;
+  /** where the report lives, read by an action when it runs */
+  client: ClientStore;
   setError: (error: string | null) => void;
   /** Runs startup again once the old home is out of the way. */
   startFresh: () => Promise<void>;
@@ -46,13 +50,18 @@ export function isIncompatibleHomeError(error: unknown): boolean {
 /** Owns the one decision flow for a local home this version cannot open. */
 export function useIncompatibleHome({
   api,
+  client,
   setError,
   startFresh,
 }: IncompatibleHomeOptions): IncompatibleHome {
-  const [report, setReport] = useState<ManagedServerResetResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [generation, setGeneration] = useState(0);
+  const { report, busy, generation } = useStore(client, (state) => state.home);
   const previewing = useRef<Promise<boolean> | null>(null);
+  const home = () => client.getState().home;
+  const setHome = (patch: Partial<ClientState["home"]>) =>
+    client.setState((state) => ({ home: { ...state.home, ...patch } }));
+  const setReport = (next: ManagedServerResetResult | null) =>
+    setHome({ report: next });
+  const setBusy = (next: boolean) => setHome({ busy: next });
 
   function adopt(error: unknown): Promise<boolean> {
     if (!isIncompatibleHomeError(error) || !api.resetManagedServer) {
@@ -78,6 +87,7 @@ export function useIncompatibleHome({
   }
 
   async function retire(disposition: "archive" | "delete") {
+    const report = home().report;
     if (!report || report.completed || !api.resetManagedServer) return;
     const confirmation =
       disposition === "archive" ? report.confirmation : report.deleteConfirmation;
@@ -120,7 +130,7 @@ export function useIncompatibleHome({
   async function continueFresh() {
     setReport(null);
     setError(null);
-    setGeneration((current) => current + 1);
+    setHome({ generation: home().generation + 1 });
     await startFresh();
   }
 

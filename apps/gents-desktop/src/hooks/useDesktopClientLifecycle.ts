@@ -16,15 +16,15 @@ import { restoreManagedServer } from "./managedServerLifecycle";
 import {
   ManagedServerStartupError,
   observeManagedServerOperation,
-  type ManagedServerWait,
 } from "../lib/managedServerStartup";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 import { useIncompatibleHome } from "./useIncompatibleHome";
 import type { SelectionStore } from "./selectionStore";
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
-import type { ClientStore } from "./clientStore";
+import { clientSetter, type ClientStore } from "./clientStore";
 import { applyFleetSnapshot, type FleetStore } from "./fleetStore";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
@@ -65,10 +65,6 @@ export function useDesktopClientLifecycle({
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
-  const initialStartupPhase: DesktopStartupPhase = supportsManagedServer
-    ? "checking-managed-server"
-    : "loading-configuration";
-  const startupPhaseRef = useRef<DesktopStartupPhase>(initialStartupPhase);
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const snapshot = useStore(client, (state) => state.snapshot);
@@ -82,19 +78,35 @@ export function useDesktopClientLifecycle({
     setLoading(false);
     resolveStartupPhase(next);
   });
-  const [startupPhase, setStartupPhaseState] =
-    useState<DesktopStartupPhase>(initialStartupPhase);
-  const [loading, setLoading] = useState(true);
-  const [starting, setStarting] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const [managedServerWait, setManagedServerWait] = useState<ManagedServerWait | null>(
-    null,
+  /* startup's state lives in the client store: functions read it there when
+     they run, and screens select it */
+  const { startupPhase, loading, starting, stopping, managedServerWait } = useStore(
+    client,
+    useShallow((state) => ({
+      startupPhase: state.startupPhase,
+      loading: state.loading,
+      starting: state.starting,
+      stopping: state.stopping,
+      managedServerWait: state.managedServerWait,
+    })),
+  );
+  const [setLoading] = useState(() => clientSetter(client, "loading"));
+  const [setStarting] = useState(() => clientSetter(client, "starting"));
+  const [setStopping] = useState(() => clientSetter(client, "stopping"));
+  const [setManagedServerWait] = useState(() =>
+    clientSetter(client, "managedServerWait"),
   );
   const managedServerWaitAbort = useRef<AbortController | null>(null);
-  const [managedServerFailure, setManagedServerFailure] =
-    useState<ManagedServerStartupError | null>(null);
-  const [startupDiagnosticsHint, setStartupDiagnosticsHint] = useState<string | null>(
-    null,
+  const managedServerFailure = useStore(client, (state) => state.managedServerFailure);
+  const [setManagedServerFailure] = useState(() =>
+    clientSetter(client, "managedServerFailure"),
+  );
+  const startupDiagnosticsHint = useStore(
+    client,
+    (state) => state.startupDiagnosticsHint,
+  );
+  const [setStartupDiagnosticsHint] = useState(() =>
+    clientSetter(client, "startupDiagnosticsHint"),
   );
   const managedServerFailed = startupPhase === "managed-server-error";
 
@@ -116,22 +128,22 @@ export function useDesktopClientLifecycle({
   }, [api, managedServerFailed, startupDiagnosticsHint, snapshot]);
   const incompatibleHome = useIncompatibleHome({
     api,
+    client,
     setError,
     startFresh: () => initializeDesktop(),
   });
 
   function setStartupPhase(next: DesktopStartupPhase) {
-    startupPhaseRef.current = next;
-    setStartupPhaseState(next);
+    client.setState({ startupPhase: next });
   }
 
   function resolveStartupPhase(next: DesktopClientSnapshot) {
     const phase = projectStartupPhaseAfterSnapshot(
-      startupPhaseRef.current,
+      client.getState().startupPhase,
       Boolean(next.client),
       !clientAutostarts(next),
     );
-    if (phase !== startupPhaseRef.current) setStartupPhase(phase);
+    if (phase !== client.getState().startupPhase) setStartupPhase(phase);
   }
 
   async function refreshSnapshot() {
@@ -147,9 +159,9 @@ export function useDesktopClientLifecycle({
         return;
       }
       setError(String(error));
-      if (startupPhaseRef.current === "loading-configuration") {
+      if (client.getState().startupPhase === "loading-configuration") {
         setStartupPhase("configuration-error");
-      } else if (startupPhaseRef.current === "starting-client") {
+      } else if (client.getState().startupPhase === "starting-client") {
         setStartupPhase("client-error");
       }
     } finally {
@@ -176,7 +188,7 @@ export function useDesktopClientLifecycle({
       } catch (error) {
         if (isCurrent() || !snapshotPublicationRef.current!.snapshot?.client) {
           setError(String(error));
-          if (startupPhaseRef.current === "starting-client") {
+          if (client.getState().startupPhase === "starting-client") {
             setStartupPhase("client-error");
           }
           await incompatibleHome.adopt(error);
@@ -253,7 +265,7 @@ export function useDesktopClientLifecycle({
   }
 
   async function onRestartManagedServer() {
-    const status = managedServerFailure?.status;
+    const status = client.getState().managedServerFailure?.status;
     if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
     const restartManagedServer = api.restartManagedServer;

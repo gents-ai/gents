@@ -1,5 +1,3 @@
-import type { Dispatch, SetStateAction } from "react";
-
 import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
 import type {
   DesktopApiAdapter,
@@ -19,7 +17,7 @@ type PeerActionParams = {
   /** the selection, read when an action lands */
   store: SelectionStore;
   selectAgent: (agentDid: string | null) => void;
-  setStarting: Dispatch<SetStateAction<boolean>>;
+  setStarting: (starting: boolean) => void;
 };
 
 export function createDesktopShellPeerActions({
