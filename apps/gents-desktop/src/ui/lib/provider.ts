@@ -15,6 +15,7 @@ export function providerLogo(
     case "OpenRouter":
       return "/logos/openrouter.svg";
     case "ClaudeCliSubscription":
+    case "AnthropicApiKey":
       return "/logos/claude.svg";
     default: {
       const url = endpoint ?? "";

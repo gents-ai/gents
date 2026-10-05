@@ -259,3 +259,28 @@ fn kind_round_trips_and_is_agent_scoped() {
     );
     assert!(crate::BackendProviderKind::ClaudeCliSubscription.is_agent_scoped_oauth());
 }
+
+#[test]
+fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
+    use crate::BackendProviderKind as Kind;
+    let kind = Kind::parse_optional(Some("AnthropicApiKey")).unwrap();
+    assert_eq!(kind, Kind::AnthropicApiKey);
+    assert_eq!(kind.as_str(), "AnthropicApiKey");
+    assert!(Kind::ALL.contains(&kind));
+    assert!(!kind.is_agent_scoped_oauth());
+    let messages_kinds: Vec<_> = Kind::ALL
+        .into_iter()
+        .filter(|kind| kind.uses_messages_wire())
+        .collect();
+    assert_eq!(
+        messages_kinds,
+        vec![Kind::ClaudeCliSubscription, Kind::AnthropicApiKey]
+    );
+    assert_eq!(
+        gents_loop::provider_input::ProviderInputProfile::resolve(
+            kind,
+            crate::OpenAiWireApi::ChatCompletions
+        ),
+        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages
+    );
+}

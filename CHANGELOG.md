@@ -191,6 +191,19 @@ source consistency checks, not a separate runtime compatibility version.
   never enter the sandbox. Bind with `gents pack install --inference-slot SLOT=PROFILE`,
   `gents plugin bind NAME PROFILE` or the desktop Packs panel; `gents plugin
   unbind` and "Not set" leave it unbound, and the plugin runs as before.
+
+- Anthropic API keys as a backend (#2122): provider kind `AnthropicApiKey` on
+  the native Messages wire, with `api_key` or `environment` auth. Each key is
+  its own backend with its own admission, health and model catalog.
+  `gents config backend --backend-preset anthropic` defaults to
+  `ANTHROPIC_API_KEY`. Requests send `authorization: Bearer` and
+  `anthropic-version`; the OAuth beta header is now sent only for Claude
+  sign-ins. The endpoint is fixed at `https://api.anthropic.com/v1`; a
+  different endpoint is refused. Keys that need `anthropic-workspace-id` are
+  not supported. The desktop shows such a backend as an API-key backend; the
+  setup wizard does not offer it yet. Nodes on a build without the tolerant
+  backend decode (under Changed) fail to list backends once a peer has one.
+
 - `gents pack remove` works for every pack kind, not only documents packs
   (#2067). Assets and plugins packs record their install at
   `<home>/pack-installs/<namespace>/<name>.json` and remove locally, with no

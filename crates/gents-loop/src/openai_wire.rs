@@ -45,7 +45,9 @@ impl OpenAiWireApi {
             // Claude is not an OpenAI wire provider; ChatCompletions is only a
             // placeholder so SamplingConfig / loop_config keep compiling. The
             // Messages HTTP wire (`claude_messages`) ignores openai_wire_api.
-            BackendProviderKind::ClaudeCliSubscription => Self::ChatCompletions,
+            BackendProviderKind::ClaudeCliSubscription | BackendProviderKind::AnthropicApiKey => {
+                Self::ChatCompletions
+            }
         }
     }
 
@@ -64,6 +66,7 @@ impl OpenAiWireApi {
             BackendProviderKind::OpenRouter
                 | BackendProviderKind::ChatGptCodex
                 | BackendProviderKind::ClaudeCliSubscription
+                | BackendProviderKind::AnthropicApiKey
         ) {
             tracing::warn!(
                 backend_id,

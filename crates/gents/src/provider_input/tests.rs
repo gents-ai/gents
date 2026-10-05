@@ -422,18 +422,19 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
         Message::user("visible prompt"),
     ]))
     .expect("non-empty signed Claude history");
-    for wire in [OpenAiWireApi::ChatCompletions, OpenAiWireApi::Responses] {
-        let counter = ProviderInputCounter::new(
-            BackendProviderKind::ClaudeCliSubscription,
-            wire,
-            "claude-sonnet-5",
-        );
-        assert_eq!(counter.profile(), ProviderInputProfile::ClaudeMessages);
-        assert_eq!(
-            counter.project_body(&request).expect("provider body"),
-            crate::claude_messages::build_messages_body("claude-sonnet-5", &request)
-                .expect("Claude body")
-        );
+    for kind in [
+        BackendProviderKind::ClaudeCliSubscription,
+        BackendProviderKind::AnthropicApiKey,
+    ] {
+        for wire in [OpenAiWireApi::ChatCompletions, OpenAiWireApi::Responses] {
+            let counter = ProviderInputCounter::new(kind, wire, "claude-sonnet-5");
+            assert_eq!(counter.profile(), ProviderInputProfile::ClaudeMessages);
+            assert_eq!(
+                counter.project_body(&request).expect("provider body"),
+                crate::claude_messages::build_messages_body("claude-sonnet-5", &request)
+                    .expect("Claude body")
+            );
+        }
     }
     let projection = ProviderInputCounter::new(
         BackendProviderKind::ClaudeCliSubscription,

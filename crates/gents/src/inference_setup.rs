@@ -293,6 +293,21 @@ pub fn connection_spec(
             oauth_provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
             api_key_required: false,
         },
+        (Anthropic, ApiKey) => {
+            let fixed = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+            anyhow::ensure!(
+                requested.is_empty() || requested.trim_end_matches('/') == fixed,
+                "the Anthropic API endpoint is fixed at {fixed}"
+            );
+            InferenceConnectionSpec {
+                backend_name: "Anthropic API",
+                provider_kind: BackendProviderKind::AnthropicApiKey,
+                openai_wire_api: None,
+                endpoint: fixed.into(),
+                oauth_provider: None,
+                api_key_required: true,
+            }
+        }
         (Grok, GrokOauth) => InferenceConnectionSpec {
             backend_name: "Grok",
             provider_kind: BackendProviderKind::XaiGrokOAuth,
@@ -356,6 +371,9 @@ pub fn provider_selection_for_backend(
             InferenceProviderId::Anthropic,
             InferenceAuthMethod::ClaudeOauth,
         ),
+        BackendProviderKind::AnthropicApiKey => {
+            (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
+        }
         BackendProviderKind::OpenRouter => {
             (InferenceProviderId::OpenRouter, InferenceAuthMethod::ApiKey)
         }
@@ -438,7 +456,7 @@ pub fn recommendation_for_model(
 ) -> Result<InferenceModelRecommendation> {
     let spec = connection_spec(provider, auth, "")?;
     let is_reasoning = reasoning_model(&advertised.model_name);
-    let is_claude = spec.provider_kind == BackendProviderKind::ClaudeCliSubscription;
+    let is_claude = spec.provider_kind.uses_messages_wire();
     let is_codex = spec.provider_kind == BackendProviderKind::ChatGptCodex;
     let is_grok = provider == InferenceProviderId::Grok;
     let claude_defaults = is_claude
@@ -805,10 +823,58 @@ mod tests {
     fn incompatible_provider_auth_pairs_fail_closed() {
         assert!(connection_spec(
             InferenceProviderId::Anthropic,
-            InferenceAuthMethod::ApiKey,
+            InferenceAuthMethod::GrokOauth,
             ""
         )
         .is_err());
+    }
+
+    #[test]
+    fn anthropic_key_backends_recover_an_api_key_contract() {
+        let endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
+        assert_eq!(
+            provider_selection_for_backend(BackendProviderKind::AnthropicApiKey, endpoint),
+            (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
+        );
+        let spec = connection_spec(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            "",
+        )
+        .unwrap();
+        assert_eq!(spec.provider_kind, BackendProviderKind::AnthropicApiKey);
+        assert_eq!(spec.endpoint, endpoint);
+        assert!(spec.api_key_required);
+        assert_eq!(spec.oauth_provider, None);
+        assert!(connection_spec(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            "https://proxy.example.invalid/v1"
+        )
+        .is_err());
+
+        let opus = recommendation_for_model(
+            InferenceProviderId::Anthropic,
+            InferenceAuthMethod::ApiKey,
+            &advertised("claude-opus-5-5"),
+        )
+        .unwrap();
+        assert_eq!(opus.context_window.unwrap().recommended, 1_000_000);
+        assert_eq!(
+            opus.reasoning_effort.unwrap().recommended,
+            ReasoningEffort::Medium
+        );
+
+        let catalog = inference_setup_catalog();
+        let anthropic = catalog
+            .providers
+            .iter()
+            .find(|provider| provider.id == InferenceProviderId::Anthropic)
+            .unwrap();
+        assert_eq!(
+            anthropic.auth_methods,
+            vec![InferenceAuthMethod::ClaudeOauth]
+        );
     }
 
     #[test]
