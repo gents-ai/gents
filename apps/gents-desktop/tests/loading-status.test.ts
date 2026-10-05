@@ -127,6 +127,18 @@ describe("session loading projection", () => {
     });
   });
 
+  it("keeps a failed refresh visible while retrying over an existing transcript", () => {
+    expect(
+      project({
+        sessionLoad: { ...loaded, phase: "loading", error: "read timed out" },
+      }),
+    ).toMatchObject({
+      title: "Retrying conversation update",
+      detail: "The last update failed. Displayed messages may be out of date.",
+      action: null,
+    });
+  });
+
   it("ignores reordered load state and session state from another target", () => {
     const status = project({
       session: session({ sessionId: "session-old" }),

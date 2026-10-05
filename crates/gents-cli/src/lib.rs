@@ -21,6 +21,7 @@ mod interactive_backend;
 pub mod native_service;
 mod p2p_relay;
 pub mod packs;
+mod process_resources;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;

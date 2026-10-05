@@ -217,6 +217,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "invocation_correlation_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "defra_query::field_page::tests::field_pages_match_lean",
+            package: "gents",
+            source_path: "crates/gents/src/defra_query/field_page.rs",
+            module_path: "defra_query::field_page::tests",
+            function: "field_pages_match_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "defra_write::tests::native_input_admission_matches_lean",
             package: "gents",
             source_path: "crates/gents/src/defra_write/tests.rs",
@@ -537,6 +544,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/admission/registry_contract_tests.rs",
             module_path: "admission::registry::contract_tests",
             function: "generated_inference_registry_cases_drive_real_permits",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lifecycle::execution_lease::tests::generated_renewal_invalidates_real_publication_point_read_transaction",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/execution_lease/tests.rs",
+            module_path: "lifecycle::execution_lease::tests",
+            function: "generated_renewal_invalidates_real_publication_point_read_transaction",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lifecycle::execution_lease::tests::generated_recovery_invalidates_real_admitted_renewal_transaction",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/execution_lease/tests.rs",
+            module_path: "lifecycle::execution_lease::tests",
+            function: "generated_recovery_invalidates_real_admitted_renewal_transaction",
         },
         ConformanceConsumer::RustTest {
             id: "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy",

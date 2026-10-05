@@ -222,18 +222,6 @@ where
     parse_query_rows(&data, root)
 }
 
-pub(super) async fn load_rows_from_access<T>(
-    access: &gents::config_client::ConfigAccess,
-    root: &str,
-    query: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let data = execute_access_graphql_query(access, query, &format!("query for {root}")).await?;
-    parse_query_rows(&data, root)
-}
-
 pub(super) async fn execute_access_graphql_query(
     access: &gents::config_client::ConfigAccess,
     query: &str,

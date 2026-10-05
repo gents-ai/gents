@@ -28,6 +28,10 @@ impl BackgroundCompletionObserver {
         cancel: CancellationToken,
     ) -> Self {
         let subscription = node.subscribe(&[EventName::Update]);
+        tracing::debug!(
+            subscription_id = subscription.id(),
+            "background completion observer subscribed"
+        );
         Self {
             node,
             local_did,
@@ -41,12 +45,16 @@ impl BackgroundCompletionObserver {
     async fn run(&mut self) -> Result<()> {
         self.run_reconcilers().await?;
         let mut reconciler_tick = tokio::time::interval(Duration::from_secs(5));
+        reconciler_tick.reset();
         loop {
             let message = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => return Ok(()),
                 _ = reconciler_tick.tick() => {
                     self.run_reconcilers().await?;
+                    // Slow sweeps must leave time to drain updates rather than
+                    // repeatedly winning this biased select with overdue ticks.
+                    reconciler_tick.reset();
                     continue;
                 }
                 msg = self.subscription.recv() => {
@@ -64,6 +72,7 @@ impl BackgroundCompletionObserver {
                     "background completion observer dropped messages; running the recovery sweeps"
                 );
                 self.run_reconcilers().await?;
+                reconciler_tick.reset();
             }
 
             let Some(update) = message.as_update() else {

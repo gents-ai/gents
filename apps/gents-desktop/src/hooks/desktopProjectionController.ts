@@ -53,7 +53,9 @@ export function createDesktopProjectionController({
   refreshSessionLiveDelta,
   onError = () => {},
 }: DesktopProjectionControllerOptions): DesktopProjectionController {
-  let active: Promise<void> | null = null;
+  let active: Promise<Promise<void>[]> | null = null;
+  let snapshotActive: Promise<void> | null = null;
+  let snapshotPending = false;
   let pending = 0;
   let disposed = false;
 
@@ -64,7 +66,29 @@ export function createDesktopProjectionController({
     }
   };
 
+  const refreshIndex = () => {
+    snapshotPending = true;
+    if (!snapshotActive) {
+      snapshotActive = Promise.resolve()
+        .then(async () => {
+          while (snapshotPending) {
+            snapshotPending = false;
+            try {
+              await refreshSnapshot();
+            } catch (error) {
+              onError(error);
+            }
+          }
+        })
+        .finally(() => {
+          snapshotActive = null;
+        });
+    }
+    return snapshotActive;
+  };
+
   const drain = async () => {
+    const snapshots: Promise<void>[] = [];
     while (!disposed && pending !== 0) {
       const work = pending;
       pending = 0;
@@ -78,17 +102,16 @@ export function createDesktopProjectionController({
             next?.turnState &&
             isTerminalTurnState(next.turnState)
           ) {
-            // Complete this event's index repair before yielding. Terminal
-            // state also tears down the tracked-request effect; queueing the
-            // snapshot allowed dispose() to discard the only preview refresh.
-            await refreshSnapshot();
+            // Terminal tracking can dispose this owner. Start the index read
+            // now, but do not block later session reads on its completion.
+            snapshots.push(refreshIndex());
           }
           // The empty composer chooses its behavior from the fleet/config
           // projection. Refresh it when leaving a session so an operator-side
           // default change made during the completed turn is visible before
           // the next session is created.
           if (!sessionId && !(work & SNAPSHOT)) {
-            await refreshSnapshot();
+            snapshots.push(refreshIndex());
           }
         } else if (sessionId && work & SESSION_DELTA) {
           if (!(await refreshSessionLiveDelta())) {
@@ -102,12 +125,13 @@ export function createDesktopProjectionController({
       // for the unrelated fleet/index projection.
       if (work & SNAPSHOT) {
         try {
-          await refreshSnapshot();
+          snapshots.push(refreshIndex());
         } catch (error) {
           onError(error);
         }
       }
     }
+    return snapshots;
   };
 
   return {
@@ -121,7 +145,9 @@ export function createDesktopProjectionController({
             active = null;
           });
       }
-      return active;
+      return active.then(async (snapshots) => {
+        await Promise.all(snapshots);
+      });
     },
     dispose() {
       disposed = true;

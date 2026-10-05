@@ -415,7 +415,8 @@ impl Drop for RollbackOnDrop {
 async fn begin_embedded_owned<F, Fut>(
     runner: Arc<dyn query::QueryExecutor>,
     node_identity: Option<String>,
-    write_guard: MutationWriteGuard,
+    read_only: bool,
+    write_guard: Option<MutationWriteGuard>,
     cancellation_rollback_scheduled: Arc<AtomicBool>,
     after_begin: F,
 ) -> Result<(RollbackOnDrop, TransactionHandle)>
@@ -431,12 +432,15 @@ where
         runner: Arc::clone(&runner),
         node_identity: node_identity.clone(),
         handle: None,
-        write_guard: Some(write_guard),
+        write_guard,
         armed: true,
     };
     let handle = tokio::time::timeout(
         EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        defra_core::current_identity::with_scoped_identity(node_identity, runner.begin_txn(false)),
+        defra_core::current_identity::with_scoped_identity(
+            node_identity,
+            runner.begin_txn(read_only),
+        ),
     )
     .await
     .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
@@ -566,6 +570,12 @@ pub struct ConfigApplyTxn<'a> {
     affected_documents: AtomicU64,
     #[cfg(test)]
     operation: Option<&'static str>,
+}
+
+enum EmbeddedTransactionPurpose {
+    Mutation,
+    ExecutionRenewal,
+    ReadOnly,
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -765,12 +775,22 @@ impl<'a> ConfigApplyTxn<'a> {
         identity: Option<Did>,
         operation: WriteOperation,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
+        purpose: EmbeddedTransactionPurpose,
     ) -> Result<Self> {
-        let write_guard = mutation_write_gate(node).acquire(operation).await?;
+        let read_only = matches!(purpose, EmbeddedTransactionPurpose::ReadOnly);
+        let write_guard = match purpose {
+            EmbeddedTransactionPurpose::Mutation => {
+                Some(mutation_write_gate(node).acquire(operation).await?)
+            }
+            EmbeddedTransactionPurpose::ExecutionRenewal | EmbeddedTransactionPurpose::ReadOnly => {
+                None
+            }
+        };
         let runner = node.runner().clone();
         let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
             runner,
             node.node_identity_did().map(str::to_owned),
+            read_only,
             write_guard,
             cancellation_rollback_scheduled,
             |_| std::future::ready(()),
@@ -791,12 +811,25 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
+    pub(crate) async fn begin_execution_renewal_for_test(node: &'a EmbeddedNode) -> Result<Self> {
+        Self::begin_local_owned(
+            node,
+            None,
+            WriteOperation::new("test.execution_renewal")?,
+            Arc::new(AtomicBool::new(false)),
+            EmbeddedTransactionPurpose::ExecutionRenewal,
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
         Self::begin_local_owned(
             node,
             identity,
             WriteOperation::new("test.begin_local")?,
             Arc::new(AtomicBool::new(false)),
+            EmbeddedTransactionPurpose::Mutation,
         )
         .await
     }
@@ -1490,6 +1523,7 @@ impl ConfigAccess {
                     None,
                     operation,
                     cancellation_rollback_scheduled,
+                    EmbeddedTransactionPurpose::Mutation,
                 )
                 .await
             }
@@ -1786,10 +1820,90 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
                 })
             },
             callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    /// Native snapshot reads retain the supplied ACP DID without taking the
+    /// mutation gate. DefraDB's native read-only transaction rejects mutations.
+    pub async fn transact_local_readonly<'a, T, F>(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::ReadOnly,
+                    )
+                    .await
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    /// Exact-request renewal retains generation/deadline CAS and native point-read
+    /// OCC while ordinary writes hold the mutation gate. Authorization is checked
+    /// again immediately before commit admission; native commit does not atomically
+    /// check wall clock, so this is not a durable-commit-before-expiry guarantee.
+    pub(crate) async fn renew_execution_lease(
+        node: &EmbeddedNode,
+        request_doc_id: &str,
+        generation: &str,
+        expected_deadline: Option<chrono::DateTime<chrono::Utc>>,
+        fixture_now: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<crate::lifecycle::RenewalAttemptOutcome> {
+        transact_owned(
+            "lifecycle.renew_execution_lease",
+            WriteBackend::Embedded,
+            TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
+            move |operation, rollback| {
+                Box::pin(ConfigApplyTxn::begin_local_owned(
+                    node,
+                    None,
+                    operation,
+                    rollback,
+                    EmbeddedTransactionPurpose::ExecutionRenewal,
+                ))
+            },
+            move |txn| {
+                Box::pin(crate::lifecycle::renew_in_transaction(
+                    txn,
+                    request_doc_id,
+                    generation,
+                    expected_deadline,
+                    fixture_now,
+                ))
+            },
         )
         .await
         .map(expect_committed)
@@ -1814,7 +1928,14 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
                 })
             },
             callback,
@@ -1840,7 +1961,14 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let identity = identity.clone();
                 Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(node, identity, operation, rollback).await
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
                 })
             },
             callback,

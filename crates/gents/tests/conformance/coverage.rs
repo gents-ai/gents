@@ -537,6 +537,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RequestExecutionLeaseCases".to_string(),
         ));
     }
+    if !snapshot.request_execution_lease_observed_cases.is_empty() {
+        emitted.insert((
+            "request_execution_lease_observed_cases".to_string(),
+            "RequestExecutionObservedCases".to_string(),
+        ));
+    }
     if !snapshot.inference_registry_cases.is_empty() {
         emitted.insert((
             "inference_registry_cases".to_string(),
@@ -777,6 +783,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "application_write_cases".to_string(),
             "ApplicationWriteCases".to_string(),
         ));
+    }
+    if !snapshot.field_read_cases.is_empty() {
+        emitted.insert(("field_read_cases".into(), "FieldReadCases".into()));
     }
     if !snapshot.write_input_cases.is_empty() {
         emitted.insert((

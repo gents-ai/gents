@@ -14,7 +14,6 @@ use crate::document_config::QueryToolDecl;
 use crate::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
-use super::{truncate_field_strings, MAX_FIELD_STRING_BYTES};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_query_bound";
 
@@ -106,6 +105,14 @@ impl BoundedQueryTool {
                 self.decl.tool_name
             );
         }
+        anyhow::ensure!(
+            !self
+                .decl
+                .filter_fields
+                .iter()
+                .any(|field| matches!(field.name.trim(), "fields" | "limit" | "field_page")),
+            "filter field collides with a reserved query argument"
+        );
         crate::document_config::reject_protected_collection_name(&self.decl.collection)
     }
 
@@ -197,7 +204,7 @@ impl BoundedQueryTool {
 
     fn resolve_filter(&self, args: &Map<String, Value>) -> Result<Option<Value>> {
         for key in args.keys() {
-            if key == "fields" || key == "limit" {
+            if key == "fields" || key == "limit" || key == "field_page" {
                 continue;
             }
             if let Some(fill) = self
@@ -341,6 +348,7 @@ impl Tool for BoundedQueryTool {
         } else {
             self.decl.description.clone()
         };
+        properties.insert("field_page".into(), json!({"type":"object","additionalProperties":false,"required":["doc_id","field"],"properties":{"doc_id":{"type":"string"},"field":{"type":"string"},"offset_bytes":{"type":"integer","minimum":0},"expected_hash":{"type":"string"}},"description":"Recover a complete String field in bounded UTF-8 pages. Field must be selected. Use offset 0 first; continue with next_offset_bytes and value_hash as expected_hash. Existing filters and authorization still apply; changed values require restarting."}));
         ToolDefinition {
             name: self.decl.tool_name.clone(),
             description,
@@ -364,9 +372,12 @@ impl Tool for BoundedQueryTool {
             limit: Some(limit),
         };
         let scope = CollectionScope::restricted(vec![self.decl.collection.clone()]);
-        let command = params.into();
+        let mut command: super::QueryParams = params.into();
+        if let Some(page) = args.0.get("field_page") {
+            command.options.insert("field_page".into(), page.clone());
+        }
         let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 Some(actor.clone()),
                 "bounded_application_query",
@@ -381,22 +392,10 @@ impl Tool for BoundedQueryTool {
             )
             .await?
         };
-        let mut rows = result["results"].clone();
-        let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
-        let total_bytes = serde_json::to_string(&rows).map(|s| s.len()).unwrap_or(0);
-        let truncated = truncate_field_strings(&mut rows);
-        let mut payload = json!({
-            "collection": self.decl.collection,
-            "count": count,
-            "truncated": truncated,
-            "total_bytes": total_bytes,
-            "results": rows,
-        });
-        if truncated {
-            payload["truncation_note"] = json!(format!(
-                "One or more string fields were truncated to {} bytes; total untruncated result size was {} bytes.",
-                MAX_FIELD_STRING_BYTES, total_bytes
-            ));
+        let mut payload = result;
+        let count = payload["returned_count"].as_u64().unwrap_or(0);
+        if payload.get("results").is_some() {
+            payload["count"] = json!(count);
         }
         if count as u32 == limit {
             payload["limit_note"] = json!(format!(
@@ -454,6 +453,80 @@ mod tests {
                 fill: Some(WriteToolFieldFill::Correlation),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn field_recovery_preserves_complete_contract_and_runtime_scope() {
+        let node = node_with_findings().await;
+        let text = format!("{}{}", "é".repeat(2001), "😀".repeat(300));
+        let mutation = format!("mutation {{ update_CandidateFinding(filter: {{finding_id: {{_eq: \"f1\"}}}}, input: {{title: \"{}\"}}) {{_docID}} }}", crate::graphql::escape_graphql_string(&text));
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test.field_recovery.seed",
+            &mutation,
+        )
+        .await
+        .unwrap();
+        let doc = response.data.as_ref().unwrap()["update_CandidateFinding"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let tool = BoundedQueryTool::new(node.clone(), decl());
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            None, tokio_util::sync::CancellationToken::new(), None, None, None,
+            Some("run-42".into()), Default::default(), false, async {
+                let initial: Value = serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"]}).as_object().unwrap().clone())).await.unwrap()).unwrap();
+                assert_eq!(initial["truncated"], true);
+                assert_eq!(initial["field_recovery"][0]["total_bytes"], text.len());
+                assert_eq!(initial["field_recovery"][0]["doc_id"], doc);
+                assert!(initial["results"][0].get("_docID").is_none());
+                assert!(initial["total_bytes"].as_u64().unwrap() > text.len() as u64);
+                let mut offset=0; let mut hash=None; let mut recovered=String::new();
+                loop {
+                    let mut page=json!({"doc_id":doc,"field":"title","offset_bytes":offset});
+                    if let Some(hash)=&hash { page["expected_hash"]=json!(hash); }
+                    let out: Value=serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.unwrap()).unwrap();
+                    let page=&out["field_page"];
+                    recovered.push_str(page["text"].as_str().unwrap());
+                    hash=Some(page["value_hash"].as_str().unwrap().to_owned());
+                    offset=page["next_offset_bytes"].as_u64().unwrap();
+                    if page["complete"] == true { break; }
+                }
+                assert_eq!(recovered,text);
+                for page in [json!({"doc_id":doc,"field":"run_id"}),json!({"doc_id":doc,"field":"title","offset_bytes":1}),json!({"doc_id":doc,"field":"title","offset_bytes":2}),json!({"doc_id":doc,"field":"title","expected_hash":"changed"})] {
+                    assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.is_err());
+                }
+                let other = crate::config_client::ConfigAccess::Local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
+                let other_doc=&other["data"]["CandidateFinding"][0]["_docID"];
+                assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone())).await.is_err());
+                crate::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",crate::graphql::escape_graphql_string(&doc))).await.unwrap();
+                assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":doc,"field":"title","offset_bytes":2,"expected_hash":hash.unwrap()}}).as_object().unwrap().clone())).await.is_err());
+            }).await;
+    }
+
+    #[tokio::test]
+    async fn actor_scoped_query_completes_while_mutation_gate_is_held() {
+        let node = node_with_findings().await;
+        let holder = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+            .await
+            .unwrap();
+        let mut declaration = decl();
+        declaration.filter_fields.clear();
+        let tool = BoundedQueryTool::new(Arc::clone(&node), declaration).with_actor(
+            ::identity::Did::new("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR")
+                .unwrap(),
+        );
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Tool::call(&tool, BoundedQueryParams(Map::new())),
+        )
+        .await
+        .expect("actor read must not wait for mutation gate")
+        .unwrap();
+        assert!(result.contains("f1"));
+        assert!(result.contains("f2"));
+        assert!(result.contains("\"count\": 2"));
+        holder.commit().await.unwrap();
     }
 
     #[tokio::test]

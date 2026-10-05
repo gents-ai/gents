@@ -401,7 +401,7 @@ pub(crate) fn validate_query_tool_declarations(
                     field.name
                 )
             })?;
-            if matches!(field.name.trim(), "fields" | "limit") {
+            if matches!(field.name.trim(), "fields" | "limit" | "field_page") {
                 return Err(anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
                     decl.tool_name,
@@ -550,19 +550,21 @@ mod tests {
 
     #[test]
     fn query_decl_rejects_reserved_filter_names() {
-        let decl = QueryToolDecl {
-            tool_name: "query_finding".into(),
-            collection: "Finding".into(),
-            description: String::new(),
-            fields: vec!["title".into()],
-            filter_fields: vec![WriteToolField {
-                name: "limit".into(),
-                required: true,
-                fill: None,
-            }],
-        };
-        let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
-        assert!(err.to_string().contains("reserved query argument"));
+        for name in ["fields", "limit", "field_page"] {
+            let decl = QueryToolDecl {
+                tool_name: "query_finding".into(),
+                collection: "Finding".into(),
+                description: String::new(),
+                fields: vec!["title".into()],
+                filter_fields: vec![WriteToolField {
+                    name: name.into(),
+                    required: true,
+                    fill: None,
+                }],
+            };
+            let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
+            assert!(err.to_string().contains("reserved query argument"));
+        }
     }
 
     #[test]

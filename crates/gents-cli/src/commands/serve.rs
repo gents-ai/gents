@@ -457,6 +457,7 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
 }
 
 pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
+    crate::process_resources::prepare()?;
     serve_foreground(args).await
 }
 
@@ -2027,6 +2028,61 @@ mod shim_host_tests {
         let observed = activation_rx.borrow();
         assert!(matches!(observed.event.as_ref(), Some((8, _, Err(_)))));
         assert!(!observed.successful_for(8, "desired"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_entrypoint_raises_inherited_soft_limit_before_opening_home() {
+        const CHILD: &str = "GENTS_SERVER_FD_LIMIT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let mut limits = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: limits points to writable storage for one rlimit value.
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
+                0
+            );
+            let hard = limits.rlim_max;
+            limits.rlim_cur = 256.min(hard);
+            // SAFETY: the test lowers its own soft limit within the hard limit.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) }, 0);
+
+            let home = tempfile::tempdir().unwrap();
+            let args = parse_server(&[
+                "--home",
+                home.path().to_str().unwrap(),
+                "--no-codex-shim",
+                "--http-port",
+                "0",
+            ]);
+            let error = serve(args).await.unwrap_err();
+            assert!(error.to_string().contains("--http-port 0 is not supported"));
+
+            // SAFETY: limits remains valid writable storage.
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
+                0
+            );
+            assert_eq!(limits.rlim_cur, 65_536.min(hard));
+            assert_eq!(limits.rlim_max, hard);
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "commands::serve::shim_host_tests::server_entrypoint_raises_inherited_soft_limit_before_opening_home",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

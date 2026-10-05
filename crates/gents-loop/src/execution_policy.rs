@@ -27,7 +27,7 @@
 //! strictly extend before expiry is rejected per renewal below.
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-/// Durable lease facts reread under the mutation gate. There is no
+/// Durable lease facts from the request owner's authoritative snapshot. There is no
 /// `response_streaming` or `progress_seq` input: output-derived liveness is
 /// retired, and the stored deadline is the only expiry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

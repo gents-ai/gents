@@ -281,7 +281,7 @@ impl ToolCallLifecycle {
                     let agent = escape_graphql_string(&agent_did);
                     let requester_filter = requester_did.as_deref().map(|value| format!(r#", requester_did: {{ _eq: "{}" }}"#, escape_graphql_string(value)))
                         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-                    let mutation = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{
+                    let mutation = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{doc}", filter: {{
                         _docID: {{ _eq: "{doc}" }}, spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }},
                         request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }},
                         agent_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }},
@@ -1512,7 +1512,7 @@ async fn terminalize_transaction(
             )
         })
         .unwrap_or_else(|| ", spawned_by_tool_call_doc_id: { _eq: null }".to_owned());
-    let lifecycle = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{
+    let lifecycle = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{
         _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
         session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
@@ -2015,6 +2015,57 @@ mod spawned_background_tests {
             .map(decode_transcript_message_row)
             .collect::<Result<Vec<_>>>()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
+        for (name, changed_field, changed_value) in [
+            ("stale-terminal-point", "lifecycle_state", "cancelled"),
+            ("mismatched-terminal-point", "tool_name", "different_tool"),
+        ] {
+            let (node, path, mut tool) = published_spawn_parent(name).await;
+            let doc_id = escape_graphql_string(tool.doc_id().unwrap());
+            let before = tool_delivery_rows(&node, &tool.session_id).await.len();
+            let escaped_value = escape_graphql_string(changed_value);
+            crate::config_client::ConfigAccess::write_local(
+                &node,
+                "test.change_tool_compare",
+                &format!(
+                    r#"mutation {{ update_AgentToolCall(docID: "{doc_id}", input: {{
+                        {changed_field}: "{escaped_value}", started_at: "{}", deadline_at: "{}"
+                    }}) {{ _docID }} }}"#,
+                    tool.started_at.unwrap().to_rfc3339(),
+                    tool.deadline_at.to_rfc3339(),
+                ),
+            )
+            .await
+            .unwrap();
+
+            let result = tool
+                .fail_owned("late failure", FailureClass::External, None)
+                .await;
+            assert!(
+                !matches!(result, Ok(true)),
+                "changed comparison must not publish"
+            );
+            let row = crate::config_client::ConfigAccess::Local(node.clone())
+                .execute(&format!(
+                    r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state tool_name }} }}"#,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                row["data"]["AgentToolCall"][0][changed_field],
+                changed_value
+            );
+            assert_ne!(row["data"]["AgentToolCall"][0]["lifecycle_state"], "failed");
+            assert_eq!(
+                tool_delivery_rows(&node, &tool.session_id).await.len(),
+                before
+            );
+            node.shutdown().await;
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     #[tokio::test]
@@ -3067,7 +3118,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
-    let receipt_fence = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, input: {{ status: "running" }}) {{ _docID }} }}"#)).await?;
+    let receipt_fence = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, input: {{ status: "running" }}) {{ _docID }} }}"#)).await?;
     anyhow::ensure!(
         receipt_fence["data"]["update_AgentToolCall"]
             .as_array()
@@ -3232,7 +3283,7 @@ pub(crate) async fn start_running_in_txn(
     );
     let update = txn
         .execute(&format!(
-            r#"mutation {{ update_AgentToolCall(filter: {{
+            r#"mutation {{ update_AgentToolCall(docID: "{physical_doc_id}", filter: {{
             _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
             session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }},
             tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }},
@@ -3249,6 +3300,7 @@ pub(crate) async fn start_running_in_txn(
             start.message_sequence,
             start.await_mode,
             start.selected_tool_fields,
+            physical_doc_id = escape_graphql_string(&start.doc_id),
         ))
         .await?;
     Ok(update["data"]["update_AgentToolCall"]

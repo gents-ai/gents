@@ -85,6 +85,36 @@ describe("createDesktopProjectionController", () => {
     }
   });
 
+  it("keeps session updates moving while a fleet refresh is blocked", async () => {
+    const fleet = deferred();
+    const refreshSnapshot = vi.fn(async () => fleet.promise);
+    const refreshSession = vi.fn(async () => null);
+    const projection = controller({ refreshSnapshot, refreshSession });
+    const first = projection.request("snapshot");
+    await vi.waitFor(() => expect(refreshSnapshot).toHaveBeenCalledTimes(1));
+    await projection.request("session");
+    expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
+    fleet.resolve();
+    await first;
+  });
+
+  it("coalesces fleet reads without blocking session completion", async () => {
+    const fleet = deferred();
+    const refreshSnapshot = vi.fn(async () => fleet.promise);
+    const refreshSession = vi.fn(
+      async () => ({ turnState: "completed" }) as DesktopSessionSnapshot,
+    );
+    const projection = controller({ refreshSnapshot, refreshSession });
+    const first = projection.request("snapshot");
+    await vi.waitFor(() => expect(refreshSnapshot).toHaveBeenCalledTimes(1));
+    const terminal = projection.request("sessionEvent");
+    await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    fleet.resolve();
+    await Promise.all([first, terminal]);
+    expect(refreshSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("still refreshes the bounded session when the fleet snapshot fails", async () => {
     const error = new Error("snapshot unavailable");
     const refreshSession = vi.fn(async () => null);

@@ -81,13 +81,16 @@ export function useDesktopSessionProjection({
     }
     const agentDid =
       agentDidOverride === undefined ? selectedAgentDidRef.current : agentDidOverride;
-    setSessionLoad({
+    setSessionLoad((previous) => ({
       phase: "loading",
       sessionId: nextSessionId,
       agentDid,
       found: null,
-      error: null,
-    });
+      error:
+        previous.sessionId === nextSessionId && previous.agentDid === agentDid
+          ? previous.error
+          : null,
+    }));
     try {
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
