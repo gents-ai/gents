@@ -139,7 +139,6 @@ describe("canonical chat submission acceptance", () => {
       clientAvailable: true,
       selectedAgentDid: "agent-b",
       selectedSessionId: null,
-      draft: "follow up",
       sending: false,
       session: null,
       selectedSessionSummary: null,

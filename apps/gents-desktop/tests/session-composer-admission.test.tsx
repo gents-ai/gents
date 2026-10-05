@@ -253,7 +253,6 @@ describe("SessionScreen canonical composer admission", () => {
         clientAvailable: true,
         selectedAgentDid: deployment.agentDid,
         selectedSessionId: null,
-        draft: "",
         sending: false,
         session: null,
         selectedSessionSummary: null,

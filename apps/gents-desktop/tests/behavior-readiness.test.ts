@@ -221,7 +221,6 @@ describe("selectedBehaviorReadinessDecision", () => {
         clientAvailable: true,
         selectedAgentDid: remote.agentDid,
         selectedSessionId: null,
-        draft: "hello",
         sending: false,
         session: null,
         selectedSessionSummary: null,
@@ -230,9 +229,9 @@ describe("selectedBehaviorReadinessDecision", () => {
       });
 
       if (blockedReason === null) {
-        expect(projection.sendStatus).toEqual({ kind: "ready" });
+        expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
       } else {
-        expect(projection.sendStatus).toMatchObject({
+        expect(projection.nonEmptyContentSendStatus).toMatchObject({
           kind: "disabled",
           reason: blockedReason,
         });

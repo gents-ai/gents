@@ -322,16 +322,11 @@ describe("error card retry", () => {
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "",
       sending: false,
       session,
       selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
       operationalState: operationalStateFor(),
-    });
-    expect(shellProjection.sendStatus).toMatchObject({
-      kind: "disabled",
-      reason: "composerEmpty",
     });
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
@@ -374,7 +369,6 @@ describe("error card retry", () => {
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "retry",
       sending: false,
       session,
       selectedSessionSummary: null,
@@ -385,7 +379,6 @@ describe("error card retry", () => {
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "retry",
       sending: false,
       session,
       selectedSessionSummary: null,
@@ -452,7 +445,6 @@ describe("error card retry", () => {
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
       selectedSessionId: "s1",
-      draft: "check the upgrade",
       sending: false,
       session,
       selectedSessionSummary: null,

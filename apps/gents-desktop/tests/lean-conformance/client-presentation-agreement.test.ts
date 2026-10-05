@@ -71,7 +71,7 @@ describe("ClientShell presentation agreement", () => {
   it("matches Lean-generated draft and automatic recovery cases", async () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
-    expect(cases).toHaveLength(22);
+    expect(cases).toHaveLength(20);
     expect(recoveryCases).toHaveLength(10);
     for (const contractCase of recoveryCases) {
       const actual =
