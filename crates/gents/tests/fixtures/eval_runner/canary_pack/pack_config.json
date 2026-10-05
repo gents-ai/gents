@@ -1,7 +1,5 @@
 {
-  "agent_principal": {
-    "default_behavior_id": "canary"
-  },
+  "agent_principal": {},
   "agent_behaviors": [
     {
       "behavior_id": "canary",

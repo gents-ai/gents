@@ -25,7 +25,9 @@ pub use installation::{
     InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
-pub use loader::{decode_pack_config, load_pack_config, pin_pack_plugins};
+pub use loader::{
+    decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
 pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
 
