@@ -280,7 +280,7 @@ function AppBody({
             onOpenDbExplorer={openDbExplorer}
           >
             {route.name === "sessions" && <SessionsScreen nodeDid={route.nodeDid} />}
-            {route.name === "session" && <SessionScreen shell={shell} />}
+            {route.name === "session" && <SessionScreen />}
             {route.name === "mailbox" && <MailboxScreen nodeDid={route.nodeDid} />}
             {(route.name === "agents" || route.name === "nodes") && <AgentsScreen />}
             {route.name === "agent" && (

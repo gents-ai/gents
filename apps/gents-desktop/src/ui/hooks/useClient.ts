@@ -132,3 +132,11 @@ export function useScopeContext(): ScopeContext {
     [nodes, selectedNodeDid, homeDid, fleet],
   );
 }
+
+/** Whether a turn is running that Stop can interrupt. */
+export function useInterruptVisible() {
+  return useView((view) => {
+    const kind = view.shellProjection.workflow.kind;
+    return kind === "awaitingObservation" || kind === "turnInProgress";
+  });
+}

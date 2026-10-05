@@ -127,6 +127,19 @@ import {
 import { useDraft } from "../../hooks/draftStore";
 import { useFleet, workersOfId } from "../hooks/useFleet";
 import { agentOf } from "@/lib/agents";
+import { useApp, useView } from "@/app/AppContext";
+import {
+  useChatFolder,
+  useDeployments,
+  useHomeDid,
+  useInterruptVisible,
+  useMailboxCause,
+  useSelectedAgentDid,
+  useSelectedBehaviorId,
+  useSelectedDeployment,
+  useSelectedSessionId,
+  useSessionLoad,
+} from "@/hooks/useClient";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -323,12 +336,14 @@ export function SessionContext({
   );
 }
 
-export function useBehaviorChoice(shell: Shell) {
+export function useBehaviorChoice() {
+  const selectedBehaviorId = useSelectedBehaviorId();
+  const { selectBehavior } = useApp().actions;
   return {
     // Read the same effective selection that owns composer admission. Defaults,
-    // mailbox routing, and agent changes are resolved by the shell, not here.
-    behaviorId: shell.selectedBehaviorId,
-    setPicked: shell.selectBehavior,
+    // mailbox routing, and agent changes are resolved by the selection, not here.
+    behaviorId: selectedBehaviorId,
+    setPicked: selectBehavior,
   };
 }
 
@@ -1282,11 +1297,39 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
 });
 
-export function SessionScreen({ shell }: { shell: Shell }) {
+export function SessionScreen() {
+  const activeRequestId = useView((view) => view.shellProjection.activeRequestId);
+  const activityStatus = useView((view) => view.shellProjection.activityStatus);
+  const {
+    api,
+    drafts,
+    stores,
+    actions: {
+      acceptsComposeIntent,
+      captureComposeIntent,
+      loadOlderSessionTimeline,
+      refreshSnapshot,
+      retryMessage,
+      selectAgent,
+      sendMessage,
+      setChatFolder,
+    },
+  } = useApp();
+  const chatFolder = useChatFolder();
+  const deployments = useDeployments();
+  const draftKey = useView((view) => view.draftKey);
+  const interruptVisible = useInterruptVisible();
+  const mailboxCause = useMailboxCause();
+  const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
+  const selectedAgentDid = useSelectedAgentDid();
+  const deployment = useSelectedDeployment();
+  const selectedSessionId = useSelectedSessionId();
+  const sending = stores.chat.use.sending();
+  const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);
-  const homeDid = shell.snapshot?.bootstrap.initAgentDid;
+  const homeDid = useHomeDid();
   const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
-  const [draft, setDraft] = useDraft(shell.draftStore, shell.draftKey);
+  const [draft, setDraft] = useDraft(drafts, draftKey);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
@@ -1301,17 +1344,17 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   );
   const viewport = () => scroller;
   const transcriptActions = useRef<TranscriptActions>({
-    loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-    retryMessage: shell.retryMessage,
+    loadOlderSessionTimeline: loadOlderSessionTimeline,
+    retryMessage: retryMessage,
   });
   useLayoutEffect(() => {
     transcriptActions.current = {
-      loadOlderSessionTimeline: shell.loadOlderSessionTimeline,
-      retryMessage: shell.retryMessage,
+      loadOlderSessionTimeline: loadOlderSessionTimeline,
+      retryMessage: retryMessage,
     };
-  }, [shell.loadOlderSessionTimeline, shell.retryMessage]);
+  }, [loadOlderSessionTimeline, retryMessage]);
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom } = useFollowTail(scroller, shell.selectedSessionId);
+  const { atBottom, toBottom } = useFollowTail(scroller, selectedSessionId);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const headerEnd = useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = useState(false);
@@ -1326,9 +1369,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return () => io.disconnect();
     /* the loader shows first and the marker mounts with the session, after
        this effect has already run once and found nothing: run again then */
-  }, [shell.selectedSessionId, session, scroller]);
-  const choice = useBehaviorChoice(shell);
-  const deployment = shell.selectedDeployment;
+  }, [selectedSessionId, session, scroller]);
+  const choice = useBehaviorChoice();
   const provenance = useSessionProvenance();
   const workers = useWorkers(provenance);
   const parentWork = useParentWork(provenance);
@@ -1380,7 +1422,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const workerActions = useMemo<WorkerActions>(
     () => ({
       interrupt: (request) => {
-        void shell.api
+        void api
           .interruptRequest({
             requestId: request.requestId,
             agentDid: request.agentDid,
@@ -1391,7 +1433,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           );
       },
     }),
-    [shell.api],
+    [api],
   );
   /* the principal name, or the pairing label while a paired node has not
      replicated its principal yet */
@@ -1403,13 +1445,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     deployment?.sessions.find((x) => x.sessionId === session?.sessionId) ?? null;
 
   const send = async (text: string) => {
-    const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
-    const intentGeneration = shell.captureComposeIntent();
+    const pending = sendMessage(text, session?.behaviorId ?? choice.behaviorId);
+    const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));
-    if (!shell.acceptsComposeIntent(intentGeneration)) return;
-    if (result && result.sessionId !== shell.selectedSessionId) {
-      if (!shell.selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
+    if (!acceptsComposeIntent(intentGeneration)) return;
+    if (result && result.sessionId !== selectedSessionId) {
+      if (!selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
       navigate({ name: "session", sessionId: result.sessionId });
     }
   };
@@ -1432,18 +1474,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   );
 
   /* ---- start a new session ---- */
-  if (!shell.selectedSessionId) {
+  if (!selectedSessionId) {
     const env = deployment?.behaviorEnvironments.find(
       (e) => e.behaviorId === choice.behaviorId,
     );
     const chosenName = behaviorName(choice.behaviorId, deployment);
-    const startStatus = presentedComposerSendStatus(
-      draft,
-      shell.nonEmptyContentSendStatus,
-    );
+    const startStatus = presentedComposerSendStatus(draft, sendStatus);
     return (
       <div
-        key={shell.selectedAgentDid ?? "new"}
+        key={selectedAgentDid ?? "new"}
         data-testid="session-screen"
         className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
       >
@@ -1452,7 +1491,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           <div>
             <h1 className="font-heading text-lg font-medium text-heading">
               Start a new chat with{" "}
-              {shell.deployments.length > 1 ? (
+              {deployments.length > 1 ? (
                 /* the node the chat starts on, where there is a choice: the
                    name is the button's own text, so the heading still reads
                    as one sentence */
@@ -1471,10 +1510,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-56">
                     <DropdownMenuRadioGroup
-                      value={shell.selectedAgentDid ?? ""}
-                      onValueChange={(did) => shell.selectAgent(did)}
+                      value={selectedAgentDid ?? ""}
+                      onValueChange={(did) => selectAgent(did)}
                     >
-                      {shell.deployments.map((n, i, all) => (
+                      {deployments.map((n, i, all) => (
                         <Fragment key={n.agentDid}>
                           {/* a faint line between the local node and the paired ones */}
                           {i > 0 &&
@@ -1509,7 +1548,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               )}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {shell.mailboxCause
+              {mailboxCause
                 ? "Answering a mailbox item; the first message starts its request"
                 : "The first message creates the session automatically"}
             </p>
@@ -1521,7 +1560,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             onChange={setDraft}
             onSend={send}
             models={[]}
-            disabled={shell.nonEmptyContentSendStatus.kind === "disabled"}
+            disabled={sendStatus.kind === "disabled"}
             above={
               <>
                 <ReplyingTo />
@@ -1540,20 +1579,17 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   behaviorId={choice.behaviorId}
                   onChange={choice.setPicked}
                 />
-                <ChatFolderPicker
-                  folder={shell.chatFolder}
-                  onChange={shell.setChatFolder}
-                />
+                <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
               </>
             }
-            sending={shell.sending}
+            sending={sending}
             placeholder={placeholderFor(startStatus, "Ask anything")}
           />
           {/* inside the composer's row, so the grid's gap is not paid twice
               around a line that is usually empty */}
           <SessionSubmissionStatus
             error={null}
-            activityStatus={shell.activityStatus}
+            activityStatus={activityStatus}
             reserve={false}
           />
         </div>
@@ -1586,11 +1622,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   }
 
   /* ---- an existing session ---- */
-  const inFlight = shell.interruptVisible ?? Boolean(shell.selectedTrackedRequestId);
+  const inFlight = interruptVisible;
 
   /* stop: the interrupt reaches this request only; sessions it started keep
      their own work, each stoppable from its row or its own screen */
-  const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
+  const stoppableRequestId = activeRequestId ?? session?.latestRequestId ?? null;
   const stopping = isStopping({
     inFlight,
     requestId: stoppableRequestId,
@@ -1606,9 +1642,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     const release = () =>
       setRequestedStop((current) => (current === requestId ? null : current));
     try {
-      await shell.api.interruptRequest({
+      await api.interruptRequest({
         requestId,
-        agentDid: shell.selectedAgentDid,
+        agentDid: selectedAgentDid,
         cause: "userCancelled",
       });
     } catch (e) {
@@ -1618,7 +1654,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   };
 
   /* Local text plus the canonical shell admission decision. */
-  const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
+  const status = presentedComposerSendStatus(draft, sendStatus);
 
   /* Until the session is here, nothing of its screen is. Drawn without it,
      the screen assembled under the reader's eye — chrome, then a title
@@ -1626,11 +1662,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
      part landed. One mark, centred, says it is coming. A load that failed,
      or a session the store does not have, keeps the screen: its
      LoadingStatus says what happened and offers the way on. */
-  if (
-    !session &&
-    shell.sessionLoad.phase !== "failed" &&
-    shell.sessionLoad.found !== false
-  )
+  if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
     return <SessionLoading />;
 
   return (
@@ -1678,7 +1710,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                   )}
                 >
                   <NodeBehaviorStack
-                    nodes={shell.deployments}
+                    nodes={deployments}
                     homeDid={homeDid}
                     nodeDid={session?.agentDid}
                     behaviorId={session?.behaviorId}
@@ -1693,12 +1725,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                         key={session.sessionId + (session.title ?? "")}
                         title={session.title ?? "Untitled session"}
                         onRename={async (title) => {
-                          await shell.api.renameSession({
-                            agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
+                          await api.renameSession({
+                            agentDid: selectedAgentDid ?? session.agentDid ?? "",
                             sessionId: session.sessionId,
                             title,
                           });
-                          await shell.refreshSnapshot();
+                          await refreshSnapshot();
                           toast("Renamed");
                         }}
                       />
@@ -1734,12 +1766,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       key={session.sessionId + (session.title ?? "")}
                       title={session.title ?? "Untitled session"}
                       onRename={async (title) => {
-                        await shell.api.renameSession({
-                          agentDid: shell.selectedAgentDid ?? session.agentDid ?? "",
+                        await api.renameSession({
+                          agentDid: selectedAgentDid ?? session.agentDid ?? "",
                           sessionId: session.sessionId,
                           title,
                         });
-                        await shell.refreshSnapshot();
+                        await refreshSnapshot();
                         toast("Renamed");
                       }}
                     />
@@ -1772,7 +1804,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <NodeBehaviorStack
-                      nodes={shell.deployments}
+                      nodes={deployments}
                       homeDid={homeDid}
                       nodeDid={session?.agentDid}
                       behaviorId={session?.behaviorId}
@@ -1784,7 +1816,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       {/* the node only when it is not the local one, as the
                           marks beside it do */}
                       {(() => {
-                        const node = shell.deployments.find(
+                        const node = deployments.find(
                           (n) => nodeDidOf(n) === session?.agentDid,
                         );
                         return node && !isWorkingNode(node, homeDid)
@@ -1850,9 +1882,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     onChange={setDraft}
                     onSend={send}
                     models={[]}
-                    disabled={
-                      shell.nonEmptyContentSendStatus.kind === "disabled" && !inFlight
-                    }
+                    disabled={sendStatus.kind === "disabled" && !inFlight}
                     above={
                       <>
                         <ReplyingTo />
@@ -1865,12 +1895,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                     onKeyDown={slash.onKeyDown}
                     leading={
-                      <ChatFolderPicker
-                        folder={shell.chatFolder}
-                        onChange={shell.setChatFolder}
-                      />
+                      <ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />
                     }
-                    sending={shell.sending || inFlight}
+                    sending={sending || inFlight}
                     onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
                       inFlight ? "Ask anything" : placeholderFor(status, "Ask anything")
@@ -1881,7 +1908,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     box is empty; the hint is only for when typed text hides it */}
                 <SessionSubmissionStatus
                   error={null}
-                  activityStatus={shell.activityStatus}
+                  activityStatus={activityStatus}
                   hint={
                     status.kind === "disabled" && !inFlight && draft.trim() !== ""
                       ? status.hint
