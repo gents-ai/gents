@@ -143,12 +143,33 @@ pub fn gate_goal_continuation(
     }
 }
 
-/// Mirror of `ReadinessGate.mayMaterializeClaimed`.
-pub fn may_materialize_claimed_goal_continuation(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalClaimedDecision {
+    Materialize,
+    AwaitReadiness,
+    Stop,
+    Inactive,
+}
+
+/// Mirror of `ReadinessGate.claimedGate`.
+pub fn gate_claimed_goal_continuation(
     observation: GoalBehaviorObservation,
     settled: bool,
-) -> bool {
-    observe_goal_behavior_readiness(observation, settled) == GoalBehaviorReadiness::Ready
+    child_exists: bool,
+    state: &GoalState,
+) -> GoalClaimedDecision {
+    if child_exists
+        || state.wrapup_completed
+        || !(state.status == GoalStatus::Active
+            || (state.status == GoalStatus::BudgetLimited && state.wrapup_requested))
+    {
+        return GoalClaimedDecision::Inactive;
+    }
+    match observe_goal_behavior_readiness(observation, settled) {
+        GoalBehaviorReadiness::Ready => GoalClaimedDecision::Materialize,
+        GoalBehaviorReadiness::Waiting => GoalClaimedDecision::AwaitReadiness,
+        GoalBehaviorReadiness::Unavailable => GoalClaimedDecision::Stop,
+    }
 }
 
 /// Mirror of `ReadinessGate.nextRetries`: the persisted

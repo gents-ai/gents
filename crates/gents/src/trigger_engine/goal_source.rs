@@ -18,14 +18,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::goal::publish_claimed_continuation;
 use crate::goal::{
-    claim_continuation, claim_retry_continuation, gate_goal_continuation,
-    goal_continuation_materialization_step, goal_failure_cause, load_goal_by_id,
-    load_goals_for_session, may_materialize_claimed_goal_continuation,
-    next_goal_infrastructure_retries, observe_goal_behavior, refresh_goal_usage,
-    update_goal_fields_if_status, GoalAction, GoalContinuationAction, GoalContinuationFacts,
-    GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision, GoalRequestTerminal,
-    GoalStatus, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND,
-    MAX_INFRASTRUCTURE_RETRIES,
+    claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
+    gate_goal_continuation, goal_continuation_materialization_step, goal_failure_cause,
+    load_goal_by_id, load_goals_for_session, next_goal_infrastructure_retries,
+    observe_goal_behavior, refresh_goal_usage, stop_claimed_continuation_for_unavailable_behavior,
+    update_goal_fields_if_status, GoalAction, GoalClaimedDecision, GoalContinuationAction,
+    GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision,
+    GoalRequestTerminal, GoalStatus, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX,
+    GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
@@ -232,11 +232,30 @@ impl GoalSource {
             if reconciled_phase != GoalContinuationPhase::ChildPresent {
                 return Ok(None);
             }
-            // The claim is durable and already advanced the sequence, so the
-            // child waits for readiness without touching the Goal: the retry
-            // prompt below is reconstructed from `last_failure`.
-            if !may_materialize_claimed_goal_continuation(behavior.observation, behavior.settled) {
-                return Ok(None);
+            match gate_claimed_goal_continuation(
+                behavior.observation,
+                behavior.settled,
+                child_exists,
+                &goal.state().context("claimed Goal has an unknown status")?,
+            ) {
+                GoalClaimedDecision::Materialize => {}
+                GoalClaimedDecision::AwaitReadiness | GoalClaimedDecision::Inactive => {
+                    return Ok(None)
+                }
+                GoalClaimedDecision::Stop => {
+                    if stop_claimed_continuation_for_unavailable_behavior(
+                        &self.node,
+                        &goal,
+                        &latest.request_id,
+                        &behavior.reason,
+                    )
+                    .await?
+                    {
+                        tracing::warn!(goal_id = %goal.goal_id, reason = %behavior.reason,
+                            "durable claimed goal stopped because its behavior is unavailable");
+                    }
+                    return Ok(None);
+                }
             }
             // A crash may leave the durable claim without its child. Decision
             // side effects (notably retry charging) were committed before the
@@ -1085,3 +1104,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "goal_source/claimed_readiness_tests.rs"]
+mod claimed_readiness_tests;
