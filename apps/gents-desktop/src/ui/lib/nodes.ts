@@ -8,7 +8,7 @@ import { isLocalAgent } from "./firstRun";
 
 export type NodeDid = string;
 
-export const nodeDidOf = (node: DeploymentView): NodeDid => node.agentDid;
+export const nodeDidOf = (node: { agentDid: string }): NodeDid => node.agentDid;
 export const nodeOfSession = (session: SessionSummary): NodeDid => session.agentDid;
 
 /* The working node is the one this machine runs. Its configuration is
@@ -19,11 +19,12 @@ export const nodeOfSession = (session: SessionSummary): NodeDid => session.agent
    enrollment, so its record says "enrollment" like any remote peer, and
    only the home's agent DID (bootstrap.initAgentDid) tells them apart;
    isLocalAgent owns that test. */
-export const isWorkingNode = (
-  node: DeploymentView,
+/** What telling a node apart needs: a deployment, or a node as the fleet
+    holds it. */
+type NodeLike = Pick<DeploymentView, "agentDid" | "source">;
+export const isWorkingNode = (node: NodeLike, homeDid: string | null | undefined) =>
+  isLocalAgent(node, homeDid);
+export const workingNode = <N extends NodeLike>(
+  nodes: readonly N[],
   homeDid: string | null | undefined,
-) => isLocalAgent(node, homeDid);
-export const workingNode = (
-  nodes: readonly DeploymentView[],
-  homeDid: string | null | undefined,
-): DeploymentView | null => nodes.find((n) => isWorkingNode(n, homeDid)) ?? null;
+): N | null => nodes.find((n) => isWorkingNode(n, homeDid)) ?? null;

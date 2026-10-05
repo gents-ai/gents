@@ -16,6 +16,7 @@ import {
   sessionsInScope,
 } from "@/lib/scope";
 import { workingNode } from "@/lib/nodes";
+import { fleetFor } from "./fleet-fixture";
 
 const session = (id: string, agentDid: string, behaviorId: string, updatedAt: string) =>
   ({ sessionId: id, agentDid, behaviorId, updatedAt }) as unknown as SessionSummary;
@@ -50,7 +51,12 @@ const peer = node(
   [session("p1", "did:peer", "did:peer:eng", "2026-09-26T11:00:00Z")],
   [item("m3", "did:peer", "did:peer:eng")],
 );
-const ctx = { nodes: [local, peer], selectedNodeDid: "did:local", homeDid: null };
+const ctx = {
+  nodes: [local, peer],
+  selectedNodeDid: "did:local",
+  homeDid: null,
+  fleet: fleetFor([local, peer]).getState(),
+};
 
 describe("nodes in scope", () => {
   it("sessions default to the working node whatever is selected; the mailbox to every node", () => {

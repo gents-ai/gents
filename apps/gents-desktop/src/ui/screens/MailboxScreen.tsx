@@ -65,6 +65,7 @@ import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { Axis, type Option } from "./SessionFilters";
 import { span, when } from "./time";
+import { useFleet } from "../hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
 
@@ -117,7 +118,10 @@ export function MailboxScreen({
 }) {
   /* the mailbox is what waits on the person wherever it came from: every
      node to start, then whatever the chips choose */
-  const ctx = scopeContextOf(shell);
+  const ctx = scopeContextOf(
+    shell,
+    useFleet(shell, (s) => s),
+  );
   const [storedNodeIds, setNodeIds] = useStoredStrings("gents-prototype-mailbox-nodes");
   useEffect(() => {
     if (nodeDid) setNodeIds([nodeDid]);

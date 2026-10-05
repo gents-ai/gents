@@ -1,4 +1,4 @@
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 
 /* two-letter initials on a pastel chip; the ink stays fixed like a marker */
 /* a leading article is not a name: "The Engineer" is En, not Te */
@@ -13,10 +13,7 @@ export function initials(name: string) {
   ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
-export function behaviorName(
-  behaviorId: string | null,
-  deployment: DeploymentView | null,
-) {
+export function behaviorName(behaviorId: string | null, deployment: NodeView | null) {
   return (
     deployment?.behaviors.find((b) => b.behaviorId === behaviorId)?.displayName ??
     "Default"

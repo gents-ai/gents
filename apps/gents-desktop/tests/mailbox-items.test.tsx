@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
+import { fleetFor } from "./fleet-fixture";
 
 /* the sender's hover card reads the whole deployment; the card is not
    what these cases are about */
@@ -45,6 +46,7 @@ const shellWith = (
   ({
     answerMailboxQuestion,
     deployments: [deploymentWith(items)],
+    fleet: fleetFor([deploymentWith(items)]),
     selectedDeployment: deploymentWith(items),
   }) as unknown as Shell;
 const deploymentWith = (items: MailboxItemView[]) => ({

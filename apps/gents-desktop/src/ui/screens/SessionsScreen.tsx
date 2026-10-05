@@ -1,6 +1,6 @@
 /* Sessions: a heading row with search and New, then plain rows on the
    ground: title, the behavior's chip, and when it last moved. */
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   CornerDownRight,
@@ -45,6 +45,7 @@ import {
   useFleet,
   workersOf,
 } from "../hooks/useFleet";
+import type { NodeView } from "../../hooks/fleetStore";
 
 export function SessionsScreen({
   shell,
@@ -62,7 +63,16 @@ export function SessionsScreen({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   /* the nodes the list shows: the working node to start, then whatever the
      chips choose; none chosen means every node */
-  const ctx = scopeContextOf(shell);
+  const fleet = useFleet(shell, (s) => s);
+  const ctx = scopeContextOf(shell, fleet);
+  /* the nodes as rows draw them, without their lists: the same objects
+     while unchanged, so a row whose session did not change skips */
+  const nodeList = useMemo(
+    () => fleet.nodeKeys.map((key) => fleet.nodes[key]!),
+    [fleet.nodeKeys, fleet.nodes],
+  );
+  const selectedNode =
+    (shell.selectedAgentDid && fleet.nodes[shell.selectedAgentDid]) || null;
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), ctx).map(nodeDidOf);
   const [storedNodeIds, setNodeIds] = useStoredStrings(
     "gents-prototype-sessions-nodes",
@@ -82,7 +92,7 @@ export function SessionsScreen({
   const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
   const inScope = sessionsInScope(scope, ctx);
   const nodeCounts = Object.fromEntries(
-    shell.deployments.map((n) => [nodeDidOf(n), n.sessions.length]),
+    fleet.nodeKeys.map((key) => [key, fleet.sessionsOf[key]?.length ?? 0]),
   );
   const conversations = filterSessions(inScope, filter, query);
   /* an empty list says "yet" only when no node has a session; otherwise
@@ -92,7 +102,6 @@ export function SessionsScreen({
     hasFilter(filter) ||
     shell.deployments.some((n) => n.sessions.length > 0);
   /* the session whose latest request spawned this one, by provenance */
-  const fleet = useFleet(shell, (s) => s);
   const parentOf = (c: SessionSummary) => parentOfIn(fleet, c);
 
   /* Work a session handed out sits under the session that handed it out.
@@ -284,107 +293,18 @@ export function SessionsScreen({
                 </button>
               </li>
             ) : (
-              <li
+              <SessionRow
                 key={row.session.sessionId}
-                className={cn(
-                  row.delay != null &&
-                    "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
-                )}
-                style={
-                  row.delay != null
-                    ? { animationDelay: `${row.delay * 40}ms` }
-                    : undefined
-                }
-              >
-                <a
-                  href={href({
-                    name: "session",
-                    sessionId: row.session.sessionId,
-                  })}
-                  data-testid={`session-${row.session.sessionId}`}
-                  className={cn(
-                    "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
-                    /* under the work it came from, and smaller with it: a
-                       worker is a detail of the row above, and a list where
-                       everything is the same size has no shape to read */
-                    row.child ? "py-2 pl-9 text-sm" : "py-3.5",
-                  )}
-                >
-                  <SessionStatus turnState={row.session.turnState} />
-                  <p className="flex min-w-0 items-center gap-1.5 text-sm">
-                    {/* the mark says a session came from another; the indent
-                        says which one. Kept in both places: a row that only
-                        moves right reads as a wrapped title, and a child
-                        whose parent is filtered away has nothing but this */}
-                    {/* a run nobody started by typing wears the mark of what
-                        did: the list filters on this and showed nothing */}
-                    {!parentOf(row.session) && row.session.taskId && (
-                      <Play
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={`Started by ${row.session.taskName ?? "a task"}`}
-                      >
-                        <title>
-                          Started by {row.session.taskName ?? "a task"}
-                          {row.session.triggerKind
-                            ? ` · ${row.session.triggerKind}`
-                            : ""}
-                        </title>
-                      </Play>
-                    )}
-                    {parentOf(row.session) && (
-                      <CornerDownRight
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={`Started by ${parentOf(row.session)?.title ?? "another session"}`}
-                      >
-                        <title>
-                          Started by {parentOf(row.session)?.title ?? "another session"}
-                        </title>
-                      </CornerDownRight>
-                    )}
-                    {row.session.unreadableReason && (
-                      <Lock
-                        className="size-3.5 shrink-0 text-muted-foreground"
-                        role="img"
-                        aria-label={row.session.unreadableReason}
-                      >
-                        <title>{row.session.unreadableReason}</title>
-                      </Lock>
-                    )}
-                    <span
-                      className={cn(
-                        "truncate",
-                        (row.child || row.session.unreadableReason) &&
-                          "text-muted-foreground",
-                      )}
-                    >
-                      {row.session.title ?? "Untitled"}
-                    </span>
-                  </p>
-                  <NodeBehaviorStack
-                    nodes={shell.deployments}
-                    homeDid={shell.snapshot?.bootstrap.initAgentDid}
-                    nodeDid={nodeOfSession(row.session)}
-                    behaviorId={row.session.behaviorId}
-                    deployment={deployment}
-                    description={
-                      shell.behaviorDescriptions[row.session.behaviorId ?? ""]
-                    }
-                    size={row.child ? "sm" : "md"}
-                    workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
-                  />
-                  <span
-                    className={cn(
-                      "w-10 text-right text-muted-foreground sm:w-20",
-                      row.child ? "text-xs" : "text-sm",
-                    )}
-                  >
-                    {/* kept current by the clock, whether or not the row re-renders */}
-                    <Age iso={row.session.updatedAt} />
-                  </span>
-                </a>
-              </li>
+                session={row.session}
+                child={row.child}
+                delay={row.delay ?? null}
+                parent={parentOf(row.session)}
+                nodes={nodeList}
+                homeDid={shell.snapshot?.bootstrap.initAgentDid}
+                deployment={selectedNode}
+                description={shell.behaviorDescriptions[row.session.behaviorId ?? ""]}
+                workers={row.child ? NO_SESSIONS : workersOf(fleet, row.session)}
+              />
             ),
           )}
           {conversations.length === 0 && narrowed && (
@@ -415,3 +335,121 @@ export function SessionsScreen({
     </ScrollArea>
   );
 }
+
+/* One row of the list. A fleet read that changed one session re-renders that
+   session's row: the others skip, since every prop keeps its identity while
+   unchanged (the fleet store reconciles each read by key). */
+const SessionRow = memo(function SessionRow({
+  session,
+  child,
+  delay,
+  parent,
+  nodes,
+  homeDid,
+  deployment,
+  description,
+  workers,
+}: {
+  session: SessionSummary;
+  child: boolean;
+  delay: number | null;
+  parent: SessionSummary | null;
+  nodes: readonly NodeView[];
+  homeDid: string | null | undefined;
+  deployment: NodeView | null;
+  description: string | undefined;
+  workers: readonly SessionSummary[];
+}) {
+  return (
+    <li
+      key={session.sessionId}
+      className={cn(
+        delay != null &&
+          "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
+      )}
+      style={delay != null ? { animationDelay: `${delay * 40}ms` } : undefined}
+    >
+      <a
+        href={href({
+          name: "session",
+          sessionId: session.sessionId,
+        })}
+        data-testid={`session-${session.sessionId}`}
+        className={cn(
+          "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
+          /* under the work it came from, and smaller with it: a
+             worker is a detail of the row above, and a list where
+             everything is the same size has no shape to read */
+          child ? "py-2 pl-9 text-sm" : "py-3.5",
+        )}
+      >
+        <SessionStatus turnState={session.turnState} />
+        <p className="flex min-w-0 items-center gap-1.5 text-sm">
+          {/* the mark says a session came from another; the indent
+              says which one. Kept in both places: a row that only
+              moves right reads as a wrapped title, and a child
+              whose parent is filtered away has nothing but this */}
+          {/* a run nobody started by typing wears the mark of what
+              did: the list filters on this and showed nothing */}
+          {!parent && session.taskId && (
+            <Play
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={`Started by ${session.taskName ?? "a task"}`}
+            >
+              <title>
+                Started by {session.taskName ?? "a task"}
+                {session.triggerKind ? ` · ${session.triggerKind}` : ""}
+              </title>
+            </Play>
+          )}
+          {parent && (
+            <CornerDownRight
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={`Started by ${parent?.title ?? "another session"}`}
+            >
+              <title>Started by {parent?.title ?? "another session"}</title>
+            </CornerDownRight>
+          )}
+          {session.unreadableReason && (
+            <Lock
+              className="size-3.5 shrink-0 text-muted-foreground"
+              role="img"
+              aria-label={session.unreadableReason}
+            >
+              <title>{session.unreadableReason}</title>
+            </Lock>
+          )}
+          <span
+            className={cn(
+              "truncate",
+              (child || session.unreadableReason) && "text-muted-foreground",
+            )}
+          >
+            {session.title ?? "Untitled"}
+          </span>
+        </p>
+        <NodeBehaviorStack
+          nodes={nodes}
+          homeDid={homeDid}
+          nodeDid={nodeOfSession(session)}
+          behaviorId={session.behaviorId}
+          deployment={deployment}
+          description={description}
+          size={child ? "sm" : "md"}
+          workers={workers}
+        />
+        <span
+          className={cn(
+            "w-10 text-right text-muted-foreground sm:w-20",
+            child ? "text-xs" : "text-sm",
+          )}
+        >
+          {/* kept current by the clock, whether or not the row re-renders */}
+          <Age iso={session.updatedAt} />
+        </span>
+      </a>
+    </li>
+  );
+});

@@ -3,7 +3,8 @@
    session's node id. The local node is where work is assumed to be, so
    only a remote node is shown; a session whose node the client cannot see
    shows the behavior alone too. */
-import type { DeploymentView, SessionSummary } from "@source-inc/gents-desktop-client";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import { cn } from "@gents/ui/lib/utils";
 import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
 import { AgentAvatar } from "./AgentAvatar";
@@ -22,12 +23,12 @@ export function NodeBehaviorStack({
   workers = [],
   keyboard = false,
 }: {
-  nodes: readonly DeploymentView[];
+  nodes: readonly NodeView[];
   /** the home's agent DID, which marks the working node */
   homeDid: string | null | undefined;
   nodeDid: string | null | undefined;
   behaviorId: string | null | undefined;
-  deployment: DeploymentView | null;
+  deployment: NodeView | null;
   description?: string;
   size?: "sm" | "md";
   /** sessions this one handed out: their behaviors, and any remote node
@@ -52,8 +53,7 @@ export function NodeBehaviorStack({
       workers
         .map((w) => nodes.find((n) => nodeDidOf(n) === w.agentDid) ?? null)
         .filter(
-          (n): n is DeploymentView =>
-            n !== null && !isWorkingNode(n, homeDid) && n !== node,
+          (n): n is NodeView => n !== null && !isWorkingNode(n, homeDid) && n !== node,
         ),
     ),
   ];

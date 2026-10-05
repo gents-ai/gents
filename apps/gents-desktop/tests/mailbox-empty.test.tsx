@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import type { Shell } from "@/hooks/useShell";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
+import { fleetFor } from "./fleet-fixture";
 
 describe("empty mailbox", () => {
   it("says what arrives here and offers a session as the way to start new work", () => {
     const shell = {
       deployments: [],
+      fleet: fleetFor(),
       selectedDeployment: { mailboxItems: [] },
     } as unknown as Shell;
     render(<MailboxScreen shell={shell} />);

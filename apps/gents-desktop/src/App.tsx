@@ -59,6 +59,7 @@ import { initTheme } from "./ui/theme";
 
 import "./App.css";
 import { useSelectedSessionValue } from "./ui/hooks/useSelectedSession";
+import { useFleet } from "./ui/hooks/useFleet";
 
 function NavBinder({ children }: { children: ReactNode }) {
   const nav = useNav();
@@ -107,10 +108,14 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     bridge,
     route.name === "session" ? route.sessionId : undefined,
   );
-  const working = workingNode(
-    shell.deployments,
-    shell.snapshot?.bootstrap.initAgentDid,
+  const homeDid = shell.snapshot?.bootstrap.initAgentDid ?? null;
+  /* what the rail counts and lists: each node's sessions and mailbox */
+  const railScope = scopeContextOf(
+    shell,
+    useFleet(shell, (s) => s),
   );
+  const working = workingNode(shell.deployments, homeDid);
+
   useEffect(() => {
     initTheme();
     applyShellPlatform();
@@ -254,10 +259,8 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             root={shell.snapshot?.bootstrap.initToolRoot}
             ceiling={shell.snapshot?.bootstrap.initToolCeiling}
             online={Boolean(shell.snapshot?.client)}
-            mailboxCount={
-              mailboxInScope(defaultScope("mailbox"), scopeContextOf(shell)).length
-            }
-            recent={recentInScope(defaultScope("recents"), scopeContextOf(shell), 8)}
+            mailboxCount={mailboxInScope(defaultScope("mailbox"), railScope).length}
+            recent={recentInScope(defaultScope("recents"), railScope, 8)}
             working={working}
             nodeCount={shell.deployments.length}
             syncHealth={shell.snapshot?.client?.syncHealth}

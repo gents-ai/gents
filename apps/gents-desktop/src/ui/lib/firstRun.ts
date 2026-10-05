@@ -8,7 +8,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 export function isLocalAgent(
-  deployment: DeploymentView,
+  deployment: Pick<DeploymentView, "agentDid" | "source">,
   initAgentDid?: string | null,
 ): boolean {
   const source = deployment.source ?? "";

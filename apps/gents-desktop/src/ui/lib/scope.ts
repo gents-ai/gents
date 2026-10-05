@@ -8,6 +8,7 @@ import type {
   MailboxItemView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
+import type { FleetState } from "../../hooks/fleetStore";
 import { nodeDidOf, workingNode, type NodeDid } from "./nodes";
 
 export type NodeScope = "selected" | "working" | "all" | readonly NodeDid[];
@@ -28,17 +29,25 @@ export type ScopeContext = {
   selectedNodeDid: NodeDid | null;
   /** the home's agent DID, which marks the working node */
   homeDid: string | null | undefined;
+  /** each node's sessions and mailbox items from the fleet store, which keep
+      their identity while unchanged */
+  fleet: Pick<FleetState, "sessionsOf" | "mailboxOf">;
 };
 
-/* the context every screen has: the shell's nodes, its selection and its home */
-export const scopeContextOf = (shell: {
-  deployments: readonly DeploymentView[];
-  selectedAgentDid: string | null;
-  snapshot: { bootstrap: { initAgentDid?: string | null } } | null;
-}): ScopeContext => ({
+/* the context every screen has: the shell's nodes, its selection, its home
+   and the fleet's lists */
+export const scopeContextOf = (
+  shell: {
+    deployments: readonly DeploymentView[];
+    selectedAgentDid: string | null;
+    snapshot: { bootstrap: { initAgentDid?: string | null } } | null;
+  },
+  fleet: ScopeContext["fleet"],
+): ScopeContext => ({
   nodes: shell.deployments,
   selectedNodeDid: shell.selectedAgentDid,
   homeDid: shell.snapshot?.bootstrap.initAgentDid,
+  fleet,
 });
 
 /* the nodes a scope names, in the snapshot's order */
@@ -75,14 +84,16 @@ const agentPasses = (scope: Scope, agentId: string | null | undefined) =>
 /* every session the scope covers, across nodes, each still naming its node */
 export function sessionsInScope(scope: Scope, ctx: ScopeContext): SessionSummary[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
-    n.sessions.filter((s) => agentPasses(scope, s.behaviorId)),
+    (ctx.fleet.sessionsOf[nodeDidOf(n)] ?? []).filter((s) =>
+      agentPasses(scope, s.behaviorId),
+    ),
   );
 }
 
 /* open mailbox items the scope covers; the node is who filed them */
 export function mailboxInScope(scope: Scope, ctx: ScopeContext): MailboxItemView[] {
   return nodesInScope(scope, ctx).flatMap((n) =>
-    n.mailboxItems.filter(
+    (ctx.fleet.mailboxOf[nodeDidOf(n)] ?? []).filter(
       (m) => m.status === "open" && agentPasses(scope, m.targetBehaviorId),
     ),
   );

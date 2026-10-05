@@ -6,7 +6,7 @@
    the behavior is already on screen. */
 import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { NodeView } from "../../hooks/fleetStore";
 import {
   HoverCard,
   HoverCardContent,
@@ -36,7 +36,7 @@ export function AgentHoverCard({
   side = "right",
   children,
 }: {
-  deployment: DeploymentView;
+  deployment: NodeView;
   root?: string | null;
   ceiling?: string | null;
   /** where the card opens; the default suits the rail and lists, a
@@ -94,7 +94,7 @@ export function BehaviorHoverCard({
   side = "right",
   children,
 }: {
-  deployment: DeploymentView | null;
+  deployment: NodeView | null;
   behaviorId: string | null;
   description?: string;
   side?: "right" | "bottom" | "top" | "left";
