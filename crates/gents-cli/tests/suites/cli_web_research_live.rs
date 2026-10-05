@@ -18,6 +18,10 @@ use gents::Collection;
 use serde_json::Value;
 use uuid::Uuid;
 
+#[path = "../support/failure_artifacts.rs"]
+mod failure_artifacts;
+use failure_artifacts::FailureArtifacts;
+
 const SERVICE_ID: &str = "web-research-mcp";
 const DEFAULT_RESEARCH_QUESTION: &str = "How should an organization design a production deployment of the Model Context Protocol in 2026 to minimize prompt-injection and credential risks? Compare current MCP authorization and security guidance, the OAuth security best-current-practice, and at least two independent security analyses. Distinguish normative requirements from recommendations, identify disagreements, and cite primary sources.";
 
@@ -564,7 +568,22 @@ async fn wait_for_exact_research_tool_surfaces(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "starts the real Docker search/extraction stack and consumes substantial real model tokens"]
+/// Failed runs retain their home and server logs under
+/// `GENTS_WEB_RESEARCH_ARTIFACT_DIR` (default: the temporary directory's
+/// `gents-web-research-failures`), keeping at most five completed failures.
+/// Set `GENTS_WEB_RESEARCH_RETAIN_FAILURES=0` to clean failed runs too.
 async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Result<()> {
+    let root = std::env::var_os("GENTS_WEB_RESEARCH_ARTIFACT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("gents-web-research-failures"));
+    let retain = std::env::var_os("GENTS_WEB_RESEARCH_RETAIN_FAILURES").as_deref()
+        != Some(std::ffi::OsStr::new("0"));
+    let mut artifacts = FailureArtifacts::new(&root, retain)?;
+    let result = run_web_deep_research(&mut artifacts).await;
+    artifacts.finish(result)
+}
+
+async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let endpoint = std::env::var("GENTS_WEB_RESEARCH_MCP_ENDPOINT")
         .context("GENTS_WEB_RESEARCH_MCP_ENDPOINT must point at the real Docker fixture")?;
     anyhow::ensure!(
@@ -572,8 +591,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         "live acceptance requires the real Docker fixture endpoint, got {endpoint:?}"
     );
 
-    let tempdir = tempfile::tempdir().context("creating live web research tempdir")?;
-    let home_dir = tempdir.path().join("agent-home");
+    let home_dir = artifacts.path().join("agent-home");
     fs::create_dir_all(&home_dir)?;
     let home_arg = home_dir
         .to_str()
@@ -611,12 +629,14 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (serve, readiness) = spawn_server_with_ready_json(
+    let (serve, readiness) = crate::support::process::spawn_server_with_ready_json_in(
         &home_dir,
         port,
         &["--home", home_arg],
         &[("RUST_LOG", "warn")],
+        artifacts.path(),
     )?;
+    artifacts.attach_server(serve);
     anyhow::ensure!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "Gents server did not become ready: {readiness}"
@@ -1180,7 +1200,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         "Markdown contains citations absent from the validated source ledger; markdown={markdown_urls:?}, ledger={cited_urls:?}"
     );
 
-    let (_stdout, stderr) = serve.captured_output()?;
+    let (_stdout, stderr) = artifacts.captured_output()?;
     anyhow::ensure!(
         !stderr.contains("mock"),
         "live runtime unexpectedly referenced a mock service:\n{stderr}"
