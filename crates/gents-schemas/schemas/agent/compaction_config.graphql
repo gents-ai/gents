@@ -1,6 +1,6 @@
-type CompactionConfig @branchable @index(fields: ["agent_did", "compaction_id"], unique: true) {
+type CompactionConfig @branchable @index(fields: ["node_did", "compaction_id"], unique: true) {
     compaction_id: String
-    agent_did: String @index
+    node_did: String @index
     display_name: String
     strategy: String
     threshold: Float

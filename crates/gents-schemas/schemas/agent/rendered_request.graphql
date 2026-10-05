@@ -31,7 +31,7 @@
 # disk, not a reader of this node. #840's participant-boundary criterion is
 # therefore NOT met by this collection as shipped.
 type RenderedRequest @branchable {
-    # sha256 over the canonical (agent_did, session_id, request_scope,
+    # sha256 over the canonical (node_did, session_id, request_scope,
     # turn_index, attempt) tuple, where `request_scope` is the injective JSON
     # pair `[request_doc_id, capture_scope]`. Unique: exactly one capture per
     # provider attempt, ever. Reusing this key with a different canonical
@@ -47,9 +47,9 @@ type RenderedRequest @branchable {
     request_commit_cid: String @index @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
-    agent_did: String @index @immutable
+    node_did: String @index @immutable
     requester_did: String @immutable
-    behavior_id: String @immutable
+    agent_id: String @immutable
     # Which completion loop inside the request issued this provider call.
     # `inference.N` is the request's own loop; `compaction.N` and
     # `compaction_fallback.N` are the summarizer whose checkpoint is fenced by
