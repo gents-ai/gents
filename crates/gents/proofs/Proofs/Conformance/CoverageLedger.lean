@@ -893,7 +893,7 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges. Nested Tools no-lockout, reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1226,9 +1226,19 @@ def caseCoverage : List CoverageEntry :=
       "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "goal_operator_resume_on_cases"
+      "GoalOperatorResumeOnCases"
+      "goal::operator_resume::tests::generated_resume_on_cases_drive_account_preflight_and_receipt_recovery")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_config_reactivation_cases"
       "GoalConfigReactivationCases"
       "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_reset_resume_cases"
+      "GoalResetResumeCases"
+      "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "graph_pipeline_validation_cases"

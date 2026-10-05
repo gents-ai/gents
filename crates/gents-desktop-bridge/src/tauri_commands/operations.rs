@@ -279,7 +279,7 @@ pub async fn list_backends_with_health_for_core(
             .to_string();
         let catalog_scope = matches!(
             backend.auth,
-            gents::document_config::BackendAuth::PrincipalOAuth
+            gents::document_config::BackendAuth::PrincipalOAuth { .. }
         )
         .then_some(backend.agent_did.as_str());
         let models = observation

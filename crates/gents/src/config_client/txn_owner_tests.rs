@@ -27,6 +27,46 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
     }
 }
 
+#[tokio::test]
+async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::Local(Arc::clone(&node))
+        .add_schema("type ReadGateProbe { value: String }")
+        .await
+        .unwrap();
+    ConfigAccess::write_local(
+        &node,
+        "test.read_gate_seed",
+        r#"mutation { create_ReadGateProbe(input: {value: "ready"}) {_docID} }"#,
+    )
+    .await
+    .unwrap();
+
+    let gate = super::mutation_write_gate(&node);
+    let held = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.hold_mutation_gate_for_read",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        ConfigAccess::Local(Arc::clone(&node))
+            .transact_readonly("test.config_access_readonly", |txn| {
+                Box::pin(async move { txn.execute("{ ReadGateProbe { value } }").await })
+            }),
+    )
+    .await
+    .expect("read-only transaction waited on the mutation gate")
+    .unwrap();
+    assert_eq!(response["data"]["ReadGateProbe"][0]["value"], "ready");
+    drop(held);
+    node.shutdown().await;
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()

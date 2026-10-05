@@ -7,6 +7,10 @@ use clap::Parser;
 use gents::defra_node::NodeBuilder;
 use serde::de::DeserializeOwned;
 
+/// The account remove and usage read the desktop shares with `gents accounts`.
+pub mod accounts {
+    pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
+}
 mod caused_sessions;
 mod cli;
 mod commands;
@@ -419,6 +423,7 @@ async fn async_main() -> Result<()> {
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
+        Command::Accounts { command } => commands::accounts::dispatch(command).await,
         Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
         Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
         Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,

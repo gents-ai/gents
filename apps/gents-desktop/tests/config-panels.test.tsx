@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,12 +19,13 @@ import {
 } from "../src/ui/screens/agent/BehaviorsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
-import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
+import { InferencePanel, useAccounts } from "../src/ui/screens/agent/InferencePanel";
 import {
   ProfileEditor,
   ProfilesPanel,
   newProfileDocument,
 } from "../src/ui/screens/agent/ProfilesPanel";
+import { ProfileSheet } from "../src/ui/screens/agent/ProfileSheet";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
@@ -335,6 +343,8 @@ describe("configuration panels", () => {
         provider: "xai-oauth",
         enabled: true,
         accountId: "person@example.test",
+        label: "Grok 2",
+        accountRef: "g-2",
         credentialId: "private-credential-id",
         planType: null,
         accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
@@ -357,6 +367,7 @@ describe("configuration panels", () => {
               endpoint: "https://cli-chat-proxy.grok.com/v1",
               probeStatus: "healthy",
               models: ["grok-4.5"],
+              accountRef: "g-2",
             },
           ],
         }}
@@ -379,6 +390,7 @@ describe("configuration panels", () => {
         provider: "grok",
         authMethod: "grok_oauth",
         apiKey: null,
+        accountRef: "g-2",
       }),
     );
     expect(api.probeInferenceEndpoint).not.toHaveBeenCalled();
@@ -423,6 +435,751 @@ describe("configuration panels", () => {
     expect(screen.getByText("saved-model")).toBeVisible();
   });
 
+  describe("subscription backends and the account each references", () => {
+    const claudeBackend = (backendId: string, accountRef: string | null) => ({
+      ...deployment.inferenceBackends[0]!,
+      backendId,
+      name: backendId,
+      providerKind: "ClaudeCliSubscription" as const,
+      endpoint: "claude-cli://subscription",
+      accountRef,
+    });
+    const claudeDeployment = {
+      ...deployment,
+      inferenceBackends: [
+        claudeBackend("claude", null),
+        claudeBackend("claude-2", "acct-2"),
+        claudeBackend("claude-3", "acct-other"),
+      ],
+    };
+    const claudeAccount = (
+      credentialId: string,
+      accountRef: string | null,
+      accountId: string,
+      enabled = true,
+    ) => ({
+      credentialId,
+      agentDid: deployment.agentDid,
+      provider: "claude-subscription",
+      accountId,
+      planType: null,
+      accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+      lastRefresh: null,
+      enabled,
+      pendingSave: false,
+      accountRef,
+      label: `label-${credentialId}`,
+    });
+
+    it("never borrows another account for a backend in the list", async () => {
+      const { api, shell } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity", false),
+        claudeAccount("cred-2", "acct-2", "second-identity"),
+      ]);
+      render(<InferencePanel shell={shell} deployment={claudeDeployment} />);
+      expect(await screen.findAllByText(/· signed in$/)).toHaveLength(1);
+      expect(screen.getAllByText(/· disabled$/)).toHaveLength(1);
+      expect(screen.getAllByText(/account not on this node/)).toHaveLength(1);
+    });
+
+    for (const [item, credentialId, identity] of [
+      ["claude", "cred-original", "original-identity"],
+      ["claude-2", "cred-2", "second-identity"],
+    ] as const) {
+      it(`shows and disconnects the account ${item} references`, async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue([
+          claudeAccount("cred-original", null, "original-identity"),
+          claudeAccount("cred-2", "acct-2", "second-identity"),
+        ]);
+        render(
+          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
+        );
+        expect(await screen.findByText(identity)).toBeVisible();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: "Disconnect" }));
+        await user.click(screen.getByRole("button", { name: "Disconnect now" }));
+        expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+          deployment.agentDid,
+          credentialId,
+        );
+      });
+    }
+
+    for (const [item, auth] of [
+      ["claude-2", { kind: "principal_oauth", account_ref: "acct-2" }],
+      ["claude", { kind: "principal_oauth" }],
+    ] as const) {
+      it(`saving ${item} keeps its account reference`, async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue([]);
+        render(
+          <InferencePanel shell={shell} deployment={claudeDeployment} item={item} />,
+        );
+        const user = await replace("Name", `${item} edited`);
+        await user.click(screen.getByRole("button", { name: "Save" }));
+        await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+        const { patches } = api.patchConfigComponents.mock.calls[0][0];
+        expect(patches[0].changes.auth).toEqual(auth);
+      });
+    }
+
+    it("says a backend's account is not on this node and offers no reconnect", async () => {
+      const { api, shell } = harness();
+      api.listProviderAccounts.mockResolvedValue([
+        claudeAccount("cred-original", null, "original-identity"),
+      ]);
+      render(
+        <InferencePanel shell={shell} deployment={claudeDeployment} item="claude-3" />,
+      );
+      expect(await screen.findByText(/account not on this node/)).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: /connect/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("original-identity")).not.toBeInTheDocument();
+    });
+
+    describe("each account is its own row with its label and state, never expired", () => {
+      const row = (
+        backendId: string,
+        name: string,
+        providerKind: "ClaudeCliSubscription" | "XaiGrokOAuth" | "ChatGptCodex",
+        accountRef: string | null,
+      ) => ({ ...claudeBackend(backendId, accountRef), name, providerKind });
+      const keyed = (backendId: string, fields: object) => ({
+        ...deployment.inferenceBackends[0]!,
+        backendId,
+        name: backendId,
+        ...fields,
+      });
+      const rowsDeployment = {
+        ...deployment,
+        inferenceBackends: [
+          row("claude", "Claude", "ClaudeCliSubscription", null),
+          row("claude-work", "Work", "ClaudeCliSubscription", "acct-2"),
+          row("grok", "Grok", "XaiGrokOAuth", null),
+          row("grok-side", "Side", "XaiGrokOAuth", "g-2"),
+          row("chatgpt", "ChatGPT", "ChatGptCodex", null),
+          row("chatgpt-team", "Team", "ChatGptCodex", "c-2"),
+          keyed("openrouter", { providerKind: "OpenRouter", apiKeyConfigured: true }),
+          keyed("openrouter-env", {
+            providerKind: "OpenRouter",
+            apiKeyEnvVar: "OPENROUTER_API_KEY",
+          }),
+          keyed("local", {}),
+          keyed("local-2", {}),
+        ],
+      };
+      const account = (
+        provider: string,
+        accountRef: string | null,
+        label: string,
+        fields: object = {},
+      ) => ({
+        ...claudeAccount(
+          `private-credential-id-${label}`,
+          accountRef,
+          `${label}-identity`,
+        ),
+        provider,
+        label,
+        ...fields,
+      });
+      const accounts = [
+        account("claude-subscription", null, "Personal", {
+          accessTokenExpiresAt: "2001-01-01T00:00:00Z",
+        }),
+        account("claude-subscription", "acct-2", "Work"),
+        account("xai-oauth", null, "Grok"),
+        account("xai-oauth", "g-2", "Side", { enabled: false }),
+        account("chatgpt-codex", null, "Main"),
+        account("chatgpt-codex", "c-2", "Team"),
+      ];
+
+      it("clears another agent's accounts and ignores its late response", async () => {
+        const { api, shell } = harness();
+        let oldRead: (views: typeof accounts) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((resolve) => (oldRead = resolve)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result, rerender } = renderHook(({ did }) => useAccounts(shell, did), {
+          initialProps: { did: "agent-a" },
+        });
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        act(() => {
+          void result.current.reload();
+        });
+        rerender({ did: "agent-b" });
+        expect(result.current.accounts).toEqual([]);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldRead(accounts));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+        expect(api.listProviderAccounts).toHaveBeenLastCalledWith("agent-b");
+      });
+
+      it("keeps the latest reload when a snapshot read fails later", async () => {
+        const { api, shell } = harness();
+        let oldFailure: (error: Error) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((_, reject) => (oldFailure = reject)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result, rerender } = renderHook(
+          ({ current }) => useAccounts(current, "agent-a"),
+          { initialProps: { current: shell } },
+        );
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        rerender({ current: { ...shell, snapshot: { ...shell.snapshot } } });
+        expect(result.current.accounts).toEqual(accounts);
+        act(() => {
+          void result.current.reload();
+        });
+        expect(result.current.accounts).toEqual(accounts);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldFailure(new Error("older read failed")));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+      });
+
+      it("draws each row's label and state", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        const claude = "Anthropic / Claude (subscription)";
+        const grok = "Grok (subscription)";
+        const chatgpt = "ChatGPT / Codex (subscription)";
+        for (const meta of [
+          `· ${claude} · Personal · signed in`,
+          `· ${claude} · signed in`,
+          `· ${grok} · signed in`,
+          `· ${grok} · disabled`,
+          `· ${chatgpt} · Main · signed in`,
+          `· ${chatgpt} · signed in`,
+          "· OpenRouter · key stored",
+          "· OpenRouter · key from OPENROUTER_API_KEY",
+        ])
+          expect(await screen.findByText(meta)).toBeVisible();
+        expect(screen.getAllByText("· OpenAI compatible · no key")).toHaveLength(2);
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("opens a lapsed token's row as connected, with its label", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(
+          <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
+        );
+        expect(await screen.findByText("Connected")).toBeVisible();
+        expect(screen.getByText("Personal")).toBeVisible();
+        expect(screen.queryByText("Expired")).not.toBeInTheDocument();
+        expect(screen.queryByText("Expires")).not.toBeInTheDocument();
+        expect(screen.queryByText(/private-credential-id/)).not.toBeInTheDocument();
+      });
+
+      it("offers Add another on every subscription row", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [
+            { id: "openai", displayName: "OpenAI" },
+            { id: "anthropic", displayName: "Anthropic" },
+            { id: "grok", displayName: "Grok" },
+          ],
+        });
+        render(<InferencePanel shell={shell} deployment={rowsDeployment} />);
+        const user = userEvent.setup();
+        for (const [row, item] of [
+          ["Claude", "Add another Anthropic"],
+          ["Side", "Add another Grok"],
+          ["Team", "Add another OpenAI"],
+        ] as const) {
+          await user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+          expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+        }
+      });
+
+      it("opens a disabled account's row with its identity and Reconnect", async () => {
+        const { api, shell } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        render(
+          <InferencePanel shell={shell} deployment={rowsDeployment} item="grok-side" />,
+        );
+        expect(await screen.findByText("Disabled")).toBeVisible();
+        expect(screen.getByText("Side-identity")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Reconnect" })).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Disconnect" }),
+        ).not.toBeInTheDocument();
+      });
+
+      describe("rename, disconnect and remove an account from its row", () => {
+        /* Work runs two backends: one a profile uses, one nothing uses */
+        const usedDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-work-spare", "Work spare", "ClaudeCliSubscription", "acct-2"),
+          ],
+          inferenceProfiles: [
+            {
+              ...deployment.inferenceProfiles[0]!,
+              profile_id: "writer",
+              display_name: "Writer",
+              backend_id: "claude-work",
+            },
+          ],
+        };
+        const setup = (item?: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.renameProviderAccount = vi.fn().mockResolvedValue(undefined);
+          api.removeProviderAccount = vi.fn().mockResolvedValue(undefined);
+          render(
+            <InferencePanel shell={shell} deployment={usedDeployment} item={item} />,
+          );
+          return { api, user: userEvent.setup() };
+        };
+        const openMenu = async (
+          user: ReturnType<typeof userEvent.setup>,
+          row: string,
+        ) =>
+          user.click(
+            (await screen.findAllByRole("button", { name: `More for ${row}` }))[0]!,
+          );
+        /* none of the account actions edits a profile or a backend */
+        const expectNoConfigWrite = (api: MockApi) => {
+          expect(api.patchConfigComponents).not.toHaveBeenCalled();
+          expect(api.applyConfigComponents).not.toHaveBeenCalled();
+          expect(api.saveInferenceProfileConfig).not.toHaveBeenCalled();
+          expect(api.deleteBackendConfig).not.toHaveBeenCalled();
+        };
+
+        it("offers the account items on account rows and Remove in place of Delete on an added account's", async () => {
+          const { user } = setup();
+          await openMenu(user, "Work");
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          expect(
+            screen.queryByRole("menuitem", { name: "Delete backend…" }),
+          ).not.toBeInTheDocument();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "Claude");
+          for (const item of [
+            "Rename account…",
+            "Disconnect…",
+            "Remove account…",
+            "Delete backend…",
+          ])
+            expect(await screen.findByRole("menuitem", { name: item })).toBeVisible();
+          await user.keyboard("{Escape}");
+
+          await openMenu(user, "openrouter");
+          expect(
+            await screen.findByRole("menuitem", { name: "Delete backend…" }),
+          ).toBeVisible();
+          for (const item of ["Rename account…", "Disconnect…", "Remove account…"])
+            expect(
+              screen.queryByRole("menuitem", { name: item }),
+            ).not.toBeInTheDocument();
+        });
+
+        it("renames an account from its row and refuses a label another account shows", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Rename account…" }),
+          );
+          const dialog = await screen.findByRole("dialog");
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Personal");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+            "Personal",
+          );
+          expect(api.renameProviderAccount).not.toHaveBeenCalled();
+
+          await user.clear(within(dialog).getByRole("textbox"));
+          await user.type(within(dialog).getByRole("textbox"), "Work 2");
+          await user.click(within(dialog).getByRole("button", { name: "Save" }));
+          await waitFor(() =>
+            expect(api.renameProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.renameProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+            "Work 2",
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("disconnects an account from its row after naming its profiles", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          let dialog = await screen.findByRole("dialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          await user.click(
+            within(dialog).getByRole("button", { name: "Keep connected" }),
+          );
+          await waitFor(() =>
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+          );
+          expect(api.disconnectProviderAccount).not.toHaveBeenCalled();
+
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Disconnect…" }),
+          );
+          dialog = await screen.findByRole("dialog");
+          await user.click(
+            within(dialog).getByRole("button", { name: "Disconnect now" }),
+          );
+          await waitFor(() =>
+            expect(api.disconnectProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.disconnectProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("removes an account from its row after naming its profiles and backends", async () => {
+          const { api, user } = setup();
+          await openMenu(user, "Work");
+          await user.click(
+            await screen.findByRole("menuitem", { name: "Remove account…" }),
+          );
+          const dialog = await screen.findByRole("alertdialog");
+          expect(dialog).toHaveTextContent(
+            "These profiles use this account and fail their next turn until moved to another backend: Writer",
+          );
+          expect(dialog).toHaveTextContent("Deletes its unused backends: Work spare");
+          expect(dialog).toHaveTextContent("Keeps the backends a profile uses: Work");
+          const remove = within(dialog).getByRole("button", { name: /^Delete / });
+          expect(remove).toBeDisabled();
+          await user.type(within(dialog).getByRole("textbox"), "Work");
+          await user.click(remove);
+          await waitFor(() =>
+            expect(api.removeProviderAccount).toHaveBeenCalledTimes(1),
+          );
+          expect(api.removeProviderAccount).toHaveBeenCalledWith(
+            deployment.agentDid,
+            "private-credential-id-Work",
+          );
+          expectNoConfigWrite(api);
+        });
+
+        it("offers Remove account, not Delete backend, in an added account's Danger zone", async () => {
+          const { user } = setup("claude-work");
+          await screen.findByText("Work-identity");
+          const zone = screen.getByTestId("danger-zone");
+          expect(within(zone).queryByText(/Delete backend/)).not.toBeInTheDocument();
+          await user.click(within(zone).getByRole("button", { name: /account/ }));
+          expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+            "Deletes its unused backends: Work spare",
+          );
+        });
+      });
+
+      describe("rows draw reported usage only, read on open and on Refresh", () => {
+        const at = (minutes: number) =>
+          new Date(Date.now() + minutes * 60_000).toISOString();
+        const window = (label: string, usedPct: number, fields: object = {}) => ({
+          label,
+          windowMinutes: null,
+          usedPct,
+          resetsAt: at(133),
+          source: "header",
+          observedAt: at(-3),
+          lastKnown: false,
+          ...fields,
+        });
+        const view_ = (backendId: string, fields: object = {}) => ({
+          backendId,
+          windows: [],
+          plan: null,
+          note: null,
+          readAt: null,
+          readError: null,
+          read: null,
+          ...fields,
+        });
+        /* built when a test renders, so the times shown are exact */
+        const usage = () => [
+          view_("claude-work", {
+            /* the most-used window is neither the first, the last nor the longest */
+            windows: [window("7d", 30), window("5h", 81), window("1h", 10)],
+          }),
+          view_("chatgpt-team", {
+            windows: [window("5h", 20, { observedAt: at(-70), lastKnown: true })],
+          }),
+          view_("chatgpt", { note: "unknown" }),
+          view_("local", { note: "not reported" }),
+          view_("openrouter", {
+            note: "no cap on this key",
+            read: "unavailable: throttled",
+          }),
+          view_("claude", { note: "unknown" }),
+          view_("grok-side", { windows: [window("5h", 50)] }),
+        ];
+        const setup = (item?: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          api.readProviderUsage = vi.fn().mockResolvedValue(usage());
+          const view = render(
+            <InferencePanel shell={shell} deployment={rowsDeployment} item={item} />,
+          );
+          return { api, shell, view, user: userEvent.setup() };
+        };
+
+        it("reads usage once on open and not on a snapshot change", async () => {
+          const { api, shell, view } = setup();
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
+          expect(api.readProviderUsage).toHaveBeenCalledWith(
+            deployment.agentDid,
+            false,
+            null,
+          );
+          view.rerender(
+            <InferencePanel
+              shell={{ ...shell, snapshot: { bootstrap } } as Shell}
+              deployment={rowsDeployment}
+            />,
+          );
+          await act(async () => {});
+          expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
+        });
+
+        it("drops the previous agent's usage when the agent changes", async () => {
+          const { api, shell, view } = setup();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
+          api.readProviderUsage.mockRejectedValue(new Error("agent not running"));
+          view.rerender(
+            <InferencePanel
+              shell={shell}
+              deployment={{ ...rowsDeployment, agentDid: "did:key:z6MkTestOther" }}
+            />,
+          );
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(2));
+          await act(async () => {});
+          expect(screen.queryByText("5h 81%")).not.toBeInTheDocument();
+        });
+
+        it("keeps a Refresh result over an open read that lands later", async () => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          let land: (views: unknown) => void = () => {};
+          api.readProviderUsage = vi
+            .fn()
+            .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
+            .mockResolvedValueOnce([view_("claude", { windows: [window("5h", 12)] })]);
+          render(
+            <InferencePanel shell={shell} deployment={rowsDeployment} item="claude" />,
+          );
+          const user = userEvent.setup();
+          await user.click(await screen.findByRole("button", { name: "Refresh" }));
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          await act(async () => land(usage()));
+          expect(screen.getByText(/^12% used/)).toBeVisible();
+        });
+
+        it("draws the most-used window on a row and no percent without a window", async () => {
+          setup();
+          expect(await screen.findByText("5h 81%")).toBeVisible();
+          expect(screen.getByText("5h 20%")).toBeVisible();
+          /* the disabled Side account draws no usage; no other row has a window */
+          expect(screen.getAllByText(/\d+%$/).map((e) => e.textContent)).toEqual([
+            "5h 81%",
+            "5h 20%",
+          ]);
+        });
+
+        it("opens a row with each window's percent, reset, source and age", async () => {
+          setup("claude-work");
+          for (const pct of [30, 81, 10])
+            expect(
+              await screen.findByText(
+                new RegExp(
+                  `^${pct}% used · resets in 2h1[23]m \\(.+\\) · from response headers, 3m ago$`,
+                ),
+              ),
+            ).toBeVisible();
+        });
+
+        it("marks a stale window as last known", async () => {
+          setup("chatgpt-team");
+          expect(
+            await screen.findByText(
+              /^20% used · .* · from response headers, 1h10m ago · last known$/,
+            ),
+          ).toBeVisible();
+        });
+
+        for (const [item, texts] of [
+          ["chatgpt", ["unknown"]],
+          ["local", ["not reported"]],
+          ["openrouter", ["no cap on this key", "Not read: throttled"]],
+        ] as const)
+          it(`says why ${item} has no number`, async () => {
+            setup(item);
+            for (const text of texts)
+              expect(await screen.findByText(text)).toBeVisible();
+            expect(screen.queryByText(/% used/)).not.toBeInTheDocument();
+          });
+
+        it("draws no usage for a disabled account", async () => {
+          setup("grok-side");
+          expect(await screen.findByText("Disabled")).toBeVisible();
+          expect(screen.queryByText(/50%/)).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("button", { name: "Refresh" }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("Refresh reads the row's provider and redraws from the result", async () => {
+          const { api, user, view } = setup("claude");
+          await screen.findByText("unknown");
+          api.readProviderUsage.mockResolvedValueOnce([
+            view_("claude", { windows: [window("5h", 12)] }),
+          ]);
+          await user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            "claude-subscription",
+          );
+          expect(await screen.findByText(/^12% used/)).toBeVisible();
+          view.unmount();
+
+          const openrouter = setup("openrouter");
+          await screen.findByText("no cap on this key");
+          await openrouter.user.click(screen.getByRole("button", { name: "Refresh" }));
+          expect(openrouter.api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.agentDid,
+            true,
+            null,
+          );
+        });
+      });
+
+      describe("profiles pick accounts by provider and label", () => {
+        const pickDeployment = {
+          ...rowsDeployment,
+          inferenceBackends: [
+            ...rowsDeployment.inferenceBackends,
+            row("claude-gone", "Gone", "ClaudeCliSubscription", "acct-gone"),
+          ],
+        };
+        const editProfileOn = (backendId: string) => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(accounts);
+          render(
+            <ProfileEditor
+              shell={shell}
+              deployment={pickDeployment}
+              profile={{ ...deployment.inferenceProfiles[0]!, backend_id: backendId }}
+            />,
+          );
+          return userEvent.setup();
+        };
+
+        it("the profile backend field names accounts and skips unusable ones", async () => {
+          const user = editProfileOn("openrouter");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          expect(
+            await screen.findByRole("option", { name: /^Work\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Personal\s*Anthropic \/ Claude$/ }),
+          ).toBeVisible();
+          expect(
+            screen.getByRole("option", { name: /^Grok\s*Grok \/ xAI$/ }),
+          ).toBeVisible();
+          /* Side is disabled; Gone's account is not on this node */
+          expect(
+            screen.queryByRole("option", { name: /^Side/ }),
+          ).not.toBeInTheDocument();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        it("the profile backend field keeps an unusable backend that is the current one", async () => {
+          const user = editProfileOn("grok-side");
+          await user.click(screen.getByRole("combobox", { name: "Backend" }));
+          await screen.findByRole("option", { name: /^Work/ });
+          expect(screen.getByRole("option", { name: /^Side/ })).toBeVisible();
+          expect(
+            screen.queryByRole("option", { name: /^Gone/ }),
+          ).not.toBeInTheDocument();
+        });
+
+        const personalOff = accounts.map((a) =>
+          a.label === "Personal" ? { ...a, enabled: false } : a,
+        );
+        it("new profile preselects the first enabled account, skipping a disabled first one", () => {
+          expect(
+            newProfileDocument(rowsDeployment, undefined, personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects the asked backend when its account is usable", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude-work", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("new profile preselects another backend when the asked one's account is disabled", () => {
+          expect(
+            newProfileDocument(rowsDeployment, "claude", personalOff).backend_id,
+          ).toBe("claude-work");
+        });
+
+        it("a new profile sheet drafts from the accounts loaded before it opens", async () => {
+          const { api, shell } = harness();
+          api.listProviderAccounts.mockResolvedValue(personalOff);
+          const sheet = (open: boolean) => (
+            <ProfileSheet
+              shell={shell}
+              deployment={rowsDeployment}
+              open={open}
+              onClose={vi.fn()}
+            />
+          );
+          const view = render(sheet(false));
+          await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalled());
+          await act(async () => {});
+          view.rerender(sheet(true));
+          expect(
+            await screen.findByRole("combobox", { name: "Backend" }),
+          ).toHaveTextContent(/^Work/);
+        });
+
+        it("new profile preselects the provider's first account in resolver order", () => {
+          const workFirst = [accounts[1]!, accounts[0]!, ...accounts.slice(2)];
+          expect(
+            newProfileDocument(rowsDeployment, undefined, workFirst).backend_id,
+          ).toBe("claude-work");
+        });
+      });
+    });
+  });
+
   it("does not treat a disabled subscription credential as signed in", async () => {
     const { api, shell } = harness();
     api.listProviderAccounts.mockResolvedValue([
@@ -446,7 +1203,31 @@ describe("configuration panels", () => {
         }}
       />,
     );
-    expect(await screen.findByText(/not signed in/)).toBeVisible();
+    expect(await screen.findByText(/disabled/)).toBeVisible();
+  });
+
+  it("says off for a switched-off backend whose account is signed in", async () => {
+    const { api, shell } = harness();
+    api.listProviderAccounts.mockResolvedValue([
+      { provider: "xai-oauth", enabled: true, credentialId: "signed-in-credential" },
+    ]);
+    render(
+      <InferencePanel
+        shell={shell}
+        deployment={{
+          ...deployment,
+          inferenceBackends: [
+            {
+              ...deployment.inferenceBackends[0]!,
+              providerKind: "XaiGrokOAuth",
+              enabled: false,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(await screen.findByText(/· off$/)).toBeVisible();
+    expect(screen.queryByText(/signed in/)).not.toBeInTheDocument();
   });
 
   it("shows runtime execution defaults and backend model choices without expanding advanced settings", async () => {

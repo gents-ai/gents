@@ -344,6 +344,20 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     Ok(())
 }
 
+/// What `init` says when its sign-in added an account beside others instead
+/// of taking the provider's original slot, which the setup backend runs on.
+fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
+    (sign_in.result == gents::oauth_credential::SignInResult::Added
+        && sign_in.credential.account_ref.is_some())
+    .then(|| {
+        format!(
+            "This sign-in was stored as another account, {}. The backend set up here runs on \
+             the provider's original account; see `gents accounts`.",
+            gents::oauth_credential::effective_account_label(&sign_in.credential)
+        )
+    })
+}
+
 enum InlineCodexLoginState {
     Unauthenticated,
     ExistingCredential,
@@ -394,8 +408,14 @@ async fn maybe_inline_grok_login(
         return InlineGrokLoginState::Unauthenticated;
     }
     let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineGrokLoginState::ExistingCredential,
         Ok(None) => {}
@@ -410,11 +430,19 @@ async fn maybe_inline_grok_login(
     match crate::commands::grok_login::run_grok_login(
         access,
         agent_did,
-        &crate::commands::grok_login::GrokLoginOptions { provider },
+        &crate::commands::grok_login::GrokLoginOptions {
+            provider,
+            label: None,
+        },
     )
     .await
     {
-        Ok(outcome) => InlineGrokLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineGrokLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!("Grok login failed: {error:#}");
             InlineGrokLoginState::Unauthenticated
@@ -454,9 +482,14 @@ async fn maybe_inline_claude_login(
     }
     let provider =
         gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    // The credential lookup is provider-generic; the grok probe just owns the copy.
-    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineClaudeLoginState::ExistingCredential,
         Ok(None) => {}
@@ -472,6 +505,7 @@ async fn maybe_inline_claude_login(
         agent_did,
         &crate::commands::claude_login::ClaudeLoginOptions {
             provider,
+            label: None,
             manual: false,
             open_browser: true,
             client_id: None,
@@ -480,7 +514,12 @@ async fn maybe_inline_claude_login(
     )
     .await
     {
-        Ok(outcome) => InlineClaudeLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineClaudeLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!("Claude login failed: {error:#}");
             InlineClaudeLoginState::Unauthenticated
@@ -500,8 +539,14 @@ async fn maybe_inline_codex_login(
         return InlineCodexLoginState::Unauthenticated;
     }
     let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    match crate::commands::codex_auth_probe::load_oauth_credential(access, agent_did, &provider)
-        .await
+    // `init` writes a backend with no account reference, which runs on the original account.
+    match gents::oauth_credential::resolve_oauth_credential(
+        access,
+        agent_did,
+        &provider,
+        gents::oauth_credential::AccountPick::Reference(None),
+    )
+    .await
     {
         Ok(Some(_)) => return InlineCodexLoginState::ExistingCredential,
         Ok(None) => {}
@@ -517,6 +562,7 @@ async fn maybe_inline_codex_login(
         agent_did,
         &crate::commands::codex_login::CodexLoginOptions {
             provider,
+            label: None,
             client_id: None,
             issuer: None,
             device_auth: false,
@@ -524,7 +570,12 @@ async fn maybe_inline_codex_login(
     )
     .await
     {
-        Ok(outcome) => InlineCodexLoginState::Completed(outcome),
+        Ok(outcome) => {
+            if let Some(note) = added_account_note(&outcome.sign_in) {
+                eprintln!("{note}");
+            }
+            InlineCodexLoginState::Completed(outcome)
+        }
         Err(error) => {
             eprintln!(
                 "ChatGPT login did not complete: {error:#}\n\
@@ -1241,7 +1292,7 @@ fn wide_open_tools_id_for_agent(agent_did: &str) -> String {
 /// unauthenticated endpoint (local model server) stays explicit.
 fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth> {
     if backend.provider_kind.is_agent_scoped_oauth() {
-        return Ok(BackendAuth::PrincipalOAuth);
+        return Ok(BackendAuth::PrincipalOAuth { account_ref: None });
     }
     match (
         backend.api_key.as_deref(),
@@ -1498,6 +1549,52 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sign_in_fixture(
+        result: gents::oauth_credential::SignInResult,
+        account_ref: Option<&str>,
+    ) -> gents::oauth_credential::SignIn {
+        let mut credential = gents::claude_oauth::credential_from_login_tokens(
+            "did:key:z6MkTest",
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            &gents::claude_oauth::ClaudeLoginTokens {
+                access_token: "access-SECRET".into(),
+                refresh_token: "refresh-SECRET".into(),
+                expires_in: Some(60),
+                scope: None,
+                account_id: None,
+                organization_uuid: None,
+                account_uuid: None,
+            },
+            chrono::Utc::now(),
+        );
+        credential.account_ref = account_ref.map(str::to_owned);
+        credential.label = account_ref.map(|_| "Claude 2".to_owned());
+        gents::oauth_credential::SignIn {
+            doc_id: "bae-1".into(),
+            credential,
+            result,
+            identity_matched: false,
+            profiles: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn init_notes_a_sign_in_that_added_another_account() {
+        use gents::oauth_credential::SignInResult;
+        let note = added_account_note(&sign_in_fixture(SignInResult::Added, Some("acct-2")))
+            .expect("an added account is noted");
+        assert!(note.contains("Claude 2"), "{note}");
+        assert!(note.contains("gents accounts"), "{note}");
+        assert_eq!(
+            added_account_note(&sign_in_fixture(SignInResult::Added, None)),
+            None
+        );
+        assert_eq!(
+            added_account_note(&sign_in_fixture(SignInResult::Refreshed, Some("acct-2"))),
+            None
+        );
+    }
 
     /// A fake user home, so no test ever resolves a real broad path.
     fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
@@ -2522,7 +2619,7 @@ mod tests {
         backend.api_key = Some("ignored".to_string());
         assert_eq!(
             backend_auth_for_init(&backend).unwrap(),
-            BackendAuth::PrincipalOAuth
+            BackendAuth::PrincipalOAuth { account_ref: None }
         );
     }
 

@@ -104,6 +104,30 @@ impl EnrollmentDecisionService {
     }
 }
 
+impl EnrollmentDecisionService {
+    /// The operator check for a signed runtime command other than an
+    /// enrollment one: the signer is this runtime's identity, the signature
+    /// covers `payload`, and the nonce is consumed once. The caller checks
+    /// the command's time window first.
+    pub(crate) async fn authenticate_signed(
+        &self,
+        signer_did: &str,
+        payload: &[u8],
+        sig: &[u8],
+        nonce: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            signer_did == self.identity.did(),
+            "operator command signer does not own this runtime"
+        );
+        anyhow::ensure!(
+            self.identity.verify(signer_did, payload, sig).await?,
+            "operator command signature is invalid"
+        );
+        consume_operator_nonce(self.node.as_ref(), signer_did, nonce, Utc::now()).await
+    }
+}
+
 const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;
 
 /// Atomically consume one signed operator nonce before any protected read or

@@ -12,7 +12,7 @@ use crate::{
     resolve_home_dir,
 };
 
-fn resolve_home_identity(
+pub(crate) fn resolve_home_identity(
     home: Option<&std::path::Path>,
 ) -> Result<std::sync::Arc<dyn gents::AgentIdentity>> {
     let home_dir = resolve_home_dir(home);

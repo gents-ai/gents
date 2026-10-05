@@ -8,7 +8,7 @@ use crate::document_config::AdvertisedModel;
 pub use gents_loop::backend_provider::BackendProviderKind;
 
 /// Agent-scoped credential provider selected by each backend kind.
-pub(crate) trait BackendProviderOauthExt {
+pub trait BackendProviderOauthExt {
     fn oauth_provider(self) -> Option<&'static str>;
 }
 
@@ -741,6 +741,10 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
         };
 
         let models = discover_models(
@@ -782,6 +786,10 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
         };
 
         let models = discover_models(
@@ -852,6 +860,10 @@ mod tests {
             access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             last_refresh: None,
             enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
         }
     }
 

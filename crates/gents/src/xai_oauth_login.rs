@@ -257,6 +257,29 @@ where
     poll_device_token(http, &challenge, cancel).await
 }
 
+/// The provider account key of a Grok sign-in: `principal_type:principal_id`
+/// from the access token.
+///
+/// The claims are not signature-verified; they are trusted only as far as the
+/// TLS-protected token endpoint they came from. The key only recognizes and
+/// deduplicates an account: it is never an authorization, routing or request
+/// header input. A missing, malformed or non-JWT input gives `None`, never an
+/// error, so a bad claim cannot fail a sign-in or refresh.
+pub fn xai_account_key(access_token: &str) -> Option<String> {
+    let claims = crate::chatgpt_oauth_refresh::jwt_payload(access_token)?;
+    let claim = |name: &str| {
+        claims
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+    };
+    Some(format!(
+        "{}:{}",
+        claim("principal_type")?,
+        claim("principal_id")?
+    ))
+}
+
 pub fn credential_from_login_tokens(
     agent_did: impl Into<String>,
     provider: impl Into<String>,
@@ -285,6 +308,10 @@ pub fn credential_from_login_tokens(
         access_token_expires_at,
         last_refresh: Some(now),
         enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: xai_account_key(&tokens.access_token),
+        label: None,
     }
 }
 
@@ -325,5 +352,39 @@ mod tests {
             credential.access_token_expires_at,
             now + chrono::Duration::seconds(900)
         );
+    }
+
+    fn grok_login(access_token: String) -> OAuthCredential {
+        let tokens = XaiLoginTokens {
+            access_token,
+            refresh_token: "ref".into(),
+            id_token: None,
+            expires_in: Some(900),
+        };
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        credential_from_login_tokens("did:key:zA", "xai-oauth", &tokens, now)
+    }
+
+    #[test]
+    fn credential_from_tokens_keys_the_access_token_principal() {
+        let access = crate::oauth_credential::test_support::unsigned_jwt(serde_json::json!({
+            "principal_type": "user",
+            "principal_id": "principal-1",
+            "sub": "user-a"
+        }));
+        assert_eq!(
+            grok_login(access).provider_account_key.as_deref(),
+            Some("user:principal-1")
+        );
+    }
+
+    #[test]
+    fn credential_from_tokens_without_principal_has_no_key() {
+        let no_principal = crate::oauth_credential::test_support::unsigned_jwt(
+            serde_json::json!({ "sub": "user-a" }),
+        );
+        for access in [no_principal, "not-a-jwt".to_string()] {
+            assert_eq!(grok_login(access).provider_account_key, None);
+        }
     }
 }

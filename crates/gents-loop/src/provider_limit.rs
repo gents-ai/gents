@@ -281,10 +281,14 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
     }
 
     if usage_text || headers.usage_exhausted {
-        let resets_at = body_json
-            .as_ref()
-            .and_then(|json| json_resets_at(json, now))
-            .or_else(|| rendered_resets_at(body))
+        // A recorded rendering first: its time is absolute, a relative
+        // `resets_in_seconds` in its detail would move with the reader's clock.
+        let resets_at = rendered_resets_at(body)
+            .or_else(|| {
+                body_json
+                    .as_ref()
+                    .and_then(|json| json_resets_at(json, now))
+            })
             .or(headers.reset_at)
             .or(headers.retry_at);
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
@@ -434,12 +438,12 @@ fn delay_after(now: DateTime<Utc>, seconds: f64) -> Option<DateTime<Utc>> {
     now.checked_add_signed(chrono::Duration::try_milliseconds(millis)?)
 }
 
-fn epoch_seconds(value: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn epoch_seconds(value: &str) -> Option<DateTime<Utc>> {
     let seconds = value.parse::<i64>().ok().filter(|seconds| *seconds > 0)?;
     Utc.timestamp_opt(seconds, 0).single()
 }
 
-fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|at| at.with_timezone(&Utc))

@@ -11,6 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
+    accounts: &[gents::oauth_credential::AccountSummary],
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
     for profile in &bundle.config.inference_profiles {
@@ -33,6 +34,9 @@ pub(super) async fn diagnose_backends(
             "required_models": required,
             "ok": result.is_ok(),
         });
+        if let Some(account) = account_field(backend, accounts) {
+            report["account"] = account;
+        }
         match result {
             Ok(details) => report
                 .as_object_mut()
@@ -87,7 +91,7 @@ async fn backend_check(
         ),
         "backend is disabled or has no healthy probe observation"
     );
-    if matches!(backend.auth, BackendAuth::PrincipalOAuth) {
+    if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
     }
@@ -123,13 +127,85 @@ async fn backend_check(
     Ok(json!({"probe_status": observation.probe_status, "discovered_models": names, "error": null}))
 }
 
+/// The `account` a backend report names: the label of the account a principal
+/// OAuth backend runs on, `null` when that account is not on this node; absent
+/// for a backend that uses no account.
+fn account_field(
+    backend: &InferenceBackend,
+    accounts: &[gents::oauth_credential::AccountSummary],
+) -> Option<Value> {
+    gents::oauth_credential::backend_account(backend, accounts)
+        .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
+}
+
 const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
     "OAuth credential backend: diagnose uses the runtime probe; use config backend discover-models for explicit discovery";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::oauth_credential::AccountSummary;
     use std::sync::Arc;
+
+    fn claude_backend(account_ref: Option<&str>) -> InferenceBackend {
+        serde_json::from_value(json!({
+            "agent_did": "did:key:owner", "backend_id": "claude", "name": "Claude",
+            "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
+            "auth": BackendAuth::PrincipalOAuth { account_ref: account_ref.map(str::to_owned) },
+        }))
+        .unwrap()
+    }
+
+    fn claude_account(account_ref: Option<&str>, label: &str) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!(
+                "claude-subscription:did:key:owner{}",
+                account_ref.unwrap_or("")
+            ),
+            provider: "claude-subscription".into(),
+            account_ref: account_ref.map(str::to_owned),
+            label: label.into(),
+            identity: Some("identity-private".into()),
+            plan: None,
+            enabled: true,
+            default: false,
+            access_token_expires_at: chrono::Utc::now(),
+            connected_at: None,
+        }
+    }
+
+    #[test]
+    fn oauth_backend_rows_name_their_account() {
+        let accounts = [
+            claude_account(None, "Personal"),
+            claude_account(Some("acct-2"), "Work"),
+        ];
+        assert_eq!(
+            account_field(&claude_backend(Some("acct-2")), &accounts),
+            Some(json!("Work"))
+        );
+        assert_eq!(
+            account_field(&claude_backend(None), &accounts),
+            Some(json!("Personal"))
+        );
+        let mut keyed: InferenceBackend = claude_backend(None);
+        keyed.provider_kind = gents::BackendProviderKind::OpenAiCompatible;
+        keyed.auth = BackendAuth::Unauthenticated;
+        assert_eq!(account_field(&keyed, &accounts), None);
+    }
+
+    #[test]
+    fn an_oauth_backend_without_a_local_account_names_none() {
+        let accounts = [claude_account(Some("acct-2"), "Work")];
+        assert_eq!(
+            account_field(&claude_backend(Some("acct-other")), &accounts),
+            Some(Value::Null)
+        );
+        assert_eq!(
+            account_field(&claude_backend(None), &accounts),
+            Some(Value::Null)
+        );
+    }
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
@@ -138,7 +214,7 @@ mod tests {
         let backend: InferenceBackend = serde_json::from_value(json!({
             "agent_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": BackendAuth::PrincipalOAuth,
+            "auth": BackendAuth::PrincipalOAuth { account_ref: None },
         }))
         .unwrap();
         for (owner, status) in [
@@ -185,7 +261,7 @@ mod tests {
             "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
-        let reports = diagnose_backends(&access, &bundle).await;
+        let reports = diagnose_backends(&access, &bundle, &[]).await;
         let warnings = reports[0]["warnings"].as_array().expect("warnings");
         assert_eq!(warnings.len(), 1, "{reports:#?}");
         assert!(

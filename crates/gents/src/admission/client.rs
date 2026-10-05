@@ -55,7 +55,7 @@ pub(crate) struct AdmittedCompletionModel<M> {
 
 #[cfg(test)]
 impl<M> AdmittedCompletionModel<M> {
-    pub(super) fn for_test(inner: M, admission: AdmissionRegistry, connection: &str) -> Self {
+    pub(crate) fn for_test(inner: M, admission: AdmissionRegistry, connection: &str) -> Self {
         Self {
             inner,
             admission,

@@ -47,6 +47,24 @@ def resumeCases : List ResumeCase :=
 theorem cases_replay_explicit_expectations :
   ∀ c ∈ resumeCases, resume c.before c.request c.commit = (c.expected, c.outcome) := by decide
 
+structure ResumeOnCase where
+  name : String
+  before : Snapshot
+  targetAvailable : Bool
+  expected : Snapshot
+  outcome : Outcome
+  deriving DecidableEq, Repr
+
+def resumeOnCases : List ResumeOnCase :=
+  [ ⟨"unavailable_target_keeps_goal_and_publishes_nothing", initial, false, initial, .unavailable⟩
+  , ⟨"existing_child_is_recovered_after_target_disabled", published, false, published, .recovered⟩
+  ]
+
+theorem resumeOnCases_match :
+    ∀ c ∈ resumeOnCases,
+      resumeOn c.before request c.targetAvailable true = (c.expected, c.outcome) := by
+  decide
+
 theorem published_retry_is_noop : resume published request true = (published, .recovered) := by decide
 
 theorem stale_pause_after_resume_is_noop : controllerWrite published .active 0 .pause = published := by decide
@@ -95,6 +113,11 @@ def caseJson (c : ResumeCase) : String :=
   ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++ jsonString (outcome c.outcome) ++
   ",\"goal_status\":" ++ (match receiptStatus (c.expected, c.outcome) with | none => "null" | some value => status value) ++ "}"
 def resumeCasesJson : String := jsonArray (resumeCases.map caseJson)
+def resumeOnCasesJson : String := jsonArray (resumeOnCases.map fun c =>
+  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
+  ",\"target_available\":" ++ b c.targetAvailable ++
+  ",\"expected\":" ++ snapshotJson c.expected ++
+  ",\"outcome\":" ++ jsonString (outcome c.outcome) ++ "}")
 def configCasesJson : String := jsonArray (configCases.map fun c =>
   "{\"current\":" ++ status c.1 ++ ",\"target\":" ++ status c.2.1 ++ ",\"allowed\":" ++ b c.2.2 ++ "}")
 end Conformance.GoalOperatorResumeContracts

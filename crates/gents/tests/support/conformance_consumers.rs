@@ -567,11 +567,25 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_operator_resume_cases_drive_real_transactions",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::operator_resume::tests::generated_resume_on_cases_drive_account_preflight_and_receipt_recovery",
+            package: "gents",
+            source_path: "crates/gents/src/goal/operator_resume/tests.rs",
+            module_path: "goal::operator_resume::tests",
+            function: "generated_resume_on_cases_drive_account_preflight_and_receipt_recovery",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter",
             package: "gents",
             source_path: "crates/gents/src/goal/operator_resume/contract_tests.rs",
             module_path: "goal::operator_resume::contract_tests",
             function: "generated_goal_config_reactivation_cases_drive_transactional_setter",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/reset_resume/contract_tests.rs",
+            module_path: "goal::reset_resume::contract_tests",
+            function: "generated_goal_reset_resume_cases_drive_real_transactions",
         },
         ConformanceConsumer::RustTest {
             id: "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child",

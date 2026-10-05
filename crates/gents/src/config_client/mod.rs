@@ -28,6 +28,7 @@ pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
 mod inference_profile;
+mod profile_switch;
 mod retry;
 mod schema_contract;
 mod schema_install;
@@ -67,8 +68,18 @@ pub(crate) use desired_state::{
     collection_is_installed, read_desired_state_document_in_txn, validate_desired_state_plan,
     OutcomeSourceSchemaError,
 };
-pub use inference_backend::{load_inference_backend_in_txn, write_inference_backend_document};
-pub use inference_profile::write_inference_profile_document;
+pub(crate) use inference_backend::write_inference_backend_in_txn;
+pub use inference_backend::{
+    list_inference_backends_in_txn, load_inference_backend_in_txn, serving_accounts,
+    write_inference_backend_document,
+};
+pub use inference_profile::{
+    behavior_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
+};
+pub use profile_switch::{
+    switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
+    SWITCH_COST,
+};
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::SchemaFieldDelta;
 pub(crate) use schema_install::SchemaInstallMismatch;

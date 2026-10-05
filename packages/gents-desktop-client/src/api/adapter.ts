@@ -24,9 +24,9 @@ import type {
 } from "../types.js";
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createProviderAccountCommands } from "./providerAccounts.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
-import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
@@ -257,33 +257,22 @@ export function createDesktopApiAdapter(
         "desktop_inference_backend_recommendation",
         { request },
       ),
-    codexLogin: (agentDid, provider) =>
+    codexLogin: (agentDid, provider, label) =>
       invokeDesktop<CodexLoginResult>("desktop_codex_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelCodexLogin: () => invokeDesktop<void>("desktop_codex_login_cancel"),
-    grokLogin: (agentDid, provider) =>
+    grokLogin: (agentDid, provider, label) =>
       invokeDesktop<GrokLoginResult>("desktop_grok_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
-    claudeLogin: (agentDid, provider) =>
+    claudeLogin: (agentDid, provider, label) =>
       invokeDesktop<ClaudeLoginResult>("desktop_claude_login", {
-        request: { agentDid, provider: provider ?? null },
+        request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
-    listProviderAccounts: (agentDid) =>
-      invokeDesktop<ProviderAccountView[]>("desktop_provider_accounts_list", {
-        request: { agentDid },
-      }),
-    disconnectProviderAccount: (agentDid, credentialId) =>
-      invokeDesktop<void>("desktop_provider_account_disconnect", {
-        request: { agentDid, credentialId },
-      }),
-    retrySaveProviderAccount: (agentDid, provider) =>
-      invokeDesktop<ProviderAccountView>("desktop_provider_account_retry_save", {
-        request: { agentDid, provider },
-      }),
+    ...createProviderAccountCommands(invokeDesktop),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

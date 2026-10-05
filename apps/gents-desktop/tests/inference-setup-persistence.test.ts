@@ -165,6 +165,43 @@ describe("inference setup persistence", () => {
     expect(plan.profileId).toBe("profile-local-2");
   });
 
+  it("never treats another account reference as the same connection", () => {
+    const deployment = structuredClone(fixtureDeployment);
+    deployment.inferenceBackends = [
+      {
+        ...deployment.inferenceBackends[0]!,
+        backendId: "claude-2",
+        providerKind: "ClaudeCliSubscription",
+        endpoint: "claude-cli://subscription",
+        authKind: "principal_oauth",
+        accountRef: "acct-2",
+      },
+    ];
+    const plan = buildInferenceSetupPlan({
+      deployment,
+      provider: "anthropic",
+      apiKey: "",
+      oauth: true,
+      discovery: {
+        ...discovery,
+        providerKind: "ClaudeCliSubscription",
+        effectiveEndpoint: "claude-cli://subscription",
+        openaiWireApi: null,
+      },
+      model: "claude-sonnet",
+      recommendation,
+      settings: {
+        contextWindow: "",
+        maxOutputTokens: "",
+        temperature: "1",
+        topP: "0.95",
+        reasoningEffort: "",
+        maxConcurrent: "1",
+      },
+    });
+    expect(plan.document.inference_backends?.[0]?.backend_id).not.toBe("claude-2");
+  });
+
   it("plans backend, exact model defaults, and Setup behavior in one document", () => {
     const deployment = structuredClone(fixtureDeployment);
     deployment.inferenceBackends = [

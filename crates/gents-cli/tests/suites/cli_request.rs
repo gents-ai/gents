@@ -632,6 +632,55 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     assert!(text_output.contains("Backgrounded tools:"));
     assert!(text_output.contains("await_mode=background"));
     assert!(text_output.contains(&child_request_id));
+    assert_eq!(json_output.get("blocked"), Some(&Value::Null));
+
+    let limited_request_id = format!("show-limited-{}", Uuid::new_v4().simple());
+    let failure = "provider usage limit reached (resets at 2030-01-01T00:00:00Z): The usage limit has been reached";
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{purpose: "normal",
+                    request_id: "{limited_request_id}", agent_did: "{agent_did}",
+                    behavior_id: "parent-behavior", session_id: "{session_id}",
+                    content: "limited", lifecycle_state: "failed",
+                    failure_reason: "{failure}", created_at: "2026-05-20T10:01:00Z"
+                }}) {{ _docID }}
+                create_InferenceCall(input: {{
+                    call_id: "{limited_request_id}-call", request_id: "{limited_request_id}",
+                    call_seq: 1, backend_id: "studios-cluster", behavior_id: "parent-behavior",
+                    agent_did: "{agent_did}", call_kind: "inference", attempt: 1,
+                    call_state: "failed", failure_reason: "{failure}",
+                    queued_at: "2026-05-20T10:01:00Z", started_at: "2026-05-20T10:01:00Z",
+                    ended_at: "2026-05-20T10:01:01Z"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    )
+    .await?;
+    let limited = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "show",
+            "--graphql",
+            &graphql,
+            "--output",
+            "json",
+            &limited_request_id,
+        ],
+    )?;
+    assert_eq!(
+        limited.pointer("/blocked/reason").and_then(Value::as_str),
+        Some("usage_limit"),
+        "{limited}"
+    );
+    assert_eq!(
+        limited
+            .pointer("/blocked/resets_at")
+            .and_then(Value::as_str),
+        Some("2030-01-01T00:00:00Z")
+    );
 
     Ok(())
 }
