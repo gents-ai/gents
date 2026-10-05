@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Desktop shell (macOS): a two-finger swipe goes back or forward. AppKit
+  recognises the gesture, an arrow handle travels in from the pane's edge
+  and fills as it nears the commit distance, and content that can still
+  scroll sideways keeps the swipe until it reaches its edge.
 - Desktop shell: Back and Forward in the window bar replace the session
   screen's back link, with a real forward cursor. Cmd+[ / Cmd+] on macOS,
   Alt+Left / Alt+Right on Windows and Linux, and mouse side buttons on all

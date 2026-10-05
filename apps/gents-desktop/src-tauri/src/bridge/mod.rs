@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod swipe;
 #[cfg(desktop)]
 mod window_close;
 #[cfg(target_os = "macos")]
@@ -52,7 +54,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init());
     #[cfg(target_os = "macos")]
     let builder = builder.invoke_handler(tauri::generate_handler![
-        windows::desktop_window_setup_complete
+        windows::desktop_window_setup_complete,
+        swipe::swipe_scroll_edges
     ]);
     #[cfg(desktop)]
     let builder = builder
@@ -60,6 +63,8 @@ pub fn run() {
             setup_tray(app)?;
             #[cfg(target_os = "macos")]
             windows::setup(app)?;
+            #[cfg(target_os = "macos")]
+            swipe::setup(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
