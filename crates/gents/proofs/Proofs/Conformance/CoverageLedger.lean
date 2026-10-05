@@ -1550,7 +1550,7 @@ def caseCoverage : List CoverageEntry :=
       "protected_replay_compaction_cases"
       "ProtectedReplayCompactionCases"
       "conformance::prompt_assembly::generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint"
-      "Native selection and checkpoint validation retain every independently required signed Claude row before summary. A long required chain may still end in CannotFit at the rebuilt full-request guard; retirement of older requirements is deferred to #1693, not inferred from the retention target. The generated cases do not themselves invoke the summary provider.")
+      "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "compaction_cursor_cases"

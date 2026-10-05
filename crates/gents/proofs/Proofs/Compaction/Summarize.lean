@@ -89,10 +89,9 @@ theorem pairSafeBoundary_pending_empty (msgs : List MessageRow) (limit : Nat) :
   · rw [h]; rfl
   · exact of_decide_eq_true (List.mem_filter.mp h).2
 
-/-- A reduction may summarize no farther than the first independently required
-Claude replay row. The retention target selects a preferred boundary; it is
-not the full provider context ceiling. Returning `none` means there is no
-useful protected prefix to summarize before provider IO. -/
+/-- The retention target selects a preferred boundary within the replay owner's
+ceiling. It is not the full provider context ceiling. Returning `none` means
+there is no useful protected prefix to summarize before provider IO. -/
 def protectedPairSafeBoundary (msgs : List MessageRow) (rawIndex maxPrefix : Nat) : Option Nat :=
   let split := min (pairSafeBoundary msgs rawIndex) (pairSafeBoundary msgs maxPrefix)
   if split == 0 then none else some split
@@ -170,6 +169,70 @@ theorem preparedProtectedReplayCheckpoint_uses_replay_owner
             exact ⟨split, rfl,
               protectedPairSafeBoundary_bounded msgs rawIndex maxPrefix split hs,
               by simpa only [bne_iff_ne, ne_eq, not_not] using haligned, hp⟩
+
+/-- Required reasoning is accepted only with the ordinary prefix that produced
+it (`ReplayFrontier.turnOk`). A summary may change that prefix even if it leaves
+the required row intact. The provider can require the reasoning block, so
+omitting it after a failed capture check is not a valid recovery.
+
+No owner retires required coordinates during a request or supplies new capture
+evidence for a summarized prefix. Conservatively forbid prefix summarization
+while any coordinate remains required; a fresh request without requirements
+keeps its ordinary retention policy. Validate associations first so malformed,
+duplicate and absent coordinates retain their existing errors. -/
+def replayReductionCeiling (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
+    Except PromptAssembly.ClaudeMap.MapError (Option Nat) :=
+  match PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows 0 with
+  | .error error => .error error
+  | .ok _ => .ok (if required.isEmpty then none else some 0)
+
+theorem replayReductionCeiling_open_round_is_zero
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) (ceiling : Option Nat)
+    (hopen : required ≠ [])
+    (h : replayReductionCeiling required rows = .ok ceiling) :
+    ceiling = some 0 := by
+  have hnonempty : required.isEmpty = false := by
+    cases required with
+    | nil => exact absurd rfl hopen
+    | cons _ _ => rfl
+  unfold replayReductionCeiling at h
+  split at h
+  · simp at h
+  · simp only [hnonempty, Bool.false_eq_true, if_false, Except.ok.injEq] at h
+    exact h.symm
+
+theorem replayReductionCeiling_closed_round_is_unbounded
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) (ceiling : Option Nat)
+    (hclosed : required = [])
+    (h : replayReductionCeiling required rows = .ok ceiling) :
+    ceiling = none := by
+  subst hclosed
+  unfold replayReductionCeiling at h
+  split at h
+  · simp at h
+  · simp only [List.isEmpty_nil, if_true, Except.ok.injEq] at h
+    exact h.symm
+
+/-- A zero ceiling admits no split at all, whatever the retention target picks. -/
+theorem protectedPairSafeBoundary_zero (msgs : List MessageRow) (rawIndex : Nat) :
+    protectedPairSafeBoundary msgs rawIndex 0 = none := by
+  have h : pairSafeBoundary msgs 0 = 0 := Nat.le_zero.mp (pairSafeBoundary_le msgs 0)
+  simp [protectedPairSafeBoundary, h]
+
+/-- The composed owner refuses an open round instead of summarizing a prefix the
+required turns depend on. -/
+theorem openRoundReduction_cannot_fit (msgs : List MessageRow) (rawIndex : Nat)
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
+    (haligned : rows.length = (msgs.filter (fun row => row.role == .assistant)).length) :
+    prepareProtectedReplayCheckpoint msgs rawIndex 0 required rows =
+      .error .cannotFit := by
+  have hne : (rows.length != (msgs.filter (fun row => row.role == .assistant)).length)
+      = false := by simp [haligned]
+  simp [prepareProtectedReplayCheckpoint, hne, protectedPairSafeBoundary_zero]
 
 /-! ## Pair closure of the retained tail -/
 
