@@ -590,3 +590,30 @@ fn a_file_with_a_single_endless_line_is_refused_not_buffered() {
         .0;
     assert!(e.contains("longer than 65536 bytes"), "{e}");
 }
+
+#[test]
+fn archives_and_compressed_files_are_refused_as_binary_never_expanded() {
+    let dir = TempDir::new();
+    // A real gzip stream of a megabyte of zeros is about a kilobyte: the file is judged by its
+    // bytes as they are, and nothing is decompressed.
+    let gzip: Vec<u8> = [
+        &[0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x02, 0x03][..],
+        &[0xed; 40],
+        &[0; 12],
+    ]
+    .concat();
+    let zip: Vec<u8> = [&b"PK\x03\x04\x14\x00\x00\x00\x08\x00"[..], &[0; 24]].concat();
+    for (name, bytes) in [
+        ("a.csv.gz", &gzip),
+        ("b.csv", &gzip),
+        ("c.zip", &zip),
+        ("d.json", &zip),
+        ("e", &gzip),
+    ] {
+        let path = dir.write(name, bytes);
+        let e = crate::run(&request_for("bar", path.to_str().unwrap()))
+            .unwrap_err()
+            .0;
+        assert!(e.contains("looks binary"), "{name}: {e}");
+    }
+}
