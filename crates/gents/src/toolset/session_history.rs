@@ -545,6 +545,9 @@ impl Tool for SessionHistoryTool {
     type Args = SessionHistoryParams;
     type Output = String;
 
+    /// Anthropic Messages rejects `oneOf`, `allOf` and `anyOf` at the top
+    /// level of `input_schema`, so per-action requirements are enforced by
+    /// `call` with a recovery hint rather than by conditional schema clauses.
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -561,11 +564,7 @@ impl Tool for SessionHistoryTool {
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
                     "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."}
-                },
-                "allOf":[
-                    {"if":{"required":["action"],"properties":{"action":{"const":"search"}}},"then":{"required":["query"]}},
-                    {"if":{"required":["action"],"properties":{"action":{"enum":["get","transcript"]}}},"then":{"required":["session_id"]}}
-                ]
+                }
             }),
         }
     }
