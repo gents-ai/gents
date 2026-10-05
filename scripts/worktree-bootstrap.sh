@@ -69,6 +69,13 @@ clone_dir "$repo_root/target" "$dest/target" "cargo target/"
 # with incremental=false) and just wastes space in the clone.
 rm -rf "$dest/target/debug/incremental" "$dest/target/release/incremental"
 
+# This helper embeds its source manifest directory to locate the executable
+# Lean model. A copied library must not keep reading another worktree's proofs.
+if [ -d "$dest/target" ] && [ -f "$dest/crates/gents-lean-contract/Cargo.toml" ]; then
+    echo "invalidating cloned Lean contract source paths ..."
+    cargo clean --locked --manifest-path "$dest/Cargo.toml" --target-dir "$dest/target" -p gents-lean-contract
+fi
+
 # Lean caches are only valid against an identical dependency manifest.
 proofs="crates/gents/proofs"
 if cmp -s "$repo_root/$proofs/lake-manifest.json" "$dest/$proofs/lake-manifest.json" 2>/dev/null; then
