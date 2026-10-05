@@ -75,6 +75,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
     pub(crate) request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
+    pub(crate) request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub(crate) request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub(crate) inference_registry_cases: Vec<serde_json::Value>,
     pub(crate) trigger_dispatch_case_count: usize,
@@ -1297,6 +1298,11 @@ pub(crate) fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryC
 
 pub(crate) fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {
     &lean_contract_snapshot().request_execution_lease_cases
+}
+
+pub(crate) fn lean_request_execution_lease_observed_cases(
+) -> &'static [LeanRequestExecutionObservedCase] {
+    &lean_contract_snapshot().request_execution_lease_observed_cases
 }
 
 pub(crate) fn lean_request_execution_lease_trace_cases(
