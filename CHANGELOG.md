@@ -58,6 +58,20 @@ source consistency checks, not a separate runtime compatibility version.
   re-initialize it with a file or `macos-keychain` identity. Existing stores
   enable access control in place on their next start.
 
+- `OAuthCredential` gains optional account fields (account reference,
+  provider account key, label and connection time) by baseline re-pin; there
+  is deliberately no migration step. A store created by an earlier build fails
+  `ensure_migrations` with `UnknownLineage` for `OAuthCredential`: reset it
+  and sign in again (#2116).
+
+- `Goal` gains an optional `auto_resume_at_reset` field by baseline re-pin;
+  there is deliberately no migration step. A store created by an earlier build
+  fails `ensure_migrations` with `UnknownLineage` for `Goal`: reset it (#2121).
+
+- `codex-login`, `claude-login` and `grok-login` accept only their own
+  `--provider` value. Other values stored a sign-in that no backend read
+  (#2119).
+
 - `Tools.self_config.self_config_dry_run` is renamed `self_config_preview`
   (#2062). It grants the `config` preview verb; it never blocked writes. There
   is no alias: rewrite stored Tools documents and manifests that set the old
@@ -204,6 +218,136 @@ source consistency checks, not a separate runtime compatibility version.
   setup wizard does not offer it yet. Nodes on a build without the tolerant
   backend decode (under Changed) fail to list backends once a peer has one.
 
+- Several accounts per provider from the CLI (#2119). `codex-login`,
+  `claude-login` and `grok-login`, and the sign-ins in `gents init` and the
+  desktop, add the account you signed in to, or refresh it when it is already
+  stored; the result JSON gains `label` and `result` (`added` or `refreshed`),
+  and `--label` names or renames the account. A provider's second and later
+  accounts each get their own backend, from the provider's default endpoint.
+  `gents accounts list|label|disable|remove` manages them; `remove` deletes the
+  tokens on this node and removes the backend sign-in created for the account
+  unless a profile uses it. `gents diagnose` adds an `accounts` array to
+  `checks.chatgpt_auth`, `xai_auth` and `claude_auth` (the existing fields
+  still describe each provider's first account), backend rows name their
+  account, and `codex-auth-probe` and `grok-auth-probe` print one block per
+  account. A browser already signed in to an account may sign in to it again:
+  the command then reports `refreshed` and says how to pick another account.
+  Backends created for added accounts replicate to the agent's other nodes and
+  appear in `gents config export`, but accounts stay on the node that signed
+  in: elsewhere those backends fail closed, and `gents accounts list` marks
+  them "account not on this node". On the desktop, Reconnect to a different
+  account adds it instead of replacing the one shown, and each backend row
+  shows and disconnects the account it references (a backend with no account
+  reference: the provider's original account); and the desktop adds and
+  manages them from each provider's rows (#2124). After you remove a provider's
+  last account, the next sign-in becomes its original account again, and
+  backends with no account reference use it, deliberately. Any sign-in that
+  becomes a provider's original account (the first one on a node, or the first
+  after removing the last) prints the profiles that use it, and the result JSON
+  lists them in `profiles`.
+
+- A profile names the account it runs on (#2120). `gents config profile set
+  --file <profile.json> --account <account>` creates a profile on one of your
+  accounts (by label, `credential_id` or `account_ref`; `--provider` narrows
+  a label two providers share), `--provider <provider>` alone picks the
+  provider's earliest-connected enabled account and says so, and
+  `gents config profile set-account <profile> <account>` moves a profile to
+  another account of the same provider.
+  Creating a profile on, or moving it to, a disabled account or one that is
+  not on this node is refused, and the error lists the enabled accounts; other
+  edits of such a profile are allowed. `config profile list` and `show` name
+  each profile's account and whether it is enabled, disabled or not on this
+  node. When a turn is refused because its profile's (or its compaction
+  profile's) account is disabled or not on this node, `gents chat` names the
+  account and the `set-account` command; a sign-in whose refresh fails
+  (expired or revoked), or that was disabled or removed while in use, fails
+  with an error that names the account. `gents trace timeline` call rows gain
+  `account`, the label of the account that served the call; a call from
+  before the account was signed in at its backend shows none. Nothing moves a
+  profile to another account except these commands.
+
+- Provider usage is kept per node and provider account (#1525). ChatGPT and
+  Claude subscription responses and OpenAI-compatible API-key responses record
+  the usage headers the provider sends in a new local `ProviderAccountUsage`
+  collection, owned by the agent and never stored on the sign-in. Usage for
+  ChatGPT, Claude, Grok and OpenRouter accounts can also be read on demand;
+  reads within the last few minutes are skipped, and nothing polls. An
+  on-demand read renews an expired sign-in the
+  same way a request would; if renewal fails the account shows its sign-in as
+  expired.
+  Usage is stale after 15 minutes and dropped after 60 minutes or at its reset
+  time. The Codex app-server shim answers `account/rateLimits/read` from the
+  stored usage of the session's account without calling the provider. Earlier
+  builds open the store unchanged and ignore the new collection.
+- `gents accounts list` shows each account's usage (#1525): the window, the
+  percent used, the reset time with a countdown, where the number came from
+  and how old it is, or "unknown", "not reported" or "no cap on this key"
+  when there is no number. `--output json` adds `usage` and
+  `read` to every row. With a runtime running, listing asks it to read
+  ChatGPT, Claude, Grok and OpenRouter usage, skipping disabled accounts and
+  accounts read in the last five minutes; `--refresh` fails instead when no
+  runtime is running. The request is signed with the home identity and
+  accepted only from the runtime's own operator, once. The model's
+  config tool gains `backend accounts`, a read-only list of accounts and
+  account-free backends with their state, the profiles that use them and
+  their last stored usage; it shows no tokens, sign-in identities or ids,
+  contacts no provider and cannot change accounts. `gents accounts remove`
+  also deletes the removed account's stored usage. The Codex shim's
+  `account/read` reports a ChatGPT session's stored plan (with no email)
+  instead of an API key, and `account/rateLimits/read` reports only fresh
+  credits, only a ChatGPT session's plan, and answers empty when usage
+  cannot be read.
+- A turn stopped by a usage limit, or by a disabled, removed or signed-out
+  account, carries a structured blocked value (#2121): the reason, the
+  account's label and provider, the profile and the behaviors that use it,
+  the reset time when the provider reported one, and the command that moves
+  the profile. `gents request show` and `gents goal show` print it (JSON
+  `blocked`); "reset not reported" when there is no reset. A limit hit by a
+  compaction call names the compaction profile's account. The failure text is
+  unchanged. A Goal now reads the call that ended its request, so an earlier
+  failed retry no longer hides a later usage limit. A recorded reset no
+  longer moves when read later.
+- Move a profile to another account in one step (#2121). `gents config
+  profile set-account <profile>` lists the provider's other enabled accounts
+  whose backend offers the profile's model, each with its stored usage (where
+  it came from and how old it is) or "unknown", the behaviors and plugin model
+  slots that use the profile and the cost: after the move the provider's
+  prompt cache starts empty, so the next turns are slower and use more of the
+  new account's quota. With an account it moves the profile, and every
+  behavior, plugin slot and session on it uses that account from its next
+  turn; `--with-compaction` also moves the other profiles of those behaviors
+  that are on the same account. A disabled or removed account, another
+  provider's account, or one whose catalog does not offer the model is
+  refused; when no account qualifies the error says how to add one.
+  `gents goal resume-on <account> --from <request>` moves the profile that
+  hit a usage limit and resumes the Goal; retrying with the same `--from`
+  returns the same continuation.
+- A usage-limited Goal can resume by itself at the reset time the provider
+  reported (#2121). `gents goal set --auto-resume on` turns it on per Goal
+  (off by default; the model's goal tools cannot set it). The Goal resumes
+  once, on the same account, when the reset passes; not when the provider
+  reported no reset, not after its profile moved to another account, and not
+  when that account is disabled or removed. A Goal limited again resumes at
+  its new reset. A restart keeps the schedule. `gents goal show` shows
+  `auto_resume_at_reset`.
+
+- The desktop draws every signed-in account as its own backend row (#2124):
+  its label, whether it is signed in, disabled or not on this node (or "off"
+  when the backend is switched off), and a usage bar from the last stored
+  observation. Opening the row shows each usage window with its reset
+  countdown, source and age, or "unknown", "not reported" or "no cap on this
+  key", and a Refresh button; opening the Providers page asks the runtime to
+  read usage, and nothing polls. "Add another <Provider>" and "New backend"
+  sign in a
+  further account for every provider, with an optional label, and say whether
+  the sign-in added an account or refreshed one already stored. The row menu
+  renames, disconnects and removes an account. A row no longer shows a
+  subscription as expired when its access token lapses, since the runtime
+  renews it on use. The profile editor names subscription backends by provider
+  and label, skips disabled and missing accounts, and a new profile starts on
+  the provider's earliest-connected enabled account. "Refresh models" reads the
+  row's own account.
+
 - An xAI API key is a named backend option (#2123). `--backend-preset xai`
   configures an `OpenAiCompatible` backend at `https://api.x.ai/v1` on the
   Responses wire that reads its key from `XAI_API_KEY`; `--model-name` is
@@ -307,6 +451,34 @@ source consistency checks, not a separate runtime compatibility version.
   they are reported unavailable (not pending). Looking up that backend by ID
   and `gents config` export still fail, naming the kind. Update older nodes
   before adding a backend of a new kind.
+
+- Subscription (principal OAuth) backends can carry an optional account
+  reference; without one they keep using the provider's original account.
+  A backend with a reference uses that account, and never falls back to
+  another one. The model's config tool cannot set or change a backend's
+  account reference, and wherever it picks a profile or backend (profile,
+  behavior, compaction, persona and pack slot) it can keep the current
+  account, use an account-free backend, or move to another provider's default
+  account. Stored backends, profiles and config exports are unchanged (#2116).
+
+- Every reader of stored OAuth sign-ins (inference, health probes, readiness,
+  `diagnose`, `init`, the auth probes, model discovery and the desktop account
+  list) now picks the account through one resolver with a fixed order:
+  earliest-connected enabled account first, older sign-ins without a
+  connection time first, ties by credential id, never a disabled account. A
+  backend's account reference resolves that account for the running agent; a
+  backend without one uses the provider's original account. When the model
+  moves a profile to another provider, that provider's default account is the
+  resolver's first account. With one account per provider nothing changes
+  (#2117).
+
+- Sign-ins now store which provider account they belong to: the ChatGPT
+  workspace membership, the Claude organization and account ids, or the Grok
+  principal. ChatGPT and Grok sign-ins that lack it gain it on their next
+  token refresh; Claude sign-ins at the next sign-in. A sign-in whose tokens do not
+  show the account clears it: for ChatGPT and Grok the next refresh whose
+  tokens show it fills it again, for Claude only a later sign-in that shows
+  it. Nothing visible changes yet (#2117).
 
 - Existing `OpenAiCompatible` backends at `https://api.x.ai/v1` (any case,
   trailing slash ignored; no other xAI host) are edited as Grok with an API
@@ -416,6 +588,13 @@ source consistency checks, not a separate runtime compatibility version.
   (reset time not reported)`, and Goals pause as usage-limited. An in-flight
   budget 402 retries after its `Retry-After`; without one it is unchanged
   (#2118).
+
+
+- A token refresh or a desktop Disconnect no longer re-creates a removed
+  sign-in, re-enables a disabled one, or overwrites a sign-in made while the
+  refresh was in flight (#2119). A rebuilt behavior on a re-created sign-in
+  uses it, not the removed sign-in's cached token.
+
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to

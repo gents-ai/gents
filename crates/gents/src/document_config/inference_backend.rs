@@ -109,8 +109,14 @@ pub enum BackendAuth {
     /// and the provider adapter's OAuth provider key. Existing login, refresh,
     /// expiry, and credential ownership rules remain authoritative. No tokens
     /// or fixed principal DID are copied into the shared backend.
+    /// `account_ref` is an opaque, DID-free account reference; absent means the
+    /// provider's original account.
     #[serde(rename = "principal_oauth")]
-    PrincipalOAuth,
+    PrincipalOAuth {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional))]
+        account_ref: Option<String>,
+    },
 }
 
 impl std::fmt::Debug for BackendAuth {
@@ -125,7 +131,21 @@ impl std::fmt::Debug for BackendAuth {
                 .debug_struct("Environment")
                 .field("variable", variable)
                 .finish(),
-            Self::PrincipalOAuth => f.write_str("PrincipalOAuth"),
+            Self::PrincipalOAuth { account_ref } => f
+                .debug_struct("PrincipalOAuth")
+                .field("account_ref", account_ref)
+                .finish(),
+        }
+    }
+}
+
+impl BackendAuth {
+    /// The account a principal OAuth backend names (Lean `oauthRef`); `None`
+    /// for other auth and for the provider's original account.
+    pub fn oauth_account_ref(&self) -> Option<&str> {
+        match self {
+            Self::PrincipalOAuth { account_ref } => account_ref.as_deref(),
+            _ => None,
         }
     }
 }

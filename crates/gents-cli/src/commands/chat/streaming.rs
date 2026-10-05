@@ -77,7 +77,7 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 limit: 2
             ) {{
                 _docID agent_did requester_did session_id
-                request_id
+                request_id behavior_id
                 lifecycle_state
                 failure_reason
                 execution_generation
@@ -456,6 +456,12 @@ pub(crate) async fn stream_turn_progress(
                     let error_message = failure_reason.trim();
                     if !error_message.is_empty() {
                         println!("[agent error] {error_message}");
+                        let behavior_id = request.behavior_id.as_deref();
+                        for line in
+                            account_problems(graphql, submitted, behavior_id, error_message).await
+                        {
+                            println!("[account] {line}");
+                        }
                         println!("[inspect] gents response show {}", submitted.request_id);
                         io::stdout().flush()?;
                     } else if matches!(
@@ -895,6 +901,67 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     (value.len(), hasher.finish())
+}
+
+/// One line per profile of a refused turn whose account cannot serve it,
+/// naming the account, its state and the move; none unless `failure_reason`
+/// is a behavior-unavailable rejection.
+fn account_problem_lines(
+    failure_reason: &str,
+    accounts: &[(String, gents::oauth_credential::ServingAccount)],
+    all: &[gents::oauth_credential::AccountSummary],
+) -> Vec<String> {
+    if !gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(failure_reason.trim())
+    {
+        return Vec::new();
+    }
+    accounts
+        .iter()
+        .filter(|(_, account)| account.state != gents::oauth_credential::AccountState::Enabled)
+        .filter_map(|(profile, account)| {
+            let provider = account.provider?;
+            Some(format!(
+                "profile {profile} uses account {:?} ({}); move it: gents config profile \
+                 set-account {profile} <account> ({})",
+                account.label,
+                account.state.as_str(),
+                gents::oauth_credential::enabled_accounts_note(provider, all),
+            ))
+        })
+        .collect()
+}
+
+/// [`account_problem_lines`] for `submitted`'s behavior, read now; a read
+/// failure gives none, since the turn's own error is already printed.
+async fn account_problems(
+    graphql: &GraphqlEndpoint,
+    submitted: &SubmittedRequest,
+    behavior_id: Option<&str>,
+    failure_reason: &str,
+) -> Vec<String> {
+    let (Some(behavior_id), true) = (
+        behavior_id,
+        gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(
+            failure_reason.trim(),
+        ),
+    ) else {
+        return Vec::new();
+    };
+    let read = async {
+        let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
+        let did = submitted.agent_did.as_str();
+        anyhow::Ok((
+            gents::config_client::behavior_accounts(&access, did, behavior_id).await?,
+            gents::oauth_credential::list_accounts(&access, did).await?,
+        ))
+    };
+    match read.await {
+        Ok((accounts, all)) => account_problem_lines(failure_reason, &accounts, &all),
+        Err(error) => {
+            tracing::debug!(%error, "accounts of a refused turn unavailable");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1342,5 +1409,114 @@ mod tests {
         assert!(!spinner_enabled(true, false));
         assert!(!spinner_enabled(false, true));
         assert!(!spinner_enabled(false, false));
+    }
+
+    mod account_problem {
+        use super::*;
+        use gents::oauth_credential::{AccountState, AccountSummary, ServingAccount};
+        use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+
+        const CLAUDE: &str = "claude-subscription";
+
+        fn on(profile: &str, label: &str, state: AccountState) -> (String, ServingAccount) {
+            (
+                profile.into(),
+                ServingAccount {
+                    label: label.into(),
+                    state,
+                    provider: Some(CLAUDE),
+                },
+            )
+        }
+
+        fn summary(label: &str, enabled: bool) -> AccountSummary {
+            AccountSummary {
+                credential_id: format!("{CLAUDE}:did:key:z6MkTest:{label}"),
+                provider: CLAUDE.into(),
+                account_ref: None,
+                label: label.into(),
+                identity: Some("IDENTITY".into()),
+                plan: None,
+                enabled,
+                default: false,
+                access_token_expires_at: chrono::Utc::now(),
+                connected_at: None,
+            }
+        }
+
+        fn all() -> Vec<AccountSummary> {
+            vec![summary("Claude", true), summary("label-b", false)]
+        }
+
+        #[test]
+        fn account_problem_lines_name_the_disabled_account() {
+            let lines = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-b", AccountState::Disabled)],
+                &all(),
+            );
+            assert_eq!(
+                lines,
+                [
+                    "profile p uses account \"label-b\" (disabled); move it: gents config profile \
+                  set-account p <account> (enabled Claude accounts: \"Claude\")"
+                ]
+            );
+        }
+
+        #[test]
+        fn account_problem_lines_name_a_missing_account_or_the_login() {
+            let missing = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-gone", AccountState::Missing)],
+                &all(),
+            );
+            assert_eq!(missing.len(), 1);
+            assert!(
+                missing[0].contains("(account not on this node)"),
+                "{missing:?}"
+            );
+            let none = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "label-b", AccountState::Disabled)],
+                &[summary("label-b", false)],
+            );
+            assert!(none[0].contains("gents claude-login"), "{none:?}");
+        }
+
+        #[test]
+        fn account_problem_lines_name_the_compaction_profile() {
+            let lines = account_problem_lines(
+                Reason::ToolConfigurationInvalid.public_message(),
+                &[
+                    on("p", "Claude", AccountState::Enabled),
+                    on("p-compaction", "label-b", AccountState::Disabled),
+                ],
+                &all(),
+            );
+            assert_eq!(lines.len(), 1);
+            assert!(
+                lines[0].starts_with("profile p-compaction uses account \"label-b\""),
+                "{lines:?}"
+            );
+        }
+
+        #[test]
+        fn account_problem_lines_are_silent_otherwise() {
+            let disabled = [on("p", "label-b", AccountState::Disabled)];
+            assert!(account_problem_lines("provider returned 500", &disabled, &all()).is_empty());
+            assert!(account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &[on("p", "Claude", AccountState::Enabled)],
+                &all(),
+            )
+            .is_empty());
+            let lines = account_problem_lines(
+                Reason::CredentialsRequired.public_message(),
+                &disabled,
+                &all(),
+            );
+            assert!(!format!("{lines:?}").contains("IDENTITY"));
+        }
     }
 }

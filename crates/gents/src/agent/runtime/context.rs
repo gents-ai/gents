@@ -121,7 +121,7 @@ impl RuntimeContext {
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
         let api_key = match &behavior.backend_auth {
-            crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+            crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
             _ => behavior.completion_client_api_key()?,
         };
         let allowed_targets =

@@ -1,14 +1,31 @@
 use super::*;
+use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+use crate::config_client::{
+    apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use crate::identity::KeyIdentity;
+use crate::oauth_credential::{preset_account_backend, store_sign_in};
 use crate::request_admission::verify_runtime_local_control_receipt;
+use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub(super) const SESSION: &str = "contract-session";
-pub(super) const PARENT: &str = "contract-parent";
+pub(crate) const SESSION: &str = "contract-session";
+pub(crate) const PARENT: &str = "contract-parent";
+pub(crate) const PROFILE: &str = "contract-behavior:inference";
 
-pub(super) struct Fixture {
+/// Claude accounts A (`label-a`) and B (`label-b`) of the fixture's DID.
+pub(crate) struct ClaudeAccounts {
+    pub access: ConfigAccess,
+    pub a: String,
+    pub b: String,
+    pub a_credential: String,
+    pub b_credential: String,
+}
+
+pub(crate) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
     pub goal: GoalDocument,
@@ -163,6 +180,158 @@ impl Fixture {
         execute(&self.node, &create.graphql_mutation().unwrap()).await;
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
     }
+    /// Sign Claude accounts A and B in, each with its backend, and put the
+    /// behavior's profile on A.
+    pub async fn claude_accounts(&self) -> ClaudeAccounts {
+        let did = self.identity.did().to_owned();
+        let access = ConfigAccess::Local(self.node.clone());
+        let preset =
+            preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
+        write_inference_backend_document(&access, &preset)
+            .await
+            .unwrap();
+        let mut accounts = Vec::new();
+        for who in ["a", "b"] {
+            let credential = crate::claude_oauth::credential_from_login_tokens(
+                &did,
+                CLAUDE_OAUTH_PROVIDER,
+                &crate::claude_oauth::ClaudeLoginTokens {
+                    access_token: format!("access-SECRET-{who}"),
+                    refresh_token: format!("refresh-SECRET-{who}"),
+                    expires_in: Some(3600),
+                    scope: None,
+                    account_id: Some("IDENTITY".into()),
+                    organization_uuid: Some("org-1".into()),
+                    account_uuid: Some(format!("account-{who}")),
+                },
+                Utc::now() - chrono::Duration::hours(1),
+            );
+            let label = format!("label-{who}");
+            let stored = store_sign_in(&access, credential, Some(&label))
+                .await
+                .unwrap()
+                .credential;
+            let backend = match stored.account_ref.as_deref() {
+                Some(account_ref) => format!("{CLAUDE_OAUTH_PROVIDER}-{account_ref}"),
+                None => CLAUDE_OAUTH_PROVIDER.to_owned(),
+            };
+            accounts.push((backend, stored.credential_id));
+        }
+        let [(a, a_credential), (b, b_credential)] = <[_; 2]>::try_from(accounts).unwrap();
+        let profile = json!({"agent_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::InferenceProfile,
+            add: profile.clone(),
+            update: profile,
+        }])
+        .unwrap();
+        access
+            .transact("test.claude_accounts.profile", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+        ClaudeAccounts {
+            access,
+            a,
+            b,
+            a_credential,
+            b_credential,
+        }
+    }
+
+    /// The behavior's context compacts with profile `summ` on `backend`.
+    pub async fn compacts_on(&self, access: &ConfigAccess, backend: &str) {
+        let did = self.identity.did();
+        let documents = [
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
+            ),
+            (
+                Collection::Compaction,
+                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        access
+            .transact("test.compacts_on", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+    }
+
+    pub async fn goal_status(&self) -> String {
+        load_canonical_goal(&self.node, self.identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+    }
+
+    /// The Goal's continuation requests, newest first.
+    pub async fn children(&self) -> Vec<String> {
+        request_rows(&self.node)
+            .await
+            .into_iter()
+            .filter(|row| {
+                row.retry_key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("goal-continuation:"))
+            })
+            .map(|row| row.request_id)
+            .collect()
+    }
+
+    /// Fail `request_id` with one failed call of `kind` on `backend` that
+    /// queued, started and ended at `at`.
+    pub async fn fail_with_call(
+        &self,
+        request_id: &str,
+        kind: &str,
+        backend: &str,
+        failure: &str,
+        at: &str,
+    ) {
+        let did = self.identity.did();
+        let failure = escape_graphql_string(failure);
+        execute(
+            &self.node,
+            &format!(
+                r#"mutation {{
+                    update_AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, input: {{
+                        lifecycle_state: "failed" failure_reason: "{failure}"
+                    }}) {{ _docID }}
+                    create_InferenceCall(input: {{
+                        call_id: "call-{request_id}" request_id: "{request_id}" call_seq: 1
+                        backend_id: "{backend}" behavior_id: "contract-behavior" agent_did: "{did}"
+                        call_kind: "{kind}" attempt: 1 call_state: "failed"
+                        failure_reason: "{failure}"
+                        queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
+                    }}) {{ _docID }}
+                }}"#
+            ),
+        )
+        .await;
+    }
+
     pub async fn observe(&self) -> Value {
         let g = load_canonical_goal(&self.node, self.identity.did(), SESSION)
             .await
@@ -290,11 +459,11 @@ impl Fixture {
             "children":children,"tokens_used":g.tokens_used.unwrap_or(0),"token_budget":g.token_budget})
     }
 }
-pub(super) async fn execute(node: &EmbeddedNode, query: &str) {
+pub(crate) async fn execute(node: &EmbeddedNode, query: &str) {
     let response = node.execute(query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 }
-pub(super) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
+pub(crate) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
     let response=node.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     crate::graphql::rows(&response, "AgentRequest").unwrap()

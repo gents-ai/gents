@@ -273,8 +273,14 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
       <AddAgentDialog shell={shell} open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
         key={renaming?.peerId ?? "none"}
-        shell={shell}
-        target={renaming}
+        title="Rename deployment"
+        description="The saved label on this desktop; the agent's own name does not change."
+        value={renaming?.label ?? null}
+        onSave={async (next) => {
+          if (!renaming) return;
+          await shell.renamePeer(renaming.peerId, next);
+          toast("Renamed");
+        }}
         onClose={() => setRenaming(null)}
       />
       <AlertDialog
@@ -404,34 +410,38 @@ function AddAgentDialog({
   );
 }
 
-/* the saved label for a peer, the one thing the fleet row edits in place */
-function RenameDialog({
-  shell,
-  target,
+/* one label edited in place: a deployment's saved label or an account's */
+export function RenameDialog({
+  title,
+  description,
+  value,
+  onSave,
   onClose,
 }: {
-  shell: Shell;
-  target: { peerId: string; label: string } | null;
+  title: string;
+  description: string;
+  value: string | null;
+  onSave: (next: string) => Promise<void>;
   onClose: () => void;
 }) {
-  const [label, setLabel] = useState(target?.label ?? "");
+  const [label, setLabel] = useState(value ?? "");
+  const [error, setError] = useState<string | null>(null);
   const save = async () => {
-    if (!target) return;
+    if (value === null) return;
     const next = label.trim();
-    if (next && next !== target.label) {
-      await shell.renamePeer(target.peerId, next);
-      toast("Renamed");
+    try {
+      if (next && next !== value) await onSave(next);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
-    onClose();
   };
   return (
-    <Dialog open={target !== null} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={value !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent aria-modal="true">
         <DialogHeader>
-          <DialogTitle>Rename deployment</DialogTitle>
-          <DialogDescription>
-            The saved label on this desktop; the agent's own name does not change.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(e) => {
@@ -441,6 +451,11 @@ function RenameDialog({
         >
           <Input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus />
         </form>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel

@@ -67,6 +67,9 @@ pub const INFERENCE_RETRY_POLICY: &str =
     include_str!("../schemas/inference/inference_retry_policy.graphql");
 pub const OAUTH_CREDENTIAL_NAME: &str = "OAuthCredential";
 pub const OAUTH_CREDENTIAL: &str = include_str!("../schemas/inference/oauth_credential.graphql");
+pub const PROVIDER_ACCOUNT_USAGE_NAME: &str = "ProviderAccountUsage";
+pub const PROVIDER_ACCOUNT_USAGE: &str =
+    include_str!("../schemas/inference/provider_account_usage.graphql");
 
 // services domain
 pub const TOOL_SERVICE_REGISTRY_NAME: &str = "ToolServiceRegistry";
@@ -159,6 +162,7 @@ pub const ALL: &[&str] = &[
     EVAL_VERDICT,
     OPTIMIZATION_JOB,
     PACK_INSTALLATION,
+    PROVIDER_ACCOUNT_USAGE,
 ];
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
@@ -238,6 +242,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVAL_VERDICT_NAME,
     OPTIMIZATION_JOB_NAME,
     PACK_INSTALLATION_NAME,
+    PROVIDER_ACCOUNT_USAGE_NAME,
 ];
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = BRANCHABLE_AGENT_COLLECTION_NAMES;

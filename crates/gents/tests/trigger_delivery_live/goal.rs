@@ -137,6 +137,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         Some(OLD_OBJECTIVE),
         Some(gents::goal::GoalStatus::Active),
         None,
+        None,
     )
     .await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);

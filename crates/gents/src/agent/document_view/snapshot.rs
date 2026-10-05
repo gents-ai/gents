@@ -394,7 +394,7 @@ fn ensure_inference_available(
     }
     if matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth
+        crate::document_config::BackendAuth::PrincipalOAuth { .. }
     ) {
         let provider = match backend.provider_kind {
             crate::backend_provider::BackendProviderKind::ChatGptCodex => {
@@ -413,7 +413,10 @@ fn ensure_inference_available(
                 ));
             }
         };
-        if !view.has_enabled_oauth_credential(provider) {
+        if !view.resolves_oauth_credential(
+            provider,
+            crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
+        ) {
             return Err(BehaviorResolutionError::new(
                 BehaviorReadinessUnavailableReason::CredentialsRequired,
                 anyhow!(

@@ -1753,6 +1753,26 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
+    /// Run a query-only transaction. Embedded access uses DefraDB's native
+    /// read-only snapshot and does not acquire the mutation gate; HTTP access
+    /// retains its existing transaction owner.
+    pub async fn transact_readonly<'a, T, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        match self {
+            Self::Local(node) => {
+                Self::transact_local_readonly(node, None, operation, callback).await
+            }
+            Self::Graphql(_) => self.transact(operation, callback).await,
+        }
+    }
+
     /// Replay a stable-key transaction after any callback or commit error.
     ///
     /// Callers must make the callback idempotent across an ambiguous commit:

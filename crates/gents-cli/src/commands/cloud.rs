@@ -343,6 +343,10 @@ fn credential_from_session(
         access_token_expires_at: no_expiry_horizon(now),
         last_refresh: Some(now),
         enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: None,
+        label: None,
     }
 }
 

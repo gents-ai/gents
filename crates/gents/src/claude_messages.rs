@@ -12,6 +12,7 @@ use std::collections::HashSet;
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
@@ -886,11 +887,12 @@ pub async fn stream_messages<S: BearerSource>(
     surface: HashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
 > {
-    stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http).await
+    stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
 /// `stream_messages` against an explicit URI (tests point it at a local
@@ -903,6 +905,7 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     surface: HashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -954,7 +957,12 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
 
     let client = RenderedRequestCapturingHttpClient::new(MessagesTransport {
         fixture,
-        live: crate::provider_http::ProviderHttpClient::new(http.clone()),
+        live: match usage {
+            Some(usage) => {
+                crate::provider_http::ProviderHttpClient::with_usage(http.clone(), usage)
+            }
+            None => crate::provider_http::ProviderHttpClient::new(http.clone()),
+        },
     });
     let response = match client.send_streaming(http_request).await {
         Ok(response) => response,

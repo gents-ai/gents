@@ -1551,6 +1551,16 @@ Separate native overlapping-write tests bypass the process-local mutation gate.
 WorkspaceBindingPending remains an unfinished request: a resume cannot
 duplicate work that already waits for workspace placement.
 
+`GoalAutomation/ResetResume.lean` gives the same resume transaction a cause:
+operator, or the reported reset reached. The operator cause is `resume`
+unchanged. A reset cause only moves a usage-limited Goal, and only when the
+operator opted in, the provider reported a reset later than the limited call's
+start that has passed, the profile still names the call's account and that
+account is enabled; otherwise it waits and publishes nothing. Budget and usage
+are preserved, a retry after the commit is a no-op, and successive timer
+resumes need strictly later resets, so there is at most one per reported reset
+(premise: a child published by a timer resume starts its calls after it).
+
 `GoalAutomation/ReadinessGate.lean` gates the existing `Goals.decide` on the
 canonical behavior-readiness projection. A publishing decision, and a claimed
 child awaiting materialization, wait while the behavior is not ready; automatic

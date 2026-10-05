@@ -501,7 +501,7 @@ pub(crate) async fn build_compaction_engine(
     summary.max_turns = 0;
     summary.compaction_inference = None;
     let api_key = match &summary.backend_auth {
-        crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+        crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
     let client =

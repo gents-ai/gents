@@ -155,6 +155,18 @@ mod tests {
     }
 
     #[test]
+    fn goal_arguments_reject_model_supplied_auto_resume() {
+        assert!(serde_json::from_str::<UpdateGoalArgs>(
+            r#"{"status":"active","auto_resume_at_reset":true}"#,
+        )
+        .is_err());
+        assert!(serde_json::from_str::<CreateGoalArgs>(
+            r#"{"objective":"x","auto_resume_at_reset":true}"#,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn goal_budget_deserialization_is_bounded_to_storage_type() {
         assert!(serde_json::from_str::<CreateGoalArgs>(
             r#"{"objective":"ship","token_budget":9223372036854775808}"#,

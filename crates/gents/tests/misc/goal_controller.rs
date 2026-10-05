@@ -5,8 +5,8 @@ use std::time::Duration;
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
-    set_goal, update_goal_fields_if_status, CreateGoalForSessionError, CreateGoalForSessionOutcome,
-    GoalStatus,
+    set_goal, set_goal_from_access, update_goal_fields_if_status, CreateGoalForSessionError,
+    CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::{
     ActiveRuntimeSnapshot, ConfigAccess, GoalSource, TriggerSource, UpdateSubscriptionSource,
@@ -2367,6 +2367,295 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         .last_failure
         .as_deref()
         .is_some_and(|reason| reason.contains("insufficient_quota")));
+}
+
+const RENDERED_LIMIT: &str =
+    "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
+
+async fn seed_failed_call(
+    db: &TestDb,
+    call_id: &str,
+    call_kind: &str,
+    attempt: i64,
+    ended_at: &str,
+    failure_reason: &str,
+) {
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                add_InferenceCall(input: {{
+                    call_id: "{call_id}",
+                    request_id: "usage-limited-request",
+                    call_seq: 1,
+                    call_kind: "{call_kind}",
+                    attempt: {attempt},
+                    call_state: "failed",
+                    ended_at: "{ended_at}",
+                    failure_reason: "{failure_reason}"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed failed call: {:?}",
+        response.errors
+    );
+}
+
+async fn usage_limited_goal_after_failed_request(db: &TestDb) -> Option<String> {
+    create_request_for_agent_with_signed_fields(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        "usage-limited-request",
+        SESSION,
+        "failed",
+        "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    set_goal(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        SESSION,
+        Some("Stop on the call that ended the request"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    let (mut source, _snapshot_tx) = source(db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+            .await
+            .is_err()
+    );
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    (goal.parsed_status() == Some(GoalStatus::UsageLimited))
+        .then_some(goal.last_failure)
+        .flatten()
+}
+
+#[tokio::test]
+async fn compaction_usage_limit_moves_goal_to_usage_limited() {
+    let db = test_db("goal-compaction-usage-limit").await;
+    seed_failed_call(
+        &db,
+        "compaction-call",
+        "compaction",
+        1,
+        "2026-07-15T00:00:10Z",
+        RENDERED_LIMIT,
+    )
+    .await;
+    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    assert!(
+        last_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
+        "{last_failure:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_later_limited_call_wins_over_an_earlier_retry() {
+    let db = test_db("goal-later-limited-call").await;
+    seed_failed_call(
+        &db,
+        "earlier-retry",
+        "inference",
+        2,
+        "2026-07-15T00:00:05Z",
+        "HttpError: Invalid status code 500",
+    )
+    .await;
+    seed_failed_call(
+        &db,
+        "later-compaction",
+        "compaction",
+        1,
+        "2026-07-15T00:00:10Z",
+        RENDERED_LIMIT,
+    )
+    .await;
+    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    assert!(
+        last_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("resets at 2026-07-15T05:00:00Z")),
+        "{last_failure:?}"
+    );
+}
+
+/// An active Goal whose request failed on a limit whose reset has passed.
+async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
+    let did = db.node_identity.did();
+    crate::support::fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        did,
+        crate::support::AGENT_NAME,
+        "reset-backend",
+        "http://127.0.0.1:1/v1",
+        "test-model",
+    )
+    .await;
+    // Resume authenticates its predecessor, so the request is signed.
+    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "usage-limited-request",
+        did,
+        did,
+        crate::support::AGENT_NAME,
+        SESSION,
+        "limited work",
+        "interactive",
+        "2026-07-15T00:00:00Z",
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+        .await
+        .expect("sign request");
+    let response = db
+        .node
+        .execute(&request.graphql_mutation().expect("request mutation"))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "seed request: {:?}",
+        response.errors
+    );
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentRequest(filter: {{ request_id: {{ _eq: "usage-limited-request" }} }}, input: {{
+                    lifecycle_state: "failed"
+                }}) {{ _docID }}
+                add_InferenceCall(input: {{
+                    call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
+                    backend_id: "reset-backend", behavior_id: "{agent}", agent_did: "{did}",
+                    call_kind: "inference", attempt: 1, call_state: "failed",
+                    queued_at: "2026-07-15T00:00:05Z", started_at: "2026-07-15T00:00:05Z",
+                    ended_at: "2026-07-15T00:00:10Z", failure_reason: "{RENDERED_LIMIT}"
+                }}) {{ _docID }}
+            }}"#,
+            agent = crate::support::AGENT_NAME,
+        ))
+        .await;
+    assert!(!response.has_errors(), "seed call: {:?}", response.errors);
+    set_goal(
+        db.node.as_ref(),
+        did,
+        SESSION,
+        Some("Resume at the reported reset"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .expect("set goal");
+    if opted_in {
+        set_goal_from_access(
+            &ConfigAccess::Local(db.node.clone()),
+            did,
+            SESSION,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .await
+        .expect("opt in");
+    }
+}
+
+/// The Goal's status and its continuation count.
+async fn goal_and_children(db: &TestDb) -> (Option<GoalStatus>, usize) {
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    let response = db.node.execute(r#"{ AgentRequest { retry_key } }"#).await;
+    let children = response.data.as_ref().unwrap()["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| {
+            row["retry_key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("goal-continuation:"))
+        })
+        .count();
+    (goal.parsed_status(), children)
+}
+
+/// One rescan pass over a Goal stopped by a limit whose reset has passed.
+async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
+    let db = test_db(name).await;
+    seed_a_passed_reset(&db, opted_in).await;
+    let (mut source, _snapshot_tx) = source(&db).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
+            .await
+            .is_err()
+    );
+    goal_and_children(&db).await
+}
+
+#[tokio::test]
+async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
+    let db = test_db("goal-reset-update").await;
+    seed_a_passed_reset(&db, true).await;
+    publish_behavior_readiness(
+        &db,
+        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        None,
+    )
+    .await;
+    let updates = MockUpdateSubscriptionSource::new();
+    let (_snapshot_tx, rx) = watch::channel(snapshot(db.node_identity.did()));
+    let mut source = GoalSource::with_subscription_source(
+        Arc::new(updates.clone()),
+        rx,
+        db.node.clone(),
+        CancellationToken::new(),
+    )
+    .with_rescan_interval(Duration::from_secs(3600));
+    // The first tick stops the Goal on its limit; the next is an hour away.
+    let pass = Duration::from_millis(300);
+    assert!(tokio::time::timeout(pass, source.next_fire())
+        .await
+        .is_err());
+    assert_eq!(
+        goal_and_children(&db).await,
+        (Some(GoalStatus::UsageLimited), 0)
+    );
+    updates.publish_update("Goal", "goal-doc");
+    assert!(tokio::time::timeout(pass, source.next_fire())
+        .await
+        .is_err());
+    assert_eq!(
+        goal_and_children(&db).await,
+        (Some(GoalStatus::UsageLimited), 0)
+    );
+}
+
+#[tokio::test]
+async fn opted_in_goal_resumes_at_its_reported_reset() {
+    assert_eq!(
+        goal_after_a_passed_reset("goal-reset-opted-in", true).await,
+        (Some(GoalStatus::Active), 1)
+    );
+    assert_eq!(
+        goal_after_a_passed_reset("goal-reset-not-opted-in", false).await,
+        (Some(GoalStatus::UsageLimited), 0)
+    );
 }
 
 #[tokio::test]

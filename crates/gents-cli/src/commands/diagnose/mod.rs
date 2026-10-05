@@ -122,8 +122,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
+    let accounts = gents::oauth_credential::list_accounts(&access, &agent_did).await;
     let backend_reports = match bundle.as_ref() {
-        Some(bundle) => diagnose_backends(&access, bundle).await,
+        Some(bundle) => {
+            diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
+        }
         None => Vec::new(),
     };
     let matching_runtime_state = runtime_state.as_ref().filter(|state| {
@@ -178,10 +181,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let chatgpt_auth_check = match crate::commands::codex_auth_probe::load_oauth_credential(
+    let mut chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         chatgpt_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {
@@ -225,10 +229,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let xai_auth_check = match crate::commands::grok_auth_probe::load_oauth_credential(
+    let mut xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         xai_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {
@@ -270,10 +275,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    let claude_auth_check = match crate::commands::grok_auth_probe::load_oauth_credential(
+    let mut claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
         &access,
         &agent_did,
         claude_provider,
+        gents::oauth_credential::AccountPick::ProviderDefault,
     )
     .await
     {
@@ -313,6 +319,38 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "error": error.to_string(),
         }),
     };
+
+    for (check, provider, classify) in [
+        (
+            &mut chatgpt_auth_check,
+            chatgpt_provider,
+            gents::oauth_credential::classify_chatgpt_auth_error
+                as fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+        ),
+        (
+            &mut xai_auth_check,
+            xai_provider,
+            gents::xai_grok_oauth::classify_xai_auth_error,
+        ),
+        (
+            &mut claude_auth_check,
+            claude_provider,
+            gents::claude_oauth::classify_claude_auth_error,
+        ),
+    ] {
+        check["accounts"] = match &accounts {
+            Ok(accounts) => accounts_json(
+                &accounts
+                    .iter()
+                    .filter(|account| account.provider == provider)
+                    .collect::<Vec<_>>(),
+                &agent_did,
+                provider,
+                classify,
+            ),
+            Err(error) => json!({ "error": error.to_string() }),
+        };
+    }
 
     // An auth failure only degrades overall health when an OAuth backend is actually
     // configured and enabled — deployments that don't use that backend have no credential
@@ -404,6 +442,38 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     Ok(())
 }
 
+/// One entry per account of a provider, for `checks.<provider>_auth.accounts`:
+/// its label, whether its token is usable now, and what to do when not. The
+/// check's own fields and gate stay on the provider's default account.
+fn accounts_json(
+    accounts: &[&gents::oauth_credential::AccountSummary],
+    agent_did: &str,
+    provider: &str,
+    classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+) -> Value {
+    use gents::oauth_credential::OAuthAuthProblem;
+    accounts
+        .iter()
+        .map(|account| {
+            let problem = if !account.enabled {
+                Some(OAuthAuthProblem::WrongMode {
+                    found_mode: "disabled".into(),
+                })
+            } else if !gents::oauth_credential::token_is_fresh(account.access_token_expires_at) {
+                Some(OAuthAuthProblem::Expired)
+            } else {
+                None
+            };
+            json!({
+                "label": account.label,
+                "ok": problem.is_none(),
+                "expires_at": account.access_token_expires_at,
+                "guidance": problem.map(|problem| classify(agent_did, provider, &problem)),
+            })
+        })
+        .collect()
+}
+
 /// `checks.claude_auth.ok` reports token freshness, but a stale access token
 /// alone does not degrade the overall status: the prober counts such a
 /// credential healthy and the next request refreshes it. Only a credential
@@ -417,7 +487,72 @@ fn claude_auth_gate(backend_configured: bool, check: &Value) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::claude_auth_gate;
+    use super::{accounts_json, claude_auth_gate};
+    use gents::oauth_credential::AccountSummary;
+
+    fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
+        AccountSummary {
+            credential_id: format!("claude-subscription:did:key:z6MkT:{label}"),
+            provider: "claude-subscription".into(),
+            account_ref: Some(label.into()),
+            label: label.into(),
+            identity: Some("identity-private".into()),
+            plan: None,
+            enabled,
+            default: false,
+            access_token_expires_at: chrono::Utc::now()
+                + chrono::Duration::minutes(expires_in_minutes),
+            connected_at: None,
+        }
+    }
+
+    fn claude_accounts(accounts: &[AccountSummary]) -> serde_json::Value {
+        accounts_json(
+            &accounts.iter().collect::<Vec<_>>(),
+            "did:key:z6MkT",
+            "claude-subscription",
+            gents::claude_oauth::classify_claude_auth_error,
+        )
+    }
+
+    #[test]
+    fn each_account_reports_its_own_state() {
+        let accounts = [
+            account("Claude", true, 60),
+            account("Work", false, 60),
+            account("Claude 3", true, -1),
+        ];
+        let json = claude_accounts(&accounts);
+        let entries = json.as_array().expect("an array");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["label"], "Claude");
+        assert_eq!(entries[0]["ok"], true);
+        assert_eq!(entries[1]["label"], "Work");
+        assert_eq!(entries[1]["ok"], false);
+        assert!(entries[1]["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("claude-login"));
+        assert_eq!(entries[2]["ok"], false);
+        assert!(entries[2]["guidance"].as_str().unwrap().contains("expired"));
+        assert!(entries
+            .iter()
+            .all(|entry| entry.get("expires_at").is_some()));
+        let text = json.to_string();
+        assert!(
+            !text.contains("identity-private") && !text.contains("SECRET"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_stale_standby_never_degrades_status() {
+        let mut check = json!({"ok": true, "credential_id": "claude-subscription:did:key:z6MkT"});
+        check["accounts"] =
+            claude_accounts(&[account("Claude", true, 60), account("Old", true, -1)]);
+        assert!(claude_auth_gate(true, &check));
+        assert_eq!(check["ok"], true);
+    }
 
     #[test]
     fn claude_auth_degrades_status_only_when_no_credential_can_be_read() {

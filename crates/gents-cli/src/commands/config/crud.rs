@@ -203,7 +203,7 @@ async fn live_manifest_for_delete(
     desired_state::manifest_from_export_bundle(&bundle)
 }
 
-async fn query_collection(
+pub(super) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     agent_did: &str,

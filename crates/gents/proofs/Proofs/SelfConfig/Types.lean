@@ -24,7 +24,8 @@ abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 
 /-- Identity/provenance and module material are operator-managed. Nested auth
-references remain editable; raw-key protection belongs to the typed guard. -/
+references remain editable; raw-key and OAuth-account protection belong to the
+typed auth guard (`SelfConfig.authGuard`, enforced in Rust `validate`). -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
   (t == .task && k == "behavior_id") || k == t.uniqueField || ["agent_did", "created_at", "updated_at", "created_by",
     "wasm_bytes", "canonical_args", "signer_did", "provenance"].contains k
