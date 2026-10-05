@@ -5,7 +5,7 @@ use crate::dates;
 use crate::err::{Res, fail};
 use crate::format::{NumFormat, axis_format, tick_labels};
 use crate::frame::{Axis, AxisKind, Tick};
-use crate::scale::{log_ticks, nice_ticks};
+use crate::scale::{Ticks, log_ticks, nice_ticks};
 
 /// The domain of a numeric axis and how to tick it.
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +24,8 @@ pub struct NumSpec {
     pub nice: bool,
     /// Logarithmic scale.
     pub log: bool,
+    /// Ticks only on whole numbers (counts).
+    pub integer: bool,
 }
 
 fn within(v: f64, lo: f64, hi: f64) -> bool {
@@ -86,7 +88,15 @@ pub fn numeric(
         lo -= pad;
         hi += pad;
     }
-    let t = nice_ticks(lo, hi, target);
+    let mut t = nice_ticks(lo, hi, target);
+    if spec.integer && t.step < 1.0 {
+        let (first, last) = (lo.floor() as i64, hi.ceil() as i64);
+        t = Ticks {
+            values: (first..=last).map(|v| v as f64).collect(),
+            step: 1.0,
+            decimals: 0,
+        };
+    }
     let (d0, d1) = if user || !spec.nice {
         (lo, hi)
     } else {
@@ -199,6 +209,7 @@ mod tests {
             zero: false,
             nice: true,
             log: false,
+            integer: false,
         }
     }
 

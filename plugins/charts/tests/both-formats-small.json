@@ -1,0 +1,62 @@
+{
+  "input": {
+    "chart": "area",
+    "output": "both",
+    "width": 240,
+    "height": 160,
+    "data": {
+      "columns": [
+        "t",
+        "v"
+      ],
+      "rows": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          3
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "parts": [
+      {
+        "data": "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",
+        "mimeType": "image/png",
+        "type": "image"
+      }
+    ],
+    "response": {
+      "alt": "Area chart. X axis: t, from 1 to 3. Y axis: v, from 0 to 6. 1 series. \"v\": 3 points, lowest 2 at 1, highest 5 at 2.",
+      "chart": "area",
+      "height": 160,
+      "png": {
+        "bytes": 3108,
+        "height": 160,
+        "width": 240
+      },
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "area",
+          "max": 5.0,
+          "min": 2.0,
+          "name": "v",
+          "points": 3
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"160\" viewBox=\"0 0 240 160\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">area chart</title><desc id=\"chart-desc\">Area chart. X axis: t, from 1 to 3. Y axis: v, from 0 to 6. 1 series. &quot;v&quot;: 3 points, lowest 2 at 1, highest 5 at 2.</desc><rect x=\"0\" y=\"0\" width=\"240\" height=\"160\" fill=\"#ffffff\"/><line x1=\"47.12\" y1=\"75.5\" x2=\"220.94\" y2=\"75.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"48.5\" x2=\"220.94\" y2=\"48.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"134.5\" y1=\"20\" x2=\"134.5\" y2=\"103\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 47.12,103 L 47.12,75.33 L 134.03,33.83 L 220.94,61.5 L 220.94,103 Z\" fill=\"#0072b2\" fill-opacity=\"0.28\"/><path d=\"M 47.12,75.33 L 134.03,33.83 L 220.94,61.5\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"47.12\" cy=\"75.33\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 1, 2</title></circle><circle cx=\"134.03\" cy=\"33.83\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2, 5</title></circle><circle cx=\"220.94\" cy=\"61.5\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 3, 3</title></circle><line x1=\"47.12\" y1=\"103.5\" x2=\"220.94\" y2=\"103.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"20\" x2=\"46.62\" y2=\"103\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"47.5\" y1=\"103\" x2=\"47.5\" y2=\"107\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"47.12\" y=\"119\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">1</text><line x1=\"134.5\" y1=\"103\" x2=\"134.5\" y2=\"107\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"134.03\" y=\"119\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2</text><line x1=\"221.5\" y1=\"103\" x2=\"221.5\" y2=\"107\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"220.94\" y=\"119\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">3</text><line x1=\"43.12\" y1=\"103.5\" x2=\"47.12\" y2=\"103.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"107\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"75.5\" x2=\"47.12\" y2=\"75.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"79.33\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"48.5\" x2=\"47.12\" y2=\"48.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"51.67\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"20.5\" x2=\"47.12\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><text x=\"134.03\" y=\"140\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">t</text><text x=\"27\" y=\"61.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 61.5)\">v</text></svg>",
+      "warnings": [],
+      "width": 240
+    }
+  }
+}

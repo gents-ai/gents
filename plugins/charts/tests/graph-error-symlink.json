@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "hostile/link.csv"
+  },
+  "bind": "fixtures",
+  "expect": {
+    "chart": "bar",
+    "error": "\"hostile/link.csv\" goes through a symbolic link; name the real file inside the folder",
+    "warnings": []
+  }
+}

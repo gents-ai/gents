@@ -1,0 +1,129 @@
+{
+  "input": {
+    "chart": "heatmap",
+    "x": "c",
+    "y": [
+      "r"
+    ],
+    "value": "v",
+    "title": "Change from baseline",
+    "theme": "dark",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "r",
+        "c",
+        "v"
+      ],
+      "rows": [
+        [
+          "A",
+          "v",
+          -5
+        ],
+        [
+          "A",
+          "w",
+          0
+        ],
+        [
+          "A",
+          "x",
+          5
+        ],
+        [
+          "A",
+          "y",
+          -1
+        ],
+        [
+          "B",
+          "v",
+          -2
+        ],
+        [
+          "B",
+          "w",
+          3
+        ],
+        [
+          "B",
+          "x",
+          -3
+        ],
+        [
+          "B",
+          "y",
+          2
+        ],
+        [
+          "C",
+          "v",
+          1
+        ],
+        [
+          "C",
+          "w",
+          -5
+        ],
+        [
+          "C",
+          "x",
+          0
+        ],
+        [
+          "C",
+          "y",
+          5
+        ],
+        [
+          "D",
+          "v",
+          4
+        ],
+        [
+          "D",
+          "w",
+          -2
+        ],
+        [
+          "D",
+          "x",
+          3
+        ],
+        [
+          "D",
+          "y",
+          -3
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Heatmap titled \"Change from baseline\". 4 columns of c by 4 rows of r, coloured by v from -5 to 5, with 0 as the neutral colour. Highest 5 at x and A; lowest -5 at v and A.",
+      "chart": "heatmap",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#f08a5d",
+          "columns": 4,
+          "empty_cells": 0,
+          "gaps": 0,
+          "mark": "cell",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "v",
+          "points": 16,
+          "rows": 4
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Change from baseline</title><desc id=\"chart-desc\">Heatmap titled &quot;Change from baseline&quot;. 4 columns of c by 4 rows of r, coloured by v from -5 to 5, with 0 as the neutral colour. Highest 5 at x and A; lowest -5 at v and A.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#14181d\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#e6edf3\">Change from baseline</text><rect x=\"49.44\" y=\"50.5\" width=\"101.76\" height=\"62.25\" fill=\"#5aaee0\"><title>A, v: -5</title></rect><text x=\"100.33\" y=\"85.62\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">-5</text><rect x=\"152.21\" y=\"50.5\" width=\"101.76\" height=\"62.25\" fill=\"#2b3139\"><title>A, w: 0</title></rect><text x=\"203.09\" y=\"85.62\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">0</text><rect x=\"254.97\" y=\"50.5\" width=\"101.76\" height=\"62.25\" fill=\"#f08a5d\"><title>A, x: 5</title></rect><text x=\"305.85\" y=\"85.62\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">5</text><rect x=\"357.74\" y=\"50.5\" width=\"101.76\" height=\"62.25\" fill=\"#2c475e\"><title>A, y: -1</title></rect><text x=\"408.62\" y=\"85.62\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-1</text><rect x=\"49.44\" y=\"113.75\" width=\"101.76\" height=\"62.25\" fill=\"#2f5e84\"><title>B, v: -2</title></rect><text x=\"100.33\" y=\"148.88\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-2</text><rect x=\"152.21\" y=\"113.75\" width=\"101.76\" height=\"62.25\" fill=\"#b65c3e\"><title>B, w: 3</title></rect><text x=\"203.09\" y=\"148.88\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">3</text><rect x=\"254.97\" y=\"113.75\" width=\"101.76\" height=\"62.25\" fill=\"#3779ab\"><title>B, x: -3</title></rect><text x=\"305.85\" y=\"148.88\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-3</text><rect x=\"357.74\" y=\"113.75\" width=\"101.76\" height=\"62.25\" fill=\"#894e3b\"><title>B, y: 2</title></rect><text x=\"408.62\" y=\"148.88\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">2</text><rect x=\"49.44\" y=\"177\" width=\"101.76\" height=\"62.25\" fill=\"#5a403a\"><title>C, v: 1</title></rect><text x=\"100.33\" y=\"212.12\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">1</text><rect x=\"152.21\" y=\"177\" width=\"101.76\" height=\"62.25\" fill=\"#5aaee0\"><title>C, w: -5</title></rect><text x=\"203.09\" y=\"212.12\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">-5</text><rect x=\"254.97\" y=\"177\" width=\"101.76\" height=\"62.25\" fill=\"#2b3139\"><title>C, x: 0</title></rect><text x=\"305.85\" y=\"212.12\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">0</text><rect x=\"357.74\" y=\"177\" width=\"101.76\" height=\"62.25\" fill=\"#f08a5d\"><title>C, y: 5</title></rect><text x=\"408.62\" y=\"212.12\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">5</text><rect x=\"49.44\" y=\"240.25\" width=\"101.76\" height=\"62.25\" fill=\"#d6714b\"><title>D, v: 4</title></rect><text x=\"100.33\" y=\"275.38\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">4</text><rect x=\"152.21\" y=\"240.25\" width=\"101.76\" height=\"62.25\" fill=\"#2f5e84\"><title>D, w: -2</title></rect><text x=\"203.09\" y=\"275.38\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-2</text><rect x=\"254.97\" y=\"240.25\" width=\"101.76\" height=\"62.25\" fill=\"#b65c3e\"><title>D, x: 3</title></rect><text x=\"305.85\" y=\"275.38\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">3</text><rect x=\"357.74\" y=\"240.25\" width=\"101.76\" height=\"62.25\" fill=\"#3779ab\"><title>D, y: -3</title></rect><text x=\"408.62\" y=\"275.38\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-3</text><line x1=\"48.94\" y1=\"303.5\" x2=\"460\" y2=\"303.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><line x1=\"48.44\" y1=\"50\" x2=\"48.44\" y2=\"303\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><line x1=\"100.5\" y1=\"303\" x2=\"100.5\" y2=\"307\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"100.33\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#a3adb8\">v</text><line x1=\"203.5\" y1=\"303\" x2=\"203.5\" y2=\"307\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"203.09\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#a3adb8\">w</text><line x1=\"306.5\" y1=\"303\" x2=\"306.5\" y2=\"307\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"305.85\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#a3adb8\">x</text><line x1=\"409.5\" y1=\"303\" x2=\"409.5\" y2=\"307\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"408.62\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#a3adb8\">y</text><line x1=\"44.94\" y1=\"82.5\" x2=\"48.94\" y2=\"82.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"40.94\" y=\"85.62\" font-size=\"11\" text-anchor=\"end\" fill=\"#a3adb8\">A</text><line x1=\"44.94\" y1=\"145.5\" x2=\"48.94\" y2=\"145.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"40.94\" y=\"148.88\" font-size=\"11\" text-anchor=\"end\" fill=\"#a3adb8\">B</text><line x1=\"44.94\" y1=\"208.5\" x2=\"48.94\" y2=\"208.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"40.94\" y=\"212.12\" font-size=\"11\" text-anchor=\"end\" fill=\"#a3adb8\">C</text><line x1=\"44.94\" y1=\"271.5\" x2=\"48.94\" y2=\"271.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"40.94\" y=\"275.38\" font-size=\"11\" text-anchor=\"end\" fill=\"#a3adb8\">D</text><text x=\"254.47\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#e6edf3\">c</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#e6edf3\" transform=\"rotate(-90 27 176.5)\">r</text><linearGradient id=\"scale\" x1=\"0\" y1=\"1\" x2=\"0\" y2=\"0\"><stop offset=\"0\" stop-color=\"#5aaee0\"/><stop offset=\"0.1\" stop-color=\"#4794c8\"/><stop offset=\"0.2\" stop-color=\"#3779ab\"/><stop offset=\"0.3\" stop-color=\"#2f5e84\"/><stop offset=\"0.4\" stop-color=\"#2c475e\"/><stop offset=\"0.5\" stop-color=\"#2b3139\"/><stop offset=\"0.6\" stop-color=\"#5a403a\"/><stop offset=\"0.7\" stop-color=\"#894e3b\"/><stop offset=\"0.8\" stop-color=\"#b65c3e\"/><stop offset=\"0.9\" stop-color=\"#d6714b\"/><stop offset=\"1\" stop-color=\"#f08a5d\"/></linearGradient><rect x=\"476\" y=\"56.5\" width=\"14\" height=\"240\" fill=\"url(#scale)\"/><line x1=\"490\" y1=\"272.5\" x2=\"494\" y2=\"272.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"498\" y=\"276\" font-size=\"10\" fill=\"#a3adb8\">-4</text><line x1=\"490\" y1=\"224.5\" x2=\"494\" y2=\"224.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"498\" y=\"228\" font-size=\"10\" fill=\"#a3adb8\">-2</text><line x1=\"490\" y1=\"176.5\" x2=\"494\" y2=\"176.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"498\" y=\"180\" font-size=\"10\" fill=\"#a3adb8\">0</text><line x1=\"490\" y1=\"128.5\" x2=\"494\" y2=\"128.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"498\" y=\"132\" font-size=\"10\" fill=\"#a3adb8\">2</text><line x1=\"490\" y1=\"80.5\" x2=\"494\" y2=\"80.5\" fill=\"none\" stroke=\"#7d8794\" stroke-width=\"1\"/><text x=\"498\" y=\"84\" font-size=\"10\" fill=\"#a3adb8\">4</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

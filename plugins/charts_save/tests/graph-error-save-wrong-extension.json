@@ -1,0 +1,16 @@
+{
+  "input": {
+    "run_id": "r4",
+    "chart": "bar",
+    "file": "data.csv",
+    "save": {
+      "svg": "x.png"
+    }
+  },
+  "bind": "save",
+  "expect": {
+    "chart": "bar",
+    "error": "save file \"x.png\" needs a name ending in .svg",
+    "warnings": []
+  }
+}

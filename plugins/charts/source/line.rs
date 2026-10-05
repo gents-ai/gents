@@ -164,6 +164,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 zero,
                 log: spec.y_log,
                 pad: 0.04,
+                integer: false,
             },
             target,
             spec.y_format.as_ref(),

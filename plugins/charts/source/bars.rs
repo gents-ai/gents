@@ -146,6 +146,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 zero: true,
                 log: spec.y_log,
                 pad: 0.06,
+                integer: spec.agg == crate::spec::Agg::Count,
             },
             target,
             spec.y_format.as_ref(),
@@ -190,6 +191,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
                 zero: false,
                 nice: true,
                 log: spec.y2_log,
+                integer: false,
             },
             target,
             spec.y2_format.as_ref(),
@@ -388,9 +390,9 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             }
         }
     }
-    // Baseline over the bars.
+    // The zero line over the bars, unless it is the axis line itself.
     let zero_line = Style::stroke(ctx.theme.axis, 1.0);
-    if horizontal {
+    if horizontal && (base - p.x).abs() > 1.0 {
         svg.line(
             base.round() + 0.5,
             p.y,
@@ -398,7 +400,7 @@ pub fn render(ctx: &mut Ctx<'_>, t: &Table) -> Res<Built> {
             p.bottom(),
             &zero_line,
         );
-    } else {
+    } else if !horizontal && (base - p.bottom()).abs() > 1.0 {
         svg.line(
             p.x,
             base.round() + 0.5,

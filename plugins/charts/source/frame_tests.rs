@@ -25,6 +25,7 @@ fn num_axis(lo: f64, hi: f64, target: usize) -> Axis {
             zero: false,
             nice: true,
             log: false,
+            integer: false,
         },
         target,
         None,

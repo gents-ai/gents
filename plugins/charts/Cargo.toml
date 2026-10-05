@@ -18,6 +18,10 @@ path = "source/main.rs"
 name = "gen_fixtures"
 path = "tools/gen_fixtures.rs"
 
+[[example]]
+name = "bless_cases"
+path = "tools/bless_cases.rs"
+
 [dependencies]
 base64 = "0.22"
 png = "0.18"

@@ -359,6 +359,47 @@ mod tests {
     }
 
     #[test]
+    fn a_png_over_the_budget_is_drawn_again_at_a_smaller_scale_with_a_warning() {
+        let mut r = rendered(1);
+        // Random bytes stand in for a picture too detailed to fit: they cannot be compressed.
+        let mut x = 0x9E37_79B9_7F4A_7C15_u64;
+        let noise: Vec<u8> = (0..3_000_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect();
+        r.png = Some(Png {
+            bytes: noise,
+            width: 200,
+            height: 150,
+        });
+        let text = deliver(r, Output::Both, &[]).unwrap();
+        assert!(text.len() <= BUDGET);
+        let v = parse(&text);
+        let w = v["response"]["warnings"].as_array().unwrap();
+        assert!(
+            w.iter().any(|w| w
+                .as_str()
+                .unwrap()
+                .starts_with("the PNG was drawn at 0.70x")),
+            "{w:?}"
+        );
+        assert!(
+            w.iter()
+                .any(|w| w.as_str().unwrap().contains("SVG is left out")),
+            "the SVG goes first"
+        );
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(v["parts"][0]["data"].as_str().unwrap())
+            .unwrap();
+        let (width, _, _) = raster::decode(&png).unwrap();
+        assert_eq!(width, 140, "200 pixels at 0.7");
+    }
+
+    #[test]
     fn the_whole_result_always_stays_within_the_budget() {
         for extra in [0, BUDGET / 2, BUDGET + 5] {
             let text = deliver(rendered(extra), Output::Both, &[]).unwrap();

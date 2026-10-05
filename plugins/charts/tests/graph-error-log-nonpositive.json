@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "line",
+    "y_scale": "log",
+    "data": "t,v\n1,5\n2,0\n"
+  },
+  "expect": {
+    "chart": "line",
+    "error": "the y axis is logarithmic but column \"v\" has 1 values at or below zero (first is 0 in row 2); remove them or use a linear axis",
+    "warnings": []
+  }
+}

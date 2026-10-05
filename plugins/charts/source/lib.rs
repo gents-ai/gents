@@ -4,6 +4,8 @@ pub mod bars;
 #[cfg(test)]
 mod bars_tests;
 pub mod boxplot;
+#[cfg(test)]
+mod case_files_tests;
 pub mod cli;
 pub mod cols;
 pub mod common;
@@ -38,6 +40,8 @@ mod pie_heat_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_tests;
+#[cfg(test)]
+mod pixel_tests;
 #[cfg(test)]
 mod proptests;
 pub mod raster;

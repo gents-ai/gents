@@ -10,9 +10,11 @@
     "plugins/charts_save/TOOL.md",
     "schemas/chart_request.graphql",
     "schemas/chart_result.graphql",
+    "tests/content.json",
+    "tests/graph_error.json",
+    "tests/graph_inline.json",
     "tests/graph_render.json",
-    "tests/install.json",
-    "tests/content.json"
+    "tests/install.json"
   ],
   "authors": [
     "gents contributors"

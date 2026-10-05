@@ -1,0 +1,9 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "sales.csv",
+    "save": "chart"
+  },
+  "bind": "fixtures/data"
+}

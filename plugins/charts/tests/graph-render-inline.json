@@ -1,0 +1,42 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "title": "Graph bar",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "k",
+        "v"
+      ],
+      "rows": [
+        [
+          "a",
+          3
+        ],
+        [
+          "b",
+          5
+        ],
+        [
+          "c",
+          4
+        ]
+      ]
+    },
+    "series": null,
+    "subtitle": "",
+    "line": []
+  },
+  "expect": {
+    "alt": "Bar chart titled \"Graph bar\". 3 categories of k, from a to c. Value axis: v, from 0 to 6. 1 series. \"v\" (bar): highest 5 at b, lowest 3 at a.",
+    "chart": "bar",
+    "height": 360,
+    "series_json": "[{\"axis\":\"left\",\"color\":\"#0072b2\",\"gaps\":0,\"mark\":\"bar\",\"max\":5.0,\"min\":3.0,\"name\":\"v\",\"points\":3,\"sum\":12.0}]",
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Graph bar</title><desc id=\"chart-desc\">Bar chart titled &quot;Graph bar&quot;. 3 categories of k, from a to c. Value axis: v, from 0 to 6. 1 series. &quot;v&quot; (bar): highest 5 at b, lowest 3 at a.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Graph bar</text><line x1=\"47.12\" y1=\"261.5\" x2=\"544\" y2=\"261.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"219.5\" x2=\"544\" y2=\"219.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"177.5\" x2=\"544\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"134.5\" x2=\"544\" y2=\"134.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"92.5\" x2=\"544\" y2=\"92.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"70.31\" y=\"176.5\" width=\"119.25\" height=\"126.5\" fill=\"#0072b2\"><title>v, a: 3</title></rect><text x=\"129.93\" y=\"172.5\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">3</text><rect x=\"235.93\" y=\"92.17\" width=\"119.25\" height=\"210.83\" fill=\"#0072b2\"><title>v, b: 5</title></rect><text x=\"295.56\" y=\"88.17\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">5</text><rect x=\"401.56\" y=\"134.33\" width=\"119.25\" height=\"168.67\" fill=\"#0072b2\"><title>v, c: 4</title></rect><text x=\"461.19\" y=\"130.33\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">4</text><line x1=\"47.12\" y1=\"303.5\" x2=\"544\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"50\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"130.5\" y1=\"303\" x2=\"130.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"129.93\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">a</text><line x1=\"296.5\" y1=\"303\" x2=\"296.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"295.56\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">b</text><line x1=\"461.5\" y1=\"303\" x2=\"461.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"461.19\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">c</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"261.5\" x2=\"47.12\" y2=\"261.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"264.83\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">1</text><line x1=\"43.12\" y1=\"219.5\" x2=\"47.12\" y2=\"219.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"222.67\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"177.5\" x2=\"47.12\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">3</text><line x1=\"43.12\" y1=\"134.5\" x2=\"47.12\" y2=\"134.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"138.33\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"92.5\" x2=\"47.12\" y2=\"92.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"96.17\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"43.12\" y1=\"50.5\" x2=\"47.12\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><text x=\"295.56\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">k</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">v</text></svg>",
+    "warnings": [],
+    "width": 560
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "pie",
+    "output": "svg",
+    "width": 420,
+    "height": 320,
+    "data": "{\"columns\": [\"k\", \"v\"], \"rows\": [[\"a\", 1], [\"b\", 3]]}"
+  },
+  "expect": {
+    "alt": "Pie chart. 2 slices of v, total 4. \"a\" 1 (25%). \"b\" 3 (75%).",
+    "chart": "pie",
+    "height": 320,
+    "series_json": "[{\"axis\":\"left\",\"color\":\"#0072b2\",\"gaps\":0,\"mark\":\"slice\",\"max\":1.0,\"min\":1.0,\"name\":\"a\",\"points\":1,\"share\":0.25,\"value\":1.0},{\"axis\":\"left\",\"color\":\"#e69f00\",\"gaps\":0,\"mark\":\"slice\",\"max\":3.0,\"min\":3.0,\"name\":\"b\",\"points\":1,\"share\":0.75,\"value\":3.0}]",
+    "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"420\" height=\"320\" viewBox=\"0 0 420 320\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">pie chart</title><desc id=\"chart-desc\">Pie chart. 2 slices of v, total 4. &quot;a&quot; 1 (25%). &quot;b&quot; 3 (75%).</desc><rect x=\"0\" y=\"0\" width=\"420\" height=\"320\" fill=\"#ffffff\"/><path d=\"M 177.49,150.5 L 177.49,22 A 128.5,128.5 0 0 1 305.99,150.5 Z\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>a: 1 (25%)</title></path><text x=\"237.46\" y=\"94.53\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">25%</text><path d=\"M 177.49,150.5 L 305.99,150.5 A 128.5,128.5 0 1 1 177.49,22 Z\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>b: 3 (75%)</title></path><text x=\"117.52\" y=\"214.47\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">75%</text><rect x=\"343.98\" y=\"19\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"363.98\" y=\"29\" font-size=\"12\" fill=\"#1f2328\">a (25%)</text><rect x=\"343.98\" y=\"37\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"363.98\" y=\"47\" font-size=\"12\" fill=\"#1f2328\">b (75%)</text></svg>",
+    "warnings": [],
+    "width": 420
+  }
+}

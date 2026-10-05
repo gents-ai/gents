@@ -1,0 +1,61 @@
+{
+  "input": {
+    "chart": "bar",
+    "agg": "mean",
+    "title": "Average per group",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "group",
+        "score"
+      ],
+      "rows": [
+        [
+          "a",
+          1
+        ],
+        [
+          "a",
+          3
+        ],
+        [
+          "b",
+          4
+        ],
+        [
+          "b",
+          8
+        ],
+        [
+          "c",
+          5
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Bar chart titled \"Average per group\". 3 categories of group, from a to c. Value axis: score, from 0 to 8. 1 series. \"score\" (bar): highest 6 at b, lowest 2 at a.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 6.0,
+          "min": 2.0,
+          "name": "score",
+          "points": 3,
+          "sum": 13.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Average per group</title><desc id=\"chart-desc\">Bar chart titled &quot;Average per group&quot;. 3 categories of group, from a to c. Value axis: score, from 0 to 8. 1 series. &quot;score&quot; (bar): highest 6 at b, lowest 2 at a.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Average per group</text><line x1=\"47.12\" y1=\"240.5\" x2=\"544\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"177.5\" x2=\"544\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"113.5\" x2=\"544\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"70.31\" y=\"239.75\" width=\"119.25\" height=\"63.25\" fill=\"#0072b2\"><title>score, a: 2</title></rect><text x=\"129.93\" y=\"235.75\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">2</text><rect x=\"235.93\" y=\"113.25\" width=\"119.25\" height=\"189.75\" fill=\"#0072b2\"><title>score, b: 6</title></rect><text x=\"295.56\" y=\"109.25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">6</text><rect x=\"401.56\" y=\"144.88\" width=\"119.25\" height=\"158.12\" fill=\"#0072b2\"><title>score, c: 5</title></rect><text x=\"461.19\" y=\"140.88\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">5</text><line x1=\"47.12\" y1=\"303.5\" x2=\"544\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"50\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"130.5\" y1=\"303\" x2=\"130.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"129.93\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">a</text><line x1=\"296.5\" y1=\"303\" x2=\"296.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"295.56\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">b</text><line x1=\"461.5\" y1=\"303\" x2=\"461.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"461.19\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">c</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"240.5\" x2=\"47.12\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"177.5\" x2=\"47.12\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"113.5\" x2=\"47.12\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><line x1=\"43.12\" y1=\"50.5\" x2=\"47.12\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">8</text><text x=\"295.56\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">group</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">score</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "scatter",
+    "file": "text.csv"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "scatter",
+    "error": "no column of numbers to draw; name the value column in y",
+    "warnings": []
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "input": {
+    "chart": "bar",
+    "file": "data/sales.csv",
+    "x": "month",
+    "y": [
+      "units"
+    ],
+    "stack": "stacked",
+    "series": "region",
+    "output": "svg",
+    "width": 560,
+    "height": 360
+  },
+  "bind": "fixtures",
+  "expect": {
+    "response": {
+      "alt": "Stacked bar chart. 12 categories of month, from Jan to Dec. Value axis from 0 to 120. 2 series. \"North\" (bar): highest 56 at Nov, lowest 40 at Jan. \"South\" (bar): highest 56 at Feb, lowest 40 at Sep.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 56.0,
+          "min": 40.0,
+          "name": "North",
+          "points": 12,
+          "sum": 572.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 56.0,
+          "min": 40.0,
+          "name": "South",
+          "points": 12,
+          "sum": 585.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">bar chart</title><desc id=\"chart-desc\">Stacked bar chart. 12 categories of month, from Jan to Dec. Value axis from 0 to 120. 2 series. &quot;North&quot; (bar): highest 56 at Nov, lowest 40 at Jan. &quot;South&quot; (bar): highest 56 at Feb, lowest 40 at Sep.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><line x1=\"43.35\" y1=\"256.5\" x2=\"480.64\" y2=\"256.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"43.35\" y1=\"209.5\" x2=\"480.64\" y2=\"209.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"43.35\" y1=\"162.5\" x2=\"480.64\" y2=\"162.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"43.35\" y1=\"114.5\" x2=\"480.64\" y2=\"114.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"43.35\" y1=\"67.5\" x2=\"480.64\" y2=\"67.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"48.45\" y=\"208.67\" width=\"26.24\" height=\"94.33\" fill=\"#0072b2\"><title>North, Jan: 40</title></rect><rect x=\"84.9\" y=\"196.88\" width=\"26.24\" height=\"106.12\" fill=\"#0072b2\"><title>North, Feb: 45</title></rect><rect x=\"121.34\" y=\"185.08\" width=\"26.24\" height=\"117.92\" fill=\"#0072b2\"><title>North, Mar: 50</title></rect><rect x=\"157.78\" y=\"173.29\" width=\"26.24\" height=\"129.71\" fill=\"#0072b2\"><title>North, Apr: 55</title></rect><rect x=\"194.22\" y=\"201.59\" width=\"26.24\" height=\"101.41\" fill=\"#0072b2\"><title>North, May: 43</title></rect><rect x=\"230.66\" y=\"189.8\" width=\"26.24\" height=\"113.2\" fill=\"#0072b2\"><title>North, Jun: 48</title></rect><rect x=\"267.1\" y=\"178.01\" width=\"26.24\" height=\"124.99\" fill=\"#0072b2\"><title>North, Jul: 53</title></rect><rect x=\"303.54\" y=\"206.31\" width=\"26.24\" height=\"96.69\" fill=\"#0072b2\"><title>North, Aug: 41</title></rect><rect x=\"339.98\" y=\"194.52\" width=\"26.24\" height=\"108.48\" fill=\"#0072b2\"><title>North, Sep: 46</title></rect><rect x=\"376.42\" y=\"182.73\" width=\"26.24\" height=\"120.27\" fill=\"#0072b2\"><title>North, Oct: 51</title></rect><rect x=\"412.86\" y=\"170.93\" width=\"26.24\" height=\"132.07\" fill=\"#0072b2\"><title>North, Nov: 56</title></rect><rect x=\"449.3\" y=\"199.23\" width=\"26.24\" height=\"103.77\" fill=\"#0072b2\"><title>North, Dec: 44</title></rect><rect x=\"48.45\" y=\"88.39\" width=\"26.24\" height=\"120.28\" fill=\"#e69f00\"><title>South, Jan: 51</title></rect><rect x=\"84.9\" y=\"64.81\" width=\"26.24\" height=\"132.07\" fill=\"#e69f00\"><title>South, Feb: 56</title></rect><rect x=\"121.34\" y=\"81.32\" width=\"26.24\" height=\"103.77\" fill=\"#e69f00\"><title>South, Mar: 44</title></rect><rect x=\"157.78\" y=\"57.73\" width=\"26.24\" height=\"115.56\" fill=\"#e69f00\"><title>South, Apr: 49</title></rect><rect x=\"194.22\" y=\"74.24\" width=\"26.24\" height=\"127.35\" fill=\"#e69f00\"><title>South, May: 54</title></rect><rect x=\"230.66\" y=\"90.75\" width=\"26.24\" height=\"99.05\" fill=\"#e69f00\"><title>South, Jun: 42</title></rect><rect x=\"267.1\" y=\"67.17\" width=\"26.24\" height=\"110.84\" fill=\"#e69f00\"><title>South, Jul: 47</title></rect><rect x=\"303.54\" y=\"83.67\" width=\"26.24\" height=\"122.63\" fill=\"#e69f00\"><title>South, Aug: 52</title></rect><rect x=\"339.98\" y=\"100.18\" width=\"26.24\" height=\"94.33\" fill=\"#e69f00\"><title>South, Sep: 40</title></rect><rect x=\"376.42\" y=\"76.6\" width=\"26.24\" height=\"106.13\" fill=\"#e69f00\"><title>South, Oct: 45</title></rect><rect x=\"412.86\" y=\"53.02\" width=\"26.24\" height=\"117.92\" fill=\"#e69f00\"><title>South, Nov: 50</title></rect><rect x=\"449.3\" y=\"69.53\" width=\"26.24\" height=\"129.71\" fill=\"#e69f00\"><title>South, Dec: 55</title></rect><line x1=\"43.35\" y1=\"303.5\" x2=\"480.64\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"42.85\" y1=\"20\" x2=\"42.85\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"62.5\" y1=\"303\" x2=\"62.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"61.57\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jan</text><line x1=\"98.5\" y1=\"303\" x2=\"98.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"98.01\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Feb</text><line x1=\"134.5\" y1=\"303\" x2=\"134.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"134.45\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Mar</text><line x1=\"171.5\" y1=\"303\" x2=\"171.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"170.9\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Apr</text><line x1=\"207.5\" y1=\"303\" x2=\"207.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"207.34\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">May</text><line x1=\"244.5\" y1=\"303\" x2=\"244.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"243.78\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jun</text><line x1=\"280.5\" y1=\"303\" x2=\"280.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"280.22\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jul</text><line x1=\"317.5\" y1=\"303\" x2=\"317.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"316.66\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Aug</text><line x1=\"353.5\" y1=\"303\" x2=\"353.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"353.1\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Sep</text><line x1=\"390.5\" y1=\"303\" x2=\"390.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"389.54\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Oct</text><line x1=\"426.5\" y1=\"303\" x2=\"426.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"425.98\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Nov</text><line x1=\"462.5\" y1=\"303\" x2=\"462.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"462.42\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Dec</text><line x1=\"39.35\" y1=\"303.5\" x2=\"43.35\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"39.35\" y1=\"256.5\" x2=\"43.35\" y2=\"256.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"259.83\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><line x1=\"39.35\" y1=\"209.5\" x2=\"43.35\" y2=\"209.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"212.67\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">40</text><line x1=\"39.35\" y1=\"162.5\" x2=\"43.35\" y2=\"162.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"165.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">60</text><line x1=\"39.35\" y1=\"114.5\" x2=\"43.35\" y2=\"114.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"118.33\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">80</text><line x1=\"39.35\" y1=\"67.5\" x2=\"43.35\" y2=\"67.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"71.17\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">100</text><line x1=\"39.35\" y1=\"20.5\" x2=\"43.35\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"35.35\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">120</text><text x=\"262\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">month</text><rect x=\"494.64\" y=\"19\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"514.64\" y=\"29\" font-size=\"12\" fill=\"#1f2328\">North</text><rect x=\"494.64\" y=\"37\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"514.64\" y=\"47\" font-size=\"12\" fill=\"#1f2328\">South</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

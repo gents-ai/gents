@@ -1,0 +1,80 @@
+{
+  "input": {
+    "chart": "histogram",
+    "file": "events.ndjson",
+    "x": "latency",
+    "series": "service",
+    "bins": 6,
+    "title": "Latency",
+    "output": "svg",
+    "width": 560,
+    "height": 360
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Histogram titled \"Latency\". 20 values of latency in 6 bins from 13 to 61. Count axis from 0 to 5. \"db\": 7 values, tallest bin 37 to 45 holds 2. \"api\": 13 values, tallest bin 13 to 21 holds 4.",
+      "chart": "histogram",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "counts": [
+            0,
+            0,
+            1,
+            2,
+            2,
+            2
+          ],
+          "edges": [
+            13.0,
+            21.0,
+            29.0,
+            37.0,
+            45.0,
+            53.0,
+            61.0
+          ],
+          "gaps": 0,
+          "mark": "bar",
+          "max": 61.0,
+          "min": 32.0,
+          "name": "db",
+          "points": 7
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "counts": [
+            4,
+            4,
+            4,
+            1,
+            0,
+            0
+          ],
+          "edges": [
+            13.0,
+            21.0,
+            29.0,
+            37.0,
+            45.0,
+            53.0,
+            61.0
+          ],
+          "gaps": 0,
+          "mark": "bar",
+          "max": 38.0,
+          "min": 13.0,
+          "name": "api",
+          "points": 13
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Latency</title><desc id=\"chart-desc\">Histogram titled &quot;Latency&quot;. 20 values of latency in 6 bins from 13 to 61. Count axis from 0 to 5. &quot;db&quot;: 7 values, tallest bin 37 to 45 holds 2. &quot;api&quot;: 13 values, tallest bin 13 to 21 holds 4.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Latency</text><line x1=\"47.12\" y1=\"252.5\" x2=\"495.99\" y2=\"252.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"202.5\" x2=\"495.99\" y2=\"202.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"151.5\" x2=\"495.99\" y2=\"151.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"101.5\" x2=\"495.99\" y2=\"101.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"113.5\" y1=\"50\" x2=\"113.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"206.5\" y1=\"50\" x2=\"206.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"300.5\" y1=\"50\" x2=\"300.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"393.5\" y1=\"50\" x2=\"393.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"487.5\" y1=\"50\" x2=\"487.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"196.74\" y=\"252.4\" width=\"74.81\" height=\"50.6\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 29 to 37, count 1</title></rect><rect x=\"271.55\" y=\"201.8\" width=\"74.81\" height=\"101.2\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 37 to 45, count 2</title></rect><rect x=\"346.36\" y=\"201.8\" width=\"74.81\" height=\"101.2\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 45 to 53, count 2</title></rect><rect x=\"421.17\" y=\"201.8\" width=\"74.81\" height=\"101.2\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 53 to 61, count 2</title></rect><rect x=\"47.12\" y=\"100.6\" width=\"74.81\" height=\"202.4\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 13 to 21, count 4</title></rect><rect x=\"121.93\" y=\"100.6\" width=\"74.81\" height=\"202.4\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 21 to 29, count 4</title></rect><rect x=\"196.74\" y=\"100.6\" width=\"74.81\" height=\"202.4\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 29 to 37, count 4</title></rect><rect x=\"271.55\" y=\"252.4\" width=\"74.81\" height=\"50.6\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 37 to 45, count 1</title></rect><line x1=\"47.12\" y1=\"303.5\" x2=\"495.99\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"50\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"113.5\" y1=\"303\" x2=\"113.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"112.58\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">20</text><line x1=\"206.5\" y1=\"303\" x2=\"206.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"206.09\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">30</text><line x1=\"300.5\" y1=\"303\" x2=\"300.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"299.61\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">40</text><line x1=\"393.5\" y1=\"303\" x2=\"393.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"393.12\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">50</text><line x1=\"487.5\" y1=\"303\" x2=\"487.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"486.63\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">60</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"252.5\" x2=\"47.12\" y2=\"252.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"256.4\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">1</text><line x1=\"43.12\" y1=\"202.5\" x2=\"47.12\" y2=\"202.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"205.8\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"151.5\" x2=\"47.12\" y2=\"151.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"155.2\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">3</text><line x1=\"43.12\" y1=\"101.5\" x2=\"47.12\" y2=\"101.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"104.6\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"50.5\" x2=\"47.12\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><text x=\"271.55\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">latency</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">Count</text><rect x=\"509.99\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"529.99\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">db</text><rect x=\"509.99\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"529.99\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">api</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

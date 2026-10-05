@@ -1,0 +1,55 @@
+{
+  "input": {
+    "chart": "bar",
+    "title": "</title><script>alert(1)</script> 売上 📈",
+    "x_label": "\"><rect/>",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "k",
+        "v"
+      ],
+      "rows": [
+        [
+          "<b onclick=x>",
+          1
+        ],
+        [
+          "a & b &amp; c",
+          2
+        ],
+        [
+          "東京",
+          3
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Bar chart titled \"</title><script>alert(1)</script> 売上 📈\". 3 categories of \"><rect/>, from <b onclick=x> to 東京. Value axis: v, from 0 to 4. 1 series. \"v\" (bar): highest 3 at 東京, lowest 1 at <b onclick=x>.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 3.0,
+          "min": 1.0,
+          "name": "v",
+          "points": 3,
+          "sum": 6.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt; 売上 📈</title><desc id=\"chart-desc\">Bar chart titled &quot;&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt; 売上 📈&quot;. 3 categories of &quot;&gt;&lt;rect/&gt;, from &lt;b onclick=x&gt; to 東京. Value axis: v, from 0 to 4. 1 series. &quot;v&quot; (bar): highest 3 at 東京, lowest 1 at &lt;b onclick=x&gt;.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt; 売上 📈</text><line x1=\"56.29\" y1=\"240.5\" x2=\"544\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"56.29\" y1=\"177.5\" x2=\"544\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"56.29\" y1=\"113.5\" x2=\"544\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"79.05\" y=\"239.75\" width=\"117.05\" height=\"63.25\" fill=\"#0072b2\"><title>v, &lt;b onclick=x&gt;: 1</title></rect><text x=\"137.58\" y=\"235.75\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">1</text><rect x=\"241.62\" y=\"176.5\" width=\"117.05\" height=\"126.5\" fill=\"#0072b2\"><title>v, a &amp; b &amp;amp; c: 2</title></rect><text x=\"300.15\" y=\"172.5\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">2</text><rect x=\"404.19\" y=\"113.25\" width=\"117.05\" height=\"189.75\" fill=\"#0072b2\"><title>v, 東京: 3</title></rect><text x=\"462.72\" y=\"109.25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">3</text><line x1=\"56.29\" y1=\"303.5\" x2=\"544\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"55.79\" y1=\"50\" x2=\"55.79\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"138.5\" y1=\"303\" x2=\"138.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"137.58\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">&lt;b onclick=x&gt;</text><line x1=\"300.5\" y1=\"303\" x2=\"300.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"300.15\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">a &amp; b &amp;amp; c</text><line x1=\"463.5\" y1=\"303\" x2=\"463.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"462.72\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">東京</text><line x1=\"52.29\" y1=\"303.5\" x2=\"56.29\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"48.29\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0.0</text><line x1=\"52.29\" y1=\"240.5\" x2=\"56.29\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"48.29\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">1.0</text><line x1=\"52.29\" y1=\"177.5\" x2=\"56.29\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"48.29\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2.0</text><line x1=\"52.29\" y1=\"113.5\" x2=\"56.29\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"48.29\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">3.0</text><line x1=\"52.29\" y1=\"50.5\" x2=\"56.29\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"48.29\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4.0</text><text x=\"300.15\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">&quot;&gt;&lt;rect/&gt;</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">v</text></svg>",
+      "warnings": [
+        "5 characters have no glyph in the built-in font and are drawn as empty boxes: 上 京 売 東 📈"
+      ],
+      "width": 560
+    }
+  }
+}

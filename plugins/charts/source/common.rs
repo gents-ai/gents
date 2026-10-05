@@ -120,6 +120,7 @@ pub fn x_axis(spec: &Spec, x: &XData, extent: (f64, f64), target: usize, nice: b
                     zero: false,
                     nice,
                     log: spec.x_scale == crate::spec::ScaleKind::Log,
+                    integer: false,
                 },
                 target,
                 fmt.as_ref(),
@@ -165,6 +166,8 @@ pub struct YRange {
     pub log: bool,
     /// Headroom as a fraction of the span.
     pub pad: f64,
+    /// Ticks only on whole numbers (counts).
+    pub integer: bool,
 }
 
 /// A y axis over `range` with about `target` ticks.
@@ -188,6 +191,7 @@ pub fn y_axis(
         zero: range.zero,
         nice: true,
         log: range.log,
+        integer: range.integer,
     };
     axes::numeric(num, target, fmt, label)
 }

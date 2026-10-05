@@ -1,0 +1,14 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "width": 4096,
+    "height": 4096,
+    "data": "k,v\na,1\n"
+  },
+  "expect": {
+    "chart": "bar",
+    "error": "the image would be 16777216 pixels, over the limit of 16000000; lower width, height or scale",
+    "warnings": []
+  }
+}

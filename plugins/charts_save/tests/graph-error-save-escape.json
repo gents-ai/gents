@@ -1,0 +1,14 @@
+{
+  "input": {
+    "run_id": "r3",
+    "chart": "bar",
+    "file": "data.csv",
+    "save": "../escaped"
+  },
+  "bind": "save",
+  "expect": {
+    "chart": "bar",
+    "error": "save file \"../escaped.svg\" must stay inside the folder: no empty parts, . or ..",
+    "warnings": []
+  }
+}
