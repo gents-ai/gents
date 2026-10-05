@@ -171,9 +171,6 @@ export function useShell(
       deleteBehaviorConfig: d.onDeleteBehaviorConfig,
       behaviorDescriptions,
       saveBehaviorDescription: async () => {},
-      forkSession: async (_sessionId: string) => {
-        throw new Error("session fork is not on the bridge");
-      },
       behaviorColors,
       saveBehaviorColor: async () => {},
       removePeer: d.onRemovePeer,

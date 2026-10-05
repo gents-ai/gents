@@ -147,7 +147,7 @@ const context = {
   lastRequest: null,
 };
 
-function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell {
+function sessionShell(): Shell {
   return {
     selectedSessionId: "session",
     selectedSession: {
@@ -184,7 +184,6 @@ function sessionShell(forkSession = vi.fn().mockResolvedValue("fork-1")): Shell 
     sessionLoad: { phase: "ready" },
     loadOlderSessionTimeline: vi.fn(),
     retryMessage: vi.fn(),
-    forkSession,
     refreshSnapshot: vi.fn(),
     api: {
       sessionProvenance: vi.fn().mockResolvedValue(null),
@@ -256,27 +255,5 @@ describe("shell dialogs take turns (#1778)", () => {
       screen.queryByRole("dialog", { name: "Session context details" }),
     ).not.toBeInTheDocument();
     expect(dialogs()).toHaveLength(1);
-  });
-
-  it("the fork notice waits for an open popover to leave", async () => {
-    const user = userEvent.setup();
-    render(<Harness shell={sessionShell()} />);
-
-    await user.click(screen.getByTestId("context-meter"));
-    expect(
-      await screen.findByRole("dialog", { name: "Session context details" }),
-    ).toBeVisible();
-
-    const [more] = screen.getAllByRole("button", { name: "More" });
-    await user.click(more!);
-    await user.click(await screen.findByRole("menuitem", { name: "Fork session" }));
-    expect(dialogs()).toHaveLength(1);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-
-    await acknowledgeClose();
-    expect(await screen.findByText(/is now its own session/)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("dialog", { name: "Session context details" }),
-    ).not.toBeInTheDocument();
   });
 });

@@ -104,7 +104,6 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
     sessionLoad: { phase: "ready" },
     loadOlderSessionTimeline: vi.fn(),
     retryMessage: vi.fn(),
-    forkSession: vi.fn(),
     refreshSnapshot: vi.fn(),
     api: {
       sessionProvenance: vi.fn().mockResolvedValue(null),

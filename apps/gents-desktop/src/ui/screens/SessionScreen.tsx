@@ -23,7 +23,6 @@ import {
   Copy,
   Pencil,
   Play,
-  Split,
   Target,
   Timer,
   X,
@@ -77,7 +76,6 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
 import { PanelMenu } from "@/app/PanelMenu";
-import { DropdownMenuItem } from "@gents/ui/components/dropdown-menu";
 import { PaneBar } from "@/app/PaneBar";
 import { BehaviorPicker } from "./BehaviorPicker";
 import { HoldCard } from "./HoldCard";
@@ -89,16 +87,6 @@ import { activityStatus, isStopping } from "./activity-status";
 import { BehaviorAvatar } from "./parts";
 import { NodeBehaviorStack } from "./NodeBehaviorStack";
 import { isWorkingNode, nodeDidOf, workersBySession } from "@/lib/nodes";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@gents/ui/components/alert-dialog";
 import { Markdown } from "./Markdown";
 import { SessionLoading } from "./SessionLoading";
 import { StreamContext, StreamText } from "./StreamText";
@@ -1293,12 +1281,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const homeDid = shell.snapshot?.bootstrap.initAgentDid;
   const { draft, setDraft } = shell;
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
-  /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
-  const [forked, setForked] = useState<{
-    sessionId: string;
-    title: string;
-  } | null>(null);
-  const forkNotice = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement | null>(null);
@@ -1633,19 +1615,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   /* Local text plus the canonical shell admission decision. */
   const status = presentedComposerSendStatus(draft, shell.nonEmptyContentSendStatus);
 
-  /* PROTOTYPE ONLY: fork this session and open the copy */
-  const fork = async () => {
-    if (!session) return;
-    try {
-      const sessionId = await shell.forkSession(session.sessionId);
-      /* the copy exists; moving to it is the person's call */
-      setForked({ sessionId, title: `${session.title ?? "Session"} (fork)` });
-      forkNotice.onOpenChange(true);
-    } catch (e) {
-      toast(`Couldn't fork: ${String(e)}`);
-    }
-  };
-
   /* Until the session is here, nothing of its screen is. Drawn without it,
      the screen assembled under the reader's eye — chrome, then a title
      reading "loading", then the transcript — and changed shape as each
@@ -1756,17 +1725,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     <SessionContext context={session.context} compact />
                   </div>
                 )}
-                <PanelMenu
-                  routeName="session"
-                  size="icon-sm"
-                  actions={
-                    session ? (
-                      <DropdownMenuItem onClick={fork}>
-                        <Split className="size-4" /> Fork session
-                      </DropdownMenuItem>
-                    ) : null
-                  }
-                />
+                <PanelMenu routeName="session" size="icon-sm" />
               </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -1991,34 +1950,6 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </ScrollArea>
         </div>
       </div>
-      <AlertDialog
-        open={forkNotice.open && forked !== null}
-        onOpenChange={forkNotice.onOpenChange}
-        onOpenChangeComplete={forkNotice.onOpenChangeComplete}
-      >
-        <AlertDialogContent ref={forkNotice.popupRef} aria-modal="true">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Forked</AlertDialogTitle>
-            <AlertDialogDescription>
-              A copy of this transcript is now its own session, "{forked?.title}
-              ". This one stays as it is. Open the fork, or stay here and find it later
-              in the sessions list.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Stay here</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const target = forked;
-                forkNotice.onOpenChange(false);
-                if (target) navigate({ name: "session", sessionId: target.sessionId });
-              }}
-            >
-              Open the fork
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
