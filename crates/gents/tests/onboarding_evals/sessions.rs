@@ -21,7 +21,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     .unwrap();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
-    assert_eq!(definition.comparability_version, 5);
+    assert_eq!(definition.comparability_version, 6);
     let registry = CheckRegistry::builtin();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         assert!(definition.cases.iter().any(|case| case.split == split));

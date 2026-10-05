@@ -207,7 +207,7 @@ impl Default for ResolvedToolSelection {
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             enable_memory: false,
-            enable_session_history_tool: false,
+            enable_session_history_tool: true,
             enable_schema_tool: false,
             enable_p2p_tool: false,
             enable_p2p_mutations: false,
@@ -380,7 +380,7 @@ impl ResolvedToolSelection {
                 .unwrap_or_default(),
             enable_session_history_tool: built_ins
                 .and_then(|built| built.enable_session_history_tool)
-                .unwrap_or(false),
+                .unwrap_or(true),
             // Canonical default is disabled-by-absence, matching
             // ToolPolicy.resolveGoalTools-style fail-closed decoding.
             enable_context_budget: built_ins

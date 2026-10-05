@@ -41,28 +41,69 @@ impl FieldPage {
         let text = row[&self.field]
             .as_str()
             .context("field_page requires a String value")?;
-        let hash = format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
-        ensure!(
-            self.expected_hash
-                .as_ref()
-                .is_none_or(|expected| expected == &hash),
-            "field_page value changed; restart at offset 0"
-        );
-        let offset = self.offset_bytes;
-        ensure!(
-            offset <= text.len() && text.is_char_boundary(offset),
-            "field_page offset is not a UTF-8 boundary within the value"
-        );
-        let mut end = offset
-            .saturating_add(MAX_FIELD_STRING_BYTES)
-            .min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
+        let page = utf8_page(
+            text,
+            self.offset_bytes,
+            self.expected_hash.as_deref(),
+            MAX_FIELD_STRING_BYTES,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(match error {
+                Utf8PageError::MissingHash =>
+                    "field_page.expected_hash is required for continuation",
+                Utf8PageError::Changed => "field_page value changed; restart at offset 0",
+                Utf8PageError::Offset =>
+                    "field_page offset is not a UTF-8 boundary within the value",
+            })
+        })?;
         Ok(
-            json!({"doc_id":self.doc_id,"field":self.field,"text":&text[offset..end],"offset_bytes":offset,"next_offset_bytes":end,"total_bytes":text.len(),"value_hash":hash,"complete":end == text.len()}),
+            json!({"doc_id":self.doc_id,"field":self.field,"text":page.text,"offset_bytes":self.offset_bytes,"next_offset_bytes":page.end,"total_bytes":text.len(),"value_hash":page.hash,"complete":page.end == text.len()}),
         )
     }
+}
+
+/// One byte page of an immutable UTF-8 value: `ToolPolicy.FieldRead.page`.
+pub(crate) struct Utf8Page<'a> {
+    pub text: &'a str,
+    pub end: usize,
+    pub hash: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Utf8PageError {
+    MissingHash,
+    Changed,
+    Offset,
+}
+
+/// Select the longest whole-scalar page of at most `budget` bytes at `offset`.
+/// A continuation must carry the SHA-256 of the value its earlier pages came
+/// from, so pages of different versions are never joined.
+pub(crate) fn utf8_page<'a>(
+    text: &'a str,
+    offset: usize,
+    expected_hash: Option<&str>,
+    budget: usize,
+) -> std::result::Result<Utf8Page<'a>, Utf8PageError> {
+    if offset > 0 && expected_hash.is_none() {
+        return Err(Utf8PageError::MissingHash);
+    }
+    let hash = format!("sha256:{:x}", Sha256::digest(text.as_bytes()));
+    if expected_hash.is_some_and(|expected| expected != hash) {
+        return Err(Utf8PageError::Changed);
+    }
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return Err(Utf8PageError::Offset);
+    }
+    let mut end = offset.saturating_add(budget).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok(Utf8Page {
+        text: &text[offset..end],
+        end,
+        hash,
+    })
 }
 
 pub(super) fn recovery_metadata(rows: &Value) -> Vec<Value> {

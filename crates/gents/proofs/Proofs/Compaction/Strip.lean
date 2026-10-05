@@ -23,8 +23,9 @@ open Transcript (MessageRow MessageKind ToolResultKey)
 
 /-- The canonical pointer payload a stripped tool result carries.
 
-Production writes `[tool: NAME(ARG), call_id: ID, N bytes — see DefraDB
-AgentToolCall for full output]`; the model abstracts that to a single canonical
+Production writes `[tool: NAME(ARG), call_id: ID, N bytes — full output:
+sessions {"action":"output","call_id":ID}]`, naming the read that pages the
+call's full stored output; the model abstracts that to a single canonical
 payload hash. Collapsing distinct payloads is deliberate — `ViewCoherent` does
 not require `UniqueToolResultKeys`. -/
 def stubKey (key : ToolResultKey) : ToolResultKey := { key with payloadHash := 0 }

@@ -53,6 +53,7 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 pub(crate) mod bounded;
 mod command;
 mod field_page;
+pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
 mod search;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};

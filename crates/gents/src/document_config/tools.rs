@@ -394,6 +394,8 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_memory: Option<bool>,
+    /// The `sessions` read tool. Unset is enabled: compaction stubs name its
+    /// `output` read as the way to recover a trimmed tool result.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_session_history_tool: Option<bool>,
