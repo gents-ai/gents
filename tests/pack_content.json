@@ -18,11 +18,11 @@
     },
     {
       "name": "each plugin points at its own instructions asset",
-      "expr": "[.manifest.plugins[].instructions] == [\"plugins/data_tables/TOOL.md\", \"plugins/data_tables/TOOL_EXPORT.md\"]"
+      "expr": "[.manifest.plugins[].instructions] == [\"plugins/data_tables/TOOL.md\", \"plugins/data_tables_export/TOOL.md\"]"
     },
     {
       "name": "the instructions name the tool they describe",
-      "expr": "(.assets[\"plugins/data_tables/TOOL.md\"] | startswith(\"# data_tables\")) and (.assets[\"plugins/data_tables/TOOL_EXPORT.md\"] | startswith(\"# data_tables_export\"))"
+      "expr": "(.assets[\"plugins/data_tables/TOOL.md\"] | startswith(\"# data_tables\")) and (.assets[\"plugins/data_tables_export/TOOL.md\"] | startswith(\"# data_tables_export\"))"
     },
     {
       "name": "the graph callback outputs three collections correlated by run_id",
@@ -42,7 +42,7 @@
     },
     {
       "name": "the system prompt and the notice carry no em or en dash",
-      "expr": "[.assets[\"agent_behaviors/data_analyst/system_prompt.md\"], .assets[\"notice.md\"], .assets[\"README.md\"], .assets[\"plugins/data_tables/TOOL.md\"], .assets[\"plugins/data_tables/TOOL_EXPORT.md\"]] | all(test(\"\\u2014|\\u2013\") | not)"
+      "expr": "[.assets[\"agent_behaviors/data_analyst/system_prompt.md\"], .assets[\"notice.md\"], .assets[\"README.md\"], .assets[\"plugins/data_tables/TOOL.md\"], .assets[\"plugins/data_tables_export/TOOL.md\"]] | all(test(\"\\u2014|\\u2013\") | not)"
     }
   ]
 }

@@ -13,6 +13,7 @@ path = "source/main.rs"
 [dependencies]
 arrow = { version = "59", default-features = false }
 async-trait = "0.1"
+bytes = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 datafusion = { version = "55", default-features = false, features = ["sql", "datetime_expressions", "string_expressions", "unicode_expressions", "regex_expressions", "nested_expressions", "math_expressions"] }
@@ -29,10 +30,12 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
 
+# Size and build time matter more than the last few percent of speed: the host compiles the module
+# on a call, and the whole of DataFusion goes into it.
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
+opt-level = "s"
+lto = "thin"
+codegen-units = 16
 panic = "abort"
 strip = true
 

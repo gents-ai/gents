@@ -6,7 +6,7 @@
     "pack_config.json",
     "plugins/data_tables.afb",
     "plugins/data_tables/TOOL.md",
-    "plugins/data_tables/TOOL_EXPORT.md",
+    "plugins/data_tables_export/TOOL.md",
     "schemas/data_job.graphql",
     "schemas/data_result.graphql",
     "schemas/data_row.graphql",
@@ -223,7 +223,7 @@
         ],
         "type": "object"
       },
-      "instructions": "plugins/data_tables/TOOL_EXPORT.md",
+      "instructions": "plugins/data_tables_export/TOOL.md",
       "language": "rust",
       "limits": {
         "max_output_mib": 4,

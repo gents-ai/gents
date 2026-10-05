@@ -1,19 +1,71 @@
 //! Parquet files: schema and row count from the footer, and a scan that reads
 //! only the columns a query names, one row group at a time.
 use std::fs::File;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::reader::{ChunkReader, Length};
 
 use crate::Res;
 use crate::table::{BATCH_ROWS, Batches, ScanError, TableSource, file_fingerprint};
 
 /// The most compressed bytes of the columns a query reads that one row group may hold.
 const MAX_ROW_GROUP_BYTES: i64 = 256 * 1024 * 1024;
+
+/// A Parquet file the reader opens by path for every read. The reader's own `File` support clones
+/// the file handle, which the WebAssembly host does not offer.
+struct PathFile {
+    path: PathBuf,
+    len: u64,
+}
+
+impl PathFile {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            len: std::fs::metadata(path)?.len(),
+        })
+    }
+
+    fn at(&self, start: u64) -> std::io::Result<File> {
+        let mut f = File::open(&self.path)?;
+        f.seek(SeekFrom::Start(start))?;
+        Ok(f)
+    }
+}
+
+impl Length for PathFile {
+    fn len(&self) -> u64 {
+        self.len
+    }
+}
+
+impl ChunkReader for PathFile {
+    type T = BufReader<std::io::Take<File>>;
+
+    fn get_read(&self, start: u64) -> Result<Self::T, ParquetError> {
+        let take = self.at(start)?.take(self.len.saturating_sub(start));
+        Ok(BufReader::with_capacity(64 * 1024, take))
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> Result<bytes::Bytes, ParquetError> {
+        // The buffer grows with what the file really holds, not with a length a damaged footer names.
+        let mut buf = Vec::with_capacity(length.min(1 << 20));
+        let read = self.at(start)?.take(length as u64).read_to_end(&mut buf)?;
+        if read != length {
+            return Err(ParquetError::EOF(format!(
+                "expected {length} bytes at offset {start}, found {read}"
+            )));
+        }
+        Ok(bytes::Bytes::from(buf))
+    }
+}
 
 /// A Parquet file as a table.
 pub struct ParquetTable {
@@ -34,7 +86,8 @@ fn corrupt(path: &Path, why: &dyn std::fmt::Display) -> String {
 impl ParquetTable {
     /// Reads the footer of `path`.
     pub fn open(path: &Path) -> Res<Self> {
-        let file = File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let file =
+            PathFile::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let builder =
             ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| corrupt(path, &e))?;
         let meta = Arc::clone(builder.metadata());
@@ -64,7 +117,7 @@ impl TableSource for ParquetTable {
 
     fn scan(&self, projection: Option<&[usize]>) -> Batches {
         let fail = |e: String| -> Batches { Box::new(std::iter::once(Err(ScanError::Failed(e)))) };
-        let file = match File::open(&self.path) {
+        let file = match PathFile::open(&self.path) {
             Ok(f) => f,
             Err(e) => return fail(format!("cannot read {}: {e}", self.path.display())),
         };

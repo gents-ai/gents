@@ -330,7 +330,17 @@ impl Catalog {
                 } else {
                     safe_join(&base, &rel)?
                 };
-                match detect(&full, strict)? {
+                let detected = match detect(&full, strict) {
+                    Ok(d) => d,
+                    // A file in a listing that cannot be opened (a link out of the folder, a
+                    // permission) is skipped and said; one that was asked for is an error.
+                    Err(why) if strict => {
+                        notes.push(unsupported(&rel, &why));
+                        continue;
+                    }
+                    Err(why) => return Err(why),
+                };
+                match detected {
                     Err(why) if strict => notes.push(unsupported(&rel, &why)),
                     Err(why) => return Err(format!("{rel} cannot be read as a table: {why}")),
                     Ok(fmt) => cat.add_file(&rel, &full, fmt, &mut taken, &mut notes, !strict)?,
@@ -969,6 +979,34 @@ mod tests {
         .err()
         .unwrap();
         assert!(err.contains("cannot read"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_a_listing_that_cannot_be_opened_is_skipped_not_fatal() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = Dir::new();
+        d.put("ok.csv", "x\n1\n");
+        let locked = d.put("locked.csv", "x\n1\n");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::File::open(&locked).is_ok();
+        let c = discover(&d);
+        let named = Catalog::discover(
+            Some(&d.s()),
+            Some(&["locked.csv".into()]),
+            None,
+            Options::default(),
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if !readable {
+            assert_eq!(names(&c), ["ok"]);
+            assert!(
+                c.listing[0].contains("locked.csv: cannot read"),
+                "{:?}",
+                c.listing
+            );
+            assert!(named.err().unwrap().contains("cannot read"));
+        }
     }
 
     #[cfg(unix)]
