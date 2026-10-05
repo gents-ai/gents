@@ -163,6 +163,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         || error_message_has_status(&reason, 403)
                         || error_message_has_status(&reason, 404)
                         || error_message_has_status(&reason, 422)
+                        || error_message_has_status(&reason, 426)
                     {
                         InferenceError::PermanentFailure { reason }
                     } else {
@@ -175,7 +176,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         InferenceError::TransientFailure { reason }
                     } else if provider_message_has_any_status(
                         provider_msg,
-                        &[400, 401, 403, 404, 422],
+                        &[400, 401, 403, 404, 422, 426],
                     ) || provider_msg_lower.contains("invalid_api_key")
                         || provider_msg_lower.contains("invalid api key")
                         || provider_msg_lower.contains("authentication")

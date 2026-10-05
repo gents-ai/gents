@@ -72,6 +72,38 @@ fn openai_compatible_404_is_permanent_backend_configuration() {
 }
 
 #[test]
+fn upgrade_required_426_is_permanent() {
+    use crate::completion_retry::{failure_class, FailureClass};
+    let body = r#"{"error":"Your Grok CLI version (1.0.12) is outdated. Please update to version 1.0.13 or later"}"#;
+    for error in [
+        rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "426".parse().expect("valid status"),
+                body.into(),
+            ),
+        ),
+        rig::completion::CompletionError::ProviderError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "426".parse().expect("valid status"),
+                body.into(),
+            )
+            .to_string(),
+        ),
+    ] {
+        let classified = classify_completion_error(&rig::agent::StreamingError::Completion(error));
+        assert!(
+            matches!(classified, InferenceError::PermanentFailure { .. }),
+            "{classified:?}"
+        );
+        assert!(!classified.is_retryable());
+        assert_eq!(
+            failure_class(&classified, &classified.to_string()),
+            FailureClass::Permanent
+        );
+    }
+}
+
+#[test]
 fn provider_transport_send_failure_is_retryable_even_with_status_like_url_digits() {
     let error =
         rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(

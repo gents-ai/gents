@@ -30,7 +30,7 @@ pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 /// Subscription inference proxy (not the metered developer API).
 pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
-const GROK_CLIENT_VERSION: &str = "1.0.13";
+const GROK_CLIENT_VERSION: &str = "1.0.46";
 const GROK_CLIENT_VERSION_ENV: &str = "GENTS_XAI_GROK_CLIENT_VERSION";
 
 pub fn default_backend_endpoint() -> &'static str {
@@ -67,12 +67,41 @@ pub fn classify_xai_auth_error(
     classify_oauth_auth_error(&XAI_OAUTH_PRODUCT, agent_did, provider, problem)
 }
 
+/// The `x-grok-client-version` advertised to the subscription proxy.
+///
+/// External premise (observed 2026-10): the proxy rejects clients below its
+/// floor with "Your Grok CLI version (X) is outdated. Please update to version
+/// 1.0.13 or later", so the default tracks a released Grok CLI at or above that
+/// floor. `GENTS_XAI_GROK_CLIENT_VERSION` overrides it when the proxy raises its
+/// floor before gents ships a newer default. The value is not read from a local
+/// Grok install because inference runs headless, on hosts without Grok.
 pub fn grok_client_version() -> String {
     std::env::var(GROK_CLIENT_VERSION_ENV)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| GROK_CLIENT_VERSION.to_string())
+}
+
+/// Operator guidance when a proxy response body is the outdated-client
+/// rejection described on [`grok_client_version`].
+pub fn outdated_client_hint(body: &str) -> Option<String> {
+    let (_, after) = body.split_once(") is outdated")?;
+    let minimum = after
+        .split_once("update to version ")
+        .map(|(_, tail)| {
+            let end = tail
+                .find(|c: char| !c.is_ascii_digit() && c != '.')
+                .unwrap_or(tail.len());
+            tail[..end].trim_end_matches('.')
+        })
+        .filter(|minimum| !minimum.is_empty())
+        .unwrap_or("unspecified");
+    Some(format!(
+        "The Grok proxy rejected client version {} as outdated (minimum {minimum}); \
+         set {GROK_CLIENT_VERSION_ENV} to a current Grok CLI version or upgrade gents.",
+        grok_client_version()
+    ))
 }
 
 /// Headers the Grok CLI chat proxy uses to recognize subscription clients.
@@ -407,6 +436,28 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("xai-grok-cli")
         );
+    }
+
+    #[test]
+    fn default_client_version_clears_proxy_floor() {
+        let parse = |version: &str| -> Vec<u32> {
+            version
+                .split('.')
+                .map(|part| part.parse().unwrap())
+                .collect()
+        };
+        assert_eq!(GROK_CLIENT_VERSION, "1.0.46");
+        assert!(parse(GROK_CLIENT_VERSION) >= parse("1.0.13"));
+    }
+
+    #[test]
+    fn outdated_client_hint_names_minimum_and_override() {
+        let body = r#"{"error":"Your Grok CLI version (1.0.12) is outdated. Please update to version 1.0.13 or later"}"#;
+        let hint = outdated_client_hint(body).expect("outdated rejection is recognized");
+        assert!(hint.contains(&grok_client_version()), "{hint}");
+        assert!(hint.contains("minimum 1.0.13"), "{hint}");
+        assert!(hint.contains(GROK_CLIENT_VERSION_ENV), "{hint}");
+        assert_eq!(outdated_client_hint(r#"{"error":"unauthorized"}"#), None);
     }
 
     #[tokio::test]

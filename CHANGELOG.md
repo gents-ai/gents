@@ -636,6 +636,12 @@ source consistency checks, not a separate runtime compatibility version.
   refresh was in flight (#2119). A rebuilt behavior on a re-created sign-in
   uses it, not the removed sign-in's cached token.
 
+- The Grok subscription advertises client version 1.0.46, above the proxy's
+  1.0.13 floor, and a test pins it there. An HTTP 426 Upgrade Required fails
+  the turn at once instead of spending the transport retry budget. When the
+  proxy rejects the client as outdated, `gents grok-auth-probe` and Grok model
+  discovery name the version sent, the minimum it quoted, and the
+  `GENTS_XAI_GROK_CLIENT_VERSION` override.
 - A document trigger whose fire cannot be admitted no longer re-fires the same
   document without bound (#2094). A refused fire, such as an `emit_outcome`
   Task delivered a document without `handoff_id` or a template that fails to

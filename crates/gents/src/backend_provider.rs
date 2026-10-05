@@ -380,13 +380,19 @@ pub async fn discover_models(
             .unwrap_or_else(|_| "<unreadable body>".to_string());
         if !status.is_success() {
             tracing::Span::current().record("failure_class", "http_status");
-            return Err(ModelDiscoveryHttpError {
+            let error = anyhow::Error::new(ModelDiscoveryHttpError {
                 provider: provider_name.to_string(),
                 url: models_url.to_string(),
                 status: status.as_u16(),
                 body: truncate_probe_body(&body),
-            }
-            .into());
+            });
+            let hint = (kind == BackendProviderKind::XaiGrokOAuth)
+                .then(|| crate::xai_grok_oauth::outdated_client_hint(&body))
+                .flatten();
+            return Err(match hint {
+                Some(hint) => error.context(hint),
+                None => error,
+            });
         }
 
         let models: OpenAiModelsResponse = match serde_json::from_str(&body) {
@@ -727,25 +733,7 @@ mod tests {
             r#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5","contextWindow":256000,"apiBackend":"responses"},{"id":"row-2","modelId":"grok-build-0.1","name":"Grok Build"}]}"#,
         )
         .await;
-        let credential = crate::oauth_credential::OAuthCredential {
-            doc_id: None,
-            credential_id: "xai-oauth:did:key:zAgent".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
-            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
-            access_token: "access-token".to_string(),
-            refresh_token: "refresh-token".to_string(),
-            id_token: None,
-            account_id: None,
-            chatgpt_plan_type: None,
-            is_fedramp: false,
-            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-            last_refresh: None,
-            enabled: true,
-            account_ref: None,
-            connected_at: None,
-            provider_account_key: None,
-            label: None,
-        };
+        let credential = xai_grok_credential();
 
         let models = discover_models(
             &Client::new(),
@@ -764,6 +752,58 @@ mod tests {
             "Grok discovery must query the official /models-v2 catalog: {}",
             requests[0]
         );
+    }
+
+    fn xai_grok_credential() -> crate::oauth_credential::OAuthCredential {
+        crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: "xai-oauth:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+            account_ref: None,
+            connected_at: None,
+            provider_account_key: None,
+            label: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_models_grok_outdated_426_names_override_and_keeps_http_status() {
+        const OUTDATED: &str = r#"{"error":"Your Grok CLI version (1.0.12) is outdated. Please update to version 1.0.13 or later"}"#;
+        let credential = xai_grok_credential();
+        for kind in [
+            BackendProviderKind::XaiGrokOAuth,
+            BackendProviderKind::OpenAiCompatible,
+        ] {
+            let (endpoint, _requests) =
+                spawn_model_discovery_server_with_status("426 Upgrade Required", OUTDATED).await;
+            let error = discover_models(&Client::new(), kind, &endpoint, None, Some(&credential))
+                .await
+                .expect_err("426 must fail discovery");
+
+            let http = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<ModelDiscoveryHttpError>())
+                .expect("426 must stay a ModelDiscoveryHttpError for CLI and desktop classifiers");
+            assert_eq!(http.status, 426, "{kind:?}");
+            let rendered = format!("{error:#}");
+            let hinted = rendered.contains("GENTS_XAI_GROK_CLIENT_VERSION")
+                && rendered.contains("minimum 1.0.13");
+            assert_eq!(
+                hinted,
+                kind == BackendProviderKind::XaiGrokOAuth,
+                "{kind:?}: {rendered}"
+            );
+        }
     }
 
     #[tokio::test]

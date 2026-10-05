@@ -123,6 +123,9 @@ async fn probe_account(
         .context("failed to read models response from Grok OAuth backend")?;
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
+        if let Some(hint) = gents::xai_grok_oauth::outdated_client_hint(&body) {
+            bail!("models request failed with HTTP {status}: {body}\n{hint}");
+        }
         if status.as_u16() == 401 {
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
                 &agent_did,
