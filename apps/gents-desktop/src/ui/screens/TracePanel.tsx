@@ -22,6 +22,7 @@ import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
 import { ToolBody, ToolSummary } from "./tool-views";
 import { ToolIcon } from "./tool-icon";
+import { useSessionFacts } from "../hooks/useSelectedSession";
 
 function Entry({
   tool,
@@ -86,10 +87,9 @@ export function TracePanel({
   /** the card and its header; off when the dock draws them */
   chrome?: boolean;
 }) {
-  const session = shell.selectedSession;
-  const tools =
-    session?.timelineItems.flatMap((i) => (i.kind === "toolGroup" ? i.tools : [])) ??
-    [];
+  /* the tool list is kept when the session is written, so a streamed chunk
+     does not rebuild it */
+  const tools = useSessionFacts(shell)?.tools ?? NO_TOOLS;
   const running = shell.selectedTrackedRequestId !== null;
   const [openKey, setOpenKey] = useState<string | null>(null);
 
@@ -165,3 +165,5 @@ function Took({ tool }: { tool: RenderedToolCallView }) {
     </span>
   );
 }
+
+const NO_TOOLS: readonly RenderedToolCallView[] = [];

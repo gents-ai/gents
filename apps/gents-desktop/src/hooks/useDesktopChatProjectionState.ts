@@ -9,7 +9,6 @@ import {
 import type {
   SessionSummary,
   DeploymentView,
-  DesktopSessionSnapshot,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import {
@@ -18,6 +17,7 @@ import {
   selectedBehaviorReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
+import type { SessionHeader } from "./sessionStore";
 
 type ChatProjectionStateOptions = {
   clientAvailable: boolean;
@@ -27,7 +27,9 @@ type ChatProjectionStateOptions = {
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
   sending: boolean;
-  session: DesktopSessionSnapshot | null;
+  session: SessionHeader | null;
+  /** the requests whose user row the transcript holds */
+  userRequestIds: ReadonlySet<string>;
   syncHealth: SyncHealthView | null;
 };
 
@@ -41,6 +43,7 @@ export function useDesktopChatProjectionState({
   selectedSessionId,
   sending,
   session,
+  userRequestIds,
   syncHealth,
 }: ChatProjectionStateOptions) {
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
@@ -149,17 +152,16 @@ export function useDesktopChatProjectionState({
     );
   }, [shellProjection.workflow]);
 
-  useEffect(() => {
-    setOptimisticPendingTurn((current) => {
-      if (!current || current.sessionId !== session?.sessionId) return current;
-      const durableOwner = session.timelineItems.some(
-        (item) =>
-          (item.kind === "pendingUserTurn" && item.requestId === current.requestId) ||
-          (item.kind === "userMessage" && item.requestId === current.requestId),
-      );
-      return durableOwner ? null : current;
-    });
-  }, [session]);
+  /* the optimistic turn stands in for a sent message until the transcript
+     holds its durable row; derived, so it ends whichever arrives first */
+  const visiblePendingTurn =
+    optimisticPendingTurn &&
+    !(
+      optimisticPendingTurn.sessionId === session?.sessionId &&
+      userRequestIds.has(optimisticPendingTurn.requestId)
+    )
+      ? optimisticPendingTurn
+      : null;
 
   const selectedTrackedRequestId =
     trackedRequestIdForSession(selectedSessionId, shellProjection.workflow) ??
@@ -172,7 +174,7 @@ export function useDesktopChatProjectionState({
     setDraft,
     localWorkflow,
     setLocalWorkflow,
-    optimisticPendingTurn,
+    optimisticPendingTurn: visiblePendingTurn,
     setOptimisticPendingTurn,
     operationalState,
     behaviorReadiness,

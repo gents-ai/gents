@@ -8,6 +8,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { useDesktopSessionProjection } from "../src/hooks/useDesktopSessionProjection";
 import { createSelectionStore } from "../src/hooks/selectionStore";
+import { readSession } from "../src/hooks/sessionStore";
 
 function session(
   keys: string[],
@@ -106,13 +107,17 @@ describe("useDesktopSessionProjection", () => {
     act(() => {
       refresh = result.current.refreshSession("session-1");
     });
-    expect(result.current.session?.timelineItems).toEqual(saved.timelineItems);
+    expect(readSession(result.current.sessionStore)?.timelineItems).toEqual(
+      saved.timelineItems,
+    );
     expect(result.current.sessionLoad.phase).toBe("loading");
     await act(async () => {
       reject(new Error("database read timed out"));
       await refresh;
     });
-    expect(result.current.session?.timelineItems).toEqual(saved.timelineItems);
+    expect(readSession(result.current.sessionStore)?.timelineItems).toEqual(
+      saved.timelineItems,
+    );
     expect(result.current.sessionLoad.phase).toBe("failed");
     expect(result.current.sessionLoad.error).toContain("database read timed out");
   });
@@ -187,13 +192,15 @@ describe("useDesktopSessionProjection", () => {
     await act(async () => {
       await result.current.refreshSession("session-1");
     });
-    expect(result.current.session?.turnState).toBe("interrupted");
+    expect(readSession(result.current.sessionStore)?.turnState).toBe("interrupted");
     await act(async () => {
       release(old);
       await first;
     });
-    expect(result.current.session?.turnState).toBe("interrupted");
-    expect(result.current.session?.timelineItems[0]?.itemKey).toBe("k2");
+    expect(readSession(result.current.sessionStore)?.turnState).toBe("interrupted");
+    expect(readSession(result.current.sessionStore)?.timelineItems[0]?.itemKey).toBe(
+      "k2",
+    );
     expect(result.current.sessionLoad.phase).toBe("loaded");
   });
 
@@ -250,12 +257,11 @@ describe("useDesktopSessionProjection", () => {
     expect(fetchSessionSnapshot.mock.calls[2]?.[3]).toMatchObject({
       beforeItemKey: "tools-7",
     });
-    expect(result.current.session?.timelineItems.map((item) => item.itemKey)).toEqual([
-      "k1",
-      "k2",
-      "k8",
-      "k9",
-    ]);
+    expect(
+      readSession(result.current.sessionStore)?.timelineItems.map(
+        (item) => item.itemKey,
+      ),
+    ).toEqual(["k1", "k2", "k8", "k9"]);
   });
 
   it("applies a delayed live delta to the page loaded while it was in flight", async () => {
@@ -330,12 +336,14 @@ describe("useDesktopSessionProjection", () => {
       await pendingDelta;
     });
 
-    expect(result.current.session?.timelineItems.map((item) => item.itemKey)).toEqual([
-      "k1",
-      "k8",
-      "live-assistant",
-    ]);
-    expect(result.current.session?.timelineItems.at(-1)).toMatchObject({
+    expect(
+      readSession(result.current.sessionStore)?.timelineItems.map(
+        (item) => item.itemKey,
+      ),
+    ).toEqual(["k1", "k8", "live-assistant"]);
+    expect(
+      readSession(result.current.sessionStore)?.timelineItems.at(-1),
+    ).toMatchObject({
       content: "hello world",
     });
   });
@@ -376,8 +384,10 @@ describe("useDesktopSessionProjection", () => {
     await act(async () => {
       await result.current.refreshSession("session-2");
     });
-    expect(result.current.session?.sessionId).toBe("session-2");
-    expect(result.current.session?.timelineItems[0]?.itemKey).toBe("other");
+    expect(readSession(result.current.sessionStore)?.sessionId).toBe("session-2");
+    expect(readSession(result.current.sessionStore)?.timelineItems[0]?.itemKey).toBe(
+      "other",
+    );
 
     const stale = session(["stale"], {
       totalItems: 1,
@@ -392,9 +402,11 @@ describe("useDesktopSessionProjection", () => {
       release(stale);
       await first!;
     });
-    expect(result.current.session?.sessionId).toBe("session-2");
-    expect(result.current.session?.timelineItems.map((item) => item.itemKey)).toEqual([
-      "other",
-    ]);
+    expect(readSession(result.current.sessionStore)?.sessionId).toBe("session-2");
+    expect(
+      readSession(result.current.sessionStore)?.timelineItems.map(
+        (item) => item.itemKey,
+      ),
+    ).toEqual(["other"]);
   });
 });

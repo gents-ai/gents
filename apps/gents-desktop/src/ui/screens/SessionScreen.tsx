@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type RefObject,
 } from "react";
 import {
@@ -119,6 +120,11 @@ import { ReplyingTo } from "./ReplyingTo";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { workspace } from "@/app/workspace";
 import { toastFailure } from "@/lib/failure";
+import {
+  useSelectedSession,
+  useSelectedSessionFields,
+  type SessionSelection,
+} from "../hooks/useSelectedSession";
 
 function formatTokens(value: number) {
   if (value < 1_000) return String(value);
@@ -1275,7 +1281,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 });
 
 export function SessionScreen({ shell }: { shell: Shell }) {
-  const session = shell.selectedSession;
+  const session = useSelectedSessionFields(shell, selectScreenFacts);
   const homeDid = shell.snapshot?.bootstrap.initAgentDid;
   const { draft, setDraft } = shell;
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
@@ -1801,13 +1807,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               </div>
 
               <div ref={headerEnd} aria-hidden="true" />
-              <TranscriptPanel
+              <SelectedTranscript
+                shell={shell}
                 deployment={deployment}
                 actionsRef={transcriptActions}
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
-                session={session}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}
@@ -2212,4 +2218,43 @@ function Reasoning({ text }: { text: string }) {
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+/* The transcript is the one reader of every streamed chunk: it alone selects
+   the whole session, so a chunk re-renders it and not the screen around it. */
+function SelectedTranscript({
+  shell,
+  ...props
+}: Omit<ComponentProps<typeof TranscriptPanel>, "session"> & {
+  shell: SessionSelection;
+}) {
+  return <TranscriptPanel {...props} session={useSelectedSession(shell)} />;
+}
+
+/* What the screen around the transcript reads from the session. A streamed
+   chunk keeps each of these, so it reaches the transcript and not the screen. */
+type ScreenFacts = Pick<
+  DesktopSessionSnapshot,
+  | "sessionId"
+  | "agentDid"
+  | "behaviorId"
+  | "title"
+  | "context"
+  | "goal"
+  | "latestRequestId"
+  | "latestRequestOutcome"
+>;
+
+function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts | null {
+  if (!session) return null;
+  return {
+    sessionId: session.sessionId,
+    agentDid: session.agentDid,
+    behaviorId: session.behaviorId,
+    title: session.title,
+    context: session.context,
+    goal: session.goal,
+    latestRequestId: session.latestRequestId,
+    latestRequestOutcome: session.latestRequestOutcome,
+  };
 }

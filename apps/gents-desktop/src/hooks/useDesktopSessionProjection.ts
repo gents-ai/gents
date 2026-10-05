@@ -22,6 +22,7 @@ import {
 } from "./desktopTimelinePaging";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
+import { createSessionStore, readSession, writeSession } from "./sessionStore";
 
 type SessionProjectionOptions = {
   api: DesktopApiAdapter;
@@ -41,8 +42,8 @@ export function useDesktopSessionProjection({
   setError,
 }: SessionProjectionOptions) {
   const refreshSeq = useRef(0);
-  const sessionRef = useRef<DesktopSessionSnapshot | null>(null);
-  const [session, setSessionState] = useState<DesktopSessionSnapshot | null>(null);
+  /* the selected session's reads land here; screens select what they draw */
+  const [sessionStore] = useState(() => createSessionStore());
   const [sessionLoad, setSessionLoad] = useState<SessionLoadState>({
     phase: "idle",
     sessionId: null,
@@ -52,12 +53,9 @@ export function useDesktopSessionProjection({
   });
 
   const setSession = useCallback(
-    (next: SetStateAction<DesktopSessionSnapshot | null>) => {
-      const resolved = typeof next === "function" ? next(sessionRef.current) : next;
-      sessionRef.current = resolved;
-      setSessionState(resolved);
-    },
-    [],
+    (next: SetStateAction<DesktopSessionSnapshot | null>) =>
+      writeSession(sessionStore, next),
+    [sessionStore],
   );
 
   async function refreshSession(
@@ -132,7 +130,7 @@ export function useDesktopSessionProjection({
     nextSessionId: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     if (!nextSessionId) return null;
-    const projected = sessionRef.current;
+    const projected = readSession(sessionStore);
     const agentDid =
       projected?.sessionId === nextSessionId
         ? (projected.agentDid ?? store.getState().agentDid)
@@ -148,7 +146,7 @@ export function useDesktopSessionProjection({
   }
 
   async function refreshSessionLiveDelta(): Promise<boolean> {
-    const current = sessionRef.current;
+    const current = readSession(sessionStore);
     const requestId = selectedTrackedRequestIdRef.current;
     if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
     const request = sessionLiveDeltaRequest(current, requestId);
@@ -156,7 +154,7 @@ export function useDesktopSessionProjection({
     try {
       const delta = await api.fetchSessionLiveDelta(request);
       if (!delta || store.getState().sessionId !== current.sessionId) return false;
-      const latest = sessionRef.current;
+      const latest = readSession(sessionStore);
       if (!latest || latest.sessionId !== current.sessionId) return true;
       const next = applySessionLiveDelta(latest, delta);
       if (!next) return false;
@@ -171,7 +169,7 @@ export function useDesktopSessionProjection({
   async function loadOlderSessionTimeline(): Promise<boolean> {
     try {
       for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
-        const current = sessionRef.current;
+        const current = readSession(sessionStore);
         const cursor = current?.timelinePage?.oldestItemKey ?? null;
         if (!current || !current.timelinePage?.hasOlder || !cursor) return false;
         const older = await api.fetchSessionSnapshot(
@@ -181,9 +179,9 @@ export function useDesktopSessionProjection({
           { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
         );
         if (!older || store.getState().sessionId !== current.sessionId) return false;
-        const previousItemCount = sessionRef.current?.timelineItems.length ?? 0;
+        const previousItemCount = readSession(sessionStore)?.timelineItems.length ?? 0;
         setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
-        const next = sessionRef.current;
+        const next = readSession(sessionStore);
         if ((next?.timelineItems.length ?? 0) > previousItemCount) return true;
         if (
           !next?.timelinePage?.hasOlder ||
@@ -203,7 +201,7 @@ export function useDesktopSessionProjection({
   }
 
   return {
-    session,
+    sessionStore,
     sessionLoad,
     setSession,
     refreshSession,

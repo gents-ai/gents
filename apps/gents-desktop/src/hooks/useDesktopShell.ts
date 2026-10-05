@@ -10,6 +10,8 @@ import { useDesktopChatProjectionState } from "./useDesktopChatProjectionState";
 import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
 import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
 import { createSelectionStore, selection, useSelection } from "./selectionStore";
+import { headerOf, useSessionFields, useSessionValue } from "./sessionStore";
+import { selectedIn } from "../ui/hooks/useSelectedSession";
 import { useDesktopSessionProjection } from "./useDesktopSessionProjection";
 import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
 import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
@@ -60,7 +62,7 @@ export function useDesktopShell({
     if (message) reportFailure?.(message);
   };
   const {
-    session,
+    sessionStore,
     sessionLoad,
     setSession,
     refreshSession,
@@ -120,11 +122,15 @@ export function useDesktopShell({
     selectedDeployment?.sessions.find(
       (session) => session.sessionId === selectedSessionId,
     ) ?? null;
-  const selectedSessionSnapshot =
-    session?.sessionId === selectedSessionId &&
-    (!selectedAgentDid || !session.agentDid || session.agentDid === selectedAgentDid)
-      ? session
-      : null;
+  /* the selected session's header and transcript facts: a streamed chunk
+     changes neither, so it does not re-render the shell */
+  const selectedSessionHeader = useSessionFields(sessionStore, (state) =>
+    headerOf(selectedIn(state, { selectedSessionId, selectedAgentDid })),
+  );
+  const userRequestIds = useSessionValue(
+    sessionStore,
+    (state) => state.facts.userRequestIds,
+  );
   const behaviorOptions = selectedDeployment?.behaviors ?? [];
   const runtimeHealth = snapshot?.client?.p2pHealth ?? null;
   const {
@@ -147,7 +153,8 @@ export function useDesktopShell({
     selectedDeployment,
     selectedSessionId,
     sending,
-    session: selectedSessionSnapshot,
+    session: selectedSessionHeader,
+    userRequestIds,
     syncHealth: snapshot?.client?.syncHealth ?? null,
   });
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
@@ -156,7 +163,7 @@ export function useDesktopShell({
       projectSessionLoadingStatus({
         selectedSessionId,
         selectedAgentDid,
-        session: selectedSessionSnapshot,
+        session: selectedSessionHeader,
         sessionLoad,
         operationalState,
       }),
@@ -164,7 +171,7 @@ export function useDesktopShell({
       operationalState,
       selectedAgentDid,
       selectedSessionId,
-      selectedSessionSnapshot,
+      selectedSessionHeader,
       sessionLoad,
     ],
   );
@@ -309,7 +316,7 @@ export function useDesktopShell({
 
   return {
     snapshot,
-    session: selectedSessionSnapshot,
+    sessionStore,
     sessionLoad,
     sessionLoadingStatus,
     optimisticPendingTurn,

@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { Shell } from "../src/ui/hooks/useShell";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import {
+  type DesktopSessionSnapshot,
   projectDeploymentOperationalState,
   type DeploymentView,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import { useDesktopChatProjectionState } from "../src/hooks/useDesktopChatProjectionState";
 import { MemoryNavProvider } from "@gents/shell";
+import { selectedSessionFields } from "./session-store-fixture";
+import { readSession, writeSession } from "../src/hooks/sessionStore";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -44,7 +47,7 @@ function newSessionShell(
 ): Shell {
   let intentGeneration = 0;
   return {
-    selectedSession: null,
+    ...selectedSessionFields(null),
     selectedSessionId: null,
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
@@ -83,8 +86,7 @@ function newSessionShell(
 function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell {
   return {
     ...newSessionShell(status),
-    selectedSessionId: "session",
-    selectedSession: {
+    ...selectedSessionFields({
       sessionId: "session",
       agentDid: "did:key:agent",
       behaviorId: "behavior",
@@ -96,7 +98,7 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
       latestRequestOutcome: null,
       goal: null,
       context: null,
-    },
+    } as unknown as DesktopSessionSnapshot),
     interruptVisible: false,
     selectedTrackedRequestId: null,
     activeRequestId: null,
@@ -123,6 +125,7 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
     selectedDeployment: null,
     sending: false,
     session: null,
+    userRequestIds: new Set(),
     syncHealth: null,
   });
   return (
@@ -137,7 +140,7 @@ function OwnedSessionScreen({ shell }: { shell: Shell }) {
 describe("SessionScreen canonical composer admission", () => {
   it("keeps transcript markdown out of real context-owned draft updates", async () => {
     const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.timelineItems = [
+    setTimeline(shell, [
       {
         kind: "assistantMessage",
         itemKey: "assistant-stable",
@@ -146,7 +149,7 @@ describe("SessionScreen canonical composer admission", () => {
         reasoning: null,
         timestamp: null,
       },
-    ];
+    ]);
     markdownRender.mockClear();
     render(<OwnedSessionScreen shell={shell} />);
     expect(markdownRender).toHaveBeenCalledTimes(1);
@@ -180,7 +183,7 @@ describe("SessionScreen canonical composer admission", () => {
   });
   it("restores each session draft without carrying text into another session", () => {
     const first = existingSessionShell({ kind: "ready" });
-    const second = { ...first, selectedSessionId: "second" };
+    const second = reselect(first, { sessionId: "second" });
     const { rerender } = render(<OwnedSessionScreen shell={first} />);
     fireEvent.change(screen.getByLabelText("Message"), {
       target: { value: "first draft" },
@@ -193,7 +196,7 @@ describe("SessionScreen canonical composer admission", () => {
     rerender(<OwnedSessionScreen shell={first} />);
     expect(screen.getByLabelText("Message")).toHaveValue("first draft");
     rerender(
-      <OwnedSessionScreen shell={{ ...first, selectedAgentDid: "other-agent" }} />,
+      <OwnedSessionScreen shell={reselect(first, { agentDid: "other-agent" })} />,
     );
     expect(screen.getByLabelText("Message")).toHaveValue("");
     rerender(<OwnedSessionScreen shell={second} />);
@@ -385,7 +388,9 @@ describe("SessionScreen goal label", () => {
 
   it("does not report a wrapped-up budget-limited goal as met", () => {
     const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.goal = goal("budget_limited", true);
+    writeSession(shell.sessionStore, (session) =>
+      session ? { ...session, goal: goal("budget_limited", true) } : session,
+    );
     render(<OwnedSessionScreen shell={shell} />);
     expect(screen.queryByText("Goal met")).not.toBeInTheDocument();
     expect(screen.getByText("Goal · budget reached")).toBeInTheDocument();
@@ -393,8 +398,25 @@ describe("SessionScreen goal label", () => {
 
   it("reports a complete goal as met", () => {
     const shell = existingSessionShell({ kind: "ready" });
-    shell.selectedSession!.goal = goal("complete", true);
+    writeSession(shell.sessionStore, (session) =>
+      session ? { ...session, goal: goal("complete", true) } : session,
+    );
     render(<OwnedSessionScreen shell={shell} />);
     expect(screen.getByText("Goal met")).toBeInTheDocument();
   });
 });
+
+/* the transcript a test gives the session before it renders */
+function setTimeline(shell: Shell, timelineItems: unknown[]) {
+  writeSession(shell.sessionStore, (session) =>
+    session ? ({ ...session, timelineItems } as DesktopSessionSnapshot) : session,
+  );
+}
+
+/* the same shell on another session: its own snapshot, selected */
+function reselect(shell: Shell, patch: Partial<DesktopSessionSnapshot>): Shell {
+  return {
+    ...shell,
+    ...selectedSessionFields({ ...readSession(shell.sessionStore)!, ...patch }),
+  };
+}

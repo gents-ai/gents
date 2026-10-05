@@ -58,6 +58,7 @@ import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { initTheme } from "./ui/theme";
 
 import "./App.css";
+import { useSelectedSessionValue } from "./ui/hooks/useSelectedSession";
 
 function NavBinder({ children }: { children: ReactNode }) {
   const nav = useNav();
@@ -120,11 +121,12 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   }, []);
   useManagedServerTrayControls(bridge.api);
   const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
+  const sessionTitle = useSelectedSessionValue(shell, (s) => s?.title ?? null);
   useEffect(() => {
     if (!isMacTauriShell()) return;
     const title =
       route.name === "session"
-        ? shell.selectedSession?.title || "New Session"
+        ? sessionTitle || "New Session"
         : route.name === "sessions"
           ? "Sessions"
           : route.name === "agents"
@@ -135,7 +137,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     void getCurrentWindow().setTitle(
       agent ? `${title} — ${agent}` : `${title} — Gents`,
     );
-  }, [agent, route.name, shell.selectedSession?.title]);
+  }, [agent, route.name, sessionTitle]);
   const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
   // A completed home reset starts over from first-run detection.
   const homeGeneration = shell.incompatibleHome.generation;

@@ -1,6 +1,7 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  DesktopSessionSnapshot,
   CausedCallView,
   DesktopSessionProvenanceRequest,
   LinkedSessionView,
@@ -16,6 +17,11 @@ import {
   useWorkers,
 } from "../src/ui/screens/workers";
 import { workerNow } from "../src/ui/screens/WorkerStep";
+import {
+  createSessionStore,
+  writeSession,
+  type SessionStore,
+} from "../src/hooks/sessionStore";
 
 const AGENT = "did:key:parent";
 const PERSON = "did:key:person";
@@ -102,12 +108,30 @@ function shellFor(
 ): Shell {
   return {
     api,
-    selectedSession: { sessionId, timelineItems },
+    sessionStore: storeFor(sessionId, timelineItems),
+    selectedSessionId: sessionId,
+    selectedAgentDid: null,
     selectedDeployment: {
       agentDid: AGENT,
       sessions: sessions ?? [{ agentDid: AGENT, sessionId, requesterDid: PERSON }],
     },
   } as unknown as Shell;
+}
+
+/* one session store per transcript a test passes, as the projection keeps
+   one store across reads */
+const stores = new WeakMap<RenderedTimelineItem[], Map<string, SessionStore>>();
+function storeFor(sessionId: string, timelineItems: RenderedTimelineItem[]) {
+  const bySession = stores.get(timelineItems) ?? new Map<string, SessionStore>();
+  stores.set(timelineItems, bySession);
+  const store =
+    bySession.get(sessionId) ??
+    createSessionStore({
+      sessionId,
+      timelineItems,
+    } as unknown as DesktopSessionSnapshot);
+  bySession.set(sessionId, store);
+  return store;
 }
 
 function apiWith(
@@ -301,25 +325,22 @@ describe("subagent lineage freshness", () => {
         view([caused("r-remote", "session-remote", state, "req-1", "call-1")]),
       );
       const tool = call("req-1", "call-1", "success");
-      const at = (storeVersion: number) =>
-        ({
-          ...shellFor(api, [group(tool)]),
-          selectedSession: {
-            sessionId: "parent-session",
-            timelineItems: [group(tool)],
-            projectionRevision: { storeVersion, reconcileVersion: 1 },
-          },
-        }) as unknown as Shell;
-      const { result, rerender } = renderHook(
-        ({ version }: { version: number }) => useBoth(at(version)),
-        { initialProps: { version: 1 } },
-      );
+      const items = [group(tool)];
+      const shell = shellFor(api, items);
+      const observe = (storeVersion: number) =>
+        writeSession(shell.sessionStore, (session) =>
+          session
+            ? { ...session, projectionRevision: { storeVersion, reconcileVersion: 1 } }
+            : session,
+        );
+      observe(1);
+      const { result } = renderHook(() => useBoth(shell));
       await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(1));
       await vi.advanceTimersByTimeAsync(60_000);
       expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
 
       state = "completed";
-      rerender({ version: 2 });
+      act(() => observe(2));
       await waitFor(() =>
         expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe(
           "completed",
@@ -335,31 +356,34 @@ describe("subagent lineage freshness", () => {
       view([caused("r-1", "session-1", "completed", "req-1", "call-1")]),
     );
     const tool = call("req-1", "call-1", "success");
-    const at = (storeVersion: number) =>
-      ({
-        ...shellFor(api, []),
-        selectedSession: {
-          sessionId: "parent-session",
-          timelineItems: [
-            group(tool),
-            {
-              kind: "liveAssistant",
-              itemKey: "live",
-              content: `chunk ${storeVersion}`,
-              reasoning: null,
-            },
-          ],
-          projectionRevision: { storeVersion, reconcileVersion: 1 },
-        },
-      }) as unknown as Shell;
-    const { result, rerender } = renderHook(
-      ({ version }: { version: number }) => useBoth(at(version)),
-      { initialProps: { version: 1 } },
-    );
+    /* a live delta replaces only the live reply; the rows stay the same objects */
+    const toolRow = group(tool);
+    const items = [toolRow];
+    const shell = shellFor(api, items);
+    const stream = (storeVersion: number) =>
+      writeSession(shell.sessionStore, (session) =>
+        session
+          ? {
+              ...session,
+              timelineItems: [
+                toolRow,
+                {
+                  kind: "liveAssistant",
+                  itemKey: "live",
+                  content: `chunk ${storeVersion}`,
+                  reasoning: null,
+                } as RenderedTimelineItem,
+              ],
+              projectionRevision: { storeVersion, reconcileVersion: 1 },
+            }
+          : session,
+      );
+    stream(1);
+    const { result } = renderHook(() => useBoth(shell));
     await waitFor(() =>
       expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed"),
     );
-    for (let version = 2; version <= 50; version += 1) rerender({ version });
+    for (let version = 2; version <= 50; version += 1) act(() => stream(version));
     await Promise.resolve();
     expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
   });

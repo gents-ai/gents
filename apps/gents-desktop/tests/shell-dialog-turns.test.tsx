@@ -1,7 +1,10 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { SyncHealthView } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopSessionSnapshot,
+  SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 
 /* Base UI keeps a closing popover mounted for its exit animation; jsdom has
    none. This popover stays mounted after closing until the test acknowledges
@@ -122,6 +125,7 @@ import { AppShell } from "../src/ui/app/AppShell";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { MemoryNavProvider } from "@gents/shell";
+import { selectedSessionFields } from "./session-store-fixture";
 
 const healthy: SyncHealthView = {
   state: "healthy",
@@ -149,8 +153,7 @@ const context = {
 
 function sessionShell(): Shell {
   return {
-    selectedSessionId: "session",
-    selectedSession: {
+    ...selectedSessionFields({
       sessionId: "session",
       agentDid: "did:key:agent",
       behaviorId: "behavior",
@@ -162,7 +165,7 @@ function sessionShell(): Shell {
       latestRequestOutcome: null,
       goal: null,
       context,
-    },
+    } as unknown as DesktopSessionSnapshot),
     selectedBehaviorId: "behavior",
     selectedAgentDid: "did:key:agent",
     deployments: [],

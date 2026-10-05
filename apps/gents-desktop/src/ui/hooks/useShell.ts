@@ -99,7 +99,9 @@ export function useShell(
       selectBehavior: d.selectBehavior,
       selectedBehaviorId: d.behaviorReadiness.behaviorId,
       selectedSessionId: d.selectedSessionId,
-      selectedSession: d.session,
+      /* the selected session lives in this store; screens select what they
+         draw through useSelectedSession, so a chunk reaches only its readers */
+      sessionStore: d.sessionStore,
       draft: d.draft,
       setDraft: d.setDraft,
       chatFolder: d.chatFolder,

@@ -18,6 +18,11 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { isLive } from "@/lib/live";
+import {
+  selectedIn,
+  useSelectedSessionValue,
+  useSessionFacts,
+} from "../hooks/useSelectedSession";
 
 export type Subagent = {
   sessionId: string;
@@ -97,16 +102,16 @@ type Held<T> = { scope: string; value: T };
 
 /* The selected session's provenance. Its scope is exact: the session's
    agent, label and requester, as the session list reports them. It is asked
-   again when the transcript gains a row or a tool row's status moves, or the
-   session list does. While a request it caused is live it is also asked
+   again when the transcript's rows change (rowsRevision, which a streamed
+   chunk to the live reply does not move), or the session list does. While a request it caused is live it is also asked
    whenever the client store's observation moves
    (projectionRevision.storeVersion), so a caused request settling anywhere
    this desktop observes refreshes it; there is no timer of its own. Every
    applied live delta advances storeVersion, so a settled lineage must not
    follow it: that would be one bridge call per streamed chunk. */
 export function useSessionProvenance(shell: Shell): SessionProvenanceView | null {
-  const session = shell.selectedSession;
-  const sessionId = session?.sessionId ?? null;
+  const sessionId = useSelectedSessionValue(shell, (s) => s?.sessionId ?? null);
+  const rowsRevision = useSessionFacts(shell)?.rowsRevision ?? 0;
   const agentDid = shell.selectedDeployment?.agentDid ?? null;
   const sessions = shell.selectedDeployment?.sessions;
   const summary = listedSession(sessions, agentDid, sessionId);
@@ -115,20 +120,13 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
   const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;
   const [held, setHeld] = useState<Held<SessionProvenanceView> | null>(null);
   const provenance = held?.scope === scope ? held.value : null;
-  /* the cues are compared by value, not identity; a live delta changes only
-     the liveAssistant row, which the row cue leaves out */
   const awaitsCaused =
     provenance?.calls.some((c) => isLive(c.caused.lifecycleState)) ?? false;
-  const observed = session?.projectionRevision?.storeVersion ?? null;
-  const storeVersion = awaitsCaused ? observed : null;
-  const rowsCue = useMemo(() => {
-    const items = session?.timelineItems ?? [];
-    const rows = items.filter((i) => i.kind !== "liveAssistant");
-    const statuses = rows.flatMap((i) =>
-      i.kind === "toolGroup" ? i.tools.map((t) => `${t.itemKey}:${t.statusKind}`) : [],
-    );
-    return `${rows[rows.length - 1]?.itemKey ?? ""}\u0001${statuses.join()}`;
-  }, [session?.timelineItems]);
+  /* the store version moves with every streamed chunk, so it is followed,
+     and re-renders this, only while a caused request is live */
+  const storeVersion = useSelectedSessionValue(shell, (s) =>
+    awaitsCaused ? (s?.projectionRevision?.storeVersion ?? null) : null,
+  );
   const sessionsCue = (sessions ?? [])
     .map((s) => `${s.sessionId}:${s.turnState ?? ""}:${s.updatedAt ?? ""}`)
     .join();
@@ -139,7 +137,7 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
   useEffect(() => {
     /* without the session's summary its exact scope is unknown */
     if (!agentDid || !sessionId || !listed) return;
-    const cues = `${scope}\u0002${rowsCue}\u0002${sessionsCue}`;
+    const cues = `${scope}\u0002${rowsRevision}\u0002${sessionsCue}`;
     const last = asked.current;
     if (
       last?.cues === cues &&
@@ -147,7 +145,12 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
     ) {
       return;
     }
-    asked.current = { cues, version: observed };
+    asked.current = {
+      cues,
+      version:
+        selectedIn(shell.sessionStore.getState(), shell)?.projectionRevision
+          ?.storeVersion ?? null,
+    };
     const ask = ++generation.current;
     void shell.api.sessionProvenance({ sessionId, agentDid, requesterDid }).then(
       (value) => {
@@ -166,7 +169,7 @@ export function useSessionProvenance(shell: Shell): SessionProvenanceView | null
     listed,
     scope,
     storeVersion,
-    rowsCue,
+    rowsRevision,
     sessionsCue,
   ]);
   return provenance;
@@ -176,19 +179,18 @@ export function useWorkers(
   shell: Shell,
   provenance: SessionProvenanceView | null,
 ): Workers {
-  const session = shell.selectedSession;
+  const facts = useSessionFacts(shell);
   const agentDid = shell.selectedDeployment?.agentDid ?? null;
   const sessions = shell.selectedDeployment?.sessions;
   const [heldOps, setHeldOps] = useState<Held<DesktopOperationsSnapshot> | null>(null);
   const ops = heldOps?.scope === agentDid ? heldOps.value : null;
-  const tools = useMemo(
-    () =>
-      session?.timelineItems.flatMap((i) => (i.kind === "toolGroup" ? i.tools : [])) ??
-      [],
-    [session?.timelineItems],
+  /* asked again when a tool changes, which the session store counts */
+  const tools = facts?.tools;
+  const toolsRevision = facts?.toolsRevision ?? 0;
+  const hasProcesses = useMemo(
+    () => tools?.some(isBackgroundProcess) ?? false,
+    [tools],
   );
-  const hasProcesses = tools.some(isBackgroundProcess);
-  const cue = tools.map((t) => `${t.itemKey}:${t.statusKind}`).join();
   useEffect(() => {
     if (!hasProcesses || !agentDid) {
       setHeldOps(null);
@@ -202,7 +204,7 @@ export function useWorkers(
     return () => {
       live = false;
     };
-  }, [shell.api, hasProcesses, agentDid, cue]);
+  }, [shell.api, hasProcesses, agentDid, toolsRevision]);
   return useMemo(() => {
     if (!provenance && !ops) return NO_WORKERS;
     const all = provenance ? subagentsOf(provenance, sessions) : [];
