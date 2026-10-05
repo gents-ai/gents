@@ -311,7 +311,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
         provider_account_key: None,
         label: None,
     };
-    crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+    let doc_id = crate::oauth_credential::upsert_oauth_credential(&node, &credential)
         .await
         .unwrap();
 
@@ -325,6 +325,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             .as_ref()
             .map(|reporter| reporter.account.clone()),
         Some(crate::usage_observation::UsageAccount::Credential {
+            doc_id: Some(doc_id),
             agent_did: did.to_string(),
             provider: CLAUDE_OAUTH_PROVIDER.to_string(),
             account_ref: Some("acct-ref-2".into()),

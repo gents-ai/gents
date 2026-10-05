@@ -6258,6 +6258,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
     crate::usage_observation::record_usage(
         node,
         &crate::usage_observation::UsageAccount::Credential {
+            doc_id: None,
             agent_did: owner.to_string(),
             provider: provider.to_string(),
             account_ref: None,

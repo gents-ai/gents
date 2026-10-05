@@ -5,6 +5,20 @@ use crate::Collection;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use serde_json::json;
 
+#[derive(serde::Deserialize)]
+struct GeneratedResumeOnCase {
+    name: String,
+    before: serde_json::Value,
+    target_available: bool,
+    expected: serde_json::Value,
+    outcome: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GeneratedResumeOnContracts {
+    goal_operator_resume_on_cases: Vec<GeneratedResumeOnCase>,
+}
+
 /// A `usage_limited` Goal whose latest request (`PARENT`) failed on a limited
 /// call on Claude account A; the behavior's profile is on A, and B is
 /// another enabled Claude account. `call_failure` is the failed call's text.
@@ -13,6 +27,7 @@ struct Limited {
     access: ConfigAccess,
     a: String,
     b: String,
+    b_credential: String,
 }
 
 impl Limited {
@@ -37,6 +52,7 @@ impl Limited {
             access: accounts.access,
             a: accounts.a,
             b: accounts.b,
+            b_credential: accounts.b_credential,
         }
     }
 
@@ -129,12 +145,169 @@ async fn resume_on_moves_the_profile_and_publishes_one_child() {
 async fn resume_on_retry_returns_the_same_child() {
     let limited = Limited::new(&usage_limit()).await;
     let first = limited.resume_on(&limited.b).await.unwrap();
+    crate::oauth_credential::set_account_enabled(
+        &limited.access,
+        limited.f.identity.did(),
+        &limited.b_credential,
+        false,
+    )
+    .await
+    .unwrap();
     let retry = limited.resume_on(&limited.b).await.unwrap();
     assert!(retry.switch.is_none(), "no second switch write");
     assert!(!retry.resume.created);
     assert_eq!(retry.resume.request_id, first.resume.request_id);
     assert_eq!(limited.profile_backend().await, limited.b);
     assert_eq!(limited.children().await, [first.resume.request_id]);
+}
+
+#[tokio::test]
+async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
+    let limited = Limited::new(&usage_limit()).await;
+    let first = limited.resume_on(&limited.b).await.unwrap();
+    crate::config_client::switch_profile_account(
+        &limited.access,
+        limited.f.identity.did(),
+        PROFILE,
+        &limited.a,
+        false,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let retry = limited.resume_on(&limited.b).await.unwrap();
+    assert!(
+        retry.switch.is_none(),
+        "a canonical receipt needs no new switch"
+    );
+    assert!(!retry.resume.created);
+    assert_eq!(retry.resume.request_id, first.resume.request_id);
+    assert_eq!(limited.profile_backend().await, limited.a);
+    assert_eq!(limited.children().await, [first.resume.request_id]);
+}
+
+#[tokio::test]
+async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery() {
+    let contracts: GeneratedResumeOnContracts =
+        gents_lean_contract::load_contract_snapshot().unwrap();
+    assert_eq!(contracts.goal_operator_resume_on_cases.len(), 2);
+    for case in contracts.goal_operator_resume_on_cases {
+        assert!(!case.target_available);
+        match case.name.as_str() {
+            "unavailable_target_keeps_goal_and_publishes_nothing" => {
+                assert!(case.before["children"].as_array().unwrap().is_empty());
+                assert!(case.expected["children"].as_array().unwrap().is_empty());
+                assert_eq!(case.outcome, "unavailable");
+                let limited = Limited::new(&usage_limit()).await;
+                crate::config_client::switch_profile_account(
+                    &limited.access,
+                    limited.f.identity.did(),
+                    PROFILE,
+                    &limited.b,
+                    false,
+                    &[],
+                )
+                .await
+                .unwrap();
+                crate::oauth_credential::set_account_enabled(
+                    &limited.access,
+                    limited.f.identity.did(),
+                    &limited.b_credential,
+                    false,
+                )
+                .await
+                .unwrap();
+                let error = limited.resume_on(&limited.b).await.unwrap_err();
+                assert!(format!("{error:#}").contains("target account"));
+                assert!(limited.children().await.is_empty());
+                assert_eq!(limited.goal_status().await, "usage_limited");
+            }
+            "existing_child_is_recovered_after_target_disabled" => {
+                assert_eq!(case.before["children"].as_array().unwrap().len(), 1);
+                assert_eq!(case.expected, case.before);
+                assert_eq!(case.outcome, "recovered");
+                let limited = Limited::new(&usage_limit()).await;
+                let first = limited.resume_on(&limited.b).await.unwrap();
+                crate::oauth_credential::set_account_enabled(
+                    &limited.access,
+                    limited.f.identity.did(),
+                    &limited.b_credential,
+                    false,
+                )
+                .await
+                .unwrap();
+                let retry = limited.resume_on(&limited.b).await.unwrap();
+                assert!(!retry.resume.created);
+                assert_eq!(retry.resume.request_id, first.resume.request_id);
+                assert_eq!(limited.children().await, [first.resume.request_id]);
+            }
+            name => panic!("unmapped generated resume-on case {name}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn moved_profile_retry_rejects_a_disabled_target_account() {
+    let limited = Limited::new(&usage_limit()).await;
+    crate::config_client::switch_profile_account(
+        &limited.access,
+        limited.f.identity.did(),
+        PROFILE,
+        &limited.b,
+        false,
+        &[],
+    )
+    .await
+    .unwrap();
+    crate::oauth_credential::set_account_enabled(
+        &limited.access,
+        limited.f.identity.did(),
+        &limited.b_credential,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
+    assert!(error.contains("target account"), "{error}");
+    assert_eq!(limited.profile_backend().await, limited.b);
+    assert_eq!(limited.goal_status().await, "usage_limited");
+    assert!(limited.children().await.is_empty());
+}
+
+#[tokio::test]
+async fn moved_profile_retry_rejects_a_removed_target_account() {
+    let limited = Limited::new(&usage_limit()).await;
+    crate::config_client::switch_profile_account(
+        &limited.access,
+        limited.f.identity.did(),
+        PROFILE,
+        &limited.b,
+        false,
+        &[],
+    )
+    .await
+    .unwrap();
+    let did = limited.f.identity.did().to_owned();
+    let credential = limited.b_credential.clone();
+    limited
+        .access
+        .transact("test.resume_on.remove_retry_target", move |txn| {
+            let did = did.clone();
+            let credential = credential.clone();
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential).await
+            })
+        })
+        .await
+        .unwrap();
+
+    let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
+    assert!(error.contains("target account"), "{error}");
+    assert_eq!(limited.profile_backend().await, limited.b);
+    assert_eq!(limited.goal_status().await, "usage_limited");
+    assert!(limited.children().await.is_empty());
 }
 
 #[tokio::test]

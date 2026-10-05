@@ -16,7 +16,8 @@ on the failed call that ended the latest request (`none`: no reset reported).
 `limitStartedAt` is that call's start. `profileNamesAccount` means the profile
 that served the call still selects the call's backend, and the serving sign-in
 connected before the limited call (the same sign-in). `accountEnabled` is the
-serving account's state. `now` is the resume's clock. -/
+serving credential's state. `backendEnabled` is the selected backend's state.
+`now` is the resume's clock. -/
 structure ResetFacts where
   optedIn : Bool
   resetAt : Option Nat
@@ -24,6 +25,7 @@ structure ResetFacts where
   now : Nat
   profileNamesAccount : Bool
   accountEnabled : Bool
+  backendEnabled : Bool
   deriving DecidableEq, Repr
 
 /-- A timer resume is due: opted in, same account and enabled, and a reported
@@ -31,7 +33,7 @@ reset that is later than the limited call's start and has passed. A reset no
 later than the call's start is stale and never due. There is no cap on how far
 away the reset may be. -/
 def ResetFacts.due (f : ResetFacts) : Bool :=
-  f.optedIn && f.profileNamesAccount && f.accountEnabled &&
+  f.optedIn && f.profileNamesAccount && f.accountEnabled && f.backendEnabled &&
     match f.resetAt with
     | some t => decide (f.limitStartedAt < t) && decide (t ≤ f.now)
     | none => false
@@ -84,10 +86,10 @@ theorem no_reset_resume_before_reset (s : Snapshot) (f : ResetFacts) (t : Nat)
 
 theorem no_reset_resume_after_account_change (s : Snapshot) (f : ResetFacts)
     (r : Request) (commit : Bool)
-    (h : f.profileNamesAccount = false ∨ f.accountEnabled = false) :
+    (h : f.profileNamesAccount = false ∨ f.accountEnabled = false ∨ f.backendEnabled = false) :
     (resumeBy s (.resetReached f) r commit).1 = s :=
   reset_resume_not_due_is_noop s f r commit
-    (by rcases h with h | h <;> simp [ResetFacts.due, h])
+    (by rcases h with h | h | h <;> simp [ResetFacts.due, h])
 
 theorem no_reset_resume_for_a_stale_reset (s : Snapshot) (f : ResetFacts) (t : Nat)
     (r : Request) (commit : Bool) (h : f.resetAt = some t)

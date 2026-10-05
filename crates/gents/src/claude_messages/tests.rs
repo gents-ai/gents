@@ -916,6 +916,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(bearer: &S) -> Str
                 HashSet::new(),
                 bearer,
                 &ReqwestClient::new(),
+                None,
             )
             .await;
             handle.await.expect("request")

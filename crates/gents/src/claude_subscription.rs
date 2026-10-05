@@ -95,6 +95,7 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
         Self {
             bearer: Arc::new(ApiKeyBearer::new(key)),
             http: ReqwestClient::new(),
+            usage: None,
         }
     }
 }

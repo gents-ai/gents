@@ -22,6 +22,7 @@ pub(crate) struct ClaudeAccounts {
     pub a: String,
     pub b: String,
     pub a_credential: String,
+    pub b_credential: String,
 }
 
 pub(crate) struct Fixture {
@@ -216,7 +217,7 @@ impl Fixture {
             };
             accounts.push((backend, stored.credential_id));
         }
-        let [(a, a_credential), (b, _)] = <[_; 2]>::try_from(accounts).unwrap();
+        let [(a, a_credential), (b, b_credential)] = <[_; 2]>::try_from(accounts).unwrap();
         let profile = json!({"agent_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::InferenceProfile,
@@ -236,6 +237,7 @@ impl Fixture {
             a,
             b,
             a_credential,
+            b_credential,
         }
     }
 

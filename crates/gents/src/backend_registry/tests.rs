@@ -308,7 +308,7 @@ fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
         backend.auth = auth;
         backend.validate().unwrap();
     }
-    backend.auth = BackendAuth::PrincipalOAuth;
+    backend.auth = BackendAuth::PrincipalOAuth { account_ref: None };
     assert!(backend.validate().is_err());
 
     backend.auth = BackendAuth::Environment {

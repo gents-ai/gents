@@ -29,12 +29,14 @@ use crate::oauth_credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
 
-/// The provider account usage belongs to, per agent. A credential account's
-/// key is resolved when usage is written or read, so a key filled after the
-/// client was built is used from the next response on.
+/// The provider account usage belongs to, per agent. Provider clients bind
+/// the credential's physical row, so replacement sign-ins cannot inherit
+/// late responses. Its provider key is resolved on each write, allowing key
+/// backfill on the same row. Inventory reads resolve the current account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsageAccount {
     Credential {
+        doc_id: Option<String>,
         agent_did: String,
         provider: String,
         account_ref: Option<String>,
@@ -49,6 +51,7 @@ pub enum UsageAccount {
 impl UsageAccount {
     pub fn for_credential(row: &OAuthCredential) -> Self {
         Self::Credential {
+            doc_id: row.doc_id.clone(),
             agent_did: row.agent_did.clone(),
             provider: row.provider.clone(),
             account_ref: row.account_ref.clone(),
@@ -69,6 +72,7 @@ impl UsageAccount {
     fn for_backend(agent_did: &str, backend: &InferenceBackend) -> Self {
         match (backend.provider_kind.oauth_provider(), &backend.auth) {
             (Some(provider), BackendAuth::PrincipalOAuth { account_ref }) => Self::Credential {
+                doc_id: None,
                 agent_did: agent_did.to_string(),
                 provider: provider.to_string(),
                 account_ref: account_ref.clone(),
@@ -179,6 +183,7 @@ pub fn usage_view(
 
 /// Where an account's usage is stored.
 struct Target {
+    credential_doc_id: Option<String>,
     agent_did: String,
     provider: String,
     /// Written here: the provider account key, else `reference`.
@@ -201,6 +206,7 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             provider,
             backend_id,
         } => Ok(Some(Target {
+            credential_doc_id: None,
             agent_did: agent_did.clone(),
             provider: provider.clone(),
             key: backend_id.clone(),
@@ -208,6 +214,7 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             plan: None,
         })),
         UsageAccount::Credential {
+            doc_id,
             agent_did,
             provider,
             account_ref,
@@ -217,24 +224,44 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
             else {
                 return Ok(None);
             };
-            let reference = fallback_key(
+            credential_target(
+                agent_did,
+                provider,
                 account_ref.as_deref(),
-                row.doc_id.as_deref().context("sign-in without _docID")?,
-            );
-            Ok(Some(Target {
-                agent_did: agent_did.clone(),
-                provider: provider.clone(),
-                key: row
-                    .provider_account_key
-                    .unwrap_or_else(|| reference.clone()),
-                reference: Some(reference),
-                plan: row.chatgpt_plan_type.map(|name| UsagePlan {
-                    name,
-                    observed_at: row.last_refresh.unwrap_or_default(),
-                }),
-            }))
+                doc_id.as_deref(),
+                row,
+            )
         }
     }
+}
+
+fn credential_target(
+    agent_did: &str,
+    provider: &str,
+    account_ref: Option<&str>,
+    doc_id: Option<&str>,
+    row: OAuthCredential,
+) -> Result<Option<Target>> {
+    if doc_id.is_some_and(|expected| row.doc_id.as_deref() != Some(expected)) {
+        return Ok(None);
+    }
+    let reference = fallback_key(
+        account_ref,
+        row.doc_id.as_deref().context("sign-in without _docID")?,
+    );
+    Ok(Some(Target {
+        credential_doc_id: row.doc_id.clone(),
+        agent_did: agent_did.to_string(),
+        provider: provider.to_string(),
+        key: row
+            .provider_account_key
+            .unwrap_or_else(|| reference.clone()),
+        reference: Some(reference),
+        plan: row.chatgpt_plan_type.map(|name| UsagePlan {
+            name,
+            observed_at: row.last_refresh.unwrap_or_default(),
+        }),
+    }))
 }
 
 /// The key of usage seen before the account's key is known: DID-free, and
@@ -359,15 +386,22 @@ async fn write(
         return Ok(());
     }
     let access = ConfigAccess::Local(node.clone());
-    let Some(target) = target(&access, account).await? else {
-        return Ok(());
-    };
-    let query = row_query(&target, &target.key);
     access
         .transact("usage_observation.record", |txn| {
-            let (target, query, report, read) = (&target, &query, report.clone(), read.clone());
+            let (report, read, access) = (report.clone(), read.clone(), &access);
             Box::pin(async move {
-                let (doc_id, stored) = match stored_row(&txn.execute(query).await?)? {
+                let target = match account {
+                    UsageAccount::Credential { doc_id, agent_did, provider, account_ref } => {
+                        let Some(row) = crate::oauth_credential::resolve_oauth_credential_in_txn(
+                            txn, agent_did, provider, AccountPick::Reference(account_ref.as_deref()),
+                        ).await? else { return Ok(()); };
+                        credential_target(agent_did, provider, account_ref.as_deref(), doc_id.as_deref(), row)?
+                    }
+                    UsageAccount::Backend { .. } => target(access, account).await?,
+                };
+                let Some(target) = target else { return Ok(()); };
+                let query = row_query(&target, &target.key);
+                let (doc_id, stored) = match stored_row(&txn.execute(&query).await?)? {
                     Some((doc_id, stored)) => (Some(doc_id), stored),
                     None => (None, StoredUsage::default()),
                 };
@@ -383,7 +417,9 @@ async fn write(
                 if let Some(observed_at) = merged.observed_at() {
                     input["observed_at"] = json!(observed_at);
                 }
-                if let Some((read_at, read_error)) = read {
+                if let Some((read_at, read_error)) = read
+                    .filter(|(read_at, _)| stored.read_at.is_none_or(|stored_at| *read_at >= stored_at))
+                {
                     input["read_at"] = json!(read_at);
                     input["read_error"] = json!(read_error);
                 }
@@ -527,7 +563,7 @@ pub async fn read_account_usage(
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
     }
-    if matches!(kind, Kind::OpenAiCompatible) {
+    if matches!(kind, Kind::OpenAiCompatible | Kind::AnthropicApiKey) {
         return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
@@ -538,10 +574,13 @@ pub async fn read_account_usage(
         _ => None,
     };
     let access = ConfigAccess::Local(node.clone());
-    let account = UsageAccount::for_backend(agent_did, backend);
+    let mut account = UsageAccount::for_backend(agent_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
     };
+    if let UsageAccount::Credential { doc_id, .. } = &mut account {
+        *doc_id = target.credential_doc_id.clone();
+    }
     let last_read = load(&access, &target)
         .await?
         .and_then(|stored| stored.read_at);
@@ -595,7 +634,9 @@ pub async fn read_account_usage(
                 ),
                 // Returned above; listed so a new kind fails to compile
                 // instead of sending its bearer to another provider.
-                Kind::OpenAiCompatible | Kind::OpenRouter => return Ok(UsageRead::NotReported),
+                Kind::OpenAiCompatible | Kind::OpenRouter | Kind::AnthropicApiKey => {
+                    return Ok(UsageRead::NotReported);
+                }
             };
             (request.bearer_auth(token), parse)
         }
@@ -658,7 +699,7 @@ pub async fn read_principal_usage(
     let access = ConfigAccess::Local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
     let backends = access
-        .transact("usage_observation.read_principal", |txn| {
+        .transact_readonly("usage_observation.read_principal", |txn| {
             Box::pin(async move {
                 crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
             })

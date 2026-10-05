@@ -74,6 +74,33 @@ def resume (s : Snapshot) (r : Request) (commit : Bool) : Snapshot × Outcome :=
             ({ s with goal := post, sequence := s.sequence + 1, lastContinuedFrom := some r.binding.predecessor, latestRequest := r.binding.child, children := r.binding :: s.children }, .created)
           else (s, .rolledBack)
 
+/-- Account-target resume validates the selected backend only when it must
+publish a new child. A prior canonical child remains an idempotent receipt even
+if its backend is later disabled. -/
+def resumeOn (s : Snapshot) (r : Request) (targetAvailable : Bool) (commit : Bool) :
+    Snapshot × Outcome :=
+  if !r.authorized || !r.parentBelongsToGoal ||
+      (s.children.find? (sameKey r.binding)).isSome then resume s r commit
+  else if targetAvailable then resume s r commit
+  else (s, .unavailable)
+
+theorem unavailable_target_cannot_publish (s : Snapshot) (r : Request) (commit : Bool)
+    (noReceipt : (s.children.find? (sameKey r.binding)).isNone)
+    (authorized : r.authorized = true) (parent : r.parentBelongsToGoal = true) :
+    resumeOn s r false commit = (s, .unavailable) := by
+  cases h : s.children.find? (sameKey r.binding) with
+  | none => simp [resumeOn, h, authorized, parent]
+  | some existing => simp [h] at noReceipt
+
+theorem target_change_does_not_block_existing_receipt
+    (s : Snapshot) (r : Request) (commit : Bool)
+    (hasReceipt : (s.children.find? (sameKey r.binding)).isSome) :
+    resumeOn s r false commit = resume s r commit := by
+  cases h : s.children.find? (sameKey r.binding) with
+  | none => simp [h] at hasReceipt
+  | some existing => simp [resumeOn, h]
+
+
 /-- Strengthen the existing GoalSource update guard with its observed sequence.
 The actual fields/transition remain owned by existing Goals.step?. -/
 def controllerWrite (s : Snapshot) (expectedStatus : Goals.Status)

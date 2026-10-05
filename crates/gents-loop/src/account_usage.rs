@@ -359,25 +359,27 @@ pub fn grok_billing(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
 pub fn openrouter_key(body: &Value, now: DateTime<Utc>) -> Option<UsageReport> {
     let data = body.get("data").filter(|value| value.is_object())?;
     let mut report = UsageReport::default();
-    let limit = data
-        .get("limit")
-        .and_then(Value::as_f64)
-        .filter(|limit| *limit > 0.0);
-    let remaining = data.get("limit_remaining").and_then(Value::as_f64);
-    if let Some(used) = limit
-        .zip(remaining)
-        .and_then(|(limit, remaining)| percent((limit - remaining) / limit * 100.0))
-    {
-        let reset = data.get("limit_reset").and_then(Value::as_str);
-        report.windows.push(UsageWindow {
-            label: reset.unwrap_or("total").to_string(),
-            window_minutes: None,
-            used_pct: used,
-            resets_at: reset.and_then(|reset| next_openrouter_reset(reset, now)),
-            source: UsageSource::Endpoint,
-            observed_at: now,
-        });
+    let limit = data.get("limit")?;
+    if limit.is_null() {
+        return Some(report);
     }
+    let limit = limit
+        .as_f64()
+        .filter(|limit| limit.is_finite() && *limit > 0.0)?;
+    let remaining = data
+        .get("limit_remaining")?
+        .as_f64()
+        .filter(|value| value.is_finite())?;
+    let used = percent((limit - remaining) / limit * 100.0)?;
+    let reset = data.get("limit_reset").and_then(Value::as_str);
+    report.windows.push(UsageWindow {
+        label: reset.unwrap_or("total").to_string(),
+        window_minutes: None,
+        used_pct: used,
+        resets_at: reset.and_then(|reset| next_openrouter_reset(reset, now)),
+        source: UsageSource::Endpoint,
+        observed_at: now,
+    });
     Some(report)
 }
 

@@ -27,6 +27,25 @@ pub async fn resume_goal_request(
     session_id: &str,
     from_request_id: &str,
 ) -> Result<GoalResumeReceipt> {
+    resume_goal_request_inner(
+        access,
+        identity,
+        agent_did,
+        session_id,
+        from_request_id,
+        None,
+    )
+    .await
+}
+
+async fn resume_goal_request_inner<'a>(
+    access: &'a crate::ConfigAccess,
+    identity: &'a dyn AgentIdentity,
+    agent_did: &'a str,
+    session_id: &'a str,
+    from_request_id: &'a str,
+    required_backend: Option<&'a str>,
+) -> Result<GoalResumeReceipt> {
     anyhow::ensure!(
         identity.did() == agent_did,
         "goal resume requires the target principal's signing identity"
@@ -40,7 +59,15 @@ pub async fn resume_goal_request(
                 "goal.resume_request",
                 move |txn| {
                     Box::pin(async move {
-                        stage_resume(txn, identity, agent_did, session_id, from_request_id).await
+                        stage_resume_inner(
+                            txn,
+                            identity,
+                            agent_did,
+                            session_id,
+                            from_request_id,
+                            required_backend,
+                        )
+                        .await
                     })
                 },
             )
@@ -50,12 +77,110 @@ pub async fn resume_goal_request(
             access
                 .transact("goal.resume_request", move |txn| {
                     Box::pin(async move {
-                        stage_resume(txn, identity, agent_did, session_id, from_request_id).await
+                        stage_resume_inner(
+                            txn,
+                            identity,
+                            agent_did,
+                            session_id,
+                            from_request_id,
+                            required_backend,
+                        )
+                        .await
                     })
                 })
                 .await
         }
     }
+}
+
+async fn existing_goal_resume_receipt<'a>(
+    access: &'a crate::ConfigAccess,
+    agent_did: &'a str,
+    session_id: &'a str,
+    from_request_id: &'a str,
+) -> Result<Option<GoalResumeReceipt>> {
+    access
+        .transact_readonly("goal.resume_existing_receipt", move |txn| {
+            Box::pin(async move {
+                let (goal, _, parent_row) =
+                    resume_context_in_txn(txn, &agent_did, &session_id, &from_request_id).await?;
+                existing_resume_receipt_in_txn(txn, &goal, &parent_row, &from_request_id).await
+            })
+        })
+        .await
+}
+
+async fn resume_context_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+    from_request_id: &str,
+) -> Result<(GoalDocument, Vec<AgentRequestRow>, AgentRequestRow)> {
+    let goal = load_canonical_goal_in_txn(txn, agent_did, session_id)
+        .await?
+        .context("no canonical goal exists for this owner and session")?;
+    let escaped_did = escape_graphql_string(agent_did);
+    let escaped_session = escape_graphql_string(session_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{
+        agent_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
+    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
+        ))
+        .await?;
+    let requests: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("request query omitted rows")?,
+    )?;
+    let parents: Vec<_> = requests
+        .iter()
+        .filter(|row| row.request_id == from_request_id)
+        .collect();
+    anyhow::ensure!(
+        parents.len() == 1,
+        "resume predecessor must uniquely belong to the goal owner and session"
+    );
+    let parent_row = parents[0].clone();
+    verify_request_receipt_signature(&parent_row)?;
+    Ok((goal, requests, parent_row))
+}
+
+async fn existing_resume_receipt_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    goal: &GoalDocument,
+    parent_row: &AgentRequestRow,
+    from_request_id: &str,
+) -> Result<Option<GoalResumeReceipt>> {
+    let key = goal_continuation_identity(&goal.goal_id, from_request_id, 1)?.retry_key;
+    let escaped_key = escape_graphql_string(&key);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped_key}" }} }}) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
+        ))
+        .await?;
+    let children: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("receipt query omitted rows")?,
+    )?;
+    anyhow::ensure!(children.len() <= 1, "ambiguous goal continuation receipt");
+    let Some(child) = children.first() else {
+        return Ok(None);
+    };
+    super::request_head::verify_goal_continuation_receipt(goal, parent_row, child)?;
+    Ok(Some(GoalResumeReceipt {
+        goal_status: goal.parsed_status().context("goal has an unknown status")?,
+        goal_id: goal.goal_id.clone(),
+        request_id: child.request_id.clone(),
+        doc_id: child
+            .doc_id
+            .clone()
+            .context("continuation receipt lacks document ID")?,
+        created: false,
+    }))
 }
 
 /// A Goal resumed on another account: the move, `None` when the profile was
@@ -93,6 +218,14 @@ pub async fn resume_goal_on_account(
         request.session_id.as_deref() == Some(session_id),
         "resume predecessor must uniquely belong to the goal owner and session"
     );
+    if let Some(resume) =
+        existing_goal_resume_receipt(access, agent_did, session_id, from_request_id).await?
+    {
+        return Ok(GoalResumeOnReceipt {
+            switch: None,
+            resume,
+        });
+    }
     let now = Utc::now();
     let limited = blocked_turn_from(&references, &accounts, &request, call.as_ref(), now)
         .filter(|turn| turn.reason == BlockedReason::UsageLimit)
@@ -138,19 +271,26 @@ pub async fn resume_goal_on_account(
             None
         }
     };
-    let resume = resume_goal_request(access, identity, agent_did, session_id, from_request_id)
-        .await
-        .map_err(|error| match &switch {
-            Some(receipt) => anyhow::anyhow!(
-                "resume failed after the switch committed (profile {} is now on {}); run the \
+    let resume = resume_goal_request_inner(
+        access,
+        identity,
+        agent_did,
+        session_id,
+        from_request_id,
+        Some(target_backend_id),
+    )
+    .await
+    .map_err(|error| match &switch {
+        Some(receipt) => anyhow::anyhow!(
+            "resume failed after the switch committed (profile {} is now on {}); run the \
                  same command again with the same --from: {error:#}",
-                receipt.profile,
-                receipt.account.label
-            ),
-            None => anyhow::anyhow!(
-                "resume failed; run the same command again with the same --from: {error:#}"
-            ),
-        })?;
+            receipt.profile,
+            receipt.account.label
+        ),
+        None => anyhow::anyhow!(
+            "resume failed; run the same command again with the same --from: {error:#}"
+        ),
+    })?;
     Ok(GoalResumeOnReceipt { switch, resume })
 }
 
@@ -161,61 +301,71 @@ pub(super) async fn stage_resume(
     session_id: &str,
     from_request_id: &str,
 ) -> Result<GoalResumeReceipt> {
-    let goal = load_canonical_goal_in_txn(txn, agent_did, session_id)
-        .await?
-        .context("no canonical goal exists for this owner and session")?;
-    let escaped_did = escape_graphql_string(agent_did);
-    let escaped_session = escape_graphql_string(session_id);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-        agent_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
-        ))
-        .await?;
-    let requests: Vec<AgentRequestRow> = serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("request query omitted rows")?,
-    )?;
-    let parents: Vec<_> = requests
-        .iter()
-        .filter(|row| row.request_id == from_request_id)
-        .collect();
-    anyhow::ensure!(
-        parents.len() == 1,
-        "resume predecessor must uniquely belong to the goal owner and session"
-    );
-    let parent_row = parents[0];
-    verify_request_receipt_signature(parent_row)?;
+    stage_resume_inner(txn, identity, agent_did, session_id, from_request_id, None).await
+}
+
+async fn stage_resume_inner(
+    txn: &ConfigApplyTxn<'_>,
+    identity: &dyn AgentIdentity,
+    agent_did: &str,
+    session_id: &str,
+    from_request_id: &str,
+    required_backend: Option<&str>,
+) -> Result<GoalResumeReceipt> {
+    let (goal, requests, parent_row) =
+        resume_context_in_txn(txn, agent_did, session_id, from_request_id).await?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
     let behavior = parent.behavior_id.clone();
+    let escaped_did = escape_graphql_string(agent_did);
 
-    // The stable key is independent of today's sequence. Its historical child
-    // is authenticated before any current-status/latest-request checks.
-    let key = goal_continuation_identity(&goal.goal_id, from_request_id, 1)?.retry_key;
-    let escaped_key = escape_graphql_string(&key);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped_key}" }} }}) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
-    let children: Vec<AgentRequestRow> = serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("receipt query omitted rows")?,
-    )?;
-    anyhow::ensure!(children.len() <= 1, "ambiguous goal continuation receipt");
-    if let Some(child) = children.first() {
-        super::request_head::verify_goal_continuation_receipt(&goal, parent_row, child)?;
-        return Ok(GoalResumeReceipt {
-            goal_status: goal.parsed_status().context("goal has an unknown status")?,
-            goal_id: goal.goal_id,
-            request_id: child.request_id.clone(),
-            doc_id: child
-                .doc_id
-                .clone()
-                .context("continuation receipt lacks document ID")?,
-            created: false,
-        });
+    if let Some(receipt) =
+        existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?
+    {
+        return Ok(receipt);
+    }
+
+    if let Some(target_backend_id) = required_backend {
+        let references =
+            crate::document_config::ConfigReferences::load_in_txn(txn, agent_did).await?;
+        let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, from_request_id)
+            .await?
+            .context("resume predecessor has no failed call")?;
+        call.backend_id = Some(target_backend_id.to_owned());
+        let behavior_id = call
+            .behavior_id
+            .as_deref()
+            .unwrap_or(parent.behavior_id.as_str());
+        let profile_id = crate::blocked_turn::served_profile(&references, behavior_id, &call)
+            .context("profile that hit the limit is unavailable")?;
+        let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
+            anyhow::bail!("profile that hit the limit is unavailable");
+        };
+        anyhow::ensure!(
+            backend.backend_id == target_backend_id,
+            "profile that hit the limit is not on target backend {target_backend_id:?}"
+        );
+        anyhow::ensure!(
+            backend.enabled,
+            "target backend {target_backend_id:?} is disabled"
+        );
+        if let crate::document_config::BackendAuth::PrincipalOAuth { account_ref } = &backend.auth {
+            use crate::backend_provider::BackendProviderOauthExt;
+            let provider = backend
+                .provider_kind
+                .oauth_provider()
+                .context("target backend has no OAuth provider")?;
+            let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
+                txn,
+                agent_did,
+                provider,
+                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+            )
+            .await?;
+            anyhow::ensure!(
+                account.is_some_and(|account| account.enabled),
+                "target account for backend {target_backend_id:?} is unavailable"
+            );
+        }
     }
 
     anyhow::ensure!(

@@ -5,7 +5,7 @@
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
 import { dependentsWarning } from "./dependents";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
 import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
@@ -160,15 +160,27 @@ const SUBSCRIPTION: Record<
 export function useAccounts(shell: Shell, agentDid: string) {
   const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
   const api = shell.api;
-  const load = () =>
-    (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
-      setAccounts,
-      () => setAccounts([]),
+  const latest = useRef(0);
+  const load = useCallback(() => {
+    const read = ++latest.current;
+    return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
+      (views) => {
+        if (latest.current === read) setAccounts(views);
+      },
+      () => {
+        if (latest.current === read) setAccounts([]);
+      },
     );
+  }, [api, agentDid]);
+  useEffect(() => {
+    setAccounts([]);
+  }, [api, agentDid]);
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentDid, shell.snapshot]);
+    return () => {
+      latest.current += 1;
+    };
+  }, [load, shell.snapshot]);
   return { accounts, reload: load };
 }
 

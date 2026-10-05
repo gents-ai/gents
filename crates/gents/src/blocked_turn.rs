@@ -225,7 +225,7 @@ pub(crate) async fn stopped_request(
 )> {
     let accounts = list_accounts(access, agent_did).await?;
     let (references, request, call) = access
-        .transact("blocked_turn.request", |txn| {
+        .transact_readonly("blocked_turn.request", |txn| {
             Box::pin(async move {
                 let filter = format!(
                     r#"request_id: {{ _eq: "{}" }}"#,
@@ -251,7 +251,7 @@ pub async fn blocked_goal_turn(
 ) -> Result<Option<BlockedTurn>> {
     let accounts = list_accounts(access, agent_did).await?;
     let stopped = access
-        .transact("blocked_turn.goal", |txn| {
+        .transact_readonly("blocked_turn.goal", |txn| {
             Box::pin(goal_stopped_in_txn(txn, agent_did, session_id))
         })
         .await?;

@@ -79,7 +79,7 @@ pub async fn switch_candidates(
 ) -> Result<SwitchPlan> {
     let accounts = list_accounts(access, agent_did).await?;
     let snapshot = access
-        .transact("config.profile_switch.candidates", |txn| {
+        .transact_readonly("config.profile_switch.candidates", |txn| {
             Box::pin(async move { Snapshot::load_in_txn(txn, agent_did, profile_id).await })
         })
         .await?;

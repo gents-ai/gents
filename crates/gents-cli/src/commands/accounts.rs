@@ -339,6 +339,7 @@ pub(crate) async fn account_rows(
         let usage = match kind {
             Some(kind) if account.enabled => {
                 let usage_account = UsageAccount::Credential {
+                    doc_id: None,
                     agent_did: agent_did.to_owned(),
                     provider: account.provider.clone(),
                     account_ref: account.account_ref.clone(),
@@ -1337,6 +1338,7 @@ mod tests {
         gents::usage_observation::record_usage(
             node,
             &gents::usage_observation::UsageAccount::Credential {
+                doc_id: None,
                 agent_did: DID.to_owned(),
                 provider: provider.to_owned(),
                 account_ref: account_ref.map(str::to_owned),

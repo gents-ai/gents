@@ -78,23 +78,26 @@ async fn stage_reset_resume(
     };
     // The same sign-in: the account the backend names, enabled, connected
     // before the limited call.
-    let account_serves = match &backend.auth {
-        BackendAuth::PrincipalOAuth { account_ref } => {
-            use crate::backend_provider::BackendProviderOauthExt;
-            let Some(provider) = backend.provider_kind.oauth_provider() else {
-                return Ok(None);
-            };
-            resolve_oauth_credential_in_txn(
-                txn,
-                agent_did,
-                provider,
-                AccountPick::Reference(account_ref.as_deref()),
-            )
-            .await?
-            .is_some_and(|row| row.connected_at.is_none_or(|since| since <= started))
-        }
-        _ => backend.enabled,
-    };
+    let account_serves = backend.enabled
+        && match &backend.auth {
+            BackendAuth::PrincipalOAuth { account_ref } => {
+                use crate::backend_provider::BackendProviderOauthExt;
+                let Some(provider) = backend.provider_kind.oauth_provider() else {
+                    return Ok(None);
+                };
+                resolve_oauth_credential_in_txn(
+                    txn,
+                    agent_did,
+                    provider,
+                    AccountPick::Reference(account_ref.as_deref()),
+                )
+                .await?
+                .is_some_and(|row| {
+                    row.enabled && row.connected_at.is_none_or(|since| since <= started)
+                })
+            }
+            _ => backend.enabled,
+        };
     if !account_serves {
         return Ok(None);
     }

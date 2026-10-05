@@ -25,6 +25,7 @@ struct Facts {
     now: i64,
     profile_names_account: bool,
     account_enabled: bool,
+    backend_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -76,7 +77,7 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
 #[tokio::test]
 async fn generated_goal_reset_resume_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_reset_resume_cases.len(), 10);
+    assert_eq!(contracts.goal_reset_resume_cases.len(), 11);
     let mut seen = std::collections::BTreeSet::new();
     for case in contracts.goal_reset_resume_cases {
         assert!(seen.insert(case.name.clone()), "duplicate generated case");
@@ -99,6 +100,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             | "before_reset_waits"
             | "profile_moved_waits"
             | "account_disabled_waits"
+            | "backend_disabled_waits"
             | "stale_reset_waits"
             | "paused_goal_is_not_timer_resumed"
             | "repeat_limit_resumes_at_its_new_reset" => {}
@@ -158,6 +160,17 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             )
             .await
             .unwrap();
+        }
+        if !facts.backend_enabled {
+            execute(
+                &f.node,
+                &format!(
+                    r#"mutation {{ update_InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
+                    escape_graphql_string(did),
+                    escape_graphql_string(&accounts.a)
+                ),
+            )
+            .await;
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
 

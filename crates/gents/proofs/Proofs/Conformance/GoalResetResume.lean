@@ -15,7 +15,7 @@ def request : Request := ⟨.usageLimited, 0, true, true, true, true, parentBind
 def resumed : Snapshot :=
   ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
 /-- Limited call started at 0, reset reported for 3600, read at 3600. -/
-def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true⟩
+def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true⟩
 def paused : Snapshot := { limited with goal := { limited.goal with status := .paused } }
 
 /-- The first child (request 20) stopped on a second limit, started at 3600. -/
@@ -47,12 +47,14 @@ def resetCases : List ResetCase :=
        limited, .deferred⟩
   , ⟨"account_disabled_waits", limited, {due with accountEnabled := false}, request, true,
        limited, .deferred⟩
+  , ⟨"backend_disabled_waits", limited, {due with backendEnabled := false}, request, true,
+       limited, .deferred⟩
   , ⟨"stale_reset_waits", limited, {due with limitStartedAt := 7200, now := 7300}, request, true,
        limited, .deferred⟩
   , ⟨"paused_goal_is_not_timer_resumed", paused, due, {request with expectedStatus := .paused},
        true, paused, .illegal⟩
   , ⟨"repeat_limit_resumes_at_its_new_reset", limitedAgain,
-       ⟨true, some 7200, 3600, 7200, true, true⟩, requestAgain, true, resumedAgain, .created⟩
+       ⟨true, some 7200, 3600, 7200, true, true, true⟩, requestAgain, true, resumedAgain, .created⟩
   ]
 
 theorem cases_replay_explicit_expectations :
@@ -73,7 +75,8 @@ def factsJson (f : ResetFacts) : String :=
     (match f.resetAt with | none => "null" | some t => toString t) ++
   ",\"limit_started_at\":" ++ toString f.limitStartedAt ++ ",\"now\":" ++ toString f.now ++
   ",\"profile_names_account\":" ++ b f.profileNamesAccount ++
-  ",\"account_enabled\":" ++ b f.accountEnabled ++ "}"
+  ",\"account_enabled\":" ++ b f.accountEnabled ++
+  ",\"backend_enabled\":" ++ b f.backendEnabled ++ "}"
 
 def caseJson (c : ResetCase) : String :=
   "{\"name\":" ++ Conformance.Contracts.jsonString c.name ++

@@ -266,6 +266,7 @@ async fn store_key_is_read_when_the_write_happens() {
     let node = node().await;
     let mut row = credential(A, None, None);
     let doc = seed(&node, &row).await;
+    row.doc_id = Some(doc.clone());
     let account = UsageAccount::for_credential(&row);
     let now = Utc::now();
     record_usage(
@@ -394,6 +395,170 @@ async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
         stored, None,
         "the removed account's usage shows: {stored:?}"
     );
+}
+
+#[tokio::test]
+async fn late_response_from_removed_account_does_not_populate_replacement_usage() {
+    let node = node().await;
+    let access = local(&node);
+    let removed = crate::oauth_credential::store_sign_in(&access, credential(A, None, None), None)
+        .await
+        .unwrap()
+        .credential;
+    let old_client_account = UsageAccount::for_credential(&removed);
+    let credential_id = removed.credential_id.as_str();
+    access
+        .transact("test.remove_account", |txn| {
+            Box::pin(async move {
+                crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
+            })
+        })
+        .await
+        .unwrap();
+    let mut replacement = credential(A, None, Some("replacement-provider-key"));
+    replacement.access_token = "access-TEST-2".into();
+    let replacement = crate::oauth_credential::store_sign_in(&access, replacement, None)
+        .await
+        .unwrap()
+        .credential;
+    assert_ne!(removed.doc_id, replacement.doc_id);
+    record_usage(
+        &node,
+        &old_client_account,
+        report(vec![window("primary", 70.0, Utc::now())]),
+    )
+    .await
+    .unwrap();
+    let observed = load_usage(&access, &UsageAccount::for_credential(&replacement))
+        .await
+        .unwrap();
+    assert_eq!(
+        observed, None,
+        "late old-account response populated replacement usage"
+    );
+}
+
+#[tokio::test]
+async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
+    for remove in [false, true] {
+        let node = node().await;
+        let access = local(&node);
+        let original = crate::oauth_credential::store_sign_in(
+            &access,
+            credential(A, None, Some("shared-provider-key")),
+            None,
+        )
+        .await
+        .unwrap()
+        .credential;
+        let account = UsageAccount::for_credential(&original);
+        let queued = Arc::new(tokio::sync::Notify::new());
+        let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = access
+            .transact("test.hold_usage_gate", |txn| {
+                let node = node.clone();
+                let account = account.clone();
+                let original = original.clone();
+                let queued = queued.clone();
+                let acquired = acquired.clone();
+                Box::pin(async move {
+                    let writing_queued = queued.clone();
+                    let writing_acquired = acquired.clone();
+                    let writer = tokio::spawn(async move {
+                        crate::config_client::ConfigApplyTxn::with_write_gate_observation(
+                            writing_queued,
+                            writing_acquired,
+                            record_usage(
+                                &node,
+                                &account,
+                                report(vec![window("primary", 70.0, Utc::now())]),
+                            ),
+                        )
+                        .await
+                    });
+                    tokio::time::timeout(std::time::Duration::from_secs(10), queued.notified())
+                        .await?;
+                    assert!(!acquired.load(std::sync::atomic::Ordering::Acquire));
+                    if remove {
+                        crate::oauth_credential::remove_account_in_txn(
+                            txn,
+                            A,
+                            &original.credential_id,
+                        )
+                        .await?;
+                        let mut replacement = credential(A, None, Some("shared-provider-key"));
+                        replacement.access_token = "replacement-access-TEST".to_string();
+                        txn.execute(&crate::oauth_credential::oauth_credential_upsert_mutation(
+                            &replacement,
+                        ))
+                        .await?;
+                    } else {
+                        let mut disabled = original;
+                        disabled.enabled = false;
+                        txn.execute(&crate::oauth_credential::oauth_credential_upsert_mutation(
+                            &disabled,
+                        ))
+                        .await?;
+                    }
+                    Ok(writer)
+                })
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), writer)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(acquired.load(std::sync::atomic::Ordering::Acquire));
+        let current = resolve_oauth_credential(&access, A, CODEX, AccountPick::Reference(None))
+            .await
+            .unwrap();
+        if remove {
+            let replacement = current.expect("replacement account must exist");
+            assert_ne!(replacement.doc_id, original.doc_id);
+            assert_eq!(
+                replacement.provider_account_key.as_deref(),
+                Some("shared-provider-key")
+            );
+        } else {
+            assert!(current.is_none(), "the disabled account must not resolve");
+        }
+        assert!(
+            rows(&node).await.is_empty(),
+            "queued old response recreated usage after account mutation"
+        );
+    }
+}
+
+#[tokio::test]
+async fn older_read_completing_last_keeps_latest_read_metadata_and_window() {
+    let node = node().await;
+    let row = credential(A, None, Some("acct-key-read-order"));
+    seed(&node, &row).await;
+    let account = UsageAccount::for_credential(&row);
+    let newer = Utc::now();
+    let older = newer - Duration::seconds(1);
+    write(
+        &node,
+        &account,
+        report(vec![window("primary", 40.0, newer)]),
+        Some((newer, None)),
+    )
+    .await
+    .unwrap();
+    write(
+        &node,
+        &account,
+        report(vec![window("primary", 70.0, older)]),
+        Some((older, Some("unreachable".to_string()))),
+    )
+    .await
+    .unwrap();
+    let stored = load_usage(&local(&node), &account).await.unwrap().unwrap();
+    assert_eq!(stored.read_at, Some(newer));
+    assert_eq!(stored.read_error, None);
+    assert_eq!(used(&stored, "primary"), Some(40.0));
 }
 
 #[tokio::test]
@@ -1018,6 +1183,7 @@ async fn read_guard_recent_read_is_skipped() {
     let did = "did:key:z6MkUsageReadRecent";
     sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;
     let account = UsageAccount::Credential {
+        doc_id: None,
         agent_did: did.to_string(),
         provider: CODEX.to_string(),
         account_ref: None,
@@ -1665,6 +1831,7 @@ fn usage_account_for_backend_follows_principal_oauth() {
     assert_eq!(
         UsageAccount::for_backend(A, &oauth),
         UsageAccount::Credential {
+            doc_id: None,
             agent_did: A.to_string(),
             provider: GROK.to_string(),
             account_ref: Some("acct-key-a".to_string()),

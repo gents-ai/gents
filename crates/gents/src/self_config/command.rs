@@ -2048,6 +2048,7 @@ impl ConfigCommandTool {
             let usage = match kind {
                 Some(kind) if account.enabled => {
                     let usage_account = UsageAccount::Credential {
+                        doc_id: None,
                         agent_did: agent_did.to_string(),
                         provider: account.provider.clone(),
                         account_ref: account.account_ref.clone(),

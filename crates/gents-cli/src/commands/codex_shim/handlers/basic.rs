@@ -467,6 +467,7 @@ mod tests {
         )
         .await;
         let account = UsageAccount::Credential {
+            doc_id: None,
             agent_did: DID.into(),
             provider: provider.into(),
             account_ref: None,
@@ -543,6 +544,7 @@ mod tests {
         record_usage(
             &node,
             &UsageAccount::Credential {
+                doc_id: None,
                 agent_did: DID.into(),
                 provider: "xai-oauth".into(),
                 account_ref: None,

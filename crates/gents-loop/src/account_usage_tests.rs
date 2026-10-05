@@ -499,3 +499,24 @@ fn view_same_values_ignores_observed_at() {
     });
     assert!(!first.same_values(&changed));
 }
+
+#[test]
+fn capped_openrouter_response_without_remaining_is_malformed() {
+    let response = serde_json::json!({ "data": { "limit": 10.0 } });
+    assert_eq!(openrouter_key(&response, Utc::now()), None);
+}
+
+#[test]
+fn numeric_zero_or_malformed_openrouter_limit_is_not_uncapped() {
+    for data in [
+        serde_json::json!({ "limit": 0, "limit_remaining": 0 }),
+        serde_json::json!({ "limit": "10", "limit_remaining": 5 }),
+        serde_json::json!({ "limit": 10, "limit_remaining": "5" }),
+        serde_json::json!({}),
+    ] {
+        assert_eq!(
+            openrouter_key(&serde_json::json!({ "data": data }), Utc::now()),
+            None
+        );
+    }
+}

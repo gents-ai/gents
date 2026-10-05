@@ -244,6 +244,26 @@ async fn waits_after_the_account_was_removed() {
 }
 
 #[tokio::test]
+async fn waits_after_the_backend_was_disabled() {
+    let reset = Reset::new("inference", Some(T)).await;
+    execute(
+        &reset.f.node,
+        &format!(
+            r#"mutation {{ update_InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
+            escape_graphql_string(reset.f.identity.did()),
+            escape_graphql_string(&reset.accounts.a)
+        ),
+    )
+    .await;
+
+    // The executable reset model has account availability but no separate
+    // backend-enabled fact; this regression records the native preflight gap.
+    assert!(reset.resume(T).await.is_none());
+    assert_eq!(reset.f.goal_status().await, "usage_limited");
+    assert!(reset.f.children().await.is_empty());
+}
+
+#[tokio::test]
 async fn restart_before_and_after_the_reset() {
     let reset = Reset::new("inference", Some(T)).await;
     assert!(reset.resume(T - 60).await.is_none());

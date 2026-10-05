@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled account_ref connected_at provider_account_key label";
 /// The fields [`pick_oauth_credential`] reads: no token.
-const OAUTH_PICK_FIELDS: &str = "credential_id agent_did provider enabled account_ref connected_at";
+const OAUTH_PICK_FIELDS: &str =
+    "_docID credential_id agent_did provider enabled account_ref connected_at provider_account_key";
 
 /// Display metadata only. Never use decoded, unverified claims for authorization
 /// or overwrite the account ID used by a provider's authentication headers.
@@ -422,7 +423,7 @@ fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
     let row: OAuthCredentialRow =
         serde_json::from_value(value).context("decoding OAuthCredential row")?;
     Ok(OAuthCredential {
-        doc_id: None,
+        doc_id: row.doc_id,
         credential_id: row.credential_id,
         agent_did: required(row.agent_did, "agent_did")?,
         provider: required(row.provider, "provider")?,
@@ -437,7 +438,7 @@ fn pick_row_from_value(value: Value) -> Result<OAuthCredential> {
         enabled: row.enabled.unwrap_or(true),
         account_ref: clean_optional(row.account_ref),
         connected_at: parse_optional_datetime(row.connected_at, "connected_at")?,
-        provider_account_key: None,
+        provider_account_key: clean_optional(row.provider_account_key),
         label: None,
     })
 }

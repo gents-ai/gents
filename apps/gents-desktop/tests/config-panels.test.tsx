@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,7 +19,7 @@ import {
 } from "../src/ui/screens/agent/BehaviorsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
-import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
+import { InferencePanel, useAccounts } from "../src/ui/screens/agent/InferencePanel";
 import {
   ProfileEditor,
   ProfilesPanel,
@@ -589,6 +596,53 @@ describe("configuration panels", () => {
         account("chatgpt-codex", null, "Main"),
         account("chatgpt-codex", "c-2", "Team"),
       ];
+
+      it("clears another agent's accounts and ignores its late response", async () => {
+        const { api, shell } = harness();
+        let oldRead: (views: typeof accounts) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((resolve) => (oldRead = resolve)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result, rerender } = renderHook(({ did }) => useAccounts(shell, did), {
+          initialProps: { did: "agent-a" },
+        });
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        act(() => {
+          void result.current.reload();
+        });
+        rerender({ did: "agent-b" });
+        expect(result.current.accounts).toEqual([]);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldRead(accounts));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+        expect(api.listProviderAccounts).toHaveBeenLastCalledWith("agent-b");
+      });
+
+      it("keeps the latest reload when a snapshot read fails later", async () => {
+        const { api, shell } = harness();
+        let oldFailure: (error: Error) => void = () => {};
+        let newRead: (views: typeof accounts) => void = () => {};
+        api.listProviderAccounts
+          .mockResolvedValueOnce(accounts)
+          .mockReturnValueOnce(new Promise((_, reject) => (oldFailure = reject)))
+          .mockReturnValueOnce(new Promise((resolve) => (newRead = resolve)));
+        const { result, rerender } = renderHook(
+          ({ current }) => useAccounts(current, "agent-a"),
+          { initialProps: { current: shell } },
+        );
+        await waitFor(() => expect(result.current.accounts).toEqual(accounts));
+        rerender({ current: { ...shell, snapshot: { ...shell.snapshot } } });
+        expect(result.current.accounts).toEqual(accounts);
+        act(() => {
+          void result.current.reload();
+        });
+        expect(result.current.accounts).toEqual(accounts);
+        await act(async () => newRead([accounts[1]!]));
+        await act(async () => oldFailure(new Error("older read failed")));
+        expect(result.current.accounts).toEqual([accounts[1]!]);
+      });
 
       it("draws each row's label and state", async () => {
         const { api, shell } = harness();
