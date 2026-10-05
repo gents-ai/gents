@@ -66,3 +66,13 @@ export async function revealInFolder(path: string): Promise<void> {
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
   await revealItemInDir(path);
 }
+
+/* Whether the traffic lights share the window bar. The app's macOS window
+   is a transparent title bar with the title hidden (tauri.conf.json), but
+   the bar is laid out as if native chrome sat above the webview: the mark
+   keeps the bar's corner and the pane region its plain inset. Returning
+   true here would move the mark to the rail and inset the bar for lights
+   it does not draw around. */
+export function trafficLightsInWebview(): boolean {
+  return false;
+}

@@ -119,14 +119,12 @@ export function NodeBehaviorStack({
           <button
             type="button"
             aria-label={`About ${behaviorName(behaviorId ?? null, deployment)} behavior`}
-            className={cn(
-              "rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none",
-              shifted,
-            )}
+            className="grid cursor-default place-items-center rounded-full p-0 leading-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
           >
             <BehaviorAvatar
               name={behaviorName(behaviorId ?? null, deployment)}
               behaviorId={behaviorId}
+              className={shifted}
             />
           </button>
         ) : (

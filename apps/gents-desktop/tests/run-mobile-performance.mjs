@@ -928,8 +928,9 @@ function collectEnvironment(browserVersion) {
 }
 
 async function openMobileNavigation(page) {
+  /* the back link lives in the window bar's pane region */
   await page
-    .getByTestId("session-screen")
+    .getByTestId("window-bar")
     .getByRole("link", { name: "Sessions", exact: true })
     .first()
     .click();
